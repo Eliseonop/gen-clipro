@@ -1,0 +1,99 @@
+// Manejador de puntero del canvas Main: mover/redimensionar el encuadre de texto de
+// pista (overlay amarillo), mover/redimensionar un texto seleccionado, o reencuadrar
+// arrastrando un clip de vídeo (crea/actualiza keyframes).
+//
+// Se construye por render con el contexto vivo (clip seleccionado, playhead, aspecto…),
+// igual que la función inline original, para no alterar el comportamiento.
+import { clamp, clampCenter } from '../../lib/panning'
+import { framingRect } from './render/canvas'
+
+export function createMainDownHandler(ctx) {
+  const {
+    mainCanvasRef, framingModeRef, playingRef, stopPlayback, setFramingMode,
+    selectedClip, mainTextBox, changeStyle, mediaEls, playhead, upsertKeyframe, outAspect,
+  } = ctx
+
+  return function onMainDown(e) {
+    const canvas = mainCanvasRef.current
+    const rect = canvas.getBoundingClientRect()
+
+    // Encuadre de texto de pista (overlay amarillo): mover / redimensionar.
+    const fm = framingModeRef.current
+    if (fm) {
+      if (playingRef.current) stopPlayback()
+      const cw = canvas.width, ch = canvas.height
+      const px = (e.clientX - rect.left) * (cw / rect.width), py = (e.clientY - rect.top) * (ch / rect.height)
+      const { bx, by, boxW, boxH } = framingRect(cw, ch, fm)
+      const near = (hx, hy) => Math.abs(px - hx) < 14 && Math.abs(py - hy) < 14
+      let mode = 'move'
+      if (near(bx + boxW, by + boxH)) mode = 'corner'
+      else if (near(bx, by + boxH / 2)) mode = 'width-l'
+      else if (near(bx + boxW, by + boxH / 2)) mode = 'width-r'
+      else if (near(bx + boxW / 2, by + boxH)) mode = 'height'
+      const s0 = { x: fm.x ?? 0.5, y: fm.y ?? 0.5, w: fm.w ?? 0.8, h: fm.h ?? 0.13, cx: e.clientX, cy: e.clientY }
+      const move = (ev) => {
+        const dxN = (ev.clientX - s0.cx) / rect.width, dyN = (ev.clientY - s0.cy) / rect.height
+        setFramingMode((prev) => {
+          if (!prev) return prev
+          const n = { ...prev }
+          if (mode === 'move') { n.x = clamp(s0.x + dxN, 0, 1); n.y = clamp(s0.y + dyN, 0, 1) }
+          else if (mode === 'width-r') n.w = clamp(s0.w + dxN * 2, 0.05, 1)
+          else if (mode === 'width-l') n.w = clamp(s0.w - dxN * 2, 0.05, 1)
+          else if (mode === 'height') n.h = clamp(s0.h + dyN * 2, 0.03, 0.95)
+          else if (mode === 'corner') { n.w = clamp(s0.w + dxN * 2, 0.05, 1); n.h = clamp(s0.h + dyN * 2, 0.03, 0.95) }
+          return n
+        })
+      }
+      const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+      window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+      return
+    }
+
+    const clip = selectedClip
+    if (!clip) return
+
+    // Texto: mover / redimensionar (solo si está visible en el instante actual)
+    if (clip.kind === 'text') {
+      const render = mainTextBox.current
+      if (!render) return                 // texto no activo bajo el playhead
+      if (playingRef.current) stopPlayback()
+      const st = clip.style || {}
+      const sx = canvas.width / rect.width, sy = canvas.height / rect.height
+      const px = (e.clientX - rect.left) * sx, py = (e.clientY - rect.top) * sy
+      let mode = 'move'
+      if (render.handles) {
+        const near = (h) => Math.abs(px - h.x) < 12 && Math.abs(py - h.y) < 12
+        if (near(render.handles.br)) mode = 'size'
+        else if (near(render.handles.r)) mode = 'width-r'
+        else if (near(render.handles.l)) mode = 'width-l'
+      }
+      const s0 = { x: st.x ?? 0.5, y: st.y ?? 0.5, w: st.w ?? 0.8, size: st.size ?? 0.07, cx: e.clientX, cy: e.clientY }
+      const move = (ev) => {
+        const dxN = (ev.clientX - s0.cx) / rect.width, dyN = (ev.clientY - s0.cy) / rect.height
+        if (mode === 'move') changeStyle(clip.id, { x: +clamp(s0.x + dxN, 0, 1).toFixed(4), y: +clamp(s0.y + dyN, 0, 1).toFixed(4) })
+        else if (mode === 'width-r') changeStyle(clip.id, { w: +clamp(s0.w + dxN * 2, 0.1, 1).toFixed(4) })
+        else if (mode === 'width-l') changeStyle(clip.id, { w: +clamp(s0.w - dxN * 2, 0.1, 1).toFixed(4) })
+        else if (mode === 'size') changeStyle(clip.id, { size: +clamp(s0.size + dyN * 0.3, 0.02, 0.3).toFixed(4) })
+      }
+      const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+      window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+      return
+    }
+
+    if (clip.kind !== 'video') return
+    const el = mediaEls.current.get(clip.id)
+    if (!el || !el.videoWidth) return
+    if (playingRef.current) stopPlayback()
+    const srcAspect = el.videoWidth / el.videoHeight
+    const localT = clamp(clip.in_point + (playhead - clip.start), clip.in_point, clip.out_point)
+    const apply = (cx, cy) => {
+      const c = clampCenter(cx, cy, clip.reframe?.zoom ?? 1, srcAspect, outAspect)
+      upsertKeyframe(clip, localT, c.cx, c.cy)
+    }
+    const toNorm = (ev) => [clamp((ev.clientX - rect.left) / rect.width, 0, 1), clamp((ev.clientY - rect.top) / rect.height, 0, 1)]
+    apply(...toNorm(e))
+    const move = (ev) => apply(...toNorm(ev))
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+  }
+}

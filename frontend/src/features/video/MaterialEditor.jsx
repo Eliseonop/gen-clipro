@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { updateMaterial, autoDescribeClip } from './api'
-import Icon from './Icon'
+import { updateMaterial, autoDescribeClip } from '../../services/api'
+import Icon from '../../components/Icon'
 
 // Modal para etiquetar (label + descripción) un clip o audio.
 export default function MaterialEditor({ pid, kind, item, onClose, onSaved }) {

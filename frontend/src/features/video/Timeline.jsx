@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect } from 'react'
-import { fmt } from './utils'
+import { fmt } from '../../lib/utils'
 
 // Línea de tiempo con selección de rango (in/out) arrastrable.
 // Los tramos del heatmap se dibujan como bloques; al hacer clic cargan su rango.

@@ -1,6 +1,6 @@
-import Icon from './Icon'
-import { fmt } from './utils'
-import { kfColor } from './panning'
+import Icon from '../../components/Icon'
+import { fmt } from '../../lib/utils'
+import { kfColor } from '../../lib/panning'
 
 // Panel "Posiciones del recorte": lista administrable de los encuadres
 // (keyframes) del clip seleccionado. Va pegado a la timeline.

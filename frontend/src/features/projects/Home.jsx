@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import Icon from './Icon'
+import Icon from '../../components/Icon'
 
 // Panel de inicio: proyectos como tarjetas + crear nuevo.
 export default function Home({ projects, onOpen, onCreate, onDelete }) {

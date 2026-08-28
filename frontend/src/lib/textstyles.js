@@ -4,7 +4,11 @@
 
 export const FONTS = ['Arial', 'Arial Black', 'Impact', 'Georgia', 'Verdana', 'Times New Roman', 'Courier New', 'Comic Sans MS', 'Trebuchet MS']
 
-const base = { font: 'Arial', size: 0.07, color: '#ffffff', bold: true, align: 'center', x: 0.5, y: 0.5, w: 0.8, border_width: 0, border_color: '#000000', shadow: false, shadow_color: '#000000', glow: false, bg: 'none', bg_opacity: 0.55 }
+const base = { font: 'Arial', size: 0.009375, color: '#ffffff', bold: true, align: 'center', x: 0.5, y: 0.5, w: 0.8, border_width: 0, border_color: '#000000', shadow: false, shadow_color: '#000000', glow: false, bg: 'none', bg_opacity: 0.55 }
+
+// Altura de referencia para convertir px ↔ fracción (resolución máxima 9:16 = 1280)
+export const FONT_SIZE_REF = 1280
+export const FONT_SIZES = [10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 42, 48, 56, 64, 72]
 
 const clampN = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 

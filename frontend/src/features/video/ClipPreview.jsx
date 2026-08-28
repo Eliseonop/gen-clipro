@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
-import { transcribeClip, getJob } from './api'
-import { fmt } from './utils'
-import Icon from './Icon'
+import { transcribeClip, getJob } from '../../services/api'
+import { fmt } from '../../lib/utils'
+import Icon from '../../components/Icon'
 
 const TX_MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3']
 

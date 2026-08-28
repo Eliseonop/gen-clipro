@@ -1,49 +1,22 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import Icon from './Icon'
-import { fmt } from './utils'
-import { getTimeline, saveTimeline, exportTimeline, getJob, generateSubtitles } from './api'
-import { drawReframe, geomFor, clampCenter, posAt, clamp, kfColor } from './panning'
-import { drawTextClip, wrappedText, defaultTextStyle, subtitleStyle } from './textstyles'
+import Icon from '../../components/Icon'
+import { fmt } from '../../lib/utils'
+import { getTimeline, saveTimeline } from '../../services/api'
+import { clamp, posAt, clampCenter } from '../../lib/panning'
+import { defaultTextStyle, wrappedText } from '../../lib/textstyles'
+import {
+  uid, FORMATS, mediaUrl, defaultTracks, newReframe, withKfIds,
+  makeClip, makeTextClip, clipDur, clipEnd,
+} from './editorModel'
+import { drawComposite, drawMainView } from './render/canvas'
+import { useExportJob } from './hooks/useExportJob'
+import { useSubtitles } from './hooks/useSubtitles'
+import { createMainDownHandler } from './interactions'
 import EdMaterial from './EdMaterial'
-import EdTimeline, { clipDur, clipEnd } from './EdTimeline'
+import EdTimeline from './EdTimeline'
 import EdCrops from './EdCrops'
 import EdText from './EdText'
 import './editor.css'
-
-let _uid = 1
-const uid = (p) => `${p}${Date.now().toString(36)}${(_uid++).toString(36)}`
-
-const FORMATS = [
-  { id: '9:16', w: 720, h: 1280 },
-  { id: '16:9', w: 1280, h: 720 },
-  { id: '1:1', w: 1080, h: 1080 },
-  { id: '4:5', w: 864, h: 1080 },
-  { id: '4:3', w: 960, h: 720 },
-]
-
-function mediaUrl(pid, clip) {
-  if (clip.asset_kind === 'sfx') return `/api/sfx/file/${clip.filename.split('/').map(encodeURIComponent).join('/')}`
-  const kind = clip.asset_kind === 'audios' ? 'audio' : 'video'
-  return `/api/media/${pid}/${kind}/${encodeURIComponent(clip.filename)}`
-}
-
-function defaultTracks() {
-  return [
-    { id: 'V1', kind: 'video', name: 'V1', hidden: false, muted: false, locked: false },
-    { id: 'V2', kind: 'video', name: 'V2', hidden: false, muted: false, locked: false },
-    { id: 'A1', kind: 'audio', name: 'A1', hidden: false, muted: false, locked: false },
-    { id: 'A2', kind: 'audio', name: 'A2', hidden: false, muted: false, locked: false },
-  ]
-}
-
-const newReframe = () => ({ zoom: 1, pan_mode: 'smooth', dual_crop: false, split_orientation: 'vertical', keyframes: [], keyframes2: [] })
-
-// Asegura ids en los keyframes (para color/selección estables).
-function withKfIds(reframe) {
-  if (!reframe) return reframe
-  const fix = (arr) => (arr || []).map((k) => (k.id ? k : { ...k, id: uid('k') }))
-  return { ...newReframe(), ...reframe, keyframes: fix(reframe.keyframes), keyframes2: fix(reframe.keyframes2) }
-}
 
 export default function VideoEditor({ project }) {
   const [tracks, setTracks] = useState(defaultTracks())
@@ -63,10 +36,9 @@ export default function VideoEditor({ project }) {
   const [audioDb, setAudioDb] = useState(-14)
   const [rowH, setRowH] = useState(52)
 
-  const [exportJob, setExportJob] = useState(null)
-  const [subJob, setSubJob] = useState(null)
   const [ctxMenu, setCtxMenu] = useState(null)      // { x, y, clip }
   const [dragInfo, setDragInfo] = useState(null)    // { kind, duration, name }
+  const [framingMode, setFramingMode] = useState(null) // { trackId, x, y, w } o null
 
   const mainCanvasRef = useRef(null)
   const resultCanvasRef = useRef(null)
@@ -84,6 +56,7 @@ export default function VideoEditor({ project }) {
   const selKfRef = useRef(selKfId); selKfRef.current = selKfId
   const hiddenKfRef = useRef(hiddenKf); hiddenKfRef.current = hiddenKf
   const outRef = useRef({ w: outW, h: outH }); outRef.current = { w: outW, h: outH }
+  const framingModeRef = useRef(null); framingModeRef.current = framingMode
 
   const duration = clips.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
   const selectedClip = clips.find((c) => c.id === selClipId) || null
@@ -150,107 +123,13 @@ export default function VideoEditor({ project }) {
     return best
   }, [layerOf])
 
-  // Dibuja el compuesto (vídeo superior + textos activos) en un canvas.
-  function drawComposite(ctx, head, selTextId) {
-    const cw = ctx.canvas.width, ch = ctx.canvas.height
-    const top = topVideoAt(head)
-    if (top) {
-      const el = mediaEls.current.get(top.id)
-      if (el && el.videoWidth) drawReframe(ctx, el, top.reframe, el.currentTime, outRef.current.w / outRef.current.h)
-      else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cw, ch) }
-    } else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cw, ch) }
-    let selRender = null
-    for (const c of clipsRef.current) {
-      if (c.kind !== 'text') continue
-      const track = tracksRef.current.find((t) => t.id === c.track_id)
-      if (track?.hidden) continue
-      // El texto solo aparece cuando el playhead está dentro de su rango.
-      const activeText = head >= c.start - 0.02 && head < c.start + clipDur(c)
-      if (!activeText) continue
-      const isSel = c.id === selTextId
-      const r = drawTextClip(ctx, c, cw, ch, { selected: isSel })
-      if (isSel) selRender = r
-    }
-    return selRender
-  }
-
-  // --- Dibujo del Main (vídeo original + encuadre, o edición de texto) ---
-  function drawMainView(head) {
-    const canvas = mainCanvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    const clip = clipsRef.current.find((c) => c.id === selRef.current)
-
-    // Modo texto: el Main muestra el resultado compuesto con la caja de texto.
-    if (clip && clip.kind === 'text') {
-      const a = outRef.current.w / outRef.current.h
-      const cw = a >= 1 ? 520 : Math.round(520 * a)
-      const ch = a >= 1 ? Math.round(520 / a) : 520
-      if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch }
-      mainTextBox.current = drawComposite(ctx, head, clip.id)
-      return
-    }
-
-    const el = clip ? mediaEls.current.get(clip.id) : null
-    if (!clip || clip.kind !== 'video' || !el || !el.videoWidth) {
-      ctx.fillStyle = '#05060a'; ctx.fillRect(0, 0, canvas.width, canvas.height)
-      return
-    }
-    const vw = el.videoWidth, vh = el.videoHeight
-    const srcAspect = vw / vh
-    // ajustar el tamaño del canvas al aspecto de la fuente
-    const cw = 520, ch = Math.round(cw / srcAspect)
-    if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch }
-
-    const active = head >= clip.start - 0.02 && head < clipEnd(clip)
-    const clampedHead = clamp(head, clip.start, clipEnd(clip))
-    const srcTime = clamp(clip.in_point + (clampedHead - clip.start), clip.in_point, clip.out_point)
-    if (!(playingRef.current && active)) {
-      if (Math.abs(el.currentTime - srcTime) > 0.06) { try { el.currentTime = srcTime } catch { /* noop */ } }
-    }
-    const drawT = (playingRef.current && active) ? el.currentTime : srcTime
-
-    ctx.clearRect(0, 0, cw, ch)
-    try { ctx.drawImage(el, 0, 0, cw, ch) } catch { /* noop */ }
-
-    const rf = clip.reframe || newReframe()
-    const zoom = rf.zoom ?? 1
-    const { widthFrac: wf, heightFrac: hf } = geomFor(zoom, srcAspect, outRef.current.w / outRef.current.h)
-    const p = clampCenter(...center(rf, drawT), zoom, srcAspect, outRef.current.w / outRef.current.h)
-    const bx = (p.cx - wf / 2) * cw, by = (p.cy - hf / 2) * ch, bw = wf * cw, bh = hf * ch
-
-    // atenuar fuera del encuadre activo
-    ctx.fillStyle = 'rgba(3,5,12,0.58)'
-    ctx.fillRect(0, 0, cw, by)
-    ctx.fillRect(0, by + bh, cw, ch - (by + bh))
-    ctx.fillRect(0, by, bx, bh)
-    ctx.fillRect(bx + bw, by, cw - (bx + bw), bh)
-
-    // cajas de cada keyframe visible (en su color)
-    const kfs = [...(rf.keyframes || [])].sort((a, b) => a.t - b.t)
-    kfs.forEach((k, i) => {
-      if (hiddenKfRef.current.has(k.id)) return
-      const kp = clampCenter(k.cx, k.cy, zoom, srcAspect, outRef.current.w / outRef.current.h)
-      const kx = (kp.cx - wf / 2) * cw, ky = (kp.cy - hf / 2) * ch
-      ctx.strokeStyle = kfColor(i)
-      ctx.lineWidth = k.id === selKfRef.current ? 3 : 1.5
-      ctx.strokeRect(kx, ky, bw, bh)
-    })
-
-    // encuadre activo (interpolado) en blanco
-    ctx.strokeStyle = '#fff'
-    ctx.lineWidth = 2
-    ctx.strokeRect(bx, by, bw, bh)
-  }
-
-  function center(rf, t) {
-    const p = posAt(rf.keyframes, t, rf.pan_mode)
-    return [p.cx, p.cy]
-  }
-
   // --- Motor rAF: Main + Resultado + reproducción ---
   useEffect(() => {
     const resultCtx = resultCanvasRef.current?.getContext('2d')
+    const env = {
+      clipsRef, tracksRef, mediaEls, outRef, selRef, selKfRef, hiddenKfRef,
+      playingRef, framingModeRef, mainCanvasRef, mainTextBox, topVideoAt,
+    }
     const tick = () => {
       const total = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
       let head = playheadRef.current
@@ -289,9 +168,9 @@ export default function VideoEditor({ project }) {
       }
 
       // Resultado final compuesto (vídeo + texto)
-      if (resultCtx) drawComposite(resultCtx, head, null)
+      if (resultCtx) drawComposite(resultCtx, head, null, env)
 
-      drawMainView(head)
+      drawMainView(head, env)
       rafRef.current = requestAnimationFrame(tick)
     }
     rafRef.current = requestAnimationFrame(tick)
@@ -340,25 +219,6 @@ export default function VideoEditor({ project }) {
     const sel = tracks.find((t) => t.id === selTrackId)
     if (sel && sel.kind === kind && !sel.locked) return sel
     return tracks.find((t) => t.kind === kind && !t.locked) || null
-  }
-
-  function makeClip(assetKind, item, trackId, start, dur) {
-    const kind = assetKind === 'clips' ? 'video' : 'audio'
-    return {
-      id: uid('c'),
-      track_id: trackId,
-      kind,
-      asset_kind: assetKind,
-      asset_id: assetKind === 'clips' ? String(item.index) : String(item.id),
-      filename: assetKind === 'sfx' ? item.id : item.filename,
-      name: item.label || item.name || item.filename,
-      start: +Math.max(0, start).toFixed(3),
-      in_point: 0,
-      out_point: +Math.max(0.3, dur || 1).toFixed(3),
-      source_duration: +Math.max(0.3, dur || 1).toFixed(3),
-      volume: 1,
-      reframe: kind === 'video' ? newReframe() : null,
-    }
   }
 
   function addAsset(assetKind, item) {
@@ -426,7 +286,7 @@ export default function VideoEditor({ project }) {
     const id = addTrack('text')
     setSelClipId(null); setSelKfId(null); setSelTrackId(id)
   }
-  function selectTrack(id) { setSelTrackId(id); setSelClipId(null); setSelKfId(null) }
+  function selectTrack(id) { setSelTrackId(id); setSelClipId(null); setSelKfId(null); setFramingMode(null) }
 
   // --- Encuadres / keyframes ---
   function changeReframe(id, patch) {
@@ -501,14 +361,6 @@ export default function VideoEditor({ project }) {
     if (existing) return existing.id
     return addTrack('text', style)
   }
-  function makeTextClip(trackId, start, dur, text, style) {
-    return {
-      id: uid('c'), track_id: trackId, kind: 'text', asset_kind: 'text', asset_id: uid('t'),
-      filename: '', name: (text || 'Texto').slice(0, 22), start: +Math.max(0, start).toFixed(3),
-      in_point: 0, out_point: +Math.max(0.5, dur).toFixed(3), source_duration: +Math.max(0.5, dur).toFixed(3),
-      volume: 1, reframe: null, text: text || 'Texto', style: { ...(style || defaultTextStyle()) },
-    }
-  }
   function addText() {
     const style = baseTextStyle()
     const tid = ensureTextTrack(style)
@@ -542,94 +394,52 @@ export default function VideoEditor({ project }) {
     }))
   }
 
+  // --- Encuadre de texto por pista (overlay amarillo en el Main) ---
+  function startFraming(track) {
+    const st = track.style || defaultTextStyle()
+    const h = clamp((st.size ?? 0.07) * 1.5, 0.05, 0.5)
+    setSelClipId(null); setSelKfId(null); setSelTrackId(track.id)
+    setFramingMode({ trackId: track.id, x: st.x ?? 0.5, y: st.y ?? 0.5, w: st.w ?? 0.8, h })
+  }
+  function saveFraming() {
+    const fm = framingMode
+    if (!fm) return
+    const size = +clamp(fm.h / 1.22, 0.02, 0.4).toFixed(4)
+    changeTrackStyle(fm.trackId, { x: +fm.x.toFixed(4), y: +fm.y.toFixed(4), w: +fm.w.toFixed(4), size })
+    setFramingMode(null)
+  }
+  function cancelFraming() { setFramingMode(null) }
+
+  // Aplica el estilo de un clip de texto a TODOS los clips de texto del Timeline.
+  // Actúa como "estado inicial común": después cada texto sigue siendo editable individualmente.
+  function applyGlobalTemplate(sourceClip) {
+    if (!sourceClip || sourceClip.kind !== 'text') return
+    const template = { ...(sourceClip.style || {}) }
+    setClips((prev) => prev.map((c) => {
+      if (c.kind !== 'text') return c
+      return { ...c, style: { ...template } }
+    }))
+  }
+
+  // --- Export ---
+  // Para el export, el texto se ajusta a su caja (wrap) antes de renderizar.
+  function exportPayload() {
+    const octx = document.createElement('canvas').getContext('2d')
+    const outClips = clips.map((c) => (c.kind === 'text' ? { ...c, text: wrappedText(octx, c, outW, outH) } : c))
+    return { version: 1, fps: 30, width: outW, height: outH, audio_target_db: audioDb, tracks, clips: outClips }
+  }
+  const { exportJob, setExportJob, doExport, exporting } = useExportJob(project.id, { timelinePayload, exportPayload })
+
   // --- Subtítulos ---
-  function requestSubtitles(clip) {
-    setCtxMenu(null)
-    if (!clip || (clip.asset_kind !== 'audios' && clip.asset_kind !== 'sfx')) return
-    generateSubtitles(project.id, { filename: clip.filename, asset_kind: clip.asset_kind, model: 'base' })
-      .then((job) => setSubJob({ ...job, srcClip: clip }))
-      .catch((e) => setSubJob({ status: 'error', error: e.message }))
-  }
-  function buildSubtitleClips(job) {
-    const src = job.srcClip
-    const existing = tracksRef.current.find((t) => t.kind === 'text')
-    const style = existing?.style || subtitleStyle()
-    const tid = ensureTextTrack(style)
-    const clipLen = src.out_point - src.in_point
-    const news = []
-    for (const s of job.transcript.segments || []) {
-      const ls = s.start - src.in_point, le = s.end - src.in_point
-      if (le <= 0 || ls >= clipLen) continue
-      const start = src.start + Math.max(0, ls)
-      const end = src.start + Math.min(clipLen, le)
-      if (!(s.text || '').trim()) continue
-      news.push(makeTextClip(tid, start, Math.max(0.4, end - start), s.text.trim(), style))
-    }
-    if (news.length) setClips((prev) => [...prev, ...news])
-  }
-  useEffect(() => {
-    if (!subJob || subJob.status === 'done' || subJob.status === 'error') {
-      if (subJob?.status === 'done' && subJob.transcript && subJob.srcClip) { buildSubtitleClips(subJob); setSubJob(null) }
-      return
-    }
-    const id = setInterval(async () => {
-      try { const j = await getJob(subJob.id); setSubJob({ ...j, srcClip: subJob.srcClip }) } catch { /* reintenta */ }
-    }, 1000)
-    return () => clearInterval(id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subJob?.id, subJob?.status])
+  const { subJob, setSubJob, requestSubtitles } = useSubtitles(project.id, {
+    tracksRef, ensureTextTrack, setClips, setCtxMenu,
+  })
 
   // --- Arrastrar en el Main: mover texto o reencuadrar ---
-  function onMainDown(e) {
-    const clip = selectedClip
-    if (!clip) return
-    const canvas = mainCanvasRef.current
-    const rect = canvas.getBoundingClientRect()
-
-    // Texto: mover / redimensionar (solo si está visible en el instante actual)
-    if (clip.kind === 'text') {
-      const render = mainTextBox.current
-      if (!render) return                 // texto no activo bajo el playhead
-      if (playingRef.current) stopPlayback()
-      const st = clip.style || {}
-      const sx = canvas.width / rect.width, sy = canvas.height / rect.height
-      const px = (e.clientX - rect.left) * sx, py = (e.clientY - rect.top) * sy
-      let mode = 'move'
-      if (render.handles) {
-        const near = (h) => Math.abs(px - h.x) < 12 && Math.abs(py - h.y) < 12
-        if (near(render.handles.br)) mode = 'size'
-        else if (near(render.handles.r)) mode = 'width-r'
-        else if (near(render.handles.l)) mode = 'width-l'
-      }
-      const s0 = { x: st.x ?? 0.5, y: st.y ?? 0.5, w: st.w ?? 0.8, size: st.size ?? 0.07, cx: e.clientX, cy: e.clientY }
-      const move = (ev) => {
-        const dxN = (ev.clientX - s0.cx) / rect.width, dyN = (ev.clientY - s0.cy) / rect.height
-        if (mode === 'move') changeStyle(clip.id, { x: +clamp(s0.x + dxN, 0, 1).toFixed(4), y: +clamp(s0.y + dyN, 0, 1).toFixed(4) })
-        else if (mode === 'width-r') changeStyle(clip.id, { w: +clamp(s0.w + dxN * 2, 0.1, 1).toFixed(4) })
-        else if (mode === 'width-l') changeStyle(clip.id, { w: +clamp(s0.w - dxN * 2, 0.1, 1).toFixed(4) })
-        else if (mode === 'size') changeStyle(clip.id, { size: +clamp(s0.size + dyN * 0.3, 0.02, 0.3).toFixed(4) })
-      }
-      const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
-      window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
-      return
-    }
-
-    if (clip.kind !== 'video') return
-    const el = mediaEls.current.get(clip.id)
-    if (!el || !el.videoWidth) return
-    if (playingRef.current) stopPlayback()
-    const srcAspect = el.videoWidth / el.videoHeight
-    const localT = clamp(clip.in_point + (playhead - clip.start), clip.in_point, clip.out_point)
-    const apply = (cx, cy) => {
-      const c = clampCenter(cx, cy, clip.reframe?.zoom ?? 1, srcAspect, outAspect)
-      upsertKeyframe(clip, localT, c.cx, c.cy)
-    }
-    const toNorm = (ev) => [clamp((ev.clientX - rect.left) / rect.width, 0, 1), clamp((ev.clientY - rect.top) / rect.height, 0, 1)]
-    apply(...toNorm(e))
-    const move = (ev) => apply(...toNorm(ev))
-    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
-    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
-  }
+  const onMainDown = createMainDownHandler({
+    mainCanvasRef, framingModeRef, playingRef, stopPlayback, setFramingMode,
+    selectedClip, mainTextBox, changeStyle, mediaEls, playhead, upsertKeyframe, outAspect,
+  })
 
   // --- Teclado ---
   useEffect(() => {
@@ -644,29 +454,6 @@ export default function VideoEditor({ project }) {
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  // --- Export ---
-  useEffect(() => {
-    if (!exportJob || exportJob.status === 'done' || exportJob.status === 'error') return
-    const id = setInterval(async () => {
-      try { setExportJob(await getJob(exportJob.id)) } catch { /* reintenta */ }
-    }, 1000)
-    return () => clearInterval(id)
-  }, [exportJob?.id, exportJob?.status])
-
-  // Para el export, el texto se ajusta a su caja (wrap) antes de renderizar.
-  function exportPayload() {
-    const octx = document.createElement('canvas').getContext('2d')
-    const outClips = clips.map((c) => (c.kind === 'text' ? { ...c, text: wrappedText(octx, c, outW, outH) } : c))
-    return { version: 1, fps: 30, width: outW, height: outH, audio_target_db: audioDb, tracks, clips: outClips }
-  }
-  async function doExport() {
-    try {
-      await saveTimeline(project.id, timelinePayload())
-      setExportJob(await exportTimeline(project.id, exportPayload()))
-    } catch (e) { setExportJob({ status: 'error', error: e.message }) }
-  }
-  const exporting = exportJob && (exportJob.status === 'pending' || exportJob.status === 'running')
 
   function setFormat(fmtId) {
     const f = FORMATS.find((x) => x.id === fmtId)
@@ -705,11 +492,12 @@ export default function VideoEditor({ project }) {
           <div className="ed-col-head"><Icon name="edit" size={15} /> Main · edición</div>
           <div className="ed-main-stage" ref={mainStageRef}
             onPointerDown={onMainDown}
-            style={{ cursor: (canEditFrame || isTextSel) ? 'crosshair' : 'default' }}>
+            style={{ cursor: (canEditFrame || isTextSel || framingMode) ? 'crosshair' : 'default' }}>
             <canvas ref={mainCanvasRef} width={520} height={292} className="ed-main-canvas" />
-            {!selectedClip && <div className="ed-stage-empty">Selecciona un clip en la timeline</div>}
+            {clips.length === 0 && !framingMode && <div className="ed-stage-empty">Agrega clips o texto al timeline</div>}
             {canEditFrame && <div className="ed-stage-hint">Arrastra para colocar el encuadre</div>}
-            {isTextSel && <div className="ed-stage-hint">Arrastra el texto para moverlo</div>}
+            {isTextSel && <div className="ed-stage-hint">Arrastra el texto para moverlo · botón Global para aplicar a todos</div>}
+            {framingMode && <div className="ed-stage-hint">Ajusta el recuadro amarillo y pulsa Guardar</div>}
           </div>
           <div className="ed-main-tools">
             <button className="primary alt small" onClick={addText} title="Añadir un texto a la composición">
@@ -798,7 +586,7 @@ export default function VideoEditor({ project }) {
           selectedClipId={selClipId} selectedTrackId={selTrackId}
           selectedClip={selectedClip} selKfId={selKfId} dragInfo={dragInfo}
           onSeek={seek}
-          onSelectClip={(id) => { setSelClipId(id); setSelKfId(null) }}
+          onSelectClip={(id) => { setSelClipId(id); setSelKfId(null); setFramingMode(null) }}
           onSelectTrack={selectTrack}
           onDoubleClip={(clip) => { seek(clip.start + 0.03); setSelClipId(clip.id); setSelKfId(null) }}
           onMutateClip={mutateClip}
@@ -820,11 +608,16 @@ export default function VideoEditor({ project }) {
             onChangeStyle={(patch) => changeStyle(selectedClip.id, patch)}
             onApplyPreset={(p) => applyPreset(selectedClip.id, p)}
             onChangeDur={(d) => mutateClip(selectedClip.id, { out_point: +(selectedClip.in_point + d).toFixed(3), source_duration: +(selectedClip.in_point + d).toFixed(3) })}
+            onApplyAsGlobalTemplate={() => applyGlobalTemplate(selectedClip)}
           />
         ) : isTextTrackSel ? (
           <EdText mode="track" style={selTrackObj.style} trackName={selTrackObj.name}
             onChangeStyle={(patch) => changeTrackStyle(selTrackObj.id, patch)}
             onApplyPreset={(p) => applyTrackPreset(selTrackObj.id, p)}
+            framing={!!framingMode && framingMode.trackId === selTrackObj.id}
+            onStartFraming={() => startFraming(selTrackObj)}
+            onSaveFraming={saveFraming}
+            onCancelFraming={cancelFraming}
           />
         ) : (
           <EdCrops
@@ -845,6 +638,11 @@ export default function VideoEditor({ project }) {
           <div className="ed-ctx-menu" style={{ left: ctxMenu.x, top: ctxMenu.y }}>
             {(ctxMenu.clip.asset_kind === 'audios' || ctxMenu.clip.asset_kind === 'sfx') && (
               <button onClick={() => requestSubtitles(ctxMenu.clip)}><Icon name="subtitles" size={15} /> Generar subtítulos</button>
+            )}
+            {ctxMenu.clip.kind === 'text' && (
+              <button onClick={() => { applyGlobalTemplate(ctxMenu.clip); setCtxMenu(null) }}>
+                <Icon name="style" size={15} /> Aplicar como plantilla global
+              </button>
             )}
             <button onClick={() => { splitClip(ctxMenu.clip.id, playhead); setCtxMenu(null) }}><Icon name="content_cut" size={15} /> Dividir aquí</button>
             <button className="danger" onClick={() => { deleteClip(ctxMenu.clip.id); setCtxMenu(null) }}><Icon name="delete" size={15} /> Eliminar</button>

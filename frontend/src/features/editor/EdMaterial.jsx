@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import Icon from './Icon'
-import { fmt } from './utils'
-import { listSfx, setSfxFolder, pickFolder } from './api'
+import Icon from '../../components/Icon'
+import { fmt } from '../../lib/utils'
+import { listSfx, setSfxFolder, pickFolder } from '../../services/api'
 
 // Panel izquierdo (biblioteca): Video | Audio | Sound Effects.
 export default function EdMaterial({ project, onAdd, onDragInfo }) {

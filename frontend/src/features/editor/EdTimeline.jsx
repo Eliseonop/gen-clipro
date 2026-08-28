@@ -1,20 +1,10 @@
 import { useRef, useEffect, useState } from 'react'
-import Icon from './Icon'
-import { fmt } from './utils'
-import { pseudoWaveform, clamp, kfColor } from './panning'
+import Icon from '../../components/Icon'
+import { fmt } from '../../lib/utils'
+import { pseudoWaveform, clamp, kfColor } from '../../lib/panning'
+import { clipDur, displayTracks } from './editorModel'
 
 const MIN_DUR = 0.15
-
-export const clipDur = (c) => Math.max(0, c.out_point - c.in_point)
-export const clipEnd = (c) => c.start + clipDur(c)
-
-// Orden en pantalla: texto (arriba), luego vídeo (capa superior arriba), luego audio.
-export function displayTracks(tracks) {
-  const txt = tracks.filter((t) => t.kind === 'text')
-  const vids = tracks.filter((t) => t.kind === 'video')
-  const auds = tracks.filter((t) => t.kind === 'audio')
-  return [...txt.slice().reverse(), ...vids.slice().reverse(), ...auds]
-}
 
 const laneKindFor = (assetKind) => (assetKind === 'clips' || assetKind === 'video' ? 'video' : 'audio')
 

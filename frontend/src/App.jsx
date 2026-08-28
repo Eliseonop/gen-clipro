@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
-import { listProjects, createProject, deleteProject } from './api'
-import Home from './Home'
-import ProjectView from './ProjectView'
-import ConfirmModal from './ConfirmModal'
-import './App.css'
+import { listProjects, createProject, deleteProject } from './services/api'
+import Home from './features/projects/Home'
+import ProjectView from './features/projects/ProjectView'
+import ConfirmModal from './components/ConfirmModal'
+import './styles/App.css'
 
 export default function App() {
   const [projects, setProjects] = useState([])

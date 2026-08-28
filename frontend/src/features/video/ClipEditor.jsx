@@ -1,41 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { prepareReframe, createClipJob, getJob } from './api'
-import { fmt } from './utils'
-import Icon from './Icon'
-import ConfirmModal from './ConfirmModal'
+import { prepareReframe, createClipJob, getJob } from '../../services/api'
+import { fmt } from '../../lib/utils'
+import Icon from '../../components/Icon'
+import ConfirmModal from '../../components/ConfirmModal'
+import { clamp, r2, r4, posAt, OUT_RATIO, geomFor, clampCenter as clampCenterFor } from '../../lib/panning'
+import { drawClipFrame } from './clipCanvas'
 
-const OUT_RATIO = 9 / 16
-
-const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
-const r2 = (x) => Math.round(x * 100) / 100
-const r4 = (x) => Math.round(x * 10000) / 10000
-
-function posAt(kfs, time, panMode = 'smooth') {
-  if (!kfs || !kfs.length) return { cx: 0.5, cy: 0.5 }
-  const s = [...kfs].sort((a, b) => a.t - b.t)
-  if (time <= s[0].t) return { cx: s[0].cx, cy: s[0].cy }
-  const last = s[s.length - 1]
-  if (time >= last.t) return { cx: last.cx, cy: last.cy }
-
-  if (panMode === 'direct') {
-    let active = s[0]
-    for (let i = 0; i < s.length; i++) {
-      if (s[i].t <= time) active = s[i]
-      else break
-    }
-    return { cx: active.cx, cy: active.cy }
-  }
-
-  for (let i = 0; i < s.length - 1; i++) {
-    const a = s[i], b = s[i + 1]
-    if (time >= a.t && time <= b.t) {
-      const f = (time - a.t) / ((b.t - a.t) || 1)
-      return { cx: a.cx + (b.cx - a.cx) * f, cy: a.cy + (b.cy - a.cy) * f }
-    }
-  }
-  return { cx: last.cx, cy: last.cy }
-}
-
+// Punto de la pista de caras más cercano al instante `time` (específico del editor de clip).
 function trackAt(track, time) {
   if (!track?.length) return null
   let best = track[0], bd = Math.abs(track[0].t - time)
@@ -162,26 +133,13 @@ export default function ClipEditor({ project, url, segStart, segEnd, segIndex, i
 
   // --- Geometría ---
   const srcAspect = prep ? prep.width / prep.height : 16 / 9
-  const geom = useCallback((z, targetAspect = OUT_RATIO) => {
-    const heightFrac = clamp(z, 0.1, 1)
-    const widthFrac = Math.min(1, (heightFrac * targetAspect) / srcAspect)
-    return { widthFrac, heightFrac }
-  }, [srcAspect])
+  const geom = useCallback((z, targetAspect = OUT_RATIO) => geomFor(z, srcAspect, targetAspect), [srcAspect])
 
   const targetAspect = dualCrop
     ? (splitOrientation === 'vertical' ? (9 / 8) : (4.5 / 16))
     : OUT_RATIO
 
-  const { widthFrac, heightFrac } = geom(activeZoom, targetAspect)
-
-  const clampCenter = useCallback((cx, cy, z = activeZoom, tAspect = targetAspect) => {
-    const { widthFrac: wf, heightFrac: hf } = geom(z, tAspect)
-    const wx = wf / 2, wy = hf / 2
-    return {
-      cx: wf >= 1 ? 0.5 : clamp(cx, wx, 1 - wx),
-      cy: hf >= 1 ? 0.5 : clamp(cy, wy, 1 - wy),
-    }
-  }, [geom, activeZoom, targetAspect])
+  const clampCenter = useCallback((cx, cy, z = activeZoom, tAspect = targetAspect) => clampCenterFor(cx, cy, z, srcAspect, tAspect), [srcAspect, activeZoom, targetAspect])
 
   const dur = prep?.duration || 0
   const interp1 = posAt(kfs, t, panMode)
@@ -190,78 +148,16 @@ export default function ClipEditor({ project, url, segStart, segEnd, segIndex, i
   const interp2 = posAt(kfs2, t, panMode)
   const center2 = clampCenter(interp2.cx, interp2.cy, zoom2, targetAspect)
 
-  const activeCenter = activeCropTab === 1 ? center1 : center2
   const face = prep ? trackAt(prep.track, t) : null
 
   // --- Resultado 9:16 en vivo en Canvas ---
   useEffect(() => {
     if (!prep) return
     let raf = 0
+    const env = { dualCropRef, splitOrientRef, panModeRef, zoomRef, zoom2Ref, kfsRef, kfs2Ref, geom, clampCenter, prep }
     const draw = () => {
       const v = videoRef.current, c = canvasRef.current
-      if (v && c && v.readyState >= 2) {
-        const ctx = c.getContext('2d')
-        const isDual = dualCropRef.current
-        const orient = splitOrientRef.current
-        const mode = panModeRef.current
-        const vw = v.videoWidth || prep.width, vh = v.videoHeight || prep.height
-
-        ctx.clearRect(0, 0, c.width, c.height)
-
-        if (!isDual) {
-          // Un solo encuadre 9:16
-          const { widthFrac: wf, heightFrac: hf } = geom(zoomRef.current, OUT_RATIO)
-          const pp = posAt(kfsRef.current, v.currentTime, mode)
-          const p = clampCenter(pp.cx, pp.cy, zoomRef.current, OUT_RATIO)
-          let sw = wf * vw, sh = hf * vh
-          let sx = clamp((p.cx - wf / 2) * vw, 0, vw - sw)
-          let sy = clamp((p.cy - hf / 2) * vh, 0, vh - sh)
-          try { ctx.drawImage(v, sx, sy, sw, sh, 0, 0, c.width, c.height) } catch { /* noop */ }
-        } else {
-          // Doble encuadre
-          const tAspect = orient === 'vertical' ? (9 / 8) : (4.5 / 16)
-
-          // Crop 1
-          const { widthFrac: wf1, heightFrac: hf1 } = geom(zoomRef.current, tAspect)
-          const pp1 = posAt(kfsRef.current, v.currentTime, mode)
-          const p1 = clampCenter(pp1.cx, pp1.cy, zoomRef.current, tAspect)
-          let sw1 = wf1 * vw, sh1 = hf1 * vh
-          let sx1 = clamp((p1.cx - wf1 / 2) * vw, 0, vw - sw1)
-          let sy1 = clamp((p1.cy - hf1 / 2) * vh, 0, vh - sh1)
-
-          // Crop 2
-          const { widthFrac: wf2, heightFrac: hf2 } = geom(zoom2Ref.current, tAspect)
-          const pp2 = posAt(kfs2Ref.current, v.currentTime, mode)
-          const p2 = clampCenter(pp2.cx, pp2.cy, zoom2Ref.current, tAspect)
-          let sw2 = wf2 * vw, sh2 = hf2 * vh
-          let sx2 = clamp((p2.cx - wf2 / 2) * vw, 0, vw - sw2)
-          let sy2 = clamp((p2.cy - hf2 / 2) * vh, 0, vh - sh2)
-
-          if (orient === 'vertical') {
-            try {
-              ctx.drawImage(v, sx1, sy1, sw1, sh1, 0, 0, c.width, c.height / 2)
-              ctx.drawImage(v, sx2, sy2, sw2, sh2, 0, c.height / 2, c.width, c.height / 2)
-              ctx.strokeStyle = '#292e3e'
-              ctx.lineWidth = 2
-              ctx.beginPath()
-              ctx.moveTo(0, c.height / 2)
-              ctx.lineTo(c.width, c.height / 2)
-              ctx.stroke()
-            } catch { /* noop */ }
-          } else {
-            try {
-              ctx.drawImage(v, sx1, sy1, sw1, sh1, 0, 0, c.width / 2, c.height)
-              ctx.drawImage(v, sx2, sy2, sw2, sh2, c.width / 2, 0, c.width / 2, c.height)
-              ctx.strokeStyle = '#292e3e'
-              ctx.lineWidth = 2
-              ctx.beginPath()
-              ctx.moveTo(c.width / 2, 0)
-              ctx.lineTo(c.width / 2, c.height)
-              ctx.stroke()
-            } catch { /* noop */ }
-          }
-        }
-      }
+      if (v && c && v.readyState >= 2) drawClipFrame(v, c, env)
       raf = requestAnimationFrame(draw)
     }
     raf = requestAnimationFrame(draw)

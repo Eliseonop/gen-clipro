@@ -1,13 +1,13 @@
 import { useState } from 'react'
-import VideoTab from './VideoTab'
-import AudioTab from './AudioTab'
-import VideoEditor from './VideoEditor'
-import Icon from './Icon'
-import MaterialEditor from './MaterialEditor'
-import JsonEditor from './JsonEditor'
-import ConfirmModal from './ConfirmModal'
-import Toast from './Toast'
-import { pickFolder, setProjectFolder, deleteMaterial } from './api'
+import VideoTab from '../video/VideoTab'
+import AudioTab from '../audio/AudioTab'
+import VideoEditor from '../editor/VideoEditor'
+import Icon from '../../components/Icon'
+import MaterialEditor from '../video/MaterialEditor'
+import JsonEditor from '../../components/JsonEditor'
+import ConfirmModal from '../../components/ConfirmModal'
+import Toast from '../../components/Toast'
+import { pickFolder, setProjectFolder, deleteMaterial } from '../../services/api'
 
 export default function ProjectView({ project, onBack, onRefresh }) {
   const [section, setSection] = useState('video')

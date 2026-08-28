@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getManifest, putManifest } from './api'
+import { getManifest, putManifest } from '../services/api'
 import Icon from './Icon'
 
 // Modal para ver / editar el JSON del proyecto y guardarlo en su carpeta.
