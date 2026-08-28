@@ -1,0 +1,363 @@
+"""Gestor de trabajos en memoria.
+
+Cada petición de clips crea un Job con un id. El procesado corre en segundo
+plano y el frontend consulta el progreso por polling. Es un almacén simple en
+memoria; si más adelante quieres persistencia o varios workers, se sustituye
+por Redis/Celery sin tocar la API.
+"""
+from __future__ import annotations
+
+import threading
+import uuid
+from datetime import datetime, timezone
+
+from . import clipper, projects
+from .schemas import (
+    AudioInfo,
+    ClipRequest,
+    Job,
+    JobStatus,
+    TranscribeRequest,
+    Transcript,
+    TranscriptSegment,
+    TTSRequest,
+)
+
+_jobs: dict[str, Job] = {}
+_lock = threading.Lock()
+
+
+def create_job() -> Job:
+    job = Job(id=uuid.uuid4().hex[:12])
+    with _lock:
+        _jobs[job.id] = job
+    return job
+
+
+def get_job(job_id: str) -> Job | None:
+    return _jobs.get(job_id)
+
+
+def _run(job_id: str, req: ClipRequest, title: str) -> None:
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+
+    def on_progress(frac: float, message: str) -> None:
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from . import storage
+
+        project = projects.get_project(req.project_id)
+        base = storage.ensure_dirs(storage.project_base(project))
+
+        clips = clipper.generate_clips(
+            url=req.url,
+            segments=req.segments,
+            mode=req.crop_mode,
+            title=title,
+            project_id=req.project_id,
+            video_dir=base / "video",
+            on_progress=on_progress,
+            reframe=req.reframe,
+        )
+        projects.add_clips(req.project_id, clips)   # persistir en el proyecto
+        job.clips = clips
+        job.progress = 1.0
+        job.message = f"{len(clips)} clip(s) generados."
+        job.status = JobStatus.done
+    except Exception as exc:  # noqa: BLE001 - queremos reportar cualquier fallo
+        job.status = JobStatus.error
+        job.error = str(exc)
+        job.message = "Error durante el procesado."
+
+
+def start_job(job: Job, req: ClipRequest, title: str) -> None:
+    thread = threading.Thread(target=_run, args=(job.id, req, title), daemon=True)
+    thread.start()
+
+
+def _mmss(s: float) -> str:
+    s = int(s)
+    return f"{s // 60}:{s % 60:02d}"
+
+
+def _run_transcribe(job_id: str, req: TranscribeRequest, title: str) -> None:
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+
+    def on_progress(frac: float, message: str) -> None:
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from . import storage, transcribe   # import perezoso (faster-whisper)
+
+        result = transcribe.run(req.url, req.model, req.language, on_progress)
+        segments = [TranscriptSegment(**s) for s in result["segments"]]
+
+        # Guardar el guion en disco, con el título del vídeo como prefijo.
+        project = projects.get_project(req.project_id)
+        base = storage.ensure_dirs(storage.project_base(project))
+        prefix = storage.safe_name(title)
+        fpath = base / "video" / f"{prefix}.guion.txt"
+        header = f"{title}\n{req.url}\n\n"
+        body = "\n".join(f"[{_mmss(s.start)}] {s.text}" for s in segments)
+        fpath.write_text(header + body, encoding="utf-8")
+
+        tr = Transcript(
+            id=uuid.uuid4().hex[:8],
+            source_url=req.url,
+            title=title,
+            model=req.model,
+            language=result["language"],
+            duration=result["duration"],
+            created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            file=str(fpath),
+            segments=segments,
+        )
+        projects.add_transcript(req.project_id, tr)
+        job.transcript = tr
+        job.progress = 1.0
+        job.message = f"Guion listo ({len(tr.segments)} líneas)."
+        job.status = JobStatus.done
+    except Exception as exc:  # noqa: BLE001
+        job.status = JobStatus.error
+        job.error = str(exc)
+        job.message = "Error durante la transcripción."
+
+
+def start_transcribe_job(job: Job, req: TranscribeRequest, title: str) -> None:
+    thread = threading.Thread(target=_run_transcribe, args=(job.id, req, title), daemon=True)
+    thread.start()
+
+
+def _run_clip_transcribe(job_id: str, pid: str, index: str, model: str, language) -> None:
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+
+    def on_progress(frac: float, message: str) -> None:
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from . import storage, transcribe
+
+        project = projects.get_project(pid)
+        clip = next((c for c in project.clips if str(c.index) == str(index)), None)
+        if clip is None:
+            raise RuntimeError("Clip no encontrado.")
+        path = storage.resolve_media(project, "video", clip.filename)
+        if path is None or not path.exists():
+            raise RuntimeError("No se encuentra el archivo del clip.")
+
+        result = transcribe.run_file(str(path), model, language, on_progress)
+        segs = [TranscriptSegment(**s) for s in result["segments"]]
+        tr = Transcript(
+            id=uuid.uuid4().hex[:8],
+            source_url=clip.source_url,
+            title=clip.label or clip.filename,
+            model=model,
+            language=result["language"],
+            duration=result["duration"],
+            created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            segments=segs,
+        )
+        projects.update_material(pid, "clips", str(index), {"transcript": tr.model_dump()})
+        job.transcript = tr
+        job.progress = 1.0
+        job.message = f"Guion del clip ({len(segs)} líneas)."
+        job.status = JobStatus.done
+    except Exception as exc:  # noqa: BLE001
+        job.status = JobStatus.error
+        job.error = str(exc)
+        job.message = "Error transcribiendo el clip."
+
+
+def start_clip_transcribe_job(job: Job, pid: str, index: str, model: str, language) -> None:
+    thread = threading.Thread(target=_run_clip_transcribe, args=(job.id, pid, index, model, language), daemon=True)
+    thread.start()
+
+
+def _run_tts(job_id: str, req: TTSRequest) -> None:
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+
+    def on_progress(frac: float, message: str) -> None:
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from urllib.parse import quote
+
+        from . import piper_tts, storage, tts
+
+        project = projects.get_project(req.project_id)
+        base = storage.ensure_dirs(storage.project_base(project))
+
+        aid = uuid.uuid4().hex[:8]
+        stem = storage.safe_name(req.name or req.text[:40] or "audio")
+        filename = f"{stem}_{aid}.wav"
+        out_path = base / "audio" / filename
+
+        engine = piper_tts if req.engine == "piper" else tts
+        info = engine.run(
+            req.text, req.voice, req.speed, out_path, on_progress,
+            voice2=req.voice2, blend=req.blend, pause=req.pause,
+        )
+
+        audio = AudioInfo(
+            id=aid,
+            filename=filename,
+            url=f"/api/media/{req.project_id}/audio/{quote(filename)}",
+            engine=req.engine,
+            voice=req.voice,
+            voice2=req.voice2 if req.engine == "kokoro" else None,
+            blend=req.blend if (req.engine == "kokoro" and req.voice2) else None,
+            speed=req.speed,
+            pause=req.pause,
+            text=req.text,
+            duration=info["duration"],
+            created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+        projects.add_audio(req.project_id, audio)
+        job.audio = audio
+        job.progress = 1.0
+        job.message = f"Audio generado ({info['duration']}s)."
+        job.status = JobStatus.done
+    except Exception as exc:  # noqa: BLE001
+        job.status = JobStatus.error
+        job.error = str(exc)
+        job.message = "Error generando el audio."
+
+
+def start_tts_job(job: Job, req: TTSRequest) -> None:
+    thread = threading.Thread(target=_run_tts, args=(job.id, req), daemon=True)
+    thread.start()
+
+
+def _run_reframe_prepare(job_id: str, url: str, start: float, end: float, samples: int) -> None:
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+
+    def on_progress(frac: float, message: str) -> None:
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from . import reframe   # import perezoso (yt-dlp + opencv)
+
+        prep = reframe.prepare(url, start, end, samples, on_progress)
+        job.reframe_prep = prep
+        job.progress = 1.0
+        job.message = f"Listo · {len(prep.track)} detecciones."
+        job.status = JobStatus.done
+    except Exception as exc:  # noqa: BLE001
+        job.status = JobStatus.error
+        job.error = str(exc)
+        job.message = "Error preparando el editor de reencuadre."
+
+
+def start_reframe_prepare_job(job: Job, url: str, start: float, end: float, samples: int) -> None:
+    thread = threading.Thread(
+        target=_run_reframe_prepare, args=(job.id, url, start, end, samples), daemon=True
+    )
+    thread.start()
+
+
+def _run_export(job_id: str, pid: str, timeline_dict: dict) -> None:
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+
+    def on_progress(frac: float, message: str) -> None:
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from datetime import datetime
+        from urllib.parse import quote
+
+        from . import compose, storage
+        from .schemas import Timeline
+
+        project = projects.get_project(pid)
+        if project is None:
+            raise RuntimeError("Proyecto no encontrado.")
+
+        timeline = Timeline(**timeline_dict) if timeline_dict else project.timeline
+        if timeline is None or not timeline.clips:
+            raise RuntimeError("No hay nada en la timeline para exportar.")
+
+        # Persistir la timeline usada, para no perder la edición.
+        projects.save_timeline(pid, timeline.model_dump())
+
+        base = storage.ensure_dirs(storage.project_base(project))
+        exports = base / "exports"
+        exports.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        filename = f"final_{stamp}.mp4"
+        out_path = exports / filename
+
+        compose.render(project, timeline, out_path, on_progress)
+
+        job.export_url = f"/api/projects/{pid}/exports/{quote(filename)}"
+        job.progress = 1.0
+        job.message = "Vídeo final exportado."
+        job.status = JobStatus.done
+    except Exception as exc:  # noqa: BLE001
+        job.status = JobStatus.error
+        job.error = str(exc)
+        job.message = "Error exportando el vídeo final."
+
+
+def start_export_job(job: Job, pid: str, timeline_dict: dict) -> None:
+    thread = threading.Thread(target=_run_export, args=(job.id, pid, timeline_dict), daemon=True)
+    thread.start()
+
+
+def _run_subtitles(job_id: str, pid: str, filename: str, asset_kind: str, model: str, language) -> None:
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+
+    def on_progress(frac: float, message: str) -> None:
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from . import sfx, storage, transcribe
+
+        project = projects.get_project(pid)
+        if project is None:
+            raise RuntimeError("Proyecto no encontrado.")
+        if asset_kind == "sfx":
+            path = sfx.resolve(filename)
+        else:
+            path = storage.resolve_media(project, "audio", filename)
+        if path is None or not path.exists():
+            raise RuntimeError("No se encuentra el archivo de audio.")
+
+        result = transcribe.run_file(str(path), model, language, on_progress)
+        segs = [TranscriptSegment(**s) for s in result["segments"]]
+        tr = Transcript(
+            id=uuid.uuid4().hex[:8],
+            title=filename,
+            model=model,
+            language=result["language"],
+            duration=result["duration"],
+            created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            segments=segs,
+        )
+        job.transcript = tr
+        job.progress = 1.0
+        job.message = f"Subtítulos listos ({len(segs)} líneas)."
+        job.status = JobStatus.done
+    except Exception as exc:  # noqa: BLE001
+        job.status = JobStatus.error
+        job.error = str(exc)
+        job.message = "Error generando subtítulos."
+
+
+def start_subtitles_job(job: Job, pid: str, filename: str, asset_kind: str, model: str, language) -> None:
+    thread = threading.Thread(target=_run_subtitles, args=(job.id, pid, filename, asset_kind, model, language), daemon=True)
+    thread.start()

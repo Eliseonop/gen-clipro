@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+yt-dlp
+opencv-python-headless
+numpy
+faster-whisper
+kokoro-onnx
+soundfile

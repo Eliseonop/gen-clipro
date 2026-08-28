@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Clips generados
+backend/clips/*
+!backend/clips/.gitkeep
+
+# Datos persistentes (proyectos)
+backend/data/
+backend/models/
+
+# Node / React
+node_modules/
+frontend/dist/
+
+# Editor
+.idea/
+.vscode/
+
+# SO
+Thumbs.db
+.DS_Store
+SFX_LIBRARY
