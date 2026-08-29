@@ -1,7 +1,8 @@
 // Modelo del editor de vídeo: fábricas puras y helpers de dominio (sin React ni canvas).
 // Centraliza la creación de clips/tracks/keyframes y las constantes de formato para
 // que los componentes y hooks del editor compartan una única fuente de verdad.
-import { defaultTextStyle } from '../../lib/textstyles'
+import { defaultTextStyle } from '../../lib/textstyles.js'
+import { isMasterReframe } from '../../lib/recipeLayout.js'
 
 // --- Identificadores estables ---
 let _uid = 1
@@ -61,6 +62,7 @@ export function withKfIds(reframe) {
 // Crea un clip de vídeo/audio a partir de un asset de la biblioteca.
 export function makeClip(assetKind, item, trackId, start, dur) {
   const kind = assetKind === 'clips' ? 'video' : 'audio'
+  const fromLib = kind === 'video' && isMasterReframe(item.reframe)
   return {
     id: uid('c'),
     track_id: trackId,
@@ -74,7 +76,9 @@ export function makeClip(assetKind, item, trackId, start, dur) {
     out_point: +Math.max(0.3, dur || 1).toFixed(3),
     source_duration: +Math.max(0.3, dur || 1).toFixed(3),
     volume: 1,
-    reframe: kind === 'video' ? newReframe() : null,
+    reframe: kind === 'video'
+      ? (fromLib ? withKfIds({ ...newReframe(), ...item.reframe }) : newReframe())
+      : null,
     layout: kind === 'video' ? 'fill' : undefined,
     frame: kind === 'video' ? 'full' : undefined,
     appear: 'none',

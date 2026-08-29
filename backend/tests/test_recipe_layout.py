@@ -25,6 +25,11 @@ class RecipeLayoutTest(unittest.TestCase):
         self.assertEqual(synced_dual_slots(9 / 16, {"split_layout": "auto"}), ["top", "bottom"])
         self.assertEqual(synced_dual_slots(16 / 9, {"split_layout": "auto"}), ["left", "right"])
 
+    def test_dual_stack_name(self):
+        from app.recipe_layout import dual_stack_name
+        self.assertEqual(dual_stack_name("vertical"), "vstack=inputs=2")
+        self.assertEqual(dual_stack_name("horizontal"), "hstack=inputs=2")
+
     def test_master_flag(self):
         self.assertTrue(is_master_reframe({"master": True}))
         self.assertFalse(is_master_reframe({}))

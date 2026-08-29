@@ -12,6 +12,7 @@ export function dragPayload(assetKind, item) {
     url: item.url,
     duration: assetKind === 'clips' ? (item.end - item.start) : (item.duration || 0),
     kind: assetKind === 'clips' ? 'video' : 'audio',
+    reframe: item.reframe || null,
   })
 }
 

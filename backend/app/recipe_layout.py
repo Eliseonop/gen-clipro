@@ -21,6 +21,26 @@ def uses_source_trim(reframe: Any) -> bool:
     return is_master_reframe(reframe)
 
 
+def dual_stack_name(orient: str) -> str:
+    return "vstack=inputs=2" if orient == "vertical" else "hstack=inputs=2"
+
+
+def dual_slot_wh(W: int, H: int, orient: str) -> tuple[int, int, int, int]:
+    if orient == "vertical":
+        return W, H // 2, W, H // 2
+    return W // 2, H, W // 2, H
+
+
+def join_dual_filters(f1: str, f2: str, orient: str) -> str:
+    stack = dual_stack_name(orient)
+    return f"split=2[ca][cb];[ca]{f1}[ta];[cb]{f2}[tb];[ta][tb]{stack}"
+
+
+def contain_scale_filter(W: int, H: int) -> str:
+    return (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+            f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1")
+
+
 def split_orientation_for(out_aspect: float, reframe: Any = None) -> str:
     layout = _field(reframe, "split_layout")
     if layout in ("vertical", "horizontal"):
