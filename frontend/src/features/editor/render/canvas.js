@@ -7,6 +7,7 @@
 import { drawReframe, kfColor, cropCornerNorms, clamp } from '../../../lib/panning'
 import { drawTextClip } from '../../../lib/textstyles'
 import { clipDur, clipEnd, newReframe } from '../editorModel'
+import { applyCanvasFx, clipFxAt } from '../../../lib/clipFx'
 import {
   cropWindow, destRectOnCanvas, isOverlay, sourceCropPx, videosAt,
 } from '../../../lib/clipLayout'
@@ -52,14 +53,21 @@ function overlayDest(ctx, video, clip, srcTime, outW, outH) {
   return { px, dest: destRectOnCanvas(clip.transform, px, outW, outH, ctx.canvas.width, ctx.canvas.height) }
 }
 
-function drawOverlayLayer(ctx, video, clip, srcTime, outW, outH) {
+function drawOverlayLayer(ctx, video, clip, srcTime, outW, outH, fx) {
   const { px, dest } = overlayDest(ctx, video, clip, srcTime, outW, outH)
   ctx.save()
-  ctx.translate(dest.dx + dest.dw / 2, dest.dy + dest.dh / 2)
+  if (fx.cssFilter && fx.cssFilter !== 'none') ctx.filter = fx.cssFilter
+  ctx.globalAlpha = fx.opacity
+  ctx.translate(dest.dx + dest.dw / 2 + fx.tx * dest.dw, dest.dy + dest.dh / 2 + fx.ty * dest.dh)
   ctx.rotate((dest.rotation || 0) * Math.PI / 180)
+  ctx.scale(fx.scale, fx.scale)
   try { ctx.drawImage(video, px.sx, px.sy, px.sw, px.sh, -dest.dw / 2, -dest.dh / 2, dest.dw, dest.dh) } catch { /* noop */ }
   ctx.restore()
   return dest
+}
+
+function fxForClip(clip, head) {
+  return clipFxAt(clip, Math.max(0, head - clip.start), clipDur(clip))
 }
 
 function drawTransformHandles(ctx, dest) {
@@ -100,11 +108,15 @@ export function drawComposite(ctx, head, selClipId, env) {
     const el = mediaEls.current.get(clip.id)
     if (!el || !el.videoWidth) continue
     const srcTime = el.currentTime
+    const fx = fxForClip(clip, head)
     if (isOverlay(clip)) {
-      const dest = drawOverlayLayer(ctx, el, clip, srcTime, outW, outH)
+      const dest = drawOverlayLayer(ctx, el, clip, srcTime, outW, outH, fx)
       if (clip.id === selClipId) overlayDestSel = dest
     } else {
+      ctx.save()
+      applyCanvasFx(ctx, fx, cw, ch)
       drawReframe(ctx, el, clip.reframe, srcTime, outW / outH, { clear: false })
+      ctx.restore()
     }
   }
 
@@ -139,10 +151,12 @@ export function drawMainView(head, env) {
   if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch }
 
   const clip = clipsRef.current.find((c) => c.id === selRef.current)
+  const clipActive = clip && clip.kind === 'video' && head >= clip.start - 0.02 && head < clipEnd(clip)
+  const playingThis = playingRef.current && clipActive
 
-  // Si hay un clip de vídeo seleccionado, dibujar la vista de edición de encuadre
-  // (vídeo original + rectángulo de recorte). No aplica para texto.
-  if (clip && clip.kind === 'video') {
+  // Recorte (fuente + recuadro) solo en pausa. Al reproducir ese clip, el Main
+  // muestra el compuesto con aparición / salida / filtro.
+  if (clip && clip.kind === 'video' && !playingThis) {
     const el = mediaEls.current.get(clip.id)
     if (!el || !el.videoWidth) {
       ctx.fillStyle = '#05060a'; ctx.fillRect(0, 0, cw, ch)

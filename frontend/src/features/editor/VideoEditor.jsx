@@ -85,7 +85,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
         if (!alive) return
         if (tl && tl.tracks && tl.tracks.length) {
           setTracks(tl.tracks)
-          setClips((tl.clips || []).map((c) => ({ ...c, reframe: c.kind === 'video' ? withKfIds(c.reframe) : null })))
+          setClips((tl.clips || []).map((c) => ({
+            ...c,
+            reframe: c.kind === 'video' ? withKfIds(c.reframe) : null,
+            appear: c.appear || 'none',
+            exit: c.exit || 'none',
+            look: c.look || 'none',
+          })))
           if (tl.tracks[0]) setSelTrackId(tl.tracks[0].id)
         }
         if (tl?.width) setOutW(tl.width)
@@ -758,8 +764,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             onToggleHidden={toggleKfHidden}
             onDelete={(kf) => deleteKeyframe(selectedClip, kf)}
             onSeek={seek}
-            onAdd={addKeyframeAtPlayhead}
             onPanMode={(kf, mode) => patchKeyframePan(selectedClip, kf, mode)}
+            onChangeFx={(patch) => selectedClip && mutateClip(selectedClip.id, patch)}
           />
         )}
       </div>

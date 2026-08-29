@@ -88,7 +88,8 @@ export function createMainDownHandler(ctx) {
     if (clip.kind !== 'video') return
     const el = mediaEls.current.get(clip.id)
     if (!el || !el.videoWidth) return
-    if (playingRef.current) stopPlayback()
+    // Al reproducir, Main enseña el compuesto: el clic solo pausa, no recorta.
+    if (playingRef.current) { stopPlayback(); return }
     const srcAspect = el.videoWidth / el.videoHeight
     const localT = clamp(clip.in_point + (playhead - clip.start), clip.in_point, clip.out_point)
     const crop = cropWindow(clip, srcAspect, outAspect, localT)
