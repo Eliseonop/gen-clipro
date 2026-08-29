@@ -116,6 +116,51 @@ export function splitLayer(layer, t, minGap = MIN_SPLIT_GAP) {
   ]
 }
 
+/** Corta el tramo en el playhead: dos piezas a pantalla completa (en secuencia al generar). */
+export function cutLayerAt(layer, t, minGap = MIN_SPLIT_GAP) {
+  const aIn = layer.trimIn || 0
+  const aOut = layer.trimOut || 0
+  if (t < aIn + minGap || t > aOut - minGap) return null
+  const kfs = layer.keyframes || []
+  return [
+    {
+      ...layer,
+      trimOut: t,
+      slot: 'full',
+      customRect: null,
+      keyframes: kfs.filter((k) => k.t <= t + 0.05),
+    },
+    {
+      ...layer,
+      id: null,
+      trimIn: t,
+      slot: 'full',
+      customRect: null,
+      keyframes: kfs.filter((k) => k.t >= t - 0.05),
+    },
+  ]
+}
+
+export function isSequentialLayout(layers) {
+  return layers.length > 1 && layers.every((l) => (l.slot || 'full') === 'full')
+}
+
+export function layerDelay(layers, index) {
+  if (!isSequentialLayout(layers)) return 0
+  return layers.slice(0, index).reduce((s, l) => s + layerDuration(l), 0)
+}
+
+export function layerDuration(layer) {
+  return Math.max(0, (layer.trimOut || 0) - (layer.trimIn || 0))
+}
+
+export function compositionDuration(layers) {
+  if (isSequentialLayout(layers)) {
+    return layers.reduce((s, l) => s + layerDuration(l), 0)
+  }
+  return layers.reduce((m, l) => Math.max(m, layerDuration(l)), 0)
+}
+
 export function layersFromInitial(url, segStart, segEnd, initial, label) {
   const base = {
     url,
@@ -171,12 +216,4 @@ export function addSecondLayer(existing, incoming) {
 
 export function prepKey(layer) {
   return `${layer.url}|${Number(layer.segStart).toFixed(2)}|${Number(layer.segEnd).toFixed(2)}`
-}
-
-export function layerDuration(layer) {
-  return Math.max(0, (layer.trimOut || 0) - (layer.trimIn || 0))
-}
-
-export function compositionDuration(layers) {
-  return layers.reduce((m, l) => Math.max(m, layerDuration(l)), 0)
 }

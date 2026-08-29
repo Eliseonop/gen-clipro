@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import {
   slotRect, outputRect, slotTargetAspect, invertSlots, splitLayer,
   layersFromInitial, addSecondLayer, applySlotPreset, complementSlot,
+  cutLayerAt, isSequentialLayout, compositionDuration, layerDelay, layerDuration,
 } from './composeModel.js'
 
 assert.deepEqual(slotRect('top'), { x: 0, y: 0, w: 1, h: 0.5 })
@@ -51,3 +52,26 @@ assert.equal(horiz[0].slot, 'left')
 assert.equal(horiz[1].slot, 'right')
 
 console.log('composeModel ok')
+
+const cutSrc = { id: 'a', trimIn: 0, trimOut: 10, slot: 'full', url: 'u', keyframes: [{ t: 2, cx: 0.4, cy: 0.5 }] }
+assert.equal(cutLayerAt(cutSrc, 0.1), null)
+const cut = cutLayerAt(cutSrc, 4)
+assert.equal(cut[0].trimOut, 4)
+assert.equal(cut[1].trimIn, 4)
+assert.equal(cut[0].slot, 'full')
+assert.equal(cut[1].slot, 'full')
+assert.equal(isSequentialLayout(cut), true)
+assert.equal(compositionDuration(cut), 10)
+assert.equal(layerDelay(cut, 0), 0)
+assert.equal(layerDelay(cut, 1), 4)
+assert.equal(layerDuration(cut[0]), 4)
+
+const parallel = [
+  { trimIn: 0, trimOut: 8, slot: 'top' },
+  { trimIn: 0, trimOut: 5, slot: 'bottom' },
+]
+assert.equal(isSequentialLayout(parallel), false)
+assert.equal(compositionDuration(parallel), 8)
+assert.equal(layerDelay(parallel, 1), 0)
+
+console.log('composeModel cut ok')

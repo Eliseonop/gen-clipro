@@ -7,8 +7,9 @@ import { clamp, r2, r4, posAt, OUT_RATIO, geomFor, clampCenter as clampCenterFor
 import { drawComposeFrame } from './clipCanvas'
 import {
   MAX_LAYERS, MIN_SPLIT_GAP, makeLayer, prepKey, outputRect, slotTargetAspect,
-  layersFromInitial, layerFromProjectClip, addSecondLayer, splitLayer,
-  invertSlots, applySlotPreset, compositionDuration,
+  layersFromInitial, layerFromProjectClip, addSecondLayer,
+  invertSlots, applySlotPreset, compositionDuration, cutLayerAt,
+  isSequentialLayout, layerDelay,
 } from './composeModel'
 import MaterialClipGrid from '../editor/MaterialClipGrid'
 import JobStatusBar from '../../components/JobStatusBar'
@@ -194,7 +195,11 @@ export default function ClipEditor({
       if (c) {
         const videos = layersRef.current.map((l) => videoEls.current[l.id])
         const preps = layersRef.current.map((l) => prepMap[prepKey(l)])
-        drawComposeFrame(videos, c, { layers: layersRef.current, preps })
+        drawComposeFrame(videos, c, {
+          layers: layersRef.current,
+          preps,
+          soloIndex: isSequentialLayout(layersRef.current) ? activeIdxRef.current : null,
+        })
       }
       raf = requestAnimationFrame(draw)
     }
@@ -443,6 +448,7 @@ export default function ClipEditor({
       slot: layers.length < 2 ? 'full' : L.slot,
       custom_rect: L.slot === 'custom' ? L.customRect : null,
       label: L.label,
+      delay: layerDelay(layers, i),
     }
   }
 
@@ -525,13 +531,16 @@ export default function ClipEditor({
     setErr('')
   }
 
-  function onSplit(idx = activeIdx) {
+  function onCut(idx = activeIdx) {
     const L = layers[idx]
     if (!L || layers.length >= MAX_LAYERS) return
-    const parts = splitLayer(L, t, MIN_SPLIT_GAP)
-    if (!parts) { setErr('Coloca el playhead más al centro del recorte para dividir.'); return }
-    const a = { ...parts[0], id: L.id, slot: 'top', label: `${L.label || 'Capa'} 1` }
-    const b = { ...parts[1], id: idc.current++, slot: 'bottom', label: `${L.label || 'Capa'} 2` }
+    const parts = cutLayerAt(L, t, MIN_SPLIT_GAP)
+    if (!parts) {
+      setErr('Coloca el playhead más al centro del recorte para cortar. Luego puedes quitar la parte que no sirva.')
+      return
+    }
+    const a = { ...parts[0], id: L.id, label: `${L.label || 'Clip'} · 1` }
+    const b = { ...parts[1], id: idc.current++, label: `${L.label || 'Clip'} · 2` }
     setLayers([a, b])
     setActiveIdx(0)
     setErr('')
@@ -694,11 +703,13 @@ export default function ClipEditor({
                   >
                     <span className="comp-layer-name">{L.label || `Capa ${i + 1}`}</span>
                     <span className="muted small">{slotLabel(layers.length < 2 ? 'full' : L.slot)}</span>
+                    {layers.length < MAX_LAYERS && (
                     <span
                       className="comp-layer-split"
-                      onClick={(e) => { e.stopPropagation(); onSplit(i) }}
-                      title="Dividir en el playhead"
-                    >Dividir</span>
+                      onClick={(e) => { e.stopPropagation(); onCut(i) }}
+                      title="Cortar aquí: dos partes. Quita la que no quieras o recorta el medio en la segunda."
+                    >Cortar</span>
+                    )}
                     {layers.length > 1 && (
                       <span className="comp-layer-x" onClick={(e) => { e.stopPropagation(); removeLayer(L.id) }} title="Quitar">×</span>
                     )}
@@ -776,8 +787,8 @@ export default function ClipEditor({
                     <button className="ghost small icon-only" onClick={() => seek(t + 0.5)} title="Adelante 0,5s">
                       <Icon name="fast_forward" size={15} />
                     </button>
-                    <button className="ghost small" onClick={onSplit} disabled={layers.length >= MAX_LAYERS} title="Divide esta capa en el playhead">
-                      Dividir
+                    <button className="ghost small" onClick={onCut} disabled={layers.length >= MAX_LAYERS} title="Corta el clip en el playhead en dos partes seguidas">
+                      Cortar
                     </button>
                   </div>
                   <span className="rf-time">{fmt(t)} / {fmt(dur)}{layers.length > 1 ? ` · out ${fmt(compositionDuration(layers))}` : ''}</span>
@@ -803,7 +814,11 @@ export default function ClipEditor({
               <div className="ed-col-preview">
                 <div className="ed-result-head">
                   <span>Resultado 9:16</span>
-                  <span className="muted small">{layers.length > 1 ? `${layers.length} capas` : 'En vivo'}</span>
+                  <span className="muted small">
+                    {isSequentialLayout(layers)
+                      ? 'En secuencia'
+                      : (layers.length > 1 ? `${layers.length} capas` : 'En vivo')}
+                  </span>
                 </div>
                 <div className="canvas-wrapper">
                   <canvas
