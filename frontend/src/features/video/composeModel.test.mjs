@@ -3,7 +3,7 @@ import {
   slotRect, outputRect, slotTargetAspect, invertSlots, splitLayer,
   layersFromInitial, addSecondLayer, applySlotPreset, complementSlot,
   cutLayerAt, isSequentialLayout, compositionDuration, layerDelay, layerDuration,
-  makeLayer, addSplitTrack, recipeFromLayers, isSyncedDual,
+  makeLayer, addSplitTrack, recipeFromLayers, isSyncedDual, previewDest,
 } from './composeModel.js'
 
 assert.deepEqual(slotRect('top'), { x: 0, y: 0, w: 1, h: 0.5 })
@@ -102,3 +102,20 @@ assert.equal(singleRf.master, true)
 assert.equal((singleRf.keyframes2 || []).length, 0)
 
 console.log('composeModel split track ok')
+
+assert.deepEqual(
+  previewDest({ slot: 'top' }, 0, 2, { syncedDual: true, outAspect: 16 / 9 }),
+  { x: 0, y: 0, w: 0.5, h: 1 },
+)
+assert.deepEqual(
+  previewDest({ slot: 'top' }, 1, 2, { syncedDual: true, outAspect: 16 / 9 }),
+  { x: 0.5, y: 0, w: 0.5, h: 1 },
+)
+assert.deepEqual(
+  previewDest({ slot: 'top' }, 0, 2, { syncedDual: true, outAspect: 9 / 16 }),
+  { x: 0, y: 0, w: 1, h: 0.5 },
+)
+assert.deepEqual(previewDest({ slot: 'top' }, 0, 2, {}), { x: 0, y: 0, w: 1, h: 0.5 })
+assert.deepEqual(previewDest({ slot: 'bottom' }, 0, 2, { solo: true }), { x: 0, y: 0, w: 1, h: 1 })
+
+console.log('composeModel previewDest ok')

@@ -2,6 +2,8 @@
 // Los keyframes son { t, cx, cy, zoom?, pan_mode? } con t en segundos (relativo a la fuente)
 // y cx/cy el centro de la ventana de recorte en coordenadas normalizadas (0-1).
 
+import { containDest, splitOrientationFor } from './recipeLayout.js'
+
 export const OUT_RATIO = 9 / 16
 
 export const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
@@ -91,6 +93,28 @@ export function clampCenter(cx, cy, zoom, srcAspect, targetAspect = OUT_RATIO) {
   }
 }
 
+/** Recorte de fuente y destino en px para un hueco (`dest` ya en píxeles). */
+export function sourceDrawRect(fr, srcW, srcH, dest, slotAspect = OUT_RATIO) {
+  const srcAspect = srcW / Math.max(1, srcH)
+  if (fr.fit === 'contain') {
+    const box = containDest(dest.dw, dest.dh, srcW, srcH)
+    return {
+      sx: 0, sy: 0, sw: srcW, sh: srcH,
+      dx: dest.dx + box.dx, dy: dest.dy + box.dy, dw: box.dw, dh: box.dh,
+    }
+  }
+  const zoom = fr.zoom
+  const { widthFrac: wf, heightFrac: hf } = geomFor(zoom, srcAspect, slotAspect)
+  const p = clampCenter(fr.cx, fr.cy, zoom, srcAspect, slotAspect)
+  const sw = wf * srcW, sh = hf * srcH
+  return {
+    sx: clamp((p.cx - wf / 2) * srcW, 0, Math.max(0, srcW - sw)),
+    sy: clamp((p.cy - hf / 2) * srcH, 0, Math.max(0, srcH - sh)),
+    sw, sh,
+    dx: dest.dx, dy: dest.dy, dw: dest.dw, dh: dest.dh,
+  }
+}
+
 /** Zoom (fracción de altura) al arrastrar una esquina, manteniendo el aspecto. */
 export function zoomFromCorner(nx, ny, cx, cy, srcAspect, targetAspect = OUT_RATIO) {
   const dx = Math.abs(nx - cx)
@@ -125,9 +149,16 @@ export const kfColor = (i) => KF_COLORS[((i % KF_COLORS.length) + KF_COLORS.leng
 // Aspecto de cada mitad en doble encuadre, dependiente del aspecto de salida.
 export function targetAspectFor(reframe, outAspect = OUT_RATIO) {
   if (reframe?.dual_crop) {
-    return (reframe.split_orientation === 'horizontal') ? (outAspect / 2) : (outAspect * 2)
+    const orient = splitOrientationFor(outAspect, reframe)
+    return orient === 'horizontal' ? (outAspect / 2) : (outAspect * 2)
   }
   return outAspect
+}
+
+function blit(ctx, video, r) {
+  try {
+    ctx.drawImage(video, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh)
+  } catch { /* noop */ }
 }
 
 // Dibuja el fotograma reencuadrado del vídeo en el canvas de salida.
@@ -137,43 +168,33 @@ export function drawReframe(ctx, video, reframe, srcTime, outAspect = OUT_RATIO,
   const c = ctx.canvas
   const vw = video.videoWidth, vh = video.videoHeight
   if (!vw || !vh) return
-  const srcAspect = vw / vh
   const mode = reframe?.pan_mode || 'smooth'
   if (opts?.clear !== false) ctx.clearRect(0, 0, c.width, c.height)
 
   if (!reframe || !reframe.dual_crop) {
     const fr = frameAt(reframe?.keyframes, srcTime, reframe?.zoom ?? 1, mode)
-    const zoom = fr.zoom
-    const { widthFrac: wf, heightFrac: hf } = geomFor(zoom, srcAspect, outAspect)
-    const p = clampCenter(fr.cx, fr.cy, zoom, srcAspect, outAspect)
-    const sw = wf * vw, sh = hf * vh
-    const sx = clamp((p.cx - wf / 2) * vw, 0, vw - sw)
-    const sy = clamp((p.cy - hf / 2) * vh, 0, vh - sh)
-    try { ctx.drawImage(video, sx, sy, sw, sh, 0, 0, c.width, c.height) } catch { /* noop */ }
+    blit(ctx, video, sourceDrawRect(fr, vw, vh, { dx: 0, dy: 0, dw: c.width, dh: c.height }, outAspect))
     return
   }
 
-  // Doble encuadre
-  const orient = reframe.split_orientation || 'vertical'
+  const orient = splitOrientationFor(outAspect, reframe)
   const tAspect = targetAspectFor(reframe, outAspect)
   const z1 = reframe.zoom ?? 1
   const z2 = reframe.zoom2 ?? z1
-  const draw = (kfs, fallbackZoom, dx, dy, dw, dh) => {
+  const draw = (kfs, fallbackZoom, dest) => {
     const fr = frameAt(kfs, srcTime, fallbackZoom, mode)
-    const zoom = fr.zoom
-    const { widthFrac: wf, heightFrac: hf } = geomFor(zoom, srcAspect, tAspect)
-    const p = clampCenter(fr.cx, fr.cy, zoom, srcAspect, tAspect)
-    const sw = wf * vw, sh = hf * vh
-    const sx = clamp((p.cx - wf / 2) * vw, 0, vw - sw)
-    const sy = clamp((p.cy - hf / 2) * vh, 0, vh - sh)
-    try { ctx.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh) } catch { /* noop */ }
+    blit(ctx, video, sourceDrawRect(fr, vw, vh, dest, tAspect))
   }
   if (orient === 'vertical') {
-    draw(reframe.keyframes, z1, 0, 0, c.width, c.height / 2)
-    draw(reframe.keyframes2?.length ? reframe.keyframes2 : reframe.keyframes, z2, 0, c.height / 2, c.width, c.height / 2)
+    draw(reframe.keyframes, z1, { dx: 0, dy: 0, dw: c.width, dh: c.height / 2 })
+    draw(reframe.keyframes2?.length ? reframe.keyframes2 : reframe.keyframes, z2, {
+      dx: 0, dy: c.height / 2, dw: c.width, dh: c.height / 2,
+    })
   } else {
-    draw(reframe.keyframes, z1, 0, 0, c.width / 2, c.height)
-    draw(reframe.keyframes2?.length ? reframe.keyframes2 : reframe.keyframes, z2, c.width / 2, 0, c.width / 2, c.height)
+    draw(reframe.keyframes, z1, { dx: 0, dy: 0, dw: c.width / 2, dh: c.height })
+    draw(reframe.keyframes2?.length ? reframe.keyframes2 : reframe.keyframes, z2, {
+      dx: c.width / 2, dy: 0, dw: c.width / 2, dh: c.height,
+    })
   }
 }
 
