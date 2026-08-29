@@ -4,15 +4,9 @@
 // Estas funciones son puras respecto a React: reciben un `env` con las refs vivas del
 // componente (clipsRef, tracksRef, mediaEls, outRef, …) y leen `.current` en el momento
 // de la llamada, igual que hacía el componente. Así el comportamiento por frame no cambia.
-import { drawReframe, geomFor, clampCenter, posAt, clamp, kfColor } from '../../../lib/panning'
+import { drawReframe, geomFor, clampCenter, frameAt, clamp, kfColor, cropCornerNorms } from '../../../lib/panning'
 import { drawTextClip } from '../../../lib/textstyles'
 import { clipDur, clipEnd, newReframe } from '../editorModel'
-
-// Centro interpolado del encuadre en el instante `t`.
-function center(rf, t) {
-  const p = posAt(rf.keyframes, t, rf.pan_mode)
-  return [p.cx, p.cy]
-}
 
 // Geometría (en px del canvas) del encuadre de texto a partir de fm normalizado.
 export function framingRect(cw, ch, fm) {
@@ -111,9 +105,11 @@ export function drawMainView(head, env) {
     ctx.clearRect(0, 0, cw2, ch2)
     try { ctx.drawImage(el, 0, 0, cw2, ch2) } catch { /* noop */ }
     const rf = clip.reframe || newReframe()
-    const zoom = rf.zoom ?? 1
-    const { widthFrac: wf, heightFrac: hf } = geomFor(zoom, srcAspect, outRef.current.w / outRef.current.h)
-    const p = clampCenter(...center(rf, playingRef.current && active ? el.currentTime : srcTime), zoom, srcAspect, outRef.current.w / outRef.current.h)
+    const outA = outRef.current.w / outRef.current.h
+    const srcT = playingRef.current && active ? el.currentTime : srcTime
+    const fr = frameAt(rf.keyframes, srcT, rf.zoom ?? 1, rf.pan_mode || 'smooth')
+    const { widthFrac: wf, heightFrac: hf } = geomFor(fr.zoom, srcAspect, outA)
+    const p = clampCenter(fr.cx, fr.cy, fr.zoom, srcAspect, outA)
     const bx = (p.cx - wf / 2) * cw2, by = (p.cy - hf / 2) * ch2, bw = wf * cw2, bh = hf * ch2
     ctx.fillStyle = 'rgba(3,5,12,0.58)'
     ctx.fillRect(0, 0, cw2, by)
@@ -123,14 +119,25 @@ export function drawMainView(head, env) {
     const kfs = [...(rf.keyframes || [])].sort((a, b) => a.t - b.t)
     kfs.forEach((k, i) => {
       if (hiddenKfRef.current.has(k.id)) return
-      const kp = clampCenter(k.cx, k.cy, zoom, srcAspect, outRef.current.w / outRef.current.h)
-      const kx = (kp.cx - wf / 2) * cw2, ky = (kp.cy - hf / 2) * ch2
+      const kz = k.zoom ?? rf.zoom ?? 1
+      const g = geomFor(kz, srcAspect, outA)
+      const kp = clampCenter(k.cx, k.cy, kz, srcAspect, outA)
+      const kx = (kp.cx - g.widthFrac / 2) * cw2, ky = (kp.cy - g.heightFrac / 2) * ch2
       ctx.strokeStyle = kfColor(i)
       ctx.lineWidth = k.id === selKfRef.current ? 3 : 1.5
-      ctx.strokeRect(kx, ky, bw, bh)
+      ctx.strokeRect(kx, ky, g.widthFrac * cw2, g.heightFrac * ch2)
     })
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 2
     ctx.strokeRect(bx, by, bw, bh)
+    const hs = 5
+    ctx.fillStyle = '#ff3b5c'
+    ctx.strokeStyle = '#fff'
+    ctx.lineWidth = 1.5
+    cropCornerNorms(p.cx, p.cy, wf, hf).forEach(([nx, ny]) => {
+      const hx = nx * cw2, hy = ny * ch2
+      ctx.fillRect(hx - hs, hy - hs, hs * 2, hs * 2)
+      ctx.strokeRect(hx - hs, hy - hs, hs * 2, hs * 2)
+    })
     return
   }
 

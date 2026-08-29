@@ -974,6 +974,21 @@ button {
   box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.55);
 }
 .rf-cropbox.drag { cursor: grabbing; }
+.rf-chandle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  box-sizing: border-box;
+  border: 2px solid #fff;
+  background: #ff3b5c;
+  border-radius: 2px;
+  z-index: 6;
+  touch-action: none;
+}
+.rf-chandle.nw { left: -6px; top: -6px; cursor: nwse-resize; }
+.rf-chandle.ne { right: -6px; top: -6px; cursor: nesw-resize; }
+.rf-chandle.sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
+.rf-chandle.se { right: -6px; bottom: -6px; cursor: nwse-resize; }
 
 .crop1-box { border: 2px solid #ff3b5c; }
 .crop1-box.active { border-color: #ff3b5c; box-shadow: 0 0 14px rgba(255, 59, 92, 0.6), 0 0 0 100vmax rgba(0,0,0,0.55); }
@@ -1082,6 +1097,46 @@ button {
   transform: scale(1.35);
   box-shadow: 0 0 10px var(--accent);
 }
+.rf-dot.direct {
+  border-radius: 2px;
+}
+.pan-mode-tog {
+  display: inline-flex;
+  gap: 3px;
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+.pan-mode-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  background: var(--card-2);
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--muted);
+}
+.pan-mode-btn:hover:not(:disabled) { border-color: var(--line-bright); color: #fff; }
+.pan-mode-btn.on {
+  border-color: var(--accent);
+  background: rgba(255, 59, 92, 0.18);
+  color: #fff;
+}
+.pan-mode-btn:disabled { opacity: 0.4; cursor: default; }
+.pan-glyph {
+  display: block;
+  width: 11px;
+  height: 11px;
+  box-sizing: border-box;
+  border: 2px solid currentColor;
+  background: transparent;
+}
+.pan-glyph.circle { border-radius: 50%; }
+.pan-glyph.square { border-radius: 2px; }
+.pan-mode-btn.on .pan-glyph { background: var(--accent-2); border-color: #fff; }
 
 /* Columna Derecha (Preview Canvas 9:16) */
 .ed-col-preview {
@@ -1120,6 +1175,9 @@ button {
   border: 1px solid var(--line-bright);
   background: #000000;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+}
+.modal-editor .ed-result-canvas {
+  max-height: 44vh;
 }
 
 .ed-pan-tools-row {

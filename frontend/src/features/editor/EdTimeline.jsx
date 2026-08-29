@@ -268,8 +268,8 @@ function ClipBlock({ clip, pps, selected, selKfId, onDown, onKfDown, onContext, 
         const kl = ((k.t - clip.in_point) / (dur || 1)) * w
         if (kl < -3 || kl > w + 3) return null
         return (
-          <span key={k.id || i} className={`ed-kf-dot ${k.id === selKfId ? 'sel' : ''}`}
-            style={{ left: kl, background: kfColor(i) }} title={`Encuadre ${fmt(k.t - clip.in_point)}`}
+          <span key={k.id || i} className={`ed-kf-dot ${k.pan_mode === 'direct' ? 'direct' : ''} ${k.id === selKfId ? 'sel' : ''}`}
+            style={{ left: kl, background: kfColor(i) }} title={`${k.pan_mode === 'direct' ? 'Directo' : 'Suave'} · ${fmt(k.t - clip.in_point)}`}
             onPointerDown={(e) => { e.stopPropagation(); onKfDown(e, k, i) }} />
         )
       })}

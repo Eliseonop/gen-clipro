@@ -1,10 +1,11 @@
 import Icon from '../../components/Icon'
+import PanModeToggle from '../../components/PanModeToggle'
 import { fmt } from '../../lib/utils'
 import { kfColor } from '../../lib/panning'
 
 // Panel "Posiciones del recorte": lista administrable de los encuadres
 // (keyframes) del clip seleccionado. Va pegado a la timeline.
-export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHidden, onDelete, onSeek, onAdd }) {
+export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHidden, onDelete, onSeek, onAdd, onPanMode }) {
   const kfs = clip?.kind === 'video' ? [...(clip.reframe?.keyframes || [])].sort((a, b) => a.t - b.t) : []
   const typeLabel = clip?.reframe?.dual_crop
     ? (clip.reframe.split_orientation === 'horizontal' ? 'Dividido L/R' : 'Dividido T/B')
@@ -29,16 +30,21 @@ export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHid
             {kfs.map((k, i) => {
               const local = k.t - clip.in_point
               const hidden = hiddenKf?.has(k.id)
+              const panMode = k.pan_mode === 'direct' ? 'direct' : 'smooth'
               return (
                 <div key={k.id || i}
-                  className={`ed-crop-row ${selKfId === k.id ? 'sel' : ''}`}
+                  className={`ed-crop-row ${selKfId === k.id ? 'sel' : ''} ${panMode}`}
                   style={{ borderLeftColor: kfColor(i) }}
                   onClick={() => { onSelect(k.id); onSeek(clip.start + local) }}>
-                  <span className="ed-crop-swatch" style={{ background: kfColor(i) }} />
+                  <span className={`ed-crop-swatch ${panMode}`} style={{ background: kfColor(i) }} />
                   <div className="ed-crop-info">
                     <span className="ed-crop-time">{fmt(local)}</span>
                     <span className="ed-crop-type">{typeLabel}</span>
                   </div>
+                  <PanModeToggle
+                    value={panMode}
+                    onChange={(mode) => { onSelect(k.id); onPanMode?.(k, mode) }}
+                  />
                   <button className="icon-btn" title={hidden ? 'Mostrar en Main' : 'Ocultar en Main'}
                     onClick={(e) => { e.stopPropagation(); onToggleHidden(k.id) }}>
                     <Icon name={hidden ? 'visibility_off' : 'visibility'} size={14} />

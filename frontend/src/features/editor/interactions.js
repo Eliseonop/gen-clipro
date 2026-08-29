@@ -4,7 +4,7 @@
 //
 // Se construye por render con el contexto vivo (clip seleccionado, playhead, aspecto…),
 // igual que la función inline original, para no alterar el comportamiento.
-import { clamp, clampCenter } from '../../lib/panning'
+import { clamp, clampCenter, frameAt, geomFor, zoomFromCorner, isNearCropCorner } from '../../lib/panning'
 import { framingRect } from './render/canvas'
 
 export function createMainDownHandler(ctx) {
@@ -86,13 +86,29 @@ export function createMainDownHandler(ctx) {
     if (playingRef.current) stopPlayback()
     const srcAspect = el.videoWidth / el.videoHeight
     const localT = clamp(clip.in_point + (playhead - clip.start), clip.in_point, clip.out_point)
-    const apply = (cx, cy) => {
-      const c = clampCenter(cx, cy, clip.reframe?.zoom ?? 1, srcAspect, outAspect)
+    const rf = clip.reframe
+    const fr = frameAt(rf?.keyframes, localT, rf?.zoom ?? 1, rf?.pan_mode || 'smooth')
+    const { widthFrac: wf, heightFrac: hf } = geomFor(fr.zoom, srcAspect, outAspect)
+    const box = clampCenter(fr.cx, fr.cy, fr.zoom, srcAspect, outAspect)
+    const toNorm = (ev) => [clamp((ev.clientX - rect.left) / rect.width, 0, 1), clamp((ev.clientY - rect.top) / rect.height, 0, 1)]
+    const [nx0, ny0] = toNorm(e)
+    const zooming = isNearCropCorner(nx0, ny0, box.cx, box.cy, wf, hf, rect)
+    const applyMove = (cx, cy) => {
+      const c = clampCenter(cx, cy, fr.zoom, srcAspect, outAspect)
       upsertKeyframe(clip, localT, c.cx, c.cy)
     }
-    const toNorm = (ev) => [clamp((ev.clientX - rect.left) / rect.width, 0, 1), clamp((ev.clientY - rect.top) / rect.height, 0, 1)]
-    apply(...toNorm(e))
-    const move = (ev) => apply(...toNorm(ev))
+    const applyZoom = (nx, ny) => {
+      const z = zoomFromCorner(nx, ny, box.cx, box.cy, srcAspect, outAspect)
+      const c = clampCenter(box.cx, box.cy, z, srcAspect, outAspect)
+      upsertKeyframe(clip, localT, c.cx, c.cy, { zoom: z })
+    }
+    if (zooming) applyZoom(nx0, ny0)
+    else applyMove(nx0, ny0)
+    const move = (ev) => {
+      const [nx, ny] = toNorm(ev)
+      if (zooming) applyZoom(nx, ny)
+      else applyMove(nx, ny)
+    }
     const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
   }

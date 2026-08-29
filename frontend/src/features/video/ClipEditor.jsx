@@ -3,7 +3,7 @@ import { prepareReframe, createClipJob, composeClipJob, getJob } from '../../ser
 import { fmt } from '../../lib/utils'
 import Icon from '../../components/Icon'
 import ConfirmModal from '../../components/ConfirmModal'
-import { clamp, r2, r4, posAt, OUT_RATIO, geomFor, clampCenter as clampCenterFor } from '../../lib/panning'
+import { clamp, r2, r4, frameAt, zoomFromCorner, OUT_RATIO, geomFor, clampCenter as clampCenterFor } from '../../lib/panning'
 import { drawComposeFrame } from './clipCanvas'
 import {
   MAX_LAYERS, MIN_SPLIT_GAP, makeLayer, prepKey, outputRect, slotTargetAspect,
@@ -13,6 +13,7 @@ import {
 } from './composeModel'
 import MaterialClipGrid from '../editor/MaterialClipGrid'
 import JobStatusBar from '../../components/JobStatusBar'
+import PanModeToggle from '../../components/PanModeToggle'
 
 function trackAt(track, time) {
   if (!track?.length) return null
@@ -84,8 +85,12 @@ export default function ClipEditor({
   const prep = activeKey ? prepMap[activeKey] : null
   const job = activeKey ? jobMap[activeKey] : null
   const kfs = active?.keyframes || []
-  const zoom = active?.zoom ?? 1
-  const panMode = active?.pan_mode ?? 'smooth'
+  const fallbackZoom = active?.zoom ?? 1
+  const fallbackMode = active?.pan_mode ?? 'smooth'
+  const selKf = kfs.find((k) => k.id === selId) || null
+  const live = frameAt(kfs, t, fallbackZoom, fallbackMode)
+  const zoom = live.zoom
+  const panMode = (selKf?.pan_mode === 'direct' || (!selKf && live.pan_mode === 'direct')) ? 'direct' : 'smooth'
   const trimIn = active?.trimIn ?? 0
   const trimOut = active?.trimOut ?? 0
 
@@ -144,7 +149,14 @@ export default function ClipEditor({
         const p = prepMap[prepKey(l)]
         if (!p || l._seeded) return l
         changed = true
-        const kfs0 = (l.keyframes?.length ? l.keyframes : (p.keyframes || [])).map((k) => (k.id ? k : withId(k)))
+        const kfs0 = (l.keyframes?.length ? l.keyframes : (p.keyframes || [])).map((k) => {
+          const row = k.id ? k : withId(k)
+          return {
+            ...row,
+            zoom: row.zoom ?? l.zoom ?? 1,
+            pan_mode: row.pan_mode === 'direct' ? 'direct' : 'smooth',
+          }
+        })
         return {
           ...l,
           _seeded: true,
@@ -177,7 +189,7 @@ export default function ClipEditor({
   )
 
   const dur = prep?.duration || 0
-  const interp = posAt(kfs, t, panMode)
+  const interp = live
   const center = clampCenter(interp.cx, interp.cy, zoom, targetAspect)
   const face = prep ? trackAt(prep.track, t) : null
   const geomBox = geom(zoom, targetAspect)
@@ -207,28 +219,40 @@ export default function ClipEditor({
     return () => cancelAnimationFrame(raf)
   }, [layers.length, prepMap, layersLive])
 
-  const writeKf = useCallback((id, tt, cx, cy) => {
+  const writeKf = useCallback((id, tt, cx, cy, extra = {}) => {
     const L = layersRef.current[activeIdxRef.current]
     if (!L) return
     const next = [...(L.keyframes || [])]
     const j = next.findIndex((k) => k.id === id)
-    const point = { id, t: r2(tt), cx: r4(cx), cy: r4(cy) }
+    const prev = j >= 0 ? next[j] : null
+    const fr = frameAt(L.keyframes, tt, L.zoom ?? 1, L.pan_mode || 'smooth')
+    const point = {
+      id,
+      t: r2(tt),
+      cx: r4(cx),
+      cy: r4(cy),
+      zoom: extra.zoom ?? prev?.zoom ?? fr.zoom,
+      pan_mode: extra.pan_mode ?? prev?.pan_mode ?? 'smooth',
+    }
     if (j >= 0) next[j] = point; else next.push(point)
     next.sort((a, b) => a.t - b.t)
     patchLayer(L.id, { keyframes: next })
     setSelId(id)
   }, [patchLayer])
 
-  function upsertAt(time, cx, cy) {
-    const tt = r2(clamp(time, 0, dur))
-    const ex = (layersRef.current[activeIdxRef.current]?.keyframes || []).find((k) => Math.abs(k.t - tt) < 0.06)
-    writeKf(ex ? ex.id : idc.current++, tt, cx, cy)
+  function addHere() {
+    const fr = frameAt(kfs, t, fallbackZoom, fallbackMode)
+    const c = clampCenter(fr.cx, fr.cy, fr.zoom, targetAspect)
+    const tt = r2(clamp(t, 0, dur))
+    const ex = kfs.find((k) => Math.abs(k.t - tt) < 0.06)
+    writeKf(ex ? ex.id : idc.current++, tt, c.cx, c.cy, { zoom: fr.zoom, pan_mode: ex?.pan_mode || 'smooth' })
   }
 
-  function addHere() {
-    const p = posAt(kfs, t, panMode)
-    const c = clampCenter(p.cx, p.cy, zoom, targetAspect)
-    upsertAt(t, c.cx, c.cy)
+  function patchSelPan(mode) {
+    if (selId == null || !active) return
+    patchActive({
+      keyframes: kfs.map((k) => (k.id === selId ? { ...k, pan_mode: mode } : k)),
+    })
   }
 
   function delSel() {
@@ -326,7 +350,18 @@ export default function ClipEditor({
     const p = stageNorm(e)
     const tt = r2(clamp(t, 0, dur))
     const ex = kfs.find((k) => Math.abs(k.t - tt) < 0.06)
-    drag.current = { dx: p.x - center.cx, dy: p.y - center.cy, id: ex ? ex.id : null, t: tt }
+    drag.current = { kind: 'move', dx: p.x - center.cx, dy: p.y - center.cy, id: ex ? ex.id : null, t: tt, cx: center.cx, cy: center.cy }
+    setDragging(true)
+    e.currentTarget.setPointerCapture(e.pointerId)
+    pauseVideo()
+  }
+
+  function onCornerDown(e) {
+    e.stopPropagation()
+    e.preventDefault()
+    const tt = r2(clamp(t, 0, dur))
+    const ex = kfs.find((k) => Math.abs(k.t - tt) < 0.06)
+    drag.current = { kind: 'zoom', id: ex ? ex.id : null, t: tt, cx: center.cx, cy: center.cy }
     setDragging(true)
     e.currentTarget.setPointerCapture(e.pointerId)
     pauseVideo()
@@ -335,6 +370,13 @@ export default function ClipEditor({
   function onBoxMove(e) {
     if (!dragging) return
     const p = stageNorm(e)
+    if (drag.current.kind === 'zoom') {
+      const z = zoomFromCorner(p.x, p.y, drag.current.cx, drag.current.cy, srcAspect, targetAspect)
+      const c = clampCenter(drag.current.cx, drag.current.cy, z, targetAspect)
+      if (drag.current.id == null) drag.current.id = idc.current++
+      writeKf(drag.current.id, drag.current.t, c.cx, c.cy, { zoom: z })
+      return
+    }
     const c = clampCenter(p.x - drag.current.dx, p.y - drag.current.dy, zoom, targetAspect)
     if (drag.current.id == null) drag.current.id = idc.current++
     writeKf(drag.current.id, drag.current.t, c.cx, c.cy)
@@ -419,15 +461,22 @@ export default function ClipEditor({
 
   function buildKfList(kfsList, inTime, outTime, zVal, tAspect, mode, srcA) {
     const sa = srcA || srcAspect
-    const pin = posAt(kfsList, inTime, mode)
-    const kin = clampCenterFor(pin.cx, pin.cy, zVal, sa, tAspect)
-    const pout = posAt(kfsList, outTime, mode)
-    const kout = clampCenterFor(pout.cx, pout.cy, zVal, sa, tAspect)
+    const pack = (tt, forceKf) => {
+      const src = forceKf || frameAt(kfsList, tt, zVal, mode)
+      const z = forceKf ? (forceKf.zoom ?? zVal) : src.zoom
+      const c = clampCenterFor(forceKf ? forceKf.cx : src.cx, forceKf ? forceKf.cy : src.cy, z, sa, tAspect)
+      return {
+        t: tt,
+        ...c,
+        zoom: r2(z),
+        pan_mode: (forceKf?.pan_mode === 'direct' || src.pan_mode === 'direct') ? 'direct' : 'smooth',
+      }
+    }
     const inside = (kfsList || [])
       .filter((k) => k.t > inTime + 0.02 && k.t < outTime - 0.02)
-      .map((k) => { const c = clampCenterFor(k.cx, k.cy, zVal, sa, tAspect); return { t: k.t, cx: c.cx, cy: c.cy } })
-    return [{ t: inTime, ...kin }, ...inside, { t: outTime, ...kout }]
-      .map((k) => ({ t: r2(k.t - inTime), cx: r4(k.cx), cy: r4(k.cy) }))
+      .map((k) => pack(k.t, k))
+    return [pack(inTime), ...inside, pack(outTime)]
+      .map((k) => ({ t: r2(k.t - inTime), cx: r4(k.cx), cy: r4(k.cy), zoom: k.zoom, pan_mode: k.pan_mode }))
       .sort((a, b) => a.t - b.t)
   }
 
@@ -462,8 +511,8 @@ export default function ClipEditor({
       dual_crop: dual,
       split_orientation: L.slot === 'left' || L.slot === 'right' ? 'horizontal' : 'vertical',
       label: clipLabel, description: clipDescription,
-      keyframes: (L.keyframes || []).map((k) => ({ t: k.t, cx: k.cx, cy: k.cy })),
-      keyframes2: (layers[1]?.keyframes || []).map((k) => ({ t: k.t, cx: k.cx, cy: k.cy })),
+      keyframes: (L.keyframes || []).map((k) => ({ t: k.t, cx: k.cx, cy: k.cy, zoom: k.zoom, pan_mode: k.pan_mode })),
+      keyframes2: (layers[1]?.keyframes || []).map((k) => ({ t: k.t, cx: k.cx, cy: k.cy, zoom: k.zoom, pan_mode: k.pan_mode })),
     }
   }
 
@@ -626,16 +675,6 @@ export default function ClipEditor({
           </div>
 
           <div className="ed-top-controls">
-            {active && (
-              <label className="ed-pill-switch" title="Saltos directos sin interpolación lineal">
-                <input
-                  type="checkbox"
-                  checked={panMode === 'direct'}
-                  onChange={(e) => patchActive({ pan_mode: e.target.checked ? 'direct' : 'smooth' })}
-                />
-                <span>Paneo directo</span>
-              </label>
-            )}
             <button className="ghost small" onClick={() => setPickerOpen(true)} disabled={layers.length >= MAX_LAYERS} title="Agregar un material del proyecto">
               <Icon name="library_add" size={15} /> {layers.length < 1 ? 'Unir' : 'Agregar material'}
             </button>
@@ -763,6 +802,16 @@ export default function ClipEditor({
                       onPointerDown={onBoxDown} onPointerMove={onBoxMove} onPointerUp={onBoxUp}
                     >
                       <span className="rf-cbadge crop1-badge">{active.label || `Capa ${activeIdx + 1}`}</span>
+                      {['nw', 'ne', 'sw', 'se'].map((c) => (
+                        <span
+                          key={c}
+                          className={`rf-chandle ${c}`}
+                          onPointerDown={onCornerDown}
+                          onPointerMove={onBoxMove}
+                          onPointerUp={onBoxUp}
+                          title="Arrastra la esquina para hacer zoom"
+                        />
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -790,6 +839,9 @@ export default function ClipEditor({
                     <button className="ghost small" onClick={onCut} disabled={layers.length >= MAX_LAYERS} title="Corta el clip en el playhead en dos partes seguidas">
                       Cortar
                     </button>
+                    {selKf && (
+                      <PanModeToggle value={panMode} onChange={patchSelPan} />
+                    )}
                   </div>
                   <span className="rf-time">{fmt(t)} / {fmt(dur)}{layers.length > 1 ? ` · out ${fmt(compositionDuration(layers))}` : ''}</span>
                 </div>
@@ -804,8 +856,8 @@ export default function ClipEditor({
                     onPointerDown={(e) => onTrimDown(e, 'out')} onPointerMove={onTrimMove} onPointerUp={onTrimUp} title="Fin del recorte" />
                   <div className="rf-playhead" style={{ left: pct(dur ? t / dur : 0) }} />
                   {kfs.map((k) => (
-                    <button key={k.id} className={`rf-dot ${k.id === selId ? 'sel' : ''}`}
-                      style={{ left: pct(dur ? k.t / dur : 0) }} title={`Punto ${fmt(k.t)}`}
+                    <button key={k.id} className={`rf-dot ${k.pan_mode === 'direct' ? 'direct' : ''} ${k.id === selId ? 'sel' : ''}`}
+                      style={{ left: pct(dur ? k.t / dur : 0) }} title={`${k.pan_mode === 'direct' ? 'Directo' : 'Suave'} · ${fmt(k.t)}`}
                       onPointerDown={(e) => onDotDown(e, k)} onPointerMove={onDotMove} onPointerUp={onDotUp} />
                   ))}
                 </div>
@@ -846,11 +898,6 @@ export default function ClipEditor({
                     <Icon name="auto_fix_high" size={15} /> Auto
                   </button>
                 </div>
-                <label className="rf-zoom-slider">
-                  <span>Zoom / Tamaño</span>
-                  <input type="range" min="0.35" max="1" step="0.01" value={zoom}
-                    onChange={(e) => patchActive({ zoom: Number(e.target.value) })} />
-                </label>
               </div>
             </div>
 
