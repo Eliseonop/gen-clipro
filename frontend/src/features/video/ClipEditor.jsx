@@ -10,7 +10,7 @@ import {
   layersFromInitial, layerFromProjectClip, addSecondLayer,
   invertSlots, applySlotPreset, compositionDuration, cutLayerAt,
   isSequentialLayout, layerDelay, addSplitTrack, recipeFromLayers, isSyncedDual,
-  previewDest,
+  previewDest, recipeForFile,
 } from './composeModel'
 import { FORMATS } from '../editor/editorModel'
 import MaterialClipGrid from '../editor/MaterialClipGrid'
@@ -553,7 +553,8 @@ export default function ClipEditor({
       : segIndex
     const label = clipLabel.trim() || `Clip #${targetIndex}`
     try {
-      if (layers.length > 1) {
+      const sameSource = layers.length === 1 || isSyncedDual(layers)
+      if (!sameSource) {
         setGenJob(await composeClipJob({
           project_id: project.id,
           layers: layers.map(payloadForLayer),
@@ -564,6 +565,7 @@ export default function ClipEditor({
       } else {
         const L = layers[0]
         const p = payloadForLayer(L, 0)
+        const recipe = recipeForFile(layers)
         const seg = {
           index: targetIndex,
           start: p.start,
@@ -576,10 +578,7 @@ export default function ClipEditor({
         setGenJob(await createClipJob({
           url: L.url, project_id: project.id, segments: [seg],
           crop_mode: 'smart_face',
-          reframe: {
-            zoom: p.zoom, pan_mode: p.pan_mode, dual_crop: false, split_orientation: 'vertical',
-            zoom2: p.zoom, keyframes: p.keyframes, keyframes2: [],
-          },
+          reframe: recipe,
         }))
       }
     } catch (e) { setErr(e.message) }

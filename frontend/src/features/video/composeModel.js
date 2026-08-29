@@ -270,6 +270,13 @@ export function recipeFromLayers(layers) {
   }
 }
 
+export function recipeForFile(layers) {
+  const raw = recipeFromLayers(layers)
+  const shift = layers[0]?.trimIn || 0
+  const fix = (arr) => (arr || []).map((k) => ({ ...k, t: Math.round((k.t - shift) * 100) / 100 }))
+  return { ...raw, keyframes: fix(raw.keyframes), keyframes2: fix(raw.keyframes2) }
+}
+
 export function prepKey(layer) {
   return `${layer.url}|${Number(layer.segStart).toFixed(2)}|${Number(layer.segEnd).toFixed(2)}`
 }

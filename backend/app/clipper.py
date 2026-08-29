@@ -17,6 +17,7 @@ from typing import Callable
 
 from . import config, ytdlp
 from .diagnostics import timed
+from .recipe_layout import uses_source_trim
 from .reframe_math import frame_at
 from .schemas import ClipInfo, CropMode, Reframe, Segment
 
@@ -237,7 +238,9 @@ def _cut_clip(source: Path, seg: Segment, mode: CropMode, out_path: Path,
         "-i", str(source),
     ]
 
-    if mode == CropMode.smart_face and reframe and reframe.keyframes:
+    if uses_source_trim(reframe):
+        filt = []
+    elif mode == CropMode.smart_face and reframe and reframe.keyframes:
         filt_str, is_complex = _reframe_filter(source, reframe)
         if is_complex:
             filt = ["-filter_complex", filt_str, "-map", "[v]", "-map", "0:a?"]

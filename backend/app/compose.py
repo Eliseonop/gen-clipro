@@ -124,7 +124,7 @@ def _shifted_keyframes(reframe: Reframe, in_point: float, dur: float, which: int
         if -0.05 <= t <= dur + 0.05:
             out.append(Keyframe(
                 t=max(0.0, min(dur, round(t, 3))),
-                cx=k.cx, cy=k.cy, zoom=k.zoom, pan_mode=k.pan_mode,
+                cx=k.cx, cy=k.cy, zoom=k.zoom, pan_mode=k.pan_mode, fit=k.fit,
             ))
     return out
 
