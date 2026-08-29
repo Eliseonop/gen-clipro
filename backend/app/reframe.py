@@ -42,8 +42,9 @@ def proxy_path(key: str) -> Path | None:
 
 def _download_proxy(url: str, start: float, end: float, key: str, on_progress: ProgressCb) -> Path:
     """Descarga un proxy <=480p del tramo [start, end] y lo deja en <key>.mp4."""
-    from yt_dlp import YoutubeDL
     from yt_dlp.utils import download_range_func
+
+    from . import ytdlp
 
     out = PROXY_DIR / f"{key}.mp4"
     outtmpl = str(PROXY_DIR / f"{key}.%(ext)s")
@@ -66,8 +67,7 @@ def _download_proxy(url: str, start: float, end: float, key: str, on_progress: P
         "progress_hooks": [hook],
     }
 
-    with YoutubeDL(opts) as ydl:
-        ydl.download([url])
+    ytdlp.call(opts, lambda ydl: ydl.download([url]))
 
     if out.exists():
         return out

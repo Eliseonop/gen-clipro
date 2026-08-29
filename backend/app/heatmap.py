@@ -7,8 +7,7 @@ puntos contiguos en "tramos de alto interés".
 """
 from __future__ import annotations
 
-from yt_dlp import YoutubeDL
-
+from . import ytdlp
 from .schemas import AnalyzeResponse, Segment, VideoInfo
 
 
@@ -19,8 +18,7 @@ def _extract_info(url: str) -> dict:
         "no_warnings": True,
         "skip_download": True,
     }
-    with YoutubeDL(opts) as ydl:
-        return ydl.extract_info(url, download=False)
+    return ytdlp.call(opts, lambda ydl: ydl.extract_info(url, download=False))
 
 
 def _pick_segments(

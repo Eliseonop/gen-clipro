@@ -1646,6 +1646,23 @@ button {
   color: var(--muted);
 }
 .field span { color: var(--muted); }
+.field-wide { grid-column: 1 / -1; }
+.field-hint {
+  font-weight: 400;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+.field select {
+  background: var(--card-3);
+  border: 1px solid var(--line-bright);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  color: var(--text);
+  font-size: 13.5px;
+  outline: none;
+  cursor: pointer;
+}
 .field input {
   background: var(--card-3);
   border: 1px solid var(--line-bright);

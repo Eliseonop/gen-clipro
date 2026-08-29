@@ -5,6 +5,23 @@ import { clamp, clampCenter, frameAt, geomFor } from './panning.js'
 
 export const newTransform = () => ({ x: 0.5, y: 0.5, scale: 1, rotation: 0 })
 
+/** Huecos asistidos en el canvas de salida (fracción). Cuarteto más adelante. */
+export const FRAME_SLOTS = {
+  top: { x: 0.5, y: 0.25, w: 1, h: 0.5 },
+  bottom: { x: 0.5, y: 0.75, w: 1, h: 0.5 },
+}
+
+export const FRAME_OPTIONS = [
+  { id: 'full', label: 'Completo' },
+  { id: 'top', label: 'Mitad superior' },
+  { id: 'bottom', label: 'Mitad inferior' },
+]
+
+export function frameOf(clip) {
+  if (clip?.frame === 'top' || clip?.frame === 'bottom') return clip.frame
+  return 'full'
+}
+
 export function isOverlay(clip) {
   return clip?.layout === 'overlay'
 }
@@ -92,6 +109,7 @@ export function enableOverlay(clip, srcAspect, outAspect, srcTime, srcW, srcH, o
   const scale = Math.min(pipW / Math.max(1, px.sw), pipH / Math.max(1, px.sh))
   return {
     layout: 'overlay',
+    frame: 'free',
     reframe: {
       ...(clip.reframe || {}),
       crop_w: crop.wf,
@@ -103,7 +121,35 @@ export function enableOverlay(clip, srcAspect, outAspect, srcTime, srcW, srcH, o
 }
 
 export function disableOverlay(clip) {
-  return { layout: 'fill', transform: newTransform() }
+  return { layout: 'fill', frame: 'full', transform: newTransform() }
+}
+
+/**
+ * Encuadre asistido: Completo (fill) o mitad superior/inferior (overlay que llena el hueco).
+ * El recorte de fuente usa el aspecto del hueco; Main sigue editando qué zona se ve.
+ */
+export function applyFrame(clip, slot, srcAspect, outAspect, srcTime, srcW, srcH, outW, outH) {
+  if (slot === 'full' || !FRAME_SLOTS[slot]) {
+    return { ...disableOverlay(clip), reframe: { ...(clip.reframe || {}), dual_crop: clip.reframe?.dual_crop } }
+  }
+  const spec = FRAME_SLOTS[slot]
+  const slotAspect = (spec.w * outAspect) / spec.h
+  const crop = cropWindow({ ...clip, layout: 'fill' }, srcAspect, slotAspect, srcTime)
+  const px = sourceCropPx(crop, srcW, srcH)
+  const slotW = spec.w * outW
+  const slotH = spec.h * outH
+  const scale = Math.min(slotW / Math.max(1, px.sw), slotH / Math.max(1, px.sh))
+  return {
+    layout: 'overlay',
+    frame: slot,
+    reframe: {
+      ...(clip.reframe || {}),
+      crop_w: crop.wf,
+      crop_h: crop.hf,
+      dual_crop: false,
+    },
+    transform: { x: spec.x, y: spec.y, scale, rotation: 0 },
+  }
 }
 
 /** Clips de vídeo visibles en `head`, de fondo a frente. */
