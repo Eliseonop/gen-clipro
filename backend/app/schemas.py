@@ -262,6 +262,9 @@ class TimelineClip(BaseModel):
     style: Optional[dict] = None          # estilo del texto (fuente, color, borde…)
     layout: str = "fill"                  # "fill" | "overlay"
     transform: Optional[dict] = None     # {x, y, scale, rotation} si layout=overlay
+    appear: str = "none"                  # none | fade | zoom | slide_up | slide_left | pop
+    exit: str = "none"                    # none | fade | zoom | slide_down | slide_right | pop
+    look: str = "none"                    # none | bw | cinematic | vintage | contrast | warm | cool | saturated
 
 
 class Timeline(BaseModel):

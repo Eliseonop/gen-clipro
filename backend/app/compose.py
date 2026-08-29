@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import clipper, config, sfx, storage
+from .clip_fx import overlay_xy_for_fx, video_fx_chain
 from .clip_layout import dest_rect_even, is_overlay, source_crop_px
 from .diagnostics import timed
 from .reframe_math import frame_at
@@ -338,15 +339,19 @@ def build_command(project: Project, timeline: Timeline, out_path: Path) -> list[
             cropscale = _reframe_cropscale(path, c.reframe, c.in_point, dur, W, H)
         else:
             cropscale = _plain_scale(W, H)
+        fx = video_fx_chain(c, dur, W, H)
+        fx_part = f",{fx}" if fx else ""
+        overlay_xy = overlay_xy_for_fx(overlay_xy, c, start, dur, W, H)
         vlabel = f"v{n}"
         filt.append(
             f"[{k}:v]trim={c.in_point:.3f}:{c.out_point:.3f},setpts=PTS-STARTPTS,"
-            f"{cropscale},fps={fps},setpts=PTS-STARTPTS+{start:.3f}/TB[{vlabel}]"
+            f"{cropscale},fps={fps}{fx_part},setpts=PTS-STARTPTS+{start:.3f}/TB[{vlabel}]"
         )
         out_label = f"ov{n}"
+        ov_fmt = ":format=auto" if fx else ""
         filt.append(
-            f"[{last_label}][{vlabel}]overlay={overlay_xy}:eof_action=pass:"
-            f"enable='between(t,{start:.3f},{end:.3f})'[{out_label}]"
+            f"[{last_label}][{vlabel}]overlay={overlay_xy}:eof_action=pass"
+            f"{ov_fmt}:enable='between(t,{start:.3f},{end:.3f})'[{out_label}]"
         )
         last_label = out_label
         n += 1
