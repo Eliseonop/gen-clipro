@@ -3,14 +3,16 @@ import { prepareReframe, createClipJob, composeClipJob, getJob } from '../../ser
 import { fmt } from '../../lib/utils'
 import Icon from '../../components/Icon'
 import ConfirmModal from '../../components/ConfirmModal'
-import { clamp, r2, r4, frameAt, zoomFromCorner, OUT_RATIO, geomFor, clampCenter as clampCenterFor } from '../../lib/panning'
+import { clamp, r2, r4, frameAt, zoomFromCorner, geomFor, clampCenter as clampCenterFor } from '../../lib/panning'
 import { drawComposeFrame } from './clipCanvas'
 import {
   MAX_LAYERS, MIN_SPLIT_GAP, makeLayer, prepKey, outputRect, slotTargetAspect,
   layersFromInitial, layerFromProjectClip, addSecondLayer,
   invertSlots, applySlotPreset, compositionDuration, cutLayerAt,
-  isSequentialLayout, layerDelay,
+  isSequentialLayout, layerDelay, addSplitTrack, recipeFromLayers, isSyncedDual,
+  previewDest,
 } from './composeModel'
+import { FORMATS } from '../editor/editorModel'
 import MaterialClipGrid from '../editor/MaterialClipGrid'
 import JobStatusBar from '../../components/JobStatusBar'
 import PanModeToggle from '../../components/PanModeToggle'
@@ -91,8 +93,14 @@ export default function ClipEditor({
   const live = frameAt(kfs, t, fallbackZoom, fallbackMode)
   const zoom = live.zoom
   const panMode = (selKf?.pan_mode === 'direct' || (!selKf && live.pan_mode === 'direct')) ? 'direct' : 'smooth'
+  const selFit = (selKf?.fit === 'contain' || (!selKf && live.fit === 'contain')) ? 'contain' : 'cover'
   const trimIn = active?.trimIn ?? 0
   const trimOut = active?.trimOut ?? 0
+  const outW = project?.timeline?.width || 720
+  const outH = project?.timeline?.height || 1280
+  const outAspect = outW / outH
+  const previewH = Math.max(1, Math.round(270 * outH / outW))
+  const formatLabel = FORMATS.find((f) => f.w === outW && f.h === outH)?.id || `${outW}×${outH}`
 
   const patchLayer = useCallback((id, patch) => {
     setLayers((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)))
@@ -179,9 +187,15 @@ export default function ClipEditor({
     return () => clearInterval(id)
   }, [genJob?.id, genJob?.status])
 
-  const dest = active ? outputRect(active, activeIdx, layers.length) : { x: 0, y: 0, w: 1, h: 1 }
+  const dest = active
+    ? previewDest(active, activeIdx, layers.length, {
+      solo: isSequentialLayout(layers),
+      syncedDual: isSyncedDual(layers),
+      outAspect,
+    })
+    : { x: 0, y: 0, w: 1, h: 1 }
   const srcAspect = prep ? prep.width / prep.height : 16 / 9
-  const targetAspect = layers.length > 1 ? slotTargetAspect(dest) : OUT_RATIO
+  const targetAspect = layers.length > 1 ? slotTargetAspect(dest, outAspect) : outAspect
   const geom = useCallback((z, tAspect = targetAspect) => geomFor(z, srcAspect, tAspect), [srcAspect, targetAspect])
   const clampCenter = useCallback(
     (cx, cy, z = zoom, tAspect = targetAspect) => clampCenterFor(cx, cy, z, srcAspect, tAspect),
@@ -190,9 +204,11 @@ export default function ClipEditor({
 
   const dur = prep?.duration || 0
   const interp = live
-  const center = clampCenter(interp.cx, interp.cy, zoom, targetAspect)
+  const center = live.fit === 'contain'
+    ? { cx: 0.5, cy: 0.5 }
+    : clampCenter(interp.cx, interp.cy, zoom, targetAspect)
   const face = prep ? trackAt(prep.track, t) : null
-  const geomBox = geom(zoom, targetAspect)
+  const geomBox = live.fit === 'contain' ? { widthFrac: 1, heightFrac: 1 } : geom(zoom, targetAspect)
 
   const layersLive = useMemo(() => layers.map((l) => ({
     ...l,
@@ -211,13 +227,15 @@ export default function ClipEditor({
           layers: layersRef.current,
           preps,
           soloIndex: isSequentialLayout(layersRef.current) ? activeIdxRef.current : null,
+          outAspect,
+          syncedDual: isSyncedDual(layersRef.current),
         })
       }
       raf = requestAnimationFrame(draw)
     }
     raf = requestAnimationFrame(draw)
     return () => cancelAnimationFrame(raf)
-  }, [layers.length, prepMap, layersLive])
+  }, [layers.length, prepMap, layersLive, outAspect])
 
   const writeKf = useCallback((id, tt, cx, cy, extra = {}) => {
     const L = layersRef.current[activeIdxRef.current]
@@ -233,6 +251,7 @@ export default function ClipEditor({
       cy: r4(cy),
       zoom: extra.zoom ?? prev?.zoom ?? fr.zoom,
       pan_mode: extra.pan_mode ?? prev?.pan_mode ?? 'smooth',
+      fit: extra.fit ?? prev?.fit ?? fr.fit ?? 'cover',
     }
     if (j >= 0) next[j] = point; else next.push(point)
     next.sort((a, b) => a.t - b.t)
@@ -245,13 +264,22 @@ export default function ClipEditor({
     const c = clampCenter(fr.cx, fr.cy, fr.zoom, targetAspect)
     const tt = r2(clamp(t, 0, dur))
     const ex = kfs.find((k) => Math.abs(k.t - tt) < 0.06)
-    writeKf(ex ? ex.id : idc.current++, tt, c.cx, c.cy, { zoom: fr.zoom, pan_mode: ex?.pan_mode || 'smooth' })
+    writeKf(ex ? ex.id : idc.current++, tt, c.cx, c.cy, {
+      zoom: fr.zoom, pan_mode: ex?.pan_mode || 'smooth', fit: ex?.fit || fr.fit || 'cover',
+    })
   }
 
   function patchSelPan(mode) {
     if (selId == null || !active) return
     patchActive({
       keyframes: kfs.map((k) => (k.id === selId ? { ...k, pan_mode: mode } : k)),
+    })
+  }
+
+  function patchSelFit(mode) {
+    if (selId == null || !active) return
+    patchActive({
+      keyframes: kfs.map((k) => (k.id === selId ? { ...k, fit: mode } : k)),
     })
   }
 
@@ -374,7 +402,7 @@ export default function ClipEditor({
       const z = zoomFromCorner(p.x, p.y, drag.current.cx, drag.current.cy, srcAspect, targetAspect)
       const c = clampCenter(drag.current.cx, drag.current.cy, z, targetAspect)
       if (drag.current.id == null) drag.current.id = idc.current++
-      writeKf(drag.current.id, drag.current.t, c.cx, c.cy, { zoom: z })
+      writeKf(drag.current.id, drag.current.t, c.cx, c.cy, { zoom: z, fit: 'cover' })
       return
     }
     const c = clampCenter(p.x - drag.current.dx, p.y - drag.current.dy, zoom, targetAspect)
@@ -484,7 +512,7 @@ export default function ClipEditor({
     const p = prepMap[prepKey(L)]
     const srcA = p ? p.width / p.height : 16 / 9
     const destR = outputRect(L, i, layers.length)
-    const tAspect = layers.length > 1 ? slotTargetAspect(destR) : OUT_RATIO
+    const tAspect = layers.length > 1 ? slotTargetAspect(destR, outAspect) : outAspect
     const outT = L.trimOut || p?.duration || 0
     const kfsAbs = buildKfList(L.keyframes || [], L.trimIn || 0, outT, L.zoom ?? 1, tAspect, L.pan_mode || 'smooth', srcA)
     return {
@@ -504,15 +532,12 @@ export default function ClipEditor({
   function currentConfig() {
     const L = layers[0]
     if (!L) return null
-    const dual = layers.length === 2 && layers[0].url === layers[1].url
     return {
-      trimIn: L.trimIn, trimOut: L.trimOut, zoom: L.zoom,
-      zoom2: layers[1]?.zoom, pan_mode: L.pan_mode,
-      dual_crop: dual,
-      split_orientation: L.slot === 'left' || L.slot === 'right' ? 'horizontal' : 'vertical',
-      label: clipLabel, description: clipDescription,
-      keyframes: (L.keyframes || []).map((k) => ({ t: k.t, cx: k.cx, cy: k.cy, zoom: k.zoom, pan_mode: k.pan_mode })),
-      keyframes2: (layers[1]?.keyframes || []).map((k) => ({ t: k.t, cx: k.cx, cy: k.cy, zoom: k.zoom, pan_mode: k.pan_mode })),
+      ...recipeFromLayers(layers),
+      trimIn: L.trimIn,
+      trimOut: L.trimOut,
+      label: clipLabel,
+      description: clipDescription,
     }
   }
 
@@ -577,6 +602,15 @@ export default function ClipEditor({
       setActiveIdx(1)
     }
     setPickerOpen(false)
+    setErr('')
+  }
+
+  function onSplitTrack() {
+    const next = addSplitTrack(layers)
+    if (!next) return
+    next[1] = { ...next[1], id: idc.current++ }
+    setLayers(next)
+    setActiveIdx(1)
     setErr('')
   }
 
@@ -839,8 +873,29 @@ export default function ClipEditor({
                     <button className="ghost small" onClick={onCut} disabled={layers.length >= MAX_LAYERS} title="Corta el clip en el playhead en dos partes seguidas">
                       Cortar
                     </button>
+                    <button className="ghost small" onClick={onSplitTrack} disabled={layers.length !== 1} title="Duplica el clip en una segunda pista sincronizada">
+                      Dividir
+                    </button>
                     {selKf && (
-                      <PanModeToggle value={panMode} onChange={patchSelPan} />
+                      <>
+                        <button
+                          type="button"
+                          className={`ghost small ${selFit === 'contain' ? 'active-save' : ''}`}
+                          title="Entero: el vídeo completo cabe en el hueco"
+                          onClick={() => patchSelFit('contain')}
+                        >
+                          Entero
+                        </button>
+                        <button
+                          type="button"
+                          className={`ghost small ${selFit === 'cover' ? 'active-save' : ''}`}
+                          title="Custom: recorta una zona y llena el hueco"
+                          onClick={() => patchSelFit('cover')}
+                        >
+                          Custom
+                        </button>
+                        <PanModeToggle value={panMode} onChange={patchSelPan} />
+                      </>
                     )}
                   </div>
                   <span className="rf-time">{fmt(t)} / {fmt(dur)}{layers.length > 1 ? ` · out ${fmt(compositionDuration(layers))}` : ''}</span>
@@ -865,7 +920,7 @@ export default function ClipEditor({
 
               <div className="ed-col-preview">
                 <div className="ed-result-head">
-                  <span>Resultado 9:16</span>
+                  <span>Resultado {formatLabel}</span>
                   <span className="muted small">
                     {isSequentialLayout(layers)
                       ? 'En secuencia'
@@ -876,7 +931,7 @@ export default function ClipEditor({
                   <canvas
                     ref={canvasRef}
                     width={270}
-                    height={480}
+                    height={previewH}
                     className="ed-result-canvas"
                     onPointerDown={onResultDown}
                     onPointerMove={onResultMove}

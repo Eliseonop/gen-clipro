@@ -1,26 +1,22 @@
-// Dibujo del resultado 9:16 en vivo del editor de clip (una o dos capas).
-import { clamp, geomFor, clampCenter, frameAt } from '../../lib/panning'
-import { outputRect, slotTargetAspect } from './composeModel'
+// Dibujo del resultado en vivo del editor de clip (una o dos capas).
+import { sourceDrawRect, frameAt } from '../../lib/panning'
+import { previewDest, slotTargetAspect } from './composeModel'
 
-function drawLayerInto(ctx, v, layer, prep, dest, srcTime) {
+function drawLayerInto(ctx, v, layer, prep, dest, srcTime, outAspect) {
   const vw = v.videoWidth || prep?.width || 0
   const vh = v.videoHeight || prep?.height || 0
   if (!vw || !vh) return
-  const srcAspect = vw / vh
-  const tAspect = slotTargetAspect(dest)
-  const fr = frameAt(layer.keyframes, srcTime, layer.zoom ?? 1, layer.pan_mode || 'smooth')
-  const zoom = fr.zoom
-  const { widthFrac: wf, heightFrac: hf } = geomFor(zoom, srcAspect, tAspect)
-  const p = clampCenter(fr.cx, fr.cy, zoom, srcAspect, tAspect)
-  const sw = wf * vw, sh = hf * vh
-  const sx = clamp((p.cx - wf / 2) * vw, 0, vw - sw)
-  const sy = clamp((p.cy - hf / 2) * vh, 0, vh - sh)
   const c = ctx.canvas
-  const dx = dest.x * c.width
-  const dy = dest.y * c.height
-  const dw = dest.w * c.width
-  const dh = dest.h * c.height
-  try { ctx.drawImage(v, sx, sy, sw, sh, dx, dy, dw, dh) } catch { /* noop */ }
+  const slot = {
+    dx: dest.x * c.width,
+    dy: dest.y * c.height,
+    dw: dest.w * c.width,
+    dh: dest.h * c.height,
+  }
+  const tAspect = slotTargetAspect(dest, outAspect)
+  const fr = frameAt(layer.keyframes, srcTime, layer.zoom ?? 1, layer.pan_mode || 'smooth')
+  const r = sourceDrawRect(fr, vw, vh, slot, tAspect)
+  try { ctx.drawImage(v, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh) } catch { /* noop */ }
 }
 
 export function drawComposeFrame(videos, canvas, env) {
@@ -29,18 +25,24 @@ export function drawComposeFrame(videos, canvas, env) {
   ctx.fillStyle = '#0a0c12'
   ctx.fillRect(0, 0, canvas.width, canvas.height)
   const n = layers.length
+  const outAspect = env.outAspect ?? (canvas.width / Math.max(1, canvas.height))
+  const solo = env.soloIndex != null
   layers.forEach((layer, i) => {
-    if (env.soloIndex != null && i !== env.soloIndex) return
+    if (solo && i !== env.soloIndex) return
     const v = videos[i]
     const prep = preps[i]
     if (!v || v.readyState < 2) return
-    const dest = outputRect(layer, i, env.soloIndex != null ? 1 : n)
+    const dest = previewDest(layer, i, solo ? 1 : n, {
+      solo,
+      syncedDual: !!env.syncedDual,
+      outAspect,
+    })
     const srcTime = v.currentTime || 0
-    drawLayerInto(ctx, v, layer, prep, dest, srcTime)
+    drawLayerInto(ctx, v, layer, prep, dest, srcTime, outAspect)
   })
-  if (n === 2 && env.soloIndex == null) {
-    const a = outputRect(layers[0], 0, 2)
-    const b = outputRect(layers[1], 1, 2)
+  if (n === 2 && !solo) {
+    const a = previewDest(layers[0], 0, 2, { syncedDual: !!env.syncedDual, outAspect })
+    const b = previewDest(layers[1], 1, 2, { syncedDual: !!env.syncedDual, outAspect })
     const sharedEdge = (a.x + a.w === b.x && a.y === b.y && a.h === b.h)
       || (a.y + a.h === b.y && a.x === b.x && a.w === b.w)
     if (sharedEdge) {
@@ -75,5 +77,5 @@ export function drawClipFrame(v, c, env) {
       ]
   const videos = isDual ? [v, v] : [v]
   const preps = isDual ? [prep, prep] : [prep]
-  drawComposeFrame(videos, c, { layers, preps })
+  drawComposeFrame(videos, c, { layers, preps, syncedDual: isDual, outAspect: c.width / Math.max(1, c.height) })
 }

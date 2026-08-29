@@ -45,7 +45,11 @@ export function defaultTracks() {
   ]
 }
 
-export const newReframe = () => ({ zoom: 1, pan_mode: 'smooth', dual_crop: false, split_orientation: 'vertical', keyframes: [], keyframes2: [] })
+export const newReframe = () => ({
+  zoom: 1, pan_mode: 'smooth', dual_crop: false,
+  split_orientation: 'vertical', split_layout: 'auto', master: false,
+  keyframes: [], keyframes2: [],
+})
 
 // Asegura ids en los keyframes (para color/selección estables).
 export function withKfIds(reframe) {

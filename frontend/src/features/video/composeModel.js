@@ -1,6 +1,8 @@
 // Modelo puro de composición de capas para el Clip Editor (máx. 2).
 // Cada capa es un material (url + tramo + paneo) con un hueco en el 9:16.
 
+import { syncedDualSlots } from '../../lib/recipeLayout.js'
+
 export const MIN_SPLIT_GAP = 0.3
 export const MAX_LAYERS = 2
 
@@ -53,6 +55,16 @@ export function slotRect(slot, index = 0, customRect = null) {
 export function outputRect(layer, index, layerCount) {
   if (layerCount < 2) return { x: 0, y: 0, w: 1, h: 1 }
   return slotRect(layer.slot, index, layer.customRect)
+}
+
+/** Hueco de preview: dual sincronizado sigue el formato; sequential/solo llena el canvas. */
+export function previewDest(layer, index, layerCount, opts = {}) {
+  if (opts.solo) return { x: 0, y: 0, w: 1, h: 1 }
+  if (opts.syncedDual && opts.outAspect != null) {
+    const names = syncedDualSlots(opts.outAspect, { split_layout: 'auto' })
+    return slotRect(names[index])
+  }
+  return outputRect(layer, index, layerCount)
 }
 
 /** Aspecto del recorte fuente para que encaje en el hueco de un 9:16. */
