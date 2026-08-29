@@ -2,10 +2,13 @@
    VIDEO EDITOR (timeline NLE) — usa los tokens de :root de App.css
    ========================================================================== */
 
-.project-view.editor-mode { gap: 12px; }
-.project-view.editor-mode .sidebar { width: 140px; padding: 14px 12px; }
-.project-view.editor-mode .side-title { font-size: 14px; margin-bottom: 12px; }
-.project-view.editor-mode .project-content { min-width: 0; }
+.project-view {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 40px);
+  min-width: 0;
+}
+.project-view.editor-mode { gap: 0; }
 
 .veditor {
   --ed-row-h: 52px;
@@ -13,10 +16,27 @@
   --ed-head-w: 150px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   height: calc(100vh - 40px);
   min-height: 0;
+  min-width: 0;
 }
+.ed-back {
+  background: none;
+  border: none;
+  color: var(--text);
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: var(--transition);
+  line-height: 0;
+  flex-shrink: 0;
+}
+.ed-back:hover { color: var(--accent); background: rgba(255, 255, 255, 0.06); }
 .ed-hidden-media { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; pointer-events: none; left: -9999px; top: -9999px; }
 
 /* ===== SUPERIOR: 3 columnas ===== */
@@ -33,6 +53,8 @@
   font-size: 11.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted);
 }
 .ed-col-head .material-icons { color: var(--accent-2); vertical-align: -3px; }
+.ed-col-head-tools { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.ed-col-head-tools .ghost.small { padding: 4px 8px; font-size: 11.5px; text-transform: none; letter-spacing: 0; font-weight: 700; }
 
 .ed-main-stage, .ed-result-stage {
   flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center;
@@ -72,11 +94,20 @@
   width: 300px; flex-shrink: 0; background: var(--card); border: 1px solid var(--line);
   border-radius: var(--radius-lg); padding: 10px; display: flex; flex-direction: column; min-height: 0;
 }
-.ed-mat-tabs { display: flex; gap: 5px; margin-bottom: 10px; }
+.ed-mat-head {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px;
+}
+.ed-mat-title { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.ed-mat-label {
+  font-size: 11.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted);
+}
+.ed-mat-actions { display: flex; gap: 5px; flex: 1; min-width: 0; }
+.ed-mat-actions .ghost.small { flex: 1; justify-content: center; padding: 5px 6px; font-size: 11px; }
+.ed-mat-tabs { display: flex; gap: 5px; margin-bottom: 8px; }
 .ed-tab {
   flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px;
   background: var(--card-2); border: 1px solid var(--line); color: var(--text-secondary);
-  padding: 8px 4px; border-radius: var(--radius-sm); font-size: 12px; cursor: pointer; transition: var(--transition);
+  padding: 6px 4px; border-radius: var(--radius-sm); font-size: 11.5px; cursor: pointer; transition: var(--transition);
 }
 .ed-tab:hover { background: var(--card-3); color: #fff; }
 .ed-tab.on { background: var(--accent-gradient); color: #fff; border-color: var(--accent); font-weight: 700; }
@@ -220,8 +251,23 @@
 .ed-mat-grid { flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; align-content: start; padding-right: 4px; }
 .ed-mat-grid .grid-full { grid-column: 1 / -1; }
 .ed-card.grid { display: flex; flex-direction: column; gap: 3px; }
-.ed-card.grid .ed-card-media { position: relative; width: 100%; max-height: 150px; min-height: 46px; border-radius: 6px; }
-.ed-card.grid .ed-card-media video { width: 100%; max-height: 150px; object-fit: contain; display: block; margin: 0 auto; }
+.ed-card.grid .ed-card-media {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  max-height: 168px;
+  min-height: 88px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #111;
+}
+.ed-card.grid .ed-card-media video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  margin: 0;
+}
 .ed-card.grid .ed-card-media.sfx-tile { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; color: var(--accent-blue); background: linear-gradient(135deg, #1e2a4d, #182138); }
 .ed-play-ov {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
@@ -238,6 +284,28 @@
 .ed-add-corner:hover { transform: scale(1.08); }
 .ed-card.grid .ed-card-name { font-size: 10.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 2px; }
 .ed-card-sub { font-size: 9.5px; color: var(--accent-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 2px; }
+.ed-card-desc {
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  padding: 0 2px 4px;
+}
+.ed-card.no-drag, .ed-card.no-drag:active { cursor: default; }
+.ed-card-poster {
+  width: 100%;
+  min-height: 88px;
+  max-height: 150px;
+  aspect-ratio: 9 / 16;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  background: #0a0c12;
+}
 .ed-card.grid .ed-card-dur { position: absolute; bottom: 3px; right: 4px; background: rgba(0,0,0,0.7); border-radius: 4px; padding: 0 4px; font-size: 9.5px; color: #fff; }
 
 /* Card de audio (lista) */

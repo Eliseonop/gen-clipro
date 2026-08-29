@@ -1,72 +1,79 @@
-// Dibujo del resultado 9:16 en vivo del editor de clip (single o doble encuadre).
-// Función pura respecto a React: recibe el <video>, el <canvas> y un `env` con las
-// refs vivas y los helpers de geometría del componente, y lee `.current` en cada
-// frame igual que hacía el efecto original (comportamiento idéntico).
-import { clamp, posAt } from '../../lib/panning'
+// Dibujo del resultado 9:16 en vivo del editor de clip (una o dos capas).
+import { clamp, posAt, geomFor, clampCenter } from '../../lib/panning'
+import { outputRect, slotTargetAspect } from './composeModel'
 
-const OUT_RATIO = 9 / 16
+function drawLayerInto(ctx, v, layer, prep, dest, srcTime) {
+  const vw = v.videoWidth || prep?.width || 0
+  const vh = v.videoHeight || prep?.height || 0
+  if (!vw || !vh) return
+  const srcAspect = vw / vh
+  const tAspect = slotTargetAspect(dest)
+  const zoom = layer.zoom ?? 1
+  const mode = layer.pan_mode || 'smooth'
+  const { widthFrac: wf, heightFrac: hf } = geomFor(zoom, srcAspect, tAspect)
+  const pp = posAt(layer.keyframes, srcTime, mode)
+  const p = clampCenter(pp.cx, pp.cy, zoom, srcAspect, tAspect)
+  const sw = wf * vw, sh = hf * vh
+  const sx = clamp((p.cx - wf / 2) * vw, 0, vw - sw)
+  const sy = clamp((p.cy - hf / 2) * vh, 0, vh - sh)
+  const c = ctx.canvas
+  const dx = dest.x * c.width
+  const dy = dest.y * c.height
+  const dw = dest.w * c.width
+  const dh = dest.h * c.height
+  try { ctx.drawImage(v, sx, sy, sw, sh, dx, dy, dw, dh) } catch { /* noop */ }
+}
 
-export function drawClipFrame(v, c, env) {
-  const { dualCropRef, splitOrientRef, panModeRef, zoomRef, zoom2Ref, kfsRef, kfs2Ref, geom, clampCenter, prep } = env
-  const ctx = c.getContext('2d')
-  const isDual = dualCropRef.current
-  const orient = splitOrientRef.current
-  const mode = panModeRef.current
-  const vw = v.videoWidth || prep.width, vh = v.videoHeight || prep.height
-
-  ctx.clearRect(0, 0, c.width, c.height)
-
-  if (!isDual) {
-    // Un solo encuadre 9:16
-    const { widthFrac: wf, heightFrac: hf } = geom(zoomRef.current, OUT_RATIO)
-    const pp = posAt(kfsRef.current, v.currentTime, mode)
-    const p = clampCenter(pp.cx, pp.cy, zoomRef.current, OUT_RATIO)
-    let sw = wf * vw, sh = hf * vh
-    let sx = clamp((p.cx - wf / 2) * vw, 0, vw - sw)
-    let sy = clamp((p.cy - hf / 2) * vh, 0, vh - sh)
-    try { ctx.drawImage(v, sx, sy, sw, sh, 0, 0, c.width, c.height) } catch { /* noop */ }
-  } else {
-    // Doble encuadre
-    const tAspect = orient === 'vertical' ? (9 / 8) : (4.5 / 16)
-
-    // Crop 1
-    const { widthFrac: wf1, heightFrac: hf1 } = geom(zoomRef.current, tAspect)
-    const pp1 = posAt(kfsRef.current, v.currentTime, mode)
-    const p1 = clampCenter(pp1.cx, pp1.cy, zoomRef.current, tAspect)
-    let sw1 = wf1 * vw, sh1 = hf1 * vh
-    let sx1 = clamp((p1.cx - wf1 / 2) * vw, 0, vw - sw1)
-    let sy1 = clamp((p1.cy - hf1 / 2) * vh, 0, vh - sh1)
-
-    // Crop 2
-    const { widthFrac: wf2, heightFrac: hf2 } = geom(zoom2Ref.current, tAspect)
-    const pp2 = posAt(kfs2Ref.current, v.currentTime, mode)
-    const p2 = clampCenter(pp2.cx, pp2.cy, zoom2Ref.current, tAspect)
-    let sw2 = wf2 * vw, sh2 = hf2 * vh
-    let sx2 = clamp((p2.cx - wf2 / 2) * vw, 0, vw - sw2)
-    let sy2 = clamp((p2.cy - hf2 / 2) * vh, 0, vh - sh2)
-
-    if (orient === 'vertical') {
-      try {
-        ctx.drawImage(v, sx1, sy1, sw1, sh1, 0, 0, c.width, c.height / 2)
-        ctx.drawImage(v, sx2, sy2, sw2, sh2, 0, c.height / 2, c.width, c.height / 2)
-        ctx.strokeStyle = '#292e3e'
-        ctx.lineWidth = 2
-        ctx.beginPath()
-        ctx.moveTo(0, c.height / 2)
-        ctx.lineTo(c.width, c.height / 2)
-        ctx.stroke()
-      } catch { /* noop */ }
-    } else {
-      try {
-        ctx.drawImage(v, sx1, sy1, sw1, sh1, 0, 0, c.width / 2, c.height)
-        ctx.drawImage(v, sx2, sy2, sw2, sh2, c.width / 2, 0, c.width / 2, c.height)
-        ctx.strokeStyle = '#292e3e'
-        ctx.lineWidth = 2
-        ctx.beginPath()
-        ctx.moveTo(c.width / 2, 0)
-        ctx.lineTo(c.width / 2, c.height)
-        ctx.stroke()
-      } catch { /* noop */ }
+export function drawComposeFrame(videos, canvas, env) {
+  const { layers, preps } = env
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#0a0c12'
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  const n = layers.length
+  layers.forEach((layer, i) => {
+    const v = videos[i]
+    const prep = preps[i]
+    if (!v || v.readyState < 2) return
+    const dest = outputRect(layer, i, n)
+    const srcTime = v.currentTime || 0
+    drawLayerInto(ctx, v, layer, prep, dest, srcTime)
+  })
+  if (n === 2) {
+    const a = outputRect(layers[0], 0, 2)
+    const b = outputRect(layers[1], 1, 2)
+    const sharedEdge = (a.x + a.w === b.x && a.y === b.y && a.h === b.h)
+      || (a.y + a.h === b.y && a.x === b.x && a.w === b.w)
+    if (sharedEdge) {
+      ctx.strokeStyle = '#292e3e'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      if (a.y + a.h === b.y) {
+        const y = b.y * canvas.height
+        ctx.moveTo(0, y)
+        ctx.lineTo(canvas.width, y)
+      } else {
+        const x = b.x * canvas.width
+        ctx.moveTo(x, 0)
+        ctx.lineTo(x, canvas.height)
+      }
+      ctx.stroke()
     }
   }
+}
+
+/** Compatibilidad: un vídeo, dual_crop del mismo origen (editor legado). */
+export function drawClipFrame(v, c, env) {
+  const { dualCropRef, splitOrientRef, panModeRef, zoomRef, zoom2Ref, kfsRef, kfs2Ref, prep } = env
+  const isDual = dualCropRef.current
+  const layers = isDual
+    ? [
+        { zoom: zoomRef.current, pan_mode: panModeRef.current, keyframes: kfsRef.current, slot: splitOrientRef.current === 'horizontal' ? 'left' : 'top' },
+        { zoom: zoom2Ref.current, pan_mode: panModeRef.current, keyframes: kfs2Ref.current, slot: splitOrientRef.current === 'horizontal' ? 'right' : 'bottom' },
+      ]
+    : [
+        { zoom: zoomRef.current, pan_mode: panModeRef.current, keyframes: kfsRef.current, slot: 'full' },
+      ]
+  const videos = isDual ? [v, v] : [v]
+  const preps = isDual ? [prep, prep] : [prep]
+  drawComposeFrame(videos, c, { layers, preps })
 }

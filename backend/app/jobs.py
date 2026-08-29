@@ -15,6 +15,7 @@ from . import clipper, projects
 from .schemas import (
     AudioInfo,
     ClipRequest,
+    ComposeClipRequest,
     Job,
     JobStatus,
     TranscribeRequest,
@@ -75,6 +76,45 @@ def _run(job_id: str, req: ClipRequest, title: str) -> None:
 
 def start_job(job: Job, req: ClipRequest, title: str) -> None:
     thread = threading.Thread(target=_run, args=(job.id, req, title), daemon=True)
+    thread.start()
+
+
+def _run_compose(job_id: str, req: ComposeClipRequest) -> None:
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+
+    def on_progress(frac: float, message: str) -> None:
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from . import compose_clip, storage
+
+        project = projects.get_project(req.project_id)
+        base = storage.ensure_dirs(storage.project_base(project))
+        index = req.index if req.index is not None else (100000 + int(datetime.now(timezone.utc).timestamp()) % 900000)
+        clip = compose_clip.generate_composition(
+            project_id=req.project_id,
+            layers=req.layers,
+            label=req.label,
+            description=req.description,
+            index=index,
+            video_dir=base / "video",
+            on_progress=on_progress,
+        )
+        projects.add_clips(req.project_id, [clip])
+        job.clips = [clip]
+        job.progress = 1.0
+        job.message = "Clip compuesto generado."
+        job.status = JobStatus.done
+    except Exception as exc:  # noqa: BLE001
+        job.status = JobStatus.error
+        job.error = str(exc)
+        job.message = "Error al componer el clip."
+
+
+def start_compose_job(job: Job, req: ComposeClipRequest) -> None:
+    thread = threading.Thread(target=_run_compose, args=(job.id, req), daemon=True)
     thread.start()
 
 
@@ -240,18 +280,26 @@ def start_tts_job(job: Job, req: TTSRequest) -> None:
 def _run_reframe_prepare(job_id: str, url: str, start: float, end: float, samples: int) -> None:
     job = _jobs[job_id]
     job.status = JobStatus.running
+    job.progress = 0.01
+    job.message = "Iniciando preparación del clip…"
 
     def on_progress(frac: float, message: str) -> None:
         job.progress = round(frac, 3)
         job.message = message
 
     try:
+        on_progress(0.02, "Cargando FFmpeg y detector de caras…")
         from . import reframe   # import perezoso (yt-dlp + opencv)
 
         prep = reframe.prepare(url, start, end, samples, on_progress)
         job.reframe_prep = prep
         job.progress = 1.0
-        job.message = f"Listo · {len(prep.track)} detecciones."
+        n = len(prep.track or [])
+        job.message = (
+            f"Listo · {n} detecciones de cara."
+            if n
+            else "Listo · no se detectaron caras (puedes encuadrar a mano)."
+        )
         job.status = JobStatus.done
     except Exception as exc:  # noqa: BLE001
         job.status = JobStatus.error

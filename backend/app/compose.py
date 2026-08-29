@@ -16,14 +16,18 @@ Estrategia:
 """
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
 from . import clipper, config, sfx, storage
+from .diagnostics import timed
 from .schemas import Keyframe, Project, Reframe, Timeline, TimelineClip
 
 ProgressCb = Callable[[float, str], None]
+
+log = logging.getLogger("videoyt.compose")
 
 _MEDIA_KIND = {"clips": "video", "audios": "audio"}
 
@@ -351,7 +355,11 @@ def render(project: Project, timeline: Timeline, out_path: Path,
     on_progress(0.05, "Preparando la composición…")
     cmd = build_command(project, timeline, out_path)
     on_progress(0.15, "Renderizando el vídeo final con FFmpeg…")
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    log.info("Export: %d clip(s), encoder=%s preset=%s crf=%s → %s",
+             len(timeline.clips), "libx264", config.VIDEO_PRESET, config.VIDEO_CRF,
+             out_path.name)
+    with timed("render FFmpeg (export)", log, clips=len(timeline.clips)):
+        proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"FFmpeg falló al exportar:\n{proc.stderr[-1200:]}")
     if not out_path.exists():

@@ -9,11 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, heatmap, jobs, projects, settings, storage, tts
+from . import config, diagnostics, heatmap, jobs, projects, settings, storage, tts
 from .schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
     ClipRequest,
+    ComposeClipRequest,
     CreateProjectRequest,
     Job,
     Project,
@@ -37,7 +38,18 @@ def _video_title(url: str) -> str:
     except Exception:
         return ""
 
+diagnostics.configure_logging()
 app = FastAPI(title="video-yt", version="0.1.0")
+
+
+@app.on_event("startup")
+def _startup_diagnostics() -> None:
+    """Al arrancar, informa de qué motor usará cada parte (GPU/CPU)."""
+    try:
+        diagnostics.log_report()
+    except Exception:  # noqa: BLE001 - un fallo de diagnóstico nunca debe tumbar el arranque
+        import logging
+        logging.getLogger("videoyt.diag").exception("No se pudo generar el diagnóstico de arranque.")
 
 # El frontend (React/Vite) corre en otro puerto durante el desarrollo.
 app.add_middleware(
@@ -54,6 +66,12 @@ app.mount("/clips", StaticFiles(directory=str(config.OUTPUT_DIR)), name="clips")
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/api/diagnostics")
+def get_diagnostics() -> dict:
+    """Estado del hardware/motores (GPU/CPU) para OpenCV y FFmpeg."""
+    return diagnostics.probe()
 
 
 # --- Proyectos -----------------------------------------------------------
@@ -332,6 +350,18 @@ def clip(req: ClipRequest) -> Job:
 
     job = jobs.create_job()
     jobs.start_job(job, req, _video_title(req.url))
+    return job
+
+
+@app.post("/api/clip/compose", response_model=Job)
+def compose_clip(req: ComposeClipRequest) -> Job:
+    """Lanza un trabajo para componer 1–8 capas en un clip 9:16 de la biblioteca."""
+    if not req.layers or len(req.layers) > 8:
+        raise HTTPException(status_code=400, detail="La composición admite entre 1 y 8 capas.")
+    if projects.get_project(req.project_id) is None:
+        raise HTTPException(status_code=400, detail="Proyecto no válido.")
+    job = jobs.create_job()
+    jobs.start_compose_job(job, req)
     return job
 
 

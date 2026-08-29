@@ -21,6 +21,7 @@ contiguo, con el tamaño de entrada exactamente igual al del fotograma).
 """
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 from typing import Callable, Optional
@@ -29,6 +30,9 @@ import cv2
 import numpy as np
 
 from . import config
+from .diagnostics import timed
+
+log = logging.getLogger("videoyt.detect")
 
 _MODEL = config.BASE_DIR / "models" / "face_detection_yunet_2023mar.onnx"
 
@@ -196,27 +200,31 @@ def face_track(
 
     track: list[dict] = []
 
-    for i in range(samples):
-        t = dur * (i + 0.5) / samples
-        cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
-        ok, frame = cap.read()
-        if ok:
-            f = _prep_frame(frame)
-            if f is not None:
-                fh, fw = f.shape[:2]
-                faces = _detect_faces(f)
-                if faces is not None and len(faces):
-                    best = max(faces, key=lambda fc: fc[2] * fc[3])
-                    x, y, bw, bh = float(best[0]), float(best[1]), float(best[2]), float(best[3])
-                    track.append({
-                        "t": round(t, 3),
-                        "cx": round(min(1.0, max(0.0, (x + bw / 2) / fw)), 4),
-                        "cy": round(min(1.0, max(0.0, (y + bh / 2) / fh)), 4),
-                        "w": round(bw / fw, 4),
-                        "h": round(bh / fh, 4),
-                    })
-        if on_progress and samples:
-            on_progress(0.5 + 0.5 * (i + 1) / samples, f"Detectando caras… {i + 1}/{samples}")
+    log.info("Tracking de caras: %s · %dx%d · %.1fs · %d muestras",
+             source.name, w, h, dur, samples)
+    with timed("detección de caras", log, samples=samples, res=f"{w}x{h}"):
+        for i in range(samples):
+            t = dur * (i + 0.5) / samples
+            cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+            ok, frame = cap.read()
+            if ok:
+                f = _prep_frame(frame)
+                if f is not None:
+                    fh, fw = f.shape[:2]
+                    faces = _detect_faces(f)
+                    if faces is not None and len(faces):
+                        best = max(faces, key=lambda fc: fc[2] * fc[3])
+                        x, y, bw, bh = float(best[0]), float(best[1]), float(best[2]), float(best[3])
+                        track.append({
+                            "t": round(t, 3),
+                            "cx": round(min(1.0, max(0.0, (x + bw / 2) / fw)), 4),
+                            "cy": round(min(1.0, max(0.0, (y + bh / 2) / fh)), 4),
+                            "w": round(bw / fw, 4),
+                            "h": round(bh / fh, 4),
+                        })
+            if on_progress and samples:
+                on_progress(0.5 + 0.5 * (i + 1) / samples, f"Detectando caras… {i + 1}/{samples}")
 
+    log.info("Tracking: %d/%d muestras con cara detectada.", len(track), samples)
     cap.release()
     return {"track": track, "duration": round(dur, 3), "width": w, "height": h, "fps": round(fps, 3)}

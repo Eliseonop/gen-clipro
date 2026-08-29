@@ -33,6 +33,7 @@ const del = (path) => req(path, { method: 'DELETE' })
 // --- Vídeo / clips ---
 export const analyze = (params) => post('/api/analyze', params)
 export const createClipJob = (params) => post('/api/clip', params)
+export const composeClipJob = (params) => post('/api/clip/compose', params)
 export const createTranscribeJob = (params) => post('/api/transcribe', params)
 export const prepareReframe = (params) => post('/api/reframe/prepare', params)
 export const getJob = (jobId) => get(`/api/job/${jobId}`)

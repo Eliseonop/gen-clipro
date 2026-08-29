@@ -1,26 +1,35 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import Icon from '../../components/Icon'
 import { fmt } from '../../lib/utils'
 import { listSfx, setSfxFolder, pickFolder } from '../../services/api'
+import MaterialClipGrid, { dragPayload, useToggle, useExclusiveMedia, Empty } from './MaterialClipGrid'
 
 // Panel izquierdo (biblioteca): Video | Audio | Sound Effects.
-export default function EdMaterial({ project, onAdd, onDragInfo }) {
+export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenVideo, onOpenAudio }) {
   const [tab, setTab] = useState('video')
   const clips = project.clips || []
   const audios = project.audios || []
-  const activeMedia = useRef(null)
-
-  const onPlayMedia = useCallback((el) => {
-    if (activeMedia.current && activeMedia.current !== el) {
-      try { activeMedia.current.pause() } catch { /* noop */ }
-    }
-    activeMedia.current = el
-  }, [])
-
+  const onPlayMedia = useExclusiveMedia()
   const di = onDragInfo || (() => {})
 
   return (
     <div className="ed-material">
+      <div className="ed-mat-head">
+        <div className="ed-mat-title">
+          <button className="ed-back" onClick={onBack} type="button" title="Volver a proyectos">
+            <Icon name="arrow_back" size={22} />
+          </button>
+          <span className="ed-mat-label" title={project.name}></span>
+        </div>
+        <div className="ed-mat-actions">
+          <button className="ghost small" onClick={onOpenVideo} type="button">
+            <Icon name="add" size={15} /> Cargar video
+          </button>
+          <button className="ghost small" onClick={onOpenAudio} type="button">
+            <Icon name="add" size={15} /> Audio
+          </button>
+        </div>
+      </div>
       <div className="ed-mat-tabs">
         <button className={`ed-tab ${tab === 'video' ? 'on' : ''}`} onClick={() => setTab('video')}>
           <Icon name="movie" size={15} /> Video <span className="ed-count">{clips.length}</span>
@@ -34,69 +43,23 @@ export default function EdMaterial({ project, onAdd, onDragInfo }) {
       </div>
 
       {tab === 'video' && (
-        <div className="ed-mat-grid">
-          {clips.length === 0
-            ? <Empty text="Sin clips. Crea clips en la pestaña Vídeo." />
-            : clips.map((c) => <VideoCard key={c.index} clip={c} onAdd={() => onAdd('clips', c)} onPlay={onPlayMedia} di={di} />)}
-        </div>
+        <MaterialClipGrid
+          clips={clips}
+          onAdd={(c) => onAdd('clips', c)}
+          onPlay={onPlayMedia}
+          di={di}
+        />
       )}
 
       {tab === 'audio' && (
         <div className="ed-mat-list">
           {audios.length === 0
-            ? <Empty text="Sin audios. Genera narración en la pestaña Audio." />
+            ? <Empty text="Sin audios. Pulsa Audio para generar narración." />
             : audios.map((a) => <AudioCard key={a.id} audio={a} onAdd={() => onAdd('audios', a)} onPlay={onPlayMedia} di={di} />)}
         </div>
       )}
 
       {tab === 'sfx' && <SfxTab onAdd={onAdd} onPlay={onPlayMedia} di={di} />}
-    </div>
-  )
-}
-
-function dragPayload(assetKind, item) {
-  return JSON.stringify({
-    asset_kind: assetKind,
-    asset_id: assetKind === 'clips' ? String(item.index) : String(item.id),
-    filename: assetKind === 'sfx' ? item.id : item.filename,
-    name: item.label || item.name || item.filename,
-    url: item.url,
-    duration: assetKind === 'clips' ? (item.end - item.start) : (item.duration || 0),
-    kind: assetKind === 'clips' ? 'video' : 'audio',
-  })
-}
-
-function useToggle(onPlay) {
-  const ref = useRef(null)
-  const [playing, setPlaying] = useState(false)
-  const toggle = (e) => {
-    e?.stopPropagation()
-    const m = ref.current
-    if (!m) return
-    if (m.paused) { onPlay(m); m.play().catch(() => {}) } else m.pause()
-  }
-  return { ref, playing, setPlaying, toggle }
-}
-
-function VideoCard({ clip, onAdd, onPlay, di }) {
-  const { ref, playing, setPlaying, toggle } = useToggle(onPlay)
-  return (
-    <div className="ed-card grid video"
-      draggable
-      onDragStart={(e) => { e.dataTransfer.setData('application/x-material', dragPayload('clips', clip)); di?.({ kind: 'video', duration: clip.end - clip.start, name: clip.label || `Clip #${clip.index}` }) }}
-      onDragEnd={() => di?.(null)}>
-      <div className="ed-card-media">
-        <video ref={ref} src={clip.url} preload="metadata" playsInline
-          onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} />
-        <button className="ed-play-ov" onClick={toggle} title={playing ? 'Pausa' : 'Reproducir'}>
-          <Icon name={playing ? 'pause' : 'play_arrow'} size={20} />
-        </button>
-        <button className="ed-add-corner" onClick={(e) => { e.stopPropagation(); onAdd() }} title="Agregar al proyecto">
-          <Icon name="add" size={16} />
-        </button>
-        <span className="ed-card-dur">{fmt(clip.end - clip.start)}</span>
-      </div>
-      <div className="ed-card-name" title={clip.filename}>{clip.label || `Clip #${clip.index}`}</div>
     </div>
   )
 }
@@ -205,8 +168,4 @@ function SfxTab({ onAdd, onPlay, di }) {
       {!loading && <div className="ed-sfx-count">{data.total} sonidos</div>}
     </div>
   )
-}
-
-function Empty({ text }) {
-  return <div className="ed-mat-empty grid-full">{text}</div>
 }

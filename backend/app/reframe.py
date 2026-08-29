@@ -12,10 +12,11 @@ El render final (clipper) reusa estos keyframes con un recorte en movimiento.
 from __future__ import annotations
 
 import hashlib
+import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Callable
-
-from yt_dlp import YoutubeDL
 
 from . import config, detect
 from .schemas import Keyframe, ReframePrep, TrackPoint
@@ -41,6 +42,7 @@ def proxy_path(key: str) -> Path | None:
 
 def _download_proxy(url: str, start: float, end: float, key: str, on_progress: ProgressCb) -> Path:
     """Descarga un proxy <=480p del tramo [start, end] y lo deja en <key>.mp4."""
+    from yt_dlp import YoutubeDL
     from yt_dlp.utils import download_range_func
 
     out = PROXY_DIR / f"{key}.mp4"
@@ -75,6 +77,64 @@ def _download_proxy(url: str, start: float, end: float, key: str, on_progress: P
     raise RuntimeError("No se pudo descargar la previsualización del tramo.")
 
 
+def _local_media_path(url: str) -> Path | None:
+    from urllib.parse import unquote
+
+    from . import projects, storage
+    from .compose_clip import _MEDIA_RE
+
+    m = _MEDIA_RE.search(url or "")
+    if not m:
+        return None
+    pid, kind, filename = m.group(1), m.group(2), unquote(m.group(3))
+    proj = projects.get_project(pid)
+    if proj is None:
+        return None
+    path = storage.resolve_media(proj, kind, filename)
+    if path is None or not path.exists():
+        return None
+    return path
+
+
+def _ffmpeg_proxy(src: Path, start: float, end: float, key: str, on_progress: ProgressCb) -> Path:
+    """Recorta un archivo local a un proxy ligero para el editor."""
+    out = PROXY_DIR / f"{key}.mp4"
+    on_progress(0.08, "Recortando previsualización con FFmpeg…")
+    stop = threading.Event()
+    t0 = time.monotonic()
+
+    def pulse() -> None:
+        while not stop.wait(1.2):
+            secs = int(time.monotonic() - t0)
+            on_progress(
+                min(0.45, 0.08 + secs * 0.012),
+                f"Recortando previsualización… {secs}s (FFmpeg, no está colgado)",
+            )
+
+    th = threading.Thread(target=pulse, daemon=True)
+    th.start()
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", str(start),
+        "-to", str(end),
+        "-i", str(src),
+        "-vf", "scale=-2:480",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "28",
+        "-an",
+        str(out),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+    finally:
+        stop.set()
+    if proc.returncode != 0 or not out.exists():
+        raise RuntimeError(f"No se pudo preparar la previsualización:\n{(proc.stderr or '')[-600:]}")
+    on_progress(0.48, "Previsualización lista. Analizando caras…")
+    return out
+
+
 def _seed_keyframes(track: list[dict], duration: float) -> list[Keyframe]:
     """Convierte el track denso en unos pocos keyframes espaciados en el tiempo."""
     if not track:
@@ -97,10 +157,16 @@ def prepare(url: str, start: float, end: float, samples: int, on_progress: Progr
     key = _key(url, start, end)
     proxy = proxy_path(key)
     if proxy is None:
-        on_progress(0.02, "Preparando previsualización…")
-        proxy = _download_proxy(url, start, end, key, on_progress)
+        on_progress(0.04, "No hay previsualización en caché. Generándola…")
+        local = _local_media_path(url)
+        if local is not None:
+            proxy = _ffmpeg_proxy(local, start, end, key, on_progress)
+        else:
+            proxy = _download_proxy(url, start, end, key, on_progress)
+    else:
+        on_progress(0.45, "Usando previsualización en caché…")
 
-    on_progress(0.5, "Analizando caras…")
+    on_progress(0.5, "Analizando caras en el tramo…")
     info = detect.face_track(proxy, samples=samples, on_progress=on_progress)
 
     keyframes = _seed_keyframes(info["track"], info["duration"])
