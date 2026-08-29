@@ -214,6 +214,50 @@ export function addSecondLayer(existing, incoming) {
   return [first, second]
 }
 
+export function isSyncedDual(layers) {
+  if (!layers || layers.length !== 2) return false
+  if (isSequentialLayout(layers)) return false
+  return (layers[0].url || '') === (layers[1].url || '')
+}
+
+export function addSplitTrack(layers) {
+  if (!layers || layers.length !== 1 || layers.length >= MAX_LAYERS) return null
+  const src = layers[0]
+  const kfs = (src.keyframes || []).map((k) => ({ ...k }))
+  return [
+    { ...src, slot: 'top' },
+    {
+      ...src,
+      id: null,
+      slot: 'bottom',
+      keyframes: kfs,
+      label: `${src.label || 'Pista'} · B`,
+    },
+  ]
+}
+
+function packKf(k) {
+  return {
+    t: k.t, cx: k.cx, cy: k.cy, zoom: k.zoom, pan_mode: k.pan_mode, fit: k.fit || 'cover',
+  }
+}
+
+export function recipeFromLayers(layers) {
+  const L = layers[0]
+  const dual = isSyncedDual(layers)
+  return {
+    zoom: L?.zoom ?? 1,
+    zoom2: dual ? (layers[1].zoom ?? L.zoom) : undefined,
+    pan_mode: L?.pan_mode ?? 'smooth',
+    dual_crop: dual,
+    split_layout: 'auto',
+    split_orientation: 'vertical',
+    master: true,
+    keyframes: (L?.keyframes || []).map(packKf),
+    keyframes2: dual ? (layers[1].keyframes || []).map(packKf) : [],
+  }
+}
+
 export function prepKey(layer) {
   return `${layer.url}|${Number(layer.segStart).toFixed(2)}|${Number(layer.segEnd).toFixed(2)}`
 }
