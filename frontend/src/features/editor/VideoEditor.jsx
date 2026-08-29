@@ -251,6 +251,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     const clip = makeClip(payload.asset_kind, {
       index: payload.asset_id, id: payload.asset_id, filename: payload.filename,
       name: payload.name, label: payload.name, duration: payload.duration, end: payload.duration, start: 0,
+      reframe: payload.reframe,
     }, trackId, startTime, payload.duration)
     setClips((prev) => [...prev, clip])
     setSelClipId(clip.id)
@@ -263,9 +264,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
       const localOut = c.in_point + (at - c.start)
       if (localOut <= c.in_point + 0.1 || localOut >= c.out_point - 0.1) return prev
       const left = { ...c, out_point: +localOut.toFixed(3) }
+      const remap = (arr) => (arr || []).map((k) => ({ ...k, id: uid('k') }))
       const right = {
         ...c, id: uid('c'), in_point: +localOut.toFixed(3), start: +at.toFixed(3),
-        reframe: c.reframe ? withKfIds({ ...c.reframe, keyframes: c.reframe.keyframes.map((k) => ({ ...k, id: uid('k') })) }) : null,
+        reframe: c.reframe ? withKfIds({
+          ...c.reframe,
+          keyframes: remap(c.reframe.keyframes),
+          keyframes2: remap(c.reframe.keyframes2),
+        }) : null,
       }
       return prev.flatMap((x) => (x.id === id ? [left, right] : [x]))
     })
@@ -410,13 +416,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   }
   function patchKeyframePan(clip, kf, mode) {
     if (!clip || !kf) return
+    const patchArr = (arr) => (arr || []).map((k) => (k.id === kf.id ? { ...k, pan_mode: mode } : k))
     setClips((prev) => prev.map((c) => {
       if (c.id !== clip.id || !c.reframe) return c
       return {
         ...c,
         reframe: {
           ...c.reframe,
-          keyframes: c.reframe.keyframes.map((k) => (k.id === kf.id ? { ...k, pan_mode: mode } : k)),
+          keyframes: patchArr(c.reframe.keyframes),
+          keyframes2: patchArr(c.reframe.keyframes2),
         },
       }
     }))
@@ -424,14 +432,21 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   function deleteKeyframe(clip, kf) {
     setClips((prev) => prev.map((c) => {
       if (c.id !== clip.id || !c.reframe) return c
-      return { ...c, reframe: { ...c.reframe, keyframes: c.reframe.keyframes.filter((k) => k.id !== kf.id) } }
+      return {
+        ...c,
+        reframe: {
+          ...c.reframe,
+          keyframes: (c.reframe.keyframes || []).filter((k) => k.id !== kf.id),
+          keyframes2: (c.reframe.keyframes2 || []).filter((k) => k.id !== kf.id),
+        },
+      }
     }))
     if (selKfId === kf.id) setSelKfId(null)
   }
   function deleteSelectedKeyframe() {
     const clip = selectedClip
     if (!clip || selKfId == null) return
-    const kf = clip.reframe?.keyframes.find((k) => k.id === selKfId)
+    const kf = [...(clip.reframe?.keyframes || []), ...(clip.reframe?.keyframes2 || [])].find((k) => k.id === selKfId)
     if (kf) deleteKeyframe(clip, kf)
   }
   function moveKeyframe(clipId, idx, newT) {
@@ -637,12 +652,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
               <label className="ed-chip" title="Colocar este clip encima del canvas sin rellenar el formato de salida">
                 <input type="checkbox" checked={overlayOn}
                   onChange={(e) => toggleOverlay(selectedClip, e.target.checked)} /> Superponer
-              </label>
-            )}
-            {canEditFrame && !overlayOn && (
-              <label className="ed-chip" title="Doble encuadre">
-                <input type="checkbox" checked={!!selectedClip.reframe?.dual_crop}
-                  onChange={(e) => changeReframe(selectedClip.id, { dual_crop: e.target.checked })} /> 📱
               </label>
             )}
           </div>

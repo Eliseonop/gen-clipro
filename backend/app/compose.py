@@ -25,6 +25,7 @@ from . import clipper, config, sfx, storage
 from .clip_fx import overlay_xy_for_fx, video_fx_chain
 from .clip_layout import dest_rect_even, is_overlay, source_crop_px
 from .diagnostics import timed
+from .recipe_layout import contain_scale_filter, dual_slot_wh, join_dual_filters, split_orientation_for
 from .reframe_math import frame_at
 from .schemas import Keyframe, Project, Reframe, Timeline, TimelineClip
 
@@ -129,6 +130,23 @@ def _shifted_keyframes(reframe: Reframe, in_point: float, dur: float, which: int
     return out
 
 
+def _kfs_all_contain(kfs) -> bool:
+    """True si la pista es 100% Entero (letterbox). Mix contain/cover → cover."""
+    if not kfs:
+        return False
+    for k in kfs:
+        fit = k.fit if hasattr(k, "fit") else None
+        if fit != "contain":
+            return False
+    return True
+
+
+def _track_cropscale(path: Path, zoom, kfs, pan_mode: str, w: int, h: int) -> str:
+    if _kfs_all_contain(kfs):
+        return _plain_scale(w, h)
+    return clipper._single_reframe_filter(path, zoom, kfs, pan_mode, w, h)
+
+
 def _reframe_cropscale(path: Path, reframe: Reframe, in_point: float, dur: float,
                        W: int, H: int) -> str:
     """Cadena de filtros (crop+scale) para el reencuadre de un clip, sin el trim.
@@ -139,27 +157,20 @@ def _reframe_cropscale(path: Path, reframe: Reframe, in_point: float, dur: float
     """
     kfs1 = _shifted_keyframes(reframe, in_point, dur, 1)
     if not reframe.dual_crop:
-        return clipper._single_reframe_filter(path, reframe.zoom, kfs1, reframe.pan_mode, W, H)
+        return _track_cropscale(path, reframe.zoom, kfs1, reframe.pan_mode, W, H)
 
     kfs2 = _shifted_keyframes(reframe, in_point, dur, 2)
-    orient = reframe.split_orientation or "vertical"
+    orient = split_orientation_for(W / max(1, H), reframe)
     z2 = reframe.zoom2 or reframe.zoom
-    if orient == "vertical":
-        w1, h1, w2, h2 = W, H // 2, W, H // 2
-        stack = "vstack=inputs=2"
-    else:
-        w1, h1, w2, h2 = W // 2, H, W // 2, H
-        stack = "hstack=inputs=2"
-    f1 = clipper._single_reframe_filter(path, reframe.zoom, kfs1, reframe.pan_mode, w1, h1)
-    f2 = clipper._single_reframe_filter(path, z2, kfs2, reframe.pan_mode, w2, h2)
-    # split del stream del clip en dos para recortar dos encuadres y apilarlos.
-    return f"split=2[ca][cb];[ca]{f1}[ta];[cb]{f2}[tb];[ta][tb]{stack}"
+    w1, h1, w2, h2 = dual_slot_wh(W, H, orient)
+    f1 = _track_cropscale(path, reframe.zoom, kfs1, reframe.pan_mode, w1, h1)
+    f2 = _track_cropscale(path, z2, kfs2, reframe.pan_mode, w2, h2)
+    return join_dual_filters(f1, f2, orient)
 
 
 def _plain_scale(W: int, H: int) -> str:
     """Escalado a WxH con letterbox (para clips sin reframe)."""
-    return (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
-            f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1")
+    return contain_scale_filter(W, H)
 
 
 # Fuentes del sistema (Windows) disponibles para el texto.

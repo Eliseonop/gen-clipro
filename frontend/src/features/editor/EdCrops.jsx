@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Icon from '../../components/Icon'
 import PanModeToggle from '../../components/PanModeToggle'
 import { fmt } from '../../lib/utils'
@@ -9,15 +9,23 @@ import { FRAME_OPTIONS, frameOf } from '../../lib/clipLayout'
 // Panel junto a la timeline: recorte (keyframes) y propiedades del clip de vídeo.
 export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHidden, onDelete, onSeek, onPanMode, onChangeFx, onChangeFrame }) {
   const [tab, setTab] = useState('crop')
-  const kfs = clip?.kind === 'video' ? [...(clip.reframe?.keyframes || [])].sort((a, b) => a.t - b.t) : []
+  const [track, setTrack] = useState(1)
+  const dual = !!(clip?.kind === 'video' && clip.reframe?.dual_crop)
+  useEffect(() => { setTrack(1) }, [clip?.id])
+  const kfs = clip?.kind === 'video'
+    ? [...((dual && track === 2 ? clip.reframe?.keyframes2 : clip.reframe?.keyframes) || [])].sort((a, b) => a.t - b.t)
+    : []
   const typeLabel = clip?.frame === 'top'
     ? 'Mitad superior'
     : clip?.frame === 'bottom'
       ? 'Mitad inferior'
       : clip?.layout === 'overlay'
         ? 'Superpuesto'
-        : clip?.reframe?.dual_crop
-          ? (clip.reframe.split_orientation === 'horizontal' ? 'Dividido L/R' : 'Dividido T/B')
+        : dual
+          ? (clip.reframe.split_layout === 'horizontal'
+            || (clip.reframe.split_layout !== 'auto' && clip.reframe.split_orientation === 'horizontal')
+            ? 'Dividido L/R'
+            : clip.reframe.split_layout === 'auto' ? 'Dividido auto' : 'Dividido T/B')
           : 'Vertical'
   const isVideo = clip?.kind === 'video'
 
@@ -67,6 +75,16 @@ export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHid
         <div className="ed-crops-empty">Selecciona un clip de vídeo para ver sus encuadres.</div>
       ) : (
         <>
+          {dual && (
+            <div className="ed-crops-tabs" role="tablist" aria-label="Pista de encuadre">
+              <button type="button" className={`ed-tab ${track === 1 ? 'on' : ''}`} onClick={() => setTrack(1)}>
+                Pista 1
+              </button>
+              <button type="button" className={`ed-tab ${track === 2 ? 'on' : ''}`} onClick={() => setTrack(2)}>
+                Pista 2
+              </button>
+            </div>
+          )}
           <div className="ed-crops-count">{kfs.length} encuadre{kfs.length === 1 ? '' : 's'}</div>
           <div className="ed-crops-list">
             {kfs.length === 0 && <div className="ed-crops-empty">Sin encuadres. Arrastra el recuadro en el Main o pulsa Encuadre en la timeline.</div>}
