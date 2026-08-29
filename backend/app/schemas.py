@@ -61,6 +61,7 @@ class Keyframe(BaseModel):
     cy: float = Field(default=0.5, ge=0.0, le=1.0)
     zoom: Optional[float] = Field(default=None, ge=0.1, le=1.0)
     pan_mode: Optional[str] = None
+    fit: Optional[str] = None  # "cover" | "contain"; ausente = cover
 
 
 class TrackPoint(Keyframe):
@@ -84,6 +85,8 @@ class Reframe(BaseModel):
     keyframes2: list[Keyframe] = []
     crop_w: Optional[float] = Field(default=None, ge=0.05, le=1.0)
     crop_h: Optional[float] = Field(default=None, ge=0.05, le=1.0)
+    master: bool = False  # True: archivo en aspecto original; receta al ver/exportar
+    split_layout: str = "auto"  # "auto" | "vertical" | "horizontal"
 
 
 class ReframePrep(BaseModel):

@@ -25,6 +25,8 @@ assert.ok(Math.abs(legacy.cx - 0.5) < 1e-9)
 const empty = frameAt([], 1, 0.8, 'direct')
 assert.equal(empty.zoom, 0.8)
 assert.equal(empty.cx, 0.5)
+assert.equal(empty.fit, 'cover')
+assert.equal(mid.fit, 'cover')
 
 const z = zoomFromCorner(0.5, 0.25, 0.5, 0.5, 16 / 9, 9 / 16)
 assert.ok(z > 0.35 && z <= 1)

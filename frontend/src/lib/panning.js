@@ -19,18 +19,30 @@ function modeOf(k, fallback = 'smooth') {
   return fallback === 'direct' ? 'direct' : 'smooth'
 }
 
-/** Centro, zoom y modo en `time`. El modo del punto de destino define cómo se llega a él. */
+function fitOf(k, fallback = 'cover') {
+  if (k?.fit === 'contain') return 'contain'
+  if (k?.fit === 'cover') return 'cover'
+  return fallback === 'contain' ? 'contain' : 'cover'
+}
+
+/** Centro, zoom, modo y fit en `time`. El punto de destino define cómo se llega a él. */
 export function frameAt(kfs, time, fallbackZoom = 1, fallbackMode = 'smooth') {
   if (!kfs || !kfs.length) {
-    return { cx: 0.5, cy: 0.5, zoom: fallbackZoom, pan_mode: fallbackMode }
+    return { cx: 0.5, cy: 0.5, zoom: fallbackZoom, pan_mode: fallbackMode, fit: 'cover' }
   }
   const s = [...kfs].sort((a, b) => a.t - b.t)
   if (time <= s[0].t) {
-    return { cx: s[0].cx, cy: s[0].cy, zoom: zoomOf(s[0], fallbackZoom), pan_mode: modeOf(s[0], fallbackMode) }
+    return {
+      cx: s[0].cx, cy: s[0].cy, zoom: zoomOf(s[0], fallbackZoom),
+      pan_mode: modeOf(s[0], fallbackMode), fit: fitOf(s[0]),
+    }
   }
   const last = s[s.length - 1]
   if (time >= last.t) {
-    return { cx: last.cx, cy: last.cy, zoom: zoomOf(last, fallbackZoom), pan_mode: modeOf(last, fallbackMode) }
+    return {
+      cx: last.cx, cy: last.cy, zoom: zoomOf(last, fallbackZoom),
+      pan_mode: modeOf(last, fallbackMode), fit: fitOf(last),
+    }
   }
 
   for (let i = 0; i < s.length - 1; i++) {
@@ -40,7 +52,7 @@ export function frameAt(kfs, time, fallbackZoom = 1, fallbackMode = 'smooth') {
       const za = zoomOf(a, fallbackZoom)
       const zb = zoomOf(b, fallbackZoom)
       if (arrive === 'direct') {
-        return { cx: a.cx, cy: a.cy, zoom: za, pan_mode: 'direct' }
+        return { cx: a.cx, cy: a.cy, zoom: za, pan_mode: 'direct', fit: fitOf(a) }
       }
       const f = (time - a.t) / ((b.t - a.t) || 1)
       return {
@@ -48,10 +60,14 @@ export function frameAt(kfs, time, fallbackZoom = 1, fallbackMode = 'smooth') {
         cy: a.cy + (b.cy - a.cy) * f,
         zoom: za + (zb - za) * f,
         pan_mode: 'smooth',
+        fit: fitOf(b),
       }
     }
   }
-  return { cx: last.cx, cy: last.cy, zoom: zoomOf(last, fallbackZoom), pan_mode: modeOf(last, fallbackMode) }
+  return {
+    cx: last.cx, cy: last.cy, zoom: zoomOf(last, fallbackZoom),
+    pan_mode: modeOf(last, fallbackMode), fit: fitOf(last),
+  }
 }
 
 export function posAt(kfs, time, panMode = 'smooth') {
