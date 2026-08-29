@@ -56,6 +56,7 @@ export function cropWindow(clip, srcAspect, outAspect, srcTime) {
     const sized = clampCrop(fr.cx, fr.cy, rf.crop_w, rf.crop_h)
     return { cx: sized.cx, cy: sized.cy, wf: sized.wf, hf: sized.hf }
   }
+  if (fr.fit === 'contain') return { cx: 0.5, cy: 0.5, wf: 1, hf: 1 }
   const zoom = fr.zoom
   const { widthFrac, heightFrac } = geomFor(zoom, srcAspect, outAspect)
   const p = clampCenter(fr.cx, fr.cy, zoom, srcAspect, outAspect)
