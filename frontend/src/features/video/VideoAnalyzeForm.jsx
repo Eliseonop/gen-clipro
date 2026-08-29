@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import Icon from '../../components/Icon'
 import JobStatusBar from '../../components/JobStatusBar'
+import { getSettings, putSettings } from '../../services/api'
 
 // Campo numérico etiquetado (opciones avanzadas del heatmap).
 function Field({ label, value, onChange, ...rest }) {
@@ -15,7 +16,17 @@ function Field({ label, value, onChange, ...rest }) {
 // Formulario de carga: URL de YouTube + opciones avanzadas + botón de análisis.
 export default function VideoAnalyzeForm({ url, setUrl, analyzing, onAnalyze, showAdvanced, setShowAdvanced, opts, setOpts }) {
   const [elapsed, setElapsed] = useState(0)
+  const [youtubeBrowser, setYoutubeBrowser] = useState('auto')
   const t0 = useRef(0)
+
+  useEffect(() => {
+    getSettings()
+      .then((s) => {
+        const b = (s.youtube_browser || 'auto').trim() || 'auto'
+        setYoutubeBrowser(b)
+      })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     if (!analyzing) { setElapsed(0); return }
@@ -71,6 +82,27 @@ export default function VideoAnalyzeForm({ url, setUrl, analyzing, onAnalyze, sh
             onChange={(v) => setOpts({ ...opts, max_duration: v })} />
           <Field label="Padding (s)" value={opts.padding} min={0} max={60} step={1}
             onChange={(v) => setOpts({ ...opts, padding: v })} />
+          <label className="field field-wide">
+            <span>Cookies de YouTube</span>
+            <select
+              className="select"
+              value={youtubeBrowser}
+              onChange={(e) => {
+                const v = e.target.value
+                setYoutubeBrowser(v)
+                putSettings({ youtube_browser: v }).catch(() => {})
+              }}
+            >
+              <option value="auto">Automático (probar navegadores si hace falta)</option>
+              <option value="edge">Microsoft Edge</option>
+              <option value="chrome">Google Chrome</option>
+              <option value="firefox">Firefox</option>
+            </select>
+            <span className="field-hint">
+              Para vídeos con restricción de edad: inicia sesión en YouTube en ese navegador
+              (cuenta con edad confirmada).
+            </span>
+          </label>
         </div>
       )}
     </section>

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import {
+  applyFrame,
   clampCrop,
   cropSizeFromCorner,
   cropWindow,
@@ -118,5 +119,35 @@ assert.equal(afterUserScale.hf, cropOnEnable.hf)
 
 assert.equal(newTransform().scale, 1)
 assert.equal(newTransform().rotation, 0)
+
+// --- Encuadre asistido: Completo / mitad superior / mitad inferior ---
+
+const top = applyFrame(fillClip, 'top', srcAspect, outAspect, 0, srcW, srcH, outW, outH)
+assert.equal(top.layout, 'overlay')
+assert.equal(top.frame, 'top')
+assert.equal(top.reframe.dual_crop, false)
+assert.equal(top.reframe.keyframes.length, fillClip.reframe.keyframes.length)
+const topCrop = cropWindow({ ...fillClip, ...top }, srcAspect, outAspect, 0)
+const topPx = sourceCropPx(topCrop, srcW, srcH)
+const topDest = destRect(top.transform, topPx, outW, outH)
+assert.ok(Math.abs(topDest.dx) < 2)
+assert.ok(Math.abs(topDest.dy) < 2)
+assert.ok(Math.abs(topDest.dw - outW) < 2)
+assert.ok(Math.abs(topDest.dh - outH / 2) < 2)
+
+const bot = applyFrame(fillClip, 'bottom', srcAspect, outAspect, 0, srcW, srcH, outW, outH)
+const botCrop = cropWindow({ ...fillClip, ...bot }, srcAspect, outAspect, 0)
+const botPx = sourceCropPx(botCrop, srcW, srcH)
+const botDest = destRect(bot.transform, botPx, outW, outH)
+assert.ok(Math.abs(botDest.dx) < 2)
+assert.ok(Math.abs(botDest.dy - outH / 2) < 2)
+assert.ok(Math.abs(botDest.dw - outW) < 2)
+assert.ok(Math.abs(botDest.dh - outH / 2) < 2)
+assert.ok(Math.abs((botDest.dy + botDest.dh) - outH) < 2)
+
+const full = applyFrame(top, 'full', srcAspect, outAspect, 0, srcW, srcH, outW, outH)
+assert.equal(full.layout, 'fill')
+assert.equal(full.frame, 'full')
+assert.equal(isOverlay(full), false)
 
 console.log('clipLayout overlay crop/transform ok')

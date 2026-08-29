@@ -68,6 +68,7 @@ class TimelineClipFxFieldsTest(unittest.TestCase):
         self.assertEqual(c.appear, "none")
         self.assertEqual(c.exit, "none")
         self.assertEqual(c.look, "none")
+        self.assertEqual(c.frame, "full")
 
 
 if __name__ == "__main__":

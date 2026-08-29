@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from faster_whisper import WhisperModel
-from yt_dlp import YoutubeDL
+
+from . import ytdlp
 
 ProgressCb = Callable[[float, str], None]
 
@@ -45,8 +46,7 @@ def _download_audio(url: str, dest_dir: Path, on_progress: ProgressCb) -> Path:
             on_progress(0.15 * frac, "Descargando audio…")
 
     opts["progress_hooks"] = [hook]
-    with YoutubeDL(opts) as ydl:
-        ydl.download([url])
+    ytdlp.call(opts, lambda ydl: ydl.download([url]))
 
     files = list(dest_dir.glob("audio.*"))
     if not files:

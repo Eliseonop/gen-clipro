@@ -8,7 +8,7 @@ import {
   uid, FORMATS, mediaUrl, defaultTracks, newReframe, withKfIds,
   makeClip, makeTextClip, clipDur, clipEnd,
 } from './editorModel'
-import { disableOverlay, enableOverlay, isOverlay, newTransform, videosAt } from '../../lib/clipLayout'
+import { applyFrame, disableOverlay, enableOverlay, isOverlay, newTransform, videosAt } from '../../lib/clipLayout'
 import { drawComposite, drawMainView } from './render/canvas'
 import { useExportJob } from './hooks/useExportJob'
 import { useSubtitles } from './hooks/useSubtitles'
@@ -91,6 +91,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             appear: c.appear || 'none',
             exit: c.exit || 'none',
             look: c.look || 'none',
+            frame: c.frame || (c.layout === 'overlay' ? 'free' : 'full'),
           })))
           if (tl.tracks[0]) setSelTrackId(tl.tracks[0].id)
         }
@@ -328,8 +329,23 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   }
   function changeTransform(id, patch) {
     setClips((prev) => prev.map((c) => (
-      c.id === id ? { ...c, transform: { ...newTransform(), ...c.transform, ...patch } } : c
+      c.id === id ? { ...c, frame: 'free', transform: { ...newTransform(), ...c.transform, ...patch } } : c
     )))
+  }
+  function applyClipFrame(clip, slot) {
+    if (!clip || clip.kind !== 'video') return
+    const el = mediaEls.current.get(clip.id)
+    const srcW = el?.videoWidth || 1920
+    const srcH = el?.videoHeight || 1080
+    const localT = clamp(clip.in_point + (playhead - clip.start), clip.in_point, clip.out_point)
+    const patch = applyFrame(clip, slot, srcW / srcH, outAspect, localT, srcW, srcH, outW, outH)
+    setClips((prev) => prev.map((c) => (c.id === clip.id ? {
+      ...c,
+      layout: patch.layout,
+      frame: patch.frame,
+      transform: patch.transform,
+      reframe: { ...(c.reframe || newReframe()), ...patch.reframe },
+    } : c)))
   }
   function toggleOverlay(clip, on) {
     if (!clip || clip.kind !== 'video') return
@@ -345,6 +361,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     setClips((prev) => prev.map((c) => (c.id === clip.id ? {
       ...c,
       layout: patch.layout,
+      frame: patch.frame,
       transform: patch.transform,
       reframe: { ...(c.reframe || newReframe()), ...patch.reframe },
     } : c)))
@@ -766,6 +783,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             onSeek={seek}
             onPanMode={(kf, mode) => patchKeyframePan(selectedClip, kf, mode)}
             onChangeFx={(patch) => selectedClip && mutateClip(selectedClip.id, patch)}
+            onChangeFrame={(slot) => applyClipFrame(selectedClip, slot)}
           />
         )}
       </div>

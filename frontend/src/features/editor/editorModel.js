@@ -72,6 +72,7 @@ export function makeClip(assetKind, item, trackId, start, dur) {
     volume: 1,
     reframe: kind === 'video' ? newReframe() : null,
     layout: kind === 'video' ? 'fill' : undefined,
+    frame: kind === 'video' ? 'full' : undefined,
     appear: 'none',
     exit: 'none',
     look: 'none',

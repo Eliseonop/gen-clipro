@@ -4,16 +4,21 @@ import PanModeToggle from '../../components/PanModeToggle'
 import { fmt } from '../../lib/utils'
 import { kfColor } from '../../lib/panning'
 import { APPEAR_OPTIONS, EXIT_OPTIONS, LOOK_OPTIONS } from '../../lib/clipFx'
+import { FRAME_OPTIONS, frameOf } from '../../lib/clipLayout'
 
-// Panel junto a la timeline: recorte (keyframes) y 3 propiedades del clip de vídeo.
-export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHidden, onDelete, onSeek, onPanMode, onChangeFx }) {
+// Panel junto a la timeline: recorte (keyframes) y propiedades del clip de vídeo.
+export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHidden, onDelete, onSeek, onPanMode, onChangeFx, onChangeFrame }) {
   const [tab, setTab] = useState('crop')
   const kfs = clip?.kind === 'video' ? [...(clip.reframe?.keyframes || [])].sort((a, b) => a.t - b.t) : []
-  const typeLabel = clip?.layout === 'overlay'
-    ? 'Superpuesto'
-    : clip?.reframe?.dual_crop
-      ? (clip.reframe.split_orientation === 'horizontal' ? 'Dividido L/R' : 'Dividido T/B')
-      : 'Vertical'
+  const typeLabel = clip?.frame === 'top'
+    ? 'Mitad superior'
+    : clip?.frame === 'bottom'
+      ? 'Mitad inferior'
+      : clip?.layout === 'overlay'
+        ? 'Superpuesto'
+        : clip?.reframe?.dual_crop
+          ? (clip.reframe.split_orientation === 'horizontal' ? 'Dividido L/R' : 'Dividido T/B')
+          : 'Vertical'
   const isVideo = clip?.kind === 'video'
 
   return (
@@ -32,6 +37,12 @@ export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHid
           <div className="ed-crops-empty">Selecciona un clip de vídeo para ver sus propiedades.</div>
         ) : (
           <div className="ed-props">
+            <label className="ed-prop">
+              Encuadre
+              <select className="select" value={frameOf(clip)} onChange={(e) => onChangeFrame(e.target.value)}>
+                {FRAME_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+              </select>
+            </label>
             <label className="ed-prop">
               Aparición
               <select className="select" value={clip.appear || 'none'} onChange={(e) => onChangeFx({ appear: e.target.value })}>

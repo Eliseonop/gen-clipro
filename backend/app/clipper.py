@@ -15,9 +15,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
-from yt_dlp import YoutubeDL
-
-from . import config
+from . import config, ytdlp
 from .diagnostics import timed
 from .reframe_math import frame_at
 from .schemas import ClipInfo, CropMode, Reframe, Segment
@@ -48,8 +46,7 @@ def _download_source(url: str, dest_dir: Path, on_progress: ProgressCb) -> Path:
 
     opts["progress_hooks"] = [hook]
 
-    with YoutubeDL(opts) as ydl:
-        ydl.download([url])
+    ytdlp.call(opts, lambda ydl: ydl.download([url]))
 
     files = list(dest_dir.glob("source.*"))
     if not files:
