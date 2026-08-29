@@ -16,9 +16,10 @@ import EdMaterial from './EdMaterial'
 import EdTimeline from './EdTimeline'
 import EdCrops from './EdCrops'
 import EdText from './EdText'
+import ClipEditor from '../video/ClipEditor'
 import './editor.css'
 
-export default function VideoEditor({ project }) {
+export default function VideoEditor({ project, onChange, onBack, onOpenJson, onOpenVideo, onOpenAudio }) {
   const [tracks, setTracks] = useState(defaultTracks())
   const [clips, setClips] = useState([])
   const [loaded, setLoaded] = useState(false)
@@ -39,6 +40,7 @@ export default function VideoEditor({ project }) {
   const [ctxMenu, setCtxMenu] = useState(null)      // { x, y, clip }
   const [dragInfo, setDragInfo] = useState(null)    // { kind, duration, name }
   const [framingMode, setFramingMode] = useState(null) // { trackId, x, y, w } o null
+  const [builder, setBuilder] = useState(null)
 
   const mainCanvasRef = useRef(null)
   const resultCanvasRef = useRef(null)
@@ -485,7 +487,14 @@ export default function VideoEditor({ project }) {
 
       {/* ===== PARTE SUPERIOR: 3 columnas ===== */}
       <div className="veditor-top">
-        <EdMaterial project={project} onAdd={addAsset} onDragInfo={setDragInfo} />
+        <EdMaterial
+          project={project}
+          onAdd={addAsset}
+          onDragInfo={setDragInfo}
+          onBack={onBack}
+          onOpenVideo={onOpenVideo}
+          onOpenAudio={onOpenAudio}
+        />
 
         {/* MAIN: vídeo original + encuadre */}
         <div className="ed-col ed-col-main">
@@ -502,6 +511,19 @@ export default function VideoEditor({ project }) {
           <div className="ed-main-tools">
             <button className="primary alt small" onClick={addText} title="Añadir un texto a la composición">
               <Icon name="title" size={15} /> Agregar texto
+            </button>
+            <button
+              className="primary alt small"
+              title="Combinar materiales en un clip 9:16"
+              onClick={() => {
+                let seed = null
+                if (selectedClip?.kind === 'video' && selectedClip.asset_kind === 'clips') {
+                  seed = (project.clips || []).find((c) => String(c.index) === String(selectedClip.asset_id)) || null
+                }
+                setBuilder({ seed })
+              }}
+            >
+              <Icon name="construction" size={15} /> Construir
             </button>
             {canEditFrame && (
               <>
@@ -526,11 +548,16 @@ export default function VideoEditor({ project }) {
         {/* RESULTADO FINAL */}
         <div className="ed-col ed-col-result">
           <div className="ed-col-head">
-            <span><Icon name="smart_display" size={15} /> Resultado final</span>
-            <select className="select mini" value={curFormat} onChange={(e) => setFormat(e.target.value)}>
-              {FORMATS.map((f) => <option key={f.id} value={f.id}>{f.id}</option>)}
-              {curFormat === 'custom' && <option value="custom">Personalizado</option>}
-            </select>
+            <span><Icon name="smart_display" size={15} /> Resultado</span>
+            <div className="ed-col-head-tools">
+              <select className="select mini" value={curFormat} onChange={(e) => setFormat(e.target.value)} title="Dimensiones de salida">
+                {FORMATS.map((f) => <option key={f.id} value={f.id}>{f.id}</option>)}
+                {curFormat === 'custom' && <option value="custom">Personalizado</option>}
+              </select>
+              <button className="ghost small" onClick={onOpenJson} title="Ver / editar el JSON del proyecto">
+                <Icon name="data_object" size={15} /> JSON
+              </button>
+            </div>
           </div>
           <div className="ed-result-stage">
             <canvas ref={resultCanvasRef} width={360} height={640} className="ed-result-canvas" />
@@ -656,6 +683,21 @@ export default function VideoEditor({ project }) {
       )}
       {subJob?.status === 'error' && (
         <div className="ed-sub-toast error" onClick={() => setSubJob(null)}>⚠️ {subJob.error}</div>
+      )}
+
+      {builder && (
+        <ClipEditor
+          mode="compose"
+          project={project}
+          seedClip={builder.seed}
+          url={builder.seed?.source_url || builder.seed?.url}
+          segStart={builder.seed ? (builder.seed.source_url ? builder.seed.start : 0) : undefined}
+          segEnd={builder.seed ? (builder.seed.source_url ? builder.seed.end : Math.max(0.5, (builder.seed.end || 0) - (builder.seed.start || 0))) : undefined}
+          segIndex={builder.seed?.index || (100000 + (Date.now() % 900000))}
+          initial={builder.seed?.reframe || null}
+          onClose={() => setBuilder(null)}
+          onChange={onChange}
+        />
       )}
     </div>
   )

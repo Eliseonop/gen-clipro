@@ -108,6 +108,28 @@ class ClipRequest(BaseModel):
     reframe: Optional[Reframe] = None   # solo si un único segmento y modo smart_face
 
 
+class CompLayer(BaseModel):
+    """Una capa de una composición: fuente + tramo + paneo + hueco en el 9:16."""
+    url: str
+    start: float
+    end: float
+    zoom: float = Field(default=1.0, ge=0.1, le=1.0)
+    pan_mode: str = "smooth"
+    keyframes: list[Keyframe] = []
+    slot: str = "full"
+    custom_rect: Optional[dict] = None
+    label: Optional[str] = None
+    delay: float = 0.0  # inicio en la composición (segundos)
+
+
+class ComposeClipRequest(BaseModel):
+    project_id: str
+    layers: list[CompLayer]
+    label: Optional[str] = None
+    description: Optional[str] = None
+    index: Optional[int] = None
+
+
 class ClipInfo(BaseModel):
     index: int
     filename: str
@@ -272,7 +294,7 @@ class Job(BaseModel):
     id: str
     status: JobStatus = JobStatus.pending
     progress: float = 0.0          # 0.0 - 1.0
-    message: str = ""
+    message: str = "En cola…"
     clips: list[ClipInfo] = []
     transcript: Optional["Transcript"] = None
     audio: Optional["AudioInfo"] = None

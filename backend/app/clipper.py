@@ -9,6 +9,7 @@ para ahorrar ancho de banda.
 """
 from __future__ import annotations
 
+import logging
 import subprocess
 import tempfile
 from pathlib import Path
@@ -17,9 +18,12 @@ from typing import Callable
 from yt_dlp import YoutubeDL
 
 from . import config
+from .diagnostics import timed
 from .schemas import ClipInfo, CropMode, Reframe, Segment
 
 ProgressCb = Callable[[float, str], None]
+
+log = logging.getLogger("videoyt.clipper")
 
 
 def _download_source(url: str, dest_dir: Path, on_progress: ProgressCb) -> Path:
@@ -228,11 +232,13 @@ def _cut_clip(source: Path, seg: Segment, mode: CropMode, out_path: Path,
         str(out_path),
     ]
 
-    proc = subprocess.run(
-        base + filt + encode,
-        capture_output=True,
-        text=True,
-    )
+    dur = max(0.0, float(seg.end) - float(seg.start))
+    with timed("corte de clip (FFmpeg)", log, idx=seg.index, mode=mode.value, dur=f"{dur:.1f}s"):
+        proc = subprocess.run(
+            base + filt + encode,
+            capture_output=True,
+            text=True,
+        )
     if proc.returncode != 0:
         raise RuntimeError(f"FFmpeg falló en el clip {seg.index}:\n{proc.stderr[-800:]}")
 

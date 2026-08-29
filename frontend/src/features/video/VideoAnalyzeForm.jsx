@@ -1,4 +1,6 @@
+import { useState, useEffect, useRef } from 'react'
 import Icon from '../../components/Icon'
+import JobStatusBar from '../../components/JobStatusBar'
 
 // Campo numérico etiquetado (opciones avanzadas del heatmap).
 function Field({ label, value, onChange, ...rest }) {
@@ -12,6 +14,23 @@ function Field({ label, value, onChange, ...rest }) {
 
 // Formulario de carga: URL de YouTube + opciones avanzadas + botón de análisis.
 export default function VideoAnalyzeForm({ url, setUrl, analyzing, onAnalyze, showAdvanced, setShowAdvanced, opts, setOpts }) {
+  const [elapsed, setElapsed] = useState(0)
+  const t0 = useRef(0)
+
+  useEffect(() => {
+    if (!analyzing) { setElapsed(0); return }
+    t0.current = Date.now()
+    setElapsed(0)
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - t0.current) / 1000)), 500)
+    return () => clearInterval(id)
+  }, [analyzing])
+
+  const loadHint = elapsed < 8
+    ? 'Consultando YouTube y descargando metadatos…'
+    : elapsed < 25
+      ? 'Sigue cargando (heatmap / descarga). No está colgado.'
+      : `Lleva ${elapsed}s. YouTube a veces tarda; espera o revisa la URL.`
+
   return (
     <section className="card">
       <div className="card-header">
@@ -31,6 +50,14 @@ export default function VideoAnalyzeForm({ url, setUrl, analyzing, onAnalyze, sh
           {analyzing ? 'Cargando…' : '▶ Cargar vídeo'}
         </button>
       </div>
+      {analyzing && (
+        <JobStatusBar
+          indeterminate
+          progress={0.35}
+          message={loadHint}
+          elapsed={elapsed}
+        />
+      )}
       <button className="link" onClick={() => setShowAdvanced((v) => !v)}>
         {showAdvanced ? '▾' : '▸'} Opciones avanzadas (heatmap)
       </button>
