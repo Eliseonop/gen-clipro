@@ -1,5 +1,5 @@
 // Dibujo del resultado 9:16 en vivo del editor de clip (una o dos capas).
-import { clamp, posAt, geomFor, clampCenter } from '../../lib/panning'
+import { clamp, geomFor, clampCenter, frameAt } from '../../lib/panning'
 import { outputRect, slotTargetAspect } from './composeModel'
 
 function drawLayerInto(ctx, v, layer, prep, dest, srcTime) {
@@ -8,11 +8,10 @@ function drawLayerInto(ctx, v, layer, prep, dest, srcTime) {
   if (!vw || !vh) return
   const srcAspect = vw / vh
   const tAspect = slotTargetAspect(dest)
-  const zoom = layer.zoom ?? 1
-  const mode = layer.pan_mode || 'smooth'
+  const fr = frameAt(layer.keyframes, srcTime, layer.zoom ?? 1, layer.pan_mode || 'smooth')
+  const zoom = fr.zoom
   const { widthFrac: wf, heightFrac: hf } = geomFor(zoom, srcAspect, tAspect)
-  const pp = posAt(layer.keyframes, srcTime, mode)
-  const p = clampCenter(pp.cx, pp.cy, zoom, srcAspect, tAspect)
+  const p = clampCenter(fr.cx, fr.cy, zoom, srcAspect, tAspect)
   const sw = wf * vw, sh = hf * vh
   const sx = clamp((p.cx - wf / 2) * vw, 0, vw - sw)
   const sy = clamp((p.cy - hf / 2) * vh, 0, vh - sh)

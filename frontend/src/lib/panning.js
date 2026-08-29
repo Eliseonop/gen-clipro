@@ -1,6 +1,6 @@
 // Matemática de reencuadre/paneo compartida por el editor de vídeo.
-// Los keyframes son { t, cx, cy } con t en segundos (relativo a la fuente) y
-// cx/cy el centro de la ventana de recorte en coordenadas normalizadas (0-1).
+// Los keyframes son { t, cx, cy, zoom?, pan_mode? } con t en segundos (relativo a la fuente)
+// y cx/cy el centro de la ventana de recorte en coordenadas normalizadas (0-1).
 
 export const OUT_RATIO = 9 / 16
 
@@ -8,31 +8,55 @@ export const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 export const r2 = (x) => Math.round(x * 100) / 100
 export const r4 = (x) => Math.round(x * 10000) / 10000
 
-// Centro interpolado en el instante `time` según el modo de paneo.
-export function posAt(kfs, time, panMode = 'smooth') {
-  if (!kfs || !kfs.length) return { cx: 0.5, cy: 0.5 }
-  const s = [...kfs].sort((a, b) => a.t - b.t)
-  if (time <= s[0].t) return { cx: s[0].cx, cy: s[0].cy }
-  const last = s[s.length - 1]
-  if (time >= last.t) return { cx: last.cx, cy: last.cy }
+function zoomOf(k, fallback = 1) {
+  const z = k?.zoom
+  return z == null ? fallback : clamp(z, 0.1, 1)
+}
 
-  if (panMode === 'direct') {
-    let active = s[0]
-    for (let i = 0; i < s.length; i++) {
-      if (s[i].t <= time) active = s[i]
-      else break
-    }
-    return { cx: active.cx, cy: active.cy }
+function modeOf(k, fallback = 'smooth') {
+  if (k?.pan_mode === 'direct') return 'direct'
+  if (k?.pan_mode === 'smooth') return 'smooth'
+  return fallback === 'direct' ? 'direct' : 'smooth'
+}
+
+/** Centro, zoom y modo en `time`. El modo del punto de destino define cómo se llega a él. */
+export function frameAt(kfs, time, fallbackZoom = 1, fallbackMode = 'smooth') {
+  if (!kfs || !kfs.length) {
+    return { cx: 0.5, cy: 0.5, zoom: fallbackZoom, pan_mode: fallbackMode }
+  }
+  const s = [...kfs].sort((a, b) => a.t - b.t)
+  if (time <= s[0].t) {
+    return { cx: s[0].cx, cy: s[0].cy, zoom: zoomOf(s[0], fallbackZoom), pan_mode: modeOf(s[0], fallbackMode) }
+  }
+  const last = s[s.length - 1]
+  if (time >= last.t) {
+    return { cx: last.cx, cy: last.cy, zoom: zoomOf(last, fallbackZoom), pan_mode: modeOf(last, fallbackMode) }
   }
 
   for (let i = 0; i < s.length - 1; i++) {
     const a = s[i], b = s[i + 1]
     if (time >= a.t && time <= b.t) {
+      const arrive = modeOf(b, fallbackMode)
+      const za = zoomOf(a, fallbackZoom)
+      const zb = zoomOf(b, fallbackZoom)
+      if (arrive === 'direct') {
+        return { cx: a.cx, cy: a.cy, zoom: za, pan_mode: 'direct' }
+      }
       const f = (time - a.t) / ((b.t - a.t) || 1)
-      return { cx: a.cx + (b.cx - a.cx) * f, cy: a.cy + (b.cy - a.cy) * f }
+      return {
+        cx: a.cx + (b.cx - a.cx) * f,
+        cy: a.cy + (b.cy - a.cy) * f,
+        zoom: za + (zb - za) * f,
+        pan_mode: 'smooth',
+      }
     }
   }
-  return { cx: last.cx, cy: last.cy }
+  return { cx: last.cx, cy: last.cy, zoom: zoomOf(last, fallbackZoom), pan_mode: modeOf(last, fallbackMode) }
+}
+
+export function posAt(kfs, time, panMode = 'smooth') {
+  const f = frameAt(kfs, time, 1, panMode)
+  return { cx: f.cx, cy: f.cy }
 }
 
 // Fracción de ancho/alto de la ventana de recorte respecto al fotograma fuente.
@@ -49,6 +73,33 @@ export function clampCenter(cx, cy, zoom, srcAspect, targetAspect = OUT_RATIO) {
     cx: wf >= 1 ? 0.5 : clamp(cx, wx, 1 - wx),
     cy: hf >= 1 ? 0.5 : clamp(cy, wy, 1 - wy),
   }
+}
+
+/** Zoom (fracción de altura) al arrastrar una esquina, manteniendo el aspecto. */
+export function zoomFromCorner(nx, ny, cx, cy, srcAspect, targetAspect = OUT_RATIO) {
+  const dx = Math.abs(nx - cx)
+  const dy = Math.abs(ny - cy)
+  const fromY = 2 * dy
+  const fromX = (2 * dx * srcAspect) / (targetAspect || OUT_RATIO)
+  return clamp(Math.max(fromX, fromY), 0.35, 1)
+}
+
+/** Esquinas del recuadro en coords normalizadas (igual que Editar clip). */
+export function cropCornerNorms(cx, cy, wf, hf) {
+  return [
+    [cx - wf / 2, cy - hf / 2],
+    [cx + wf / 2, cy - hf / 2],
+    [cx - wf / 2, cy + hf / 2],
+    [cx + wf / 2, cy + hf / 2],
+  ]
+}
+
+export function isNearCropCorner(nx, ny, cx, cy, wf, hf, rect, px = 14) {
+  return cropCornerNorms(cx, cy, wf, hf).some(([x, y]) => {
+    const dx = (nx - x) * rect.width
+    const dy = (ny - y) * rect.height
+    return dx * dx + dy * dy <= px * px
+  })
 }
 
 // Colores (poco saturados) para distinguir cada encuadre/keyframe.
@@ -75,10 +126,10 @@ export function drawReframe(ctx, video, reframe, srcTime, outAspect = OUT_RATIO)
   ctx.clearRect(0, 0, c.width, c.height)
 
   if (!reframe || !reframe.dual_crop) {
-    const zoom = reframe?.zoom ?? 1
+    const fr = frameAt(reframe?.keyframes, srcTime, reframe?.zoom ?? 1, mode)
+    const zoom = fr.zoom
     const { widthFrac: wf, heightFrac: hf } = geomFor(zoom, srcAspect, outAspect)
-    const pp = posAt(reframe?.keyframes, srcTime, mode)
-    const p = clampCenter(pp.cx, pp.cy, zoom, srcAspect, outAspect)
+    const p = clampCenter(fr.cx, fr.cy, zoom, srcAspect, outAspect)
     const sw = wf * vw, sh = hf * vh
     const sx = clamp((p.cx - wf / 2) * vw, 0, vw - sw)
     const sy = clamp((p.cy - hf / 2) * vh, 0, vh - sh)
@@ -91,10 +142,11 @@ export function drawReframe(ctx, video, reframe, srcTime, outAspect = OUT_RATIO)
   const tAspect = targetAspectFor(reframe, outAspect)
   const z1 = reframe.zoom ?? 1
   const z2 = reframe.zoom2 ?? z1
-  const draw = (kfs, zoom, dx, dy, dw, dh) => {
+  const draw = (kfs, fallbackZoom, dx, dy, dw, dh) => {
+    const fr = frameAt(kfs, srcTime, fallbackZoom, mode)
+    const zoom = fr.zoom
     const { widthFrac: wf, heightFrac: hf } = geomFor(zoom, srcAspect, tAspect)
-    const pp = posAt(kfs, srcTime, mode)
-    const p = clampCenter(pp.cx, pp.cy, zoom, srcAspect, tAspect)
+    const p = clampCenter(fr.cx, fr.cy, zoom, srcAspect, tAspect)
     const sw = wf * vw, sh = hf * vh
     const sx = clamp((p.cx - wf / 2) * vw, 0, vw - sw)
     const sy = clamp((p.cy - hf / 2) * vh, 0, vh - sh)

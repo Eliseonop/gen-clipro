@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import Icon from '../../components/Icon'
 import { fmt } from '../../lib/utils'
 import { getTimeline, saveTimeline } from '../../services/api'
-import { clamp, posAt, clampCenter } from '../../lib/panning'
+import { clamp, clampCenter, frameAt } from '../../lib/panning'
 import { defaultTextStyle, wrappedText } from '../../lib/textstyles'
 import {
   uid, FORMATS, mediaUrl, defaultTracks, newReframe, withKfIds,
@@ -18,6 +18,8 @@ import EdCrops from './EdCrops'
 import EdText from './EdText'
 import ClipEditor from '../video/ClipEditor'
 import './editor.css'
+
+const AUDIO_DB_PRESETS = [-24, -18, -16, -14, -12, -10, -8]
 
 export default function VideoEditor({ project, onChange, onBack, onOpenJson, onOpenVideo, onOpenAudio }) {
   const [tracks, setTracks] = useState(defaultTracks())
@@ -294,7 +296,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   function changeReframe(id, patch) {
     setClips((prev) => prev.map((c) => (c.id === id ? { ...c, reframe: { ...(c.reframe || newReframe()), ...patch } } : c)))
   }
-  function upsertKeyframe(clip, localT, cx, cy) {
+  function upsertKeyframe(clip, localT, cx, cy, extra = {}) {
     let newId = null
     setClips((prev) => prev.map((c) => {
       if (c.id !== clip.id) return c
@@ -302,8 +304,24 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
       const kfs = [...(rf.keyframes || [])]
       const t = +clamp(localT, c.in_point, c.out_point).toFixed(3)
       const j = kfs.findIndex((k) => Math.abs(k.t - t) < 0.06)
-      if (j >= 0) { kfs[j] = { ...kfs[j], t, cx: +cx.toFixed(4), cy: +cy.toFixed(4) }; newId = kfs[j].id }
-      else { const id = uid('k'); newId = id; kfs.push({ id, t, cx: +cx.toFixed(4), cy: +cy.toFixed(4) }) }
+      if (j >= 0) {
+        kfs[j] = {
+          ...kfs[j],
+          t,
+          cx: +cx.toFixed(4),
+          cy: +cy.toFixed(4),
+          ...(extra.zoom != null ? { zoom: extra.zoom } : {}),
+          ...(extra.pan_mode ? { pan_mode: extra.pan_mode } : {}),
+        }
+        newId = kfs[j].id
+      } else {
+        const id = uid('k'); newId = id
+        kfs.push({
+          id, t, cx: +cx.toFixed(4), cy: +cy.toFixed(4),
+          zoom: extra.zoom ?? rf.zoom ?? 1,
+          pan_mode: extra.pan_mode ?? 'smooth',
+        })
+      }
       kfs.sort((a, b) => a.t - b.t)
       rf.keyframes = kfs
       return { ...c, reframe: rf }
@@ -314,11 +332,24 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     const clip = selectedClip
     if (!clip || clip.kind !== 'video') return
     const localT = clamp(clip.in_point + (playhead - clip.start), clip.in_point, clip.out_point)
-    const p = posAt(clip.reframe?.keyframes, localT, clip.reframe?.pan_mode)
+    const fr = frameAt(clip.reframe?.keyframes, localT, clip.reframe?.zoom ?? 1, clip.reframe?.pan_mode || 'smooth')
     const el = mediaEls.current.get(clip.id)
     const srcAspect = el?.videoWidth ? el.videoWidth / el.videoHeight : 16 / 9
-    const c = clampCenter(p.cx, p.cy, clip.reframe?.zoom ?? 1, srcAspect, outAspect)
-    upsertKeyframe(clip, localT, c.cx, c.cy)
+    const c = clampCenter(fr.cx, fr.cy, fr.zoom, srcAspect, outAspect)
+    upsertKeyframe(clip, localT, c.cx, c.cy, { zoom: fr.zoom })
+  }
+  function patchKeyframePan(clip, kf, mode) {
+    if (!clip || !kf) return
+    setClips((prev) => prev.map((c) => {
+      if (c.id !== clip.id || !c.reframe) return c
+      return {
+        ...c,
+        reframe: {
+          ...c.reframe,
+          keyframes: c.reframe.keyframes.map((k) => (k.id === kf.id ? { ...k, pan_mode: mode } : k)),
+        },
+      }
+    }))
   }
   function deleteKeyframe(clip, kf) {
     setClips((prev) => prev.map((c) => {
@@ -504,7 +535,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             style={{ cursor: (canEditFrame || isTextSel || framingMode) ? 'crosshair' : 'default' }}>
             <canvas ref={mainCanvasRef} width={520} height={292} className="ed-main-canvas" />
             {clips.length === 0 && !framingMode && <div className="ed-stage-empty">Agrega clips o texto al timeline</div>}
-            {canEditFrame && <div className="ed-stage-hint">Arrastra para colocar el encuadre</div>}
+            {canEditFrame && <div className="ed-stage-hint">Arrastra el recuadro · esquinas para zoom</div>}
             {isTextSel && <div className="ed-stage-hint">Arrastra el texto para moverlo · botón Global para aplicar a todos</div>}
             {framingMode && <div className="ed-stage-hint">Ajusta el recuadro amarillo y pulsa Guardar</div>}
           </div>
@@ -526,21 +557,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
               <Icon name="construction" size={15} /> Construir
             </button>
             {canEditFrame && (
-              <>
-                <label className="ed-inline-field" title="Zoom del encuadre">
-                  <Icon name="zoom_in" size={14} />
-                  <input type="range" min="0.35" max="1" step="0.01" value={selectedClip.reframe?.zoom ?? 1}
-                    onChange={(e) => changeReframe(selectedClip.id, { zoom: Number(e.target.value) })} />
-                </label>
-                <label className="ed-chip" title="Saltos directos entre encuadres">
-                  <input type="checkbox" checked={selectedClip.reframe?.pan_mode === 'direct'}
-                    onChange={(e) => changeReframe(selectedClip.id, { pan_mode: e.target.checked ? 'direct' : 'smooth' })} /> ⚡
-                </label>
-                <label className="ed-chip" title="Doble encuadre">
-                  <input type="checkbox" checked={!!selectedClip.reframe?.dual_crop}
-                    onChange={(e) => changeReframe(selectedClip.id, { dual_crop: e.target.checked })} /> 📱
-                </label>
-              </>
+              <label className="ed-chip" title="Doble encuadre">
+                <input type="checkbox" checked={!!selectedClip.reframe?.dual_crop}
+                  onChange={(e) => changeReframe(selectedClip.id, { dual_crop: e.target.checked })} /> 📱
+              </label>
             )}
           </div>
         </div>
@@ -557,16 +577,38 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
               <button className="ghost small" onClick={onOpenJson} title="Ver / editar el JSON del proyecto">
                 <Icon name="data_object" size={15} /> JSON
               </button>
+              {exporting ? (
+                <span className="ed-export-pct" title={exportJob.message || 'Exportando…'}>
+                  {Math.round((exportJob.progress || 0.05) * 100)}%
+                </span>
+              ) : exportJob?.status === 'done' ? (
+                <>
+                  <a className="primary small" href={exportJob.export_url} download>
+                    <Icon name="download" size={15} /> Descargar
+                  </a>
+                  <button className="ghost small" onClick={() => setExportJob(null)}>Editar</button>
+                </>
+              ) : (
+                <button className="primary small" onClick={doExport} disabled={!clips.length} title="Exportar el resultado">
+                  <Icon name="movie" size={15} /> Exportar
+                </button>
+              )}
             </div>
           </div>
           <div className="ed-result-stage">
             <canvas ref={resultCanvasRef} width={360} height={640} className="ed-result-canvas" />
+            {exporting && (
+              <div className="ed-result-exporting">
+                <div className="progress"><span style={{ width: `${(exportJob.progress || 0.05) * 100}%` }} /></div>
+                <span>{exportJob.message || 'Exportando…'}</span>
+              </div>
+            )}
           </div>
           <div className="ed-transport">
             <button className="icon-btn big" onClick={togglePlay} title="Reproducir / Pausa (Espacio)">
-              <Icon name={playing ? 'pause_circle' : 'play_circle'} size={30} />
+              <Icon name={playing ? 'pause_circle' : 'play_circle'} size={24} />
             </button>
-            <button className="icon-btn" onClick={() => seek(0)} title="Al inicio"><Icon name="first_page" size={20} /></button>
+            <button className="icon-btn" onClick={() => seek(0)} title="Al inicio"><Icon name="first_page" size={18} /></button>
             <div className="ed-scrub" onPointerDown={(e) => {
               const rect = e.currentTarget.getBoundingClientRect()
               const doSeek = (cx) => seek(((cx - rect.left) / rect.width) * (duration || 1))
@@ -579,27 +621,21 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
               <div className="ed-scrub-knob" style={{ left: `${duration ? (playhead / duration) * 100 : 0}%` }} />
             </div>
             <span className="ed-time">{fmt(playhead)} / {fmt(duration)}</span>
-          </div>
-          <div className="ed-result-opts">
-            <label className="ed-inline-field" title="Nivel de audio objetivo del render (LUFS)">
-              <Icon name="volume_up" size={14} /> Audio {audioDb} dB
-              <input type="range" min="-24" max="-8" step="1" value={audioDb} onChange={(e) => setAudioDb(Number(e.target.value))} />
+            <label className="ed-audio-db" title="Nivel de audio objetivo del render (LUFS). No cambia la vista previa.">
+              <Icon name="volume_up" size={14} />
+              <select
+                className="select mini"
+                value={audioDb}
+                onChange={(e) => setAudioDb(Number(e.target.value))}
+              >
+                {(AUDIO_DB_PRESETS.includes(Number(audioDb))
+                  ? AUDIO_DB_PRESETS
+                  : [...AUDIO_DB_PRESETS, Number(audioDb)].sort((a, b) => a - b)
+                ).map((db) => (
+                  <option key={db} value={db}>{db} dB</option>
+                ))}
+              </select>
             </label>
-            {exporting ? (
-              <div className="ed-export-prog">
-                <div className="progress"><span style={{ width: `${(exportJob.progress || 0.05) * 100}%` }} /></div>
-                <span className="muted small">{exportJob.message || 'Exportando…'}</span>
-              </div>
-            ) : exportJob?.status === 'done' ? (
-              <div className="ed-export-done">
-                <a className="primary small" href={exportJob.export_url} download><Icon name="download" size={15} /> Descargar</a>
-                <button className="ghost small" onClick={() => setExportJob(null)}>Editar</button>
-              </div>
-            ) : (
-              <button className="primary" onClick={doExport} disabled={!clips.length}>
-                <Icon name="movie" size={16} /> Exportar
-              </button>
-            )}
           </div>
           {exportJob?.status === 'error' && <div className="error small">⚠️ {exportJob.error}</div>}
         </div>
@@ -654,6 +690,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             onDelete={(kf) => deleteKeyframe(selectedClip, kf)}
             onSeek={seek}
             onAdd={addKeyframeAtPlayhead}
+            onPanMode={(kf, mode) => patchKeyframePan(selectedClip, kf, mode)}
           />
         )}
       </div>

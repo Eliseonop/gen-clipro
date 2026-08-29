@@ -19,6 +19,7 @@ from yt_dlp import YoutubeDL
 
 from . import config
 from .diagnostics import timed
+from .reframe_math import frame_at
 from .schemas import ClipInfo, CropMode, Reframe, Segment
 
 ProgressCb = Callable[[float, str], None]
@@ -146,32 +147,62 @@ def _single_reframe_filter(source: Path, zoom: float, keyframes: list, pan_mode:
     from . import detect
 
     iw, ih = detect.dims(source)
+    z_fallback = _clamp(zoom or 1.0, 0.1, 1.0)
+    mode_fallback = pan_mode or "smooth"
+    kfs = keyframes or []
+    variable = any(getattr(k, "zoom", None) is not None or getattr(k, "pan_mode", None) for k in kfs)
 
-    z = _clamp(zoom or 1.0, 0.1, 1.0)
-    ch = int(round(ih * z)); ch -= ch % 2
-    cw = int(round(ch * target_w / target_h)); cw -= cw % 2
-    cw = min(cw, iw - (iw % 2))
-    ch = min(ch, ih - (ih % 2))
+    def crop_at(t: float) -> tuple[float, float, float, float]:
+        fr = frame_at(kfs, t, z_fallback, mode_fallback)
+        z = fr["zoom"]
+        ch = int(round(ih * z)); ch -= ch % 2
+        cw = int(round(ch * target_w / target_h)); cw -= cw % 2
+        cw = min(max(2, cw), iw - (iw % 2))
+        ch = min(max(2, ch), ih - (ih % 2))
+        x = _clamp(fr["cx"] * iw - cw / 2, 0, iw - cw)
+        y = _clamp(fr["cy"] * ih - ch / 2, 0, ih - ch)
+        return x, y, cw, ch
 
-    xs: list[tuple[float, float]] = []
-    ys: list[tuple[float, float]] = []
-    for kf in keyframes:
-        x = _clamp(kf.cx * iw - cw / 2, 0, iw - cw)
-        y = _clamp(kf.cy * ih - ch / 2, 0, ih - ch)
-        xs.append((kf.t, x))
-        ys.append((kf.t, y))
+    if not kfs:
+        x, y, cw, ch = crop_at(0)
+        return f"crop=w={cw}:h={ch}:x={int(x)}:y={int(y)},scale={target_w}:{target_h}"
 
-    if not xs:
-        x_expr = f"{(iw - cw) // 2}"
-        y_expr = f"{(ih - ch) // 2}"
-    elif pan_mode == "direct":
-        x_expr = _pw_expr_direct(xs)
-        y_expr = _pw_expr_direct(ys)
-    else:
-        x_expr = _pw_expr(xs)
-        y_expr = _pw_expr(ys)
+    if not variable:
+        x0, y0, cw, ch = crop_at(kfs[0].t)
+        xs: list[tuple[float, float]] = []
+        ys: list[tuple[float, float]] = []
+        for kf in kfs:
+            x, y, _, _ = crop_at(kf.t)
+            xs.append((kf.t, x))
+            ys.append((kf.t, y))
+        if mode_fallback == "direct":
+            x_expr = _pw_expr_direct(xs)
+            y_expr = _pw_expr_direct(ys)
+        else:
+            x_expr = _pw_expr(xs)
+            y_expr = _pw_expr(ys)
+        return f"crop=w={cw}:h={ch}:x='{x_expr}':y='{y_expr}',scale={target_w}:{target_h}"
 
-    return f"crop=w={cw}:h={ch}:x='{x_expr}':y='{y_expr}',scale={target_w}:{target_h}"
+    tmax = max(float(k.t) for k in kfs)
+    step = 1.0 / 20.0
+    times = {round(float(k.t), 4) for k in kfs}
+    t = 0.0
+    while t <= tmax + 1e-6:
+        times.add(round(t, 4))
+        t += step
+    for k in kfs:
+        times.add(round(max(0.0, float(k.t) - step), 4))
+    xs, ys, ws, hs = [], [], [], []
+    for t in sorted(times):
+        x, y, cw, ch = crop_at(t)
+        xs.append((t, x))
+        ys.append((t, y))
+        ws.append((t, cw))
+        hs.append((t, ch))
+    return (
+        f"crop=w='{_pw_expr(ws)}':h='{_pw_expr(hs)}':x='{_pw_expr(xs)}':y='{_pw_expr(ys)}'"
+        f",scale={target_w}:{target_h}"
+    )
 
 
 def _reframe_filter(source: Path, reframe: Reframe) -> tuple[str, bool]:
