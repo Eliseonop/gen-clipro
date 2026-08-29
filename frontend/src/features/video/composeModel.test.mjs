@@ -3,6 +3,7 @@ import {
   slotRect, outputRect, slotTargetAspect, invertSlots, splitLayer,
   layersFromInitial, addSecondLayer, applySlotPreset, complementSlot,
   cutLayerAt, isSequentialLayout, compositionDuration, layerDelay, layerDuration,
+  makeLayer, addSplitTrack, recipeFromLayers, isSyncedDual,
 } from './composeModel.js'
 
 assert.deepEqual(slotRect('top'), { x: 0, y: 0, w: 1, h: 0.5 })
@@ -75,3 +76,29 @@ assert.equal(compositionDuration(parallel), 8)
 assert.equal(layerDelay(parallel, 1), 0)
 
 console.log('composeModel cut ok')
+
+const one = [makeLayer({ id: 1, url: 'http://x', trimIn: 0, trimOut: 8, keyframes: [{ t: 1, cx: 0.4, cy: 0.5, zoom: 0.7, fit: 'cover' }] })]
+assert.equal(addSplitTrack([one[0], { ...one[0], id: 2 }]), null)
+const split = addSplitTrack(one)
+assert.equal(split.length, 2)
+assert.equal(split[0].url, split[1].url)
+assert.equal(split[0].trimOut, 8)
+assert.equal(split[1].trimOut, 8)
+assert.equal(split[0].keyframes[0].cx, 0.4)
+assert.equal(split[1].keyframes[0].cx, 0.4)
+assert.notEqual(split[1].id, split[0].id)
+assert.equal(isSyncedDual(split), true)
+assert.equal(isSyncedDual(cut), false)
+
+const rf = recipeFromLayers(split)
+assert.equal(rf.master, true)
+assert.equal(rf.dual_crop, true)
+assert.equal(rf.split_layout, 'auto')
+assert.equal(rf.keyframes2[0].cx, 0.4)
+
+const singleRf = recipeFromLayers(one)
+assert.equal(singleRf.dual_crop, false)
+assert.equal(singleRf.master, true)
+assert.equal((singleRf.keyframes2 || []).length, 0)
+
+console.log('composeModel split track ok')
