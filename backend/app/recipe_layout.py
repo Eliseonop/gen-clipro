@@ -16,6 +16,11 @@ def is_master_reframe(reframe: Any) -> bool:
     return bool(_field(reframe, "master", False) is True)
 
 
+def uses_source_trim(reframe: Any) -> bool:
+    """True: el archivo de biblioteca es el tramo fuente; no hay que hornear 9:16."""
+    return is_master_reframe(reframe)
+
+
 def split_orientation_for(out_aspect: float, reframe: Any = None) -> str:
     layout = _field(reframe, "split_layout")
     if layout in ("vertical", "horizontal"):

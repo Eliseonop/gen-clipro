@@ -3,7 +3,7 @@ import {
   slotRect, outputRect, slotTargetAspect, invertSlots, splitLayer,
   layersFromInitial, addSecondLayer, applySlotPreset, complementSlot,
   cutLayerAt, isSequentialLayout, compositionDuration, layerDelay, layerDuration,
-  makeLayer, addSplitTrack, recipeFromLayers, isSyncedDual, previewDest,
+  makeLayer, addSplitTrack, recipeFromLayers, isSyncedDual, previewDest, recipeForFile,
 } from './composeModel.js'
 
 assert.deepEqual(slotRect('top'), { x: 0, y: 0, w: 1, h: 0.5 })
@@ -100,6 +100,14 @@ const singleRf = recipeFromLayers(one)
 assert.equal(singleRf.dual_crop, false)
 assert.equal(singleRf.master, true)
 assert.equal((singleRf.keyframes2 || []).length, 0)
+
+const trimmed = [makeLayer({
+  id: 3, url: 'http://x', trimIn: 2, trimOut: 8,
+  keyframes: [{ t: 3, cx: 0.4, cy: 0.5, zoom: 0.7, fit: 'cover' }],
+})]
+const fileRf = recipeForFile(trimmed)
+assert.equal(fileRf.keyframes[0].t, 1)
+assert.equal(fileRf.master, true)
 
 console.log('composeModel split track ok')
 
