@@ -12,7 +12,7 @@ export default function EdTimeline({
   tracks, clips, pps, setPps, duration, playhead, rowH, setRowH,
   selectedClipId, selectedTrackId, selectedClip, selKfId, dragInfo,
   onSeek, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onSplit, onDeleteClip,
-  onDropAsset, onTrackToggle, onAddTrack, onAddTextTrack, onMoveKeyframe, onSelectKf, onAddKf, onDeleteKf, onContextClip,
+  onDropAsset, onTrackToggle, onTrackCompact, onAddTrack, onAddTextTrack, onMoveKeyframe, onSelectKf, onAddKf, onDeleteKf, onContextClip,
 }) {
   const lanesRef = useRef(null)
   const bodyRef = useRef(null)
@@ -189,6 +189,10 @@ export default function EdTimeline({
                 <button className={`ed-th-btn ${t.muted ? 'off' : ''}`} title="Silenciar"
                   onClick={(e) => { e.stopPropagation(); onTrackToggle(t.id, 'muted') }} disabled={t.kind === 'text'}>
                   <Icon name={t.muted ? 'volume_off' : 'volume_up'} size={14} />
+                </button>
+                <button className="ed-th-btn" title="Juntar clips (sin huecos ni solapes)"
+                  onClick={(e) => { e.stopPropagation(); onTrackCompact(t.id) }} disabled={t.locked}>
+                  <Icon name="compress" size={14} />
                 </button>
                 <button className={`ed-th-btn ${t.locked ? 'on' : ''}`} title="Bloquear"
                   onClick={(e) => { e.stopPropagation(); onTrackToggle(t.id, 'locked') }}>

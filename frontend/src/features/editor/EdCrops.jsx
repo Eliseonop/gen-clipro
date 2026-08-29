@@ -7,9 +7,11 @@ import { kfColor } from '../../lib/panning'
 // (keyframes) del clip seleccionado. Va pegado a la timeline.
 export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHidden, onDelete, onSeek, onAdd, onPanMode }) {
   const kfs = clip?.kind === 'video' ? [...(clip.reframe?.keyframes || [])].sort((a, b) => a.t - b.t) : []
-  const typeLabel = clip?.reframe?.dual_crop
-    ? (clip.reframe.split_orientation === 'horizontal' ? 'Dividido L/R' : 'Dividido T/B')
-    : 'Vertical'
+  const typeLabel = clip?.layout === 'overlay'
+    ? 'Superpuesto'
+    : clip?.reframe?.dual_crop
+      ? (clip.reframe.split_orientation === 'horizontal' ? 'Dividido L/R' : 'Dividido T/B')
+      : 'Vertical'
 
   return (
     <div className="ed-crops">

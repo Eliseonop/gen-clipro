@@ -4,9 +4,12 @@
 // Estas funciones son puras respecto a React: reciben un `env` con las refs vivas del
 // componente (clipsRef, tracksRef, mediaEls, outRef, …) y leen `.current` en el momento
 // de la llamada, igual que hacía el componente. Así el comportamiento por frame no cambia.
-import { drawReframe, geomFor, clampCenter, frameAt, clamp, kfColor, cropCornerNorms } from '../../../lib/panning'
+import { drawReframe, kfColor, cropCornerNorms, clamp } from '../../../lib/panning'
 import { drawTextClip } from '../../../lib/textstyles'
 import { clipDur, clipEnd, newReframe } from '../editorModel'
+import {
+  cropWindow, destRectOnCanvas, isOverlay, sourceCropPx, videosAt,
+} from '../../../lib/clipLayout'
 
 // Geometría (en px del canvas) del encuadre de texto a partir de fm normalizado.
 export function framingRect(cw, ch, fm) {
@@ -42,28 +45,81 @@ export function drawFramingOverlay(ctx, cw, ch, fm) {
   ctx.restore()
 }
 
-// Dibuja el compuesto (vídeo superior + textos activos) en un canvas.
-export function drawComposite(ctx, head, selTextId, env) {
-  const { clipsRef, tracksRef, mediaEls, outRef, topVideoAt } = env
+function overlayDest(ctx, video, clip, srcTime, outW, outH) {
+  const vw = video.videoWidth, vh = video.videoHeight
+  const crop = cropWindow(clip, vw / vh, outW / outH, srcTime)
+  const px = sourceCropPx(crop, vw, vh)
+  return { px, dest: destRectOnCanvas(clip.transform, px, outW, outH, ctx.canvas.width, ctx.canvas.height) }
+}
+
+function drawOverlayLayer(ctx, video, clip, srcTime, outW, outH) {
+  const { px, dest } = overlayDest(ctx, video, clip, srcTime, outW, outH)
+  ctx.save()
+  ctx.translate(dest.dx + dest.dw / 2, dest.dy + dest.dh / 2)
+  ctx.rotate((dest.rotation || 0) * Math.PI / 180)
+  try { ctx.drawImage(video, px.sx, px.sy, px.sw, px.sh, -dest.dw / 2, -dest.dh / 2, dest.dw, dest.dh) } catch { /* noop */ }
+  ctx.restore()
+  return dest
+}
+
+function drawTransformHandles(ctx, dest) {
+  const { dx, dy, dw, dh } = dest
+  const hs = 5
+  ctx.save()
+  ctx.strokeStyle = '#ff3b5c'
+  ctx.lineWidth = 1.6
+  ctx.strokeRect(dx, dy, dw, dh)
+  ctx.fillStyle = '#fff'
+  ctx.strokeStyle = '#ff3b5c'
+  ;[[dx, dy], [dx + dw, dy], [dx, dy + dh], [dx + dw, dy + dh]].forEach(([x, y]) => {
+    ctx.fillRect(x - hs, y - hs, hs * 2, hs * 2)
+    ctx.strokeRect(x - hs, y - hs, hs * 2, hs * 2)
+  })
+  const rx = dx + dw / 2, ry = dy - 22
+  ctx.beginPath()
+  ctx.moveTo(dx + dw / 2, dy)
+  ctx.lineTo(rx, ry)
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.arc(rx, ry, 6, 0, Math.PI * 2)
+  ctx.fillStyle = '#ff3b5c'
+  ctx.fill()
+  ctx.restore()
+}
+
+// Dibuja el compuesto (todas las pistas de vídeo, fondo→frente + textos) en un canvas.
+export function drawComposite(ctx, head, selClipId, env) {
+  const { clipsRef, tracksRef, mediaEls, outRef } = env
   const cw = ctx.canvas.width, ch = ctx.canvas.height
-  const top = topVideoAt(head)
-  if (top) {
-    const el = mediaEls.current.get(top.id)
-    if (el && el.videoWidth) drawReframe(ctx, el, top.reframe, el.currentTime, outRef.current.w / outRef.current.h)
-    else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cw, ch) }
-  } else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cw, ch) }
+  const outW = outRef.current.w, outH = outRef.current.h
+  ctx.fillStyle = '#000'
+  ctx.fillRect(0, 0, cw, ch)
+
+  let overlayDestSel = null
+  for (const clip of videosAt(head, clipsRef.current, tracksRef.current)) {
+    const el = mediaEls.current.get(clip.id)
+    if (!el || !el.videoWidth) continue
+    const srcTime = el.currentTime
+    if (isOverlay(clip)) {
+      const dest = drawOverlayLayer(ctx, el, clip, srcTime, outW, outH)
+      if (clip.id === selClipId) overlayDestSel = dest
+    } else {
+      drawReframe(ctx, el, clip.reframe, srcTime, outW / outH, { clear: false })
+    }
+  }
+
   let selRender = null
   for (const c of clipsRef.current) {
     if (c.kind !== 'text') continue
     const track = tracksRef.current.find((t) => t.id === c.track_id)
     if (track?.hidden) continue
-    // El texto solo aparece cuando el playhead está dentro de su rango.
     const activeText = head >= c.start - 0.02 && head < c.start + clipDur(c)
     if (!activeText) continue
-    const isSel = c.id === selTextId
+    const isSel = c.id === selClipId
     const r = drawTextClip(ctx, c, cw, ch, { selected: isSel })
     if (isSel) selRender = r
   }
+  if (overlayDestSel) drawTransformHandles(ctx, overlayDestSel)
   return selRender
 }
 
@@ -107,10 +163,9 @@ export function drawMainView(head, env) {
     const rf = clip.reframe || newReframe()
     const outA = outRef.current.w / outRef.current.h
     const srcT = playingRef.current && active ? el.currentTime : srcTime
-    const fr = frameAt(rf.keyframes, srcT, rf.zoom ?? 1, rf.pan_mode || 'smooth')
-    const { widthFrac: wf, heightFrac: hf } = geomFor(fr.zoom, srcAspect, outA)
-    const p = clampCenter(fr.cx, fr.cy, fr.zoom, srcAspect, outA)
-    const bx = (p.cx - wf / 2) * cw2, by = (p.cy - hf / 2) * ch2, bw = wf * cw2, bh = hf * ch2
+    const crop = cropWindow(clip, srcAspect, outA, srcT)
+    const { cx: pcx, cy: pcy, wf, hf } = crop
+    const bx = (pcx - wf / 2) * cw2, by = (pcy - hf / 2) * ch2, bw = wf * cw2, bh = hf * ch2
     ctx.fillStyle = 'rgba(3,5,12,0.58)'
     ctx.fillRect(0, 0, cw2, by)
     ctx.fillRect(0, by + bh, cw2, ch2 - (by + bh))
@@ -119,13 +174,11 @@ export function drawMainView(head, env) {
     const kfs = [...(rf.keyframes || [])].sort((a, b) => a.t - b.t)
     kfs.forEach((k, i) => {
       if (hiddenKfRef.current.has(k.id)) return
-      const kz = k.zoom ?? rf.zoom ?? 1
-      const g = geomFor(kz, srcAspect, outA)
-      const kp = clampCenter(k.cx, k.cy, kz, srcAspect, outA)
-      const kx = (kp.cx - g.widthFrac / 2) * cw2, ky = (kp.cy - g.heightFrac / 2) * ch2
+      const g = cropWindow({ ...clip, reframe: { ...rf, keyframes: [k] } }, srcAspect, outA, k.t)
+      const kx = (g.cx - g.wf / 2) * cw2, ky = (g.cy - g.hf / 2) * ch2
       ctx.strokeStyle = kfColor(i)
       ctx.lineWidth = k.id === selKfRef.current ? 3 : 1.5
-      ctx.strokeRect(kx, ky, g.widthFrac * cw2, g.heightFrac * ch2)
+      ctx.strokeRect(kx, ky, g.wf * cw2, g.hf * ch2)
     })
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 2
     ctx.strokeRect(bx, by, bw, bh)
@@ -133,7 +186,7 @@ export function drawMainView(head, env) {
     ctx.fillStyle = '#ff3b5c'
     ctx.strokeStyle = '#fff'
     ctx.lineWidth = 1.5
-    cropCornerNorms(p.cx, p.cy, wf, hf).forEach(([nx, ny]) => {
+    cropCornerNorms(pcx, pcy, wf, hf).forEach(([nx, ny]) => {
       const hx = nx * cw2, hy = ny * ch2
       ctx.fillRect(hx - hs, hy - hs, hs * 2, hs * 2)
       ctx.strokeRect(hx - hs, hy - hs, hs * 2, hs * 2)

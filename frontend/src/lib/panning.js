@@ -117,13 +117,13 @@ export function targetAspectFor(reframe, outAspect = OUT_RATIO) {
 // Dibuja el fotograma reencuadrado del vídeo en el canvas de salida.
 // `srcTime` = tiempo de la fuente (para interpolar keyframes).
 // `outAspect` = ancho/alto del formato de salida (9/16, 16/9, 1, …).
-export function drawReframe(ctx, video, reframe, srcTime, outAspect = OUT_RATIO) {
+export function drawReframe(ctx, video, reframe, srcTime, outAspect = OUT_RATIO, opts) {
   const c = ctx.canvas
   const vw = video.videoWidth, vh = video.videoHeight
   if (!vw || !vh) return
   const srcAspect = vw / vh
   const mode = reframe?.pan_mode || 'smooth'
-  ctx.clearRect(0, 0, c.width, c.height)
+  if (opts?.clear !== false) ctx.clearRect(0, 0, c.width, c.height)
 
   if (!reframe || !reframe.dual_crop) {
     const fr = frameAt(reframe?.keyframes, srcTime, reframe?.zoom ?? 1, mode)

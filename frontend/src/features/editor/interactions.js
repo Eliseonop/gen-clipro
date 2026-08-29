@@ -4,13 +4,18 @@
 //
 // Se construye por render con el contexto vivo (clip seleccionado, playhead, aspecto…),
 // igual que la función inline original, para no alterar el comportamiento.
-import { clamp, clampCenter, frameAt, geomFor, zoomFromCorner, isNearCropCorner } from '../../lib/panning'
+import { clamp, clampCenter, frameAt, zoomFromCorner, isNearCropCorner } from '../../lib/panning'
+import {
+  canvasPointer, clampCrop, cropSizeFromCorner, cropWindow, destRectOnCanvas,
+  hitTransformHandle, isOverlay, newTransform, sourceCropPx,
+} from '../../lib/clipLayout'
 import { framingRect } from './render/canvas'
 
 export function createMainDownHandler(ctx) {
   const {
     mainCanvasRef, framingModeRef, playingRef, stopPlayback, setFramingMode,
     selectedClip, mainTextBox, changeStyle, mediaEls, playhead, upsertKeyframe, outAspect,
+    changeReframe,
   } = ctx
 
   return function onMainDown(e) {
@@ -86,20 +91,43 @@ export function createMainDownHandler(ctx) {
     if (playingRef.current) stopPlayback()
     const srcAspect = el.videoWidth / el.videoHeight
     const localT = clamp(clip.in_point + (playhead - clip.start), clip.in_point, clip.out_point)
-    const rf = clip.reframe
-    const fr = frameAt(rf?.keyframes, localT, rf?.zoom ?? 1, rf?.pan_mode || 'smooth')
-    const { widthFrac: wf, heightFrac: hf } = geomFor(fr.zoom, srcAspect, outAspect)
-    const box = clampCenter(fr.cx, fr.cy, fr.zoom, srcAspect, outAspect)
+    const crop = cropWindow(clip, srcAspect, outAspect, localT)
     const toNorm = (ev) => [clamp((ev.clientX - rect.left) / rect.width, 0, 1), clamp((ev.clientY - rect.top) / rect.height, 0, 1)]
     const [nx0, ny0] = toNorm(e)
-    const zooming = isNearCropCorner(nx0, ny0, box.cx, box.cy, wf, hf, rect)
+    const zooming = isNearCropCorner(nx0, ny0, crop.cx, crop.cy, crop.wf, crop.hf, rect)
+
+    if (isOverlay(clip)) {
+      const applyMove = (cx, cy) => {
+        const c = clampCrop(cx, cy, crop.wf, crop.hf)
+        upsertKeyframe(clip, localT, c.cx, c.cy)
+      }
+      const applySize = (nx, ny) => {
+        const sized = cropSizeFromCorner(nx, ny, crop.cx, crop.cy)
+        const c = clampCrop(crop.cx, crop.cy, sized.wf, sized.hf)
+        changeReframe(clip.id, { crop_w: +c.wf.toFixed(4), crop_h: +c.hf.toFixed(4) })
+        upsertKeyframe(clip, localT, c.cx, c.cy)
+      }
+      if (zooming) applySize(nx0, ny0)
+      else applyMove(nx0, ny0)
+      const move = (ev) => {
+        const [nx, ny] = toNorm(ev)
+        if (zooming) applySize(nx, ny)
+        else applyMove(nx, ny)
+      }
+      const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+      window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+      return
+    }
+
+    const rf = clip.reframe
+    const fr = frameAt(rf?.keyframes, localT, rf?.zoom ?? 1, rf?.pan_mode || 'smooth')
     const applyMove = (cx, cy) => {
       const c = clampCenter(cx, cy, fr.zoom, srcAspect, outAspect)
       upsertKeyframe(clip, localT, c.cx, c.cy)
     }
     const applyZoom = (nx, ny) => {
-      const z = zoomFromCorner(nx, ny, box.cx, box.cy, srcAspect, outAspect)
-      const c = clampCenter(box.cx, box.cy, z, srcAspect, outAspect)
+      const z = zoomFromCorner(nx, ny, crop.cx, crop.cy, srcAspect, outAspect)
+      const c = clampCenter(crop.cx, crop.cy, z, srcAspect, outAspect)
       upsertKeyframe(clip, localT, c.cx, c.cy, { zoom: z })
     }
     if (zooming) applyZoom(nx0, ny0)
@@ -108,6 +136,58 @@ export function createMainDownHandler(ctx) {
       const [nx, ny] = toNorm(ev)
       if (zooming) applyZoom(nx, ny)
       else applyMove(nx, ny)
+    }
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+  }
+}
+
+export function createResultDownHandler(ctx) {
+  const {
+    resultCanvasRef, selectedClip, playhead, mediaEls, outW, outH,
+    changeTransform, playingRef, stopPlayback,
+  } = ctx
+
+  return function onResultDown(e) {
+    const clip = selectedClip
+    if (!isOverlay(clip) || clip.kind !== 'video') return
+    const end = clip.start + Math.max(0, clip.out_point - clip.in_point)
+    if (playhead < clip.start - 0.02 || playhead >= end) return
+    const canvas = resultCanvasRef.current
+    const el = mediaEls.current.get(clip.id)
+    if (!canvas || !el?.videoWidth) return
+    if (playingRef.current) stopPlayback()
+
+    const localT = clamp(clip.in_point + (playhead - clip.start), clip.in_point, clip.out_point)
+    const crop = cropWindow(clip, el.videoWidth / el.videoHeight, outW / outH, localT)
+    const pxCrop = sourceCropPx(crop, el.videoWidth, el.videoHeight)
+    const dest = destRectOnCanvas(clip.transform, pxCrop, outW, outH, canvas.width, canvas.height)
+    const p0 = canvasPointer(e, canvas)
+    const mode = hitTransformHandle(p0.x, p0.y, dest)
+    if (!mode) return
+
+    const t0 = { ...newTransform(), ...clip.transform }
+    const cx0 = dest.dx + dest.dw / 2
+    const cy0 = dest.dy + dest.dh / 2
+    const dist0 = Math.hypot(p0.x - cx0, p0.y - cy0) || 1
+    const ang0 = Math.atan2(p0.y - cy0, p0.x - cx0)
+
+    const move = (ev) => {
+      const p = canvasPointer(ev, canvas)
+      if (mode === 'move') {
+        const dxN = (p.x - p0.x) / canvas.width
+        const dyN = (p.y - p0.y) / canvas.height
+        changeTransform(clip.id, {
+          x: +clamp(t0.x + dxN, -0.2, 1.2).toFixed(4),
+          y: +clamp(t0.y + dyN, -0.2, 1.2).toFixed(4),
+        })
+      } else if (mode === 'scale') {
+        const dist = Math.hypot(p.x - cx0, p.y - cy0)
+        changeTransform(clip.id, { scale: +clamp(t0.scale * (dist / dist0), 0.05, 8).toFixed(4) })
+      } else if (mode === 'rotate') {
+        const ang = Math.atan2(p.y - cy0, p.x - cx0)
+        changeTransform(clip.id, { rotation: +((t0.rotation + (ang - ang0) * 180 / Math.PI) % 360).toFixed(2) })
+      }
     }
     const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
