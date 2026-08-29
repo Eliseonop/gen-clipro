@@ -31,14 +31,15 @@ export function drawComposeFrame(videos, canvas, env) {
   ctx.fillRect(0, 0, canvas.width, canvas.height)
   const n = layers.length
   layers.forEach((layer, i) => {
+    if (env.soloIndex != null && i !== env.soloIndex) return
     const v = videos[i]
     const prep = preps[i]
     if (!v || v.readyState < 2) return
-    const dest = outputRect(layer, i, n)
+    const dest = outputRect(layer, i, env.soloIndex != null ? 1 : n)
     const srcTime = v.currentTime || 0
     drawLayerInto(ctx, v, layer, prep, dest, srcTime)
   })
-  if (n === 2) {
+  if (n === 2 && env.soloIndex == null) {
     const a = outputRect(layers[0], 0, 2)
     const b = outputRect(layers[1], 1, 2)
     const sharedEdge = (a.x + a.w === b.x && a.y === b.y && a.h === b.h)
