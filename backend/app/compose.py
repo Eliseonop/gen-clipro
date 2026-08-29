@@ -22,7 +22,9 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import clipper, config, sfx, storage
+from .clip_layout import dest_rect_even, is_overlay, source_crop_px
 from .diagnostics import timed
+from .reframe_math import frame_at
 from .schemas import Keyframe, Project, Reframe, Timeline, TimelineClip
 
 ProgressCb = Callable[[float, str], None]
@@ -39,6 +41,55 @@ def _clip_path(project: Project, clip: TimelineClip) -> Optional[Path]:
     if kind is None:
         return None
     return storage.resolve_media(project, kind, clip.filename)
+
+
+def _even(n: float) -> int:
+    n = int(round(n))
+    return n - (n % 2) if n >= 2 else 2
+
+
+def _overlay_video_filter(path: Path, clip: TimelineClip, W: int, H: int, dur: float) -> tuple[str, str]:
+    """Crop de fuente (tamaño fijo) + scale/rotate del resultado. Devuelve (filtro, overlay=x:y)."""
+    from . import detect
+    iw, ih = detect.dims(path)
+    rf = clip.reframe
+    crop_w = float(rf.crop_w)
+    crop_h = float(rf.crop_h)
+    kfs = _shifted_keyframes(rf, clip.in_point, dur, 1) if rf else []
+    fr0 = frame_at(kfs, 0, rf.zoom or 1.0, rf.pan_mode or "smooth")
+    _, _, sw, sh = source_crop_px(crop_w, crop_h, fr0["cx"], fr0["cy"], iw, ih)
+    ox, oy, dw, dh, rot = dest_rect_even(clip.transform, sw, sh, W, H)
+    cw = min(_even(sw), iw - (iw % 2))
+    ch = min(_even(sh), ih - (ih % 2))
+
+    def xy_at(t: float) -> tuple[float, float]:
+        fr = frame_at(kfs, t, rf.zoom or 1.0, rf.pan_mode or "smooth")
+        sx, sy, _, _ = source_crop_px(crop_w, crop_h, fr["cx"], fr["cy"], iw, ih)
+        x = max(0, min(iw - cw, sx))
+        y = max(0, min(ih - ch, sy))
+        return x, y
+
+    if not kfs:
+        x, y = xy_at(0)
+        crop_f = f"crop=w={cw}:h={ch}:x={int(x)}:y={int(y)}"
+    else:
+        xs, ys = [], []
+        for kf in kfs:
+            x, y = xy_at(kf.t)
+            xs.append((kf.t, x))
+            ys.append((kf.t, y))
+        mode = rf.pan_mode or "smooth"
+        x_expr = clipper._pw_expr_direct(xs) if mode == "direct" else clipper._pw_expr(xs)
+        y_expr = clipper._pw_expr_direct(ys) if mode == "direct" else clipper._pw_expr(ys)
+        crop_f = f"crop=w={cw}:h={ch}:x='{x_expr}':y='{y_expr}'"
+
+    chain = f"{crop_f},scale={dw}:{dh}"
+    if abs(rot) > 0.05:
+        chain += f",format=gbrap,rotate={rot:.3f}*PI/180:ow=rotw(iw):oh=roth(ih):c=none@0x00000000"
+        xy = f"x={ox}-(overlay_w-{dw})/2:y={oy}-(overlay_h-{dh})/2"
+    else:
+        xy = f"x={ox}:y={oy}"
+    return chain, xy
 
 
 def _clip_duration(clip: TimelineClip) -> float:
@@ -280,7 +331,10 @@ def build_command(project: Project, timeline: Timeline, out_path: Path) -> list[
         dur = _clip_duration(c)
         start = max(0.0, c.start)
         end = start + dur
-        if c.reframe and (c.reframe.keyframes or c.reframe.dual_crop):
+        overlay_xy = "x=0:y=0"
+        if is_overlay(c) and c.reframe and c.reframe.crop_w and c.reframe.crop_h:
+            cropscale, overlay_xy = _overlay_video_filter(path, c, W, H, dur)
+        elif c.reframe and (c.reframe.keyframes or c.reframe.dual_crop):
             cropscale = _reframe_cropscale(path, c.reframe, c.in_point, dur, W, H)
         else:
             cropscale = _plain_scale(W, H)
@@ -291,7 +345,7 @@ def build_command(project: Project, timeline: Timeline, out_path: Path) -> list[
         )
         out_label = f"ov{n}"
         filt.append(
-            f"[{last_label}][{vlabel}]overlay=x=0:y=0:eof_action=pass:"
+            f"[{last_label}][{vlabel}]overlay={overlay_xy}:eof_action=pass:"
             f"enable='between(t,{start:.3f},{end:.3f})'[{out_label}]"
         )
         last_label = out_label

@@ -8,10 +8,11 @@ import {
   uid, FORMATS, mediaUrl, defaultTracks, newReframe, withKfIds,
   makeClip, makeTextClip, clipDur, clipEnd,
 } from './editorModel'
+import { disableOverlay, enableOverlay, isOverlay, newTransform, videosAt } from '../../lib/clipLayout'
 import { drawComposite, drawMainView } from './render/canvas'
 import { useExportJob } from './hooks/useExportJob'
 import { useSubtitles } from './hooks/useSubtitles'
-import { createMainDownHandler } from './interactions'
+import { createMainDownHandler, createResultDownHandler } from './interactions'
 import EdMaterial from './EdMaterial'
 import EdTimeline from './EdTimeline'
 import EdCrops from './EdCrops'
@@ -161,18 +162,21 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
         }
       }
 
-      // Sincronizar el fotograma del clip de vídeo superior (para el compuesto)
-      const top = topVideoAt(head)
-      if (top && !playingRef.current) {
-        const el = mediaEls.current.get(top.id)
-        if (el && el.videoWidth) {
-          const expected = clamp(top.in_point + (head - top.start), 0, el.duration || top.out_point)
-          if (Math.abs(el.currentTime - expected) > 0.06) { try { el.currentTime = expected } catch { /* noop */ } }
+      // Sincronizar fotogramas de todos los vídeos activos (fill + overlays)
+      if (!playingRef.current) {
+        for (const c of videosAt(head, clipsRef.current, tracksRef.current)) {
+          const el = mediaEls.current.get(c.id)
+          if (el && el.videoWidth) {
+            const expected = clamp(c.in_point + (head - c.start), 0, el.duration || c.out_point)
+            if (Math.abs(el.currentTime - expected) > 0.06) { try { el.currentTime = expected } catch { /* noop */ } }
+          }
         }
       }
 
-      // Resultado final compuesto (vídeo + texto)
-      if (resultCtx) drawComposite(resultCtx, head, null, env)
+      if (resultCtx) {
+        const sel = clipsRef.current.find((c) => c.id === selRef.current)
+        drawComposite(resultCtx, head, (sel && isOverlay(sel)) ? sel.id : null, env)
+      }
 
       drawMainView(head, env)
       rafRef.current = requestAnimationFrame(tick)
@@ -270,6 +274,26 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     setTracks((prev) => prev.map((t) => (t.id === id ? { ...t, [prop]: !t[prop] } : t)))
   }
 
+  // Compactar pista: junta los clips uno tras otro (sin huecos ni solapes),
+  // manteniendo su orden y la posición del primero.
+  function compactTrack(trackId) {
+    setClips((prev) => {
+      const track = tracksRef.current.find((t) => t.id === trackId)
+      if (track?.locked) return prev
+      const ordered = prev
+        .filter((c) => c.track_id === trackId)
+        .sort((a, b) => a.start - b.start)
+      if (ordered.length < 2) return prev
+      const nextStart = {}
+      let cursor = ordered[0].start
+      for (const c of ordered) {
+        nextStart[c.id] = +cursor.toFixed(3)
+        cursor += clipDur(c)
+      }
+      return prev.map((c) => (c.track_id === trackId ? { ...c, start: nextStart[c.id] } : c))
+    })
+  }
+
   function addTrack(kind, style) {
     const prefix = kind === 'video' ? 'V' : kind === 'audio' ? 'A' : 'T'
     const nums = tracksRef.current.filter((t) => t.kind === kind).map((t) => parseInt(String(t.name).replace(/\D/g, ''), 10) || 0)
@@ -295,6 +319,29 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   // --- Encuadres / keyframes ---
   function changeReframe(id, patch) {
     setClips((prev) => prev.map((c) => (c.id === id ? { ...c, reframe: { ...(c.reframe || newReframe()), ...patch } } : c)))
+  }
+  function changeTransform(id, patch) {
+    setClips((prev) => prev.map((c) => (
+      c.id === id ? { ...c, transform: { ...newTransform(), ...c.transform, ...patch } } : c
+    )))
+  }
+  function toggleOverlay(clip, on) {
+    if (!clip || clip.kind !== 'video') return
+    if (!on) {
+      setClips((prev) => prev.map((c) => (c.id === clip.id ? { ...c, ...disableOverlay(c) } : c)))
+      return
+    }
+    const el = mediaEls.current.get(clip.id)
+    const srcW = el?.videoWidth || 1920
+    const srcH = el?.videoHeight || 1080
+    const localT = clamp(clip.in_point + (playhead - clip.start), clip.in_point, clip.out_point)
+    const patch = enableOverlay(clip, srcW / srcH, outAspect, localT, srcW, srcH, outW, outH)
+    setClips((prev) => prev.map((c) => (c.id === clip.id ? {
+      ...c,
+      layout: patch.layout,
+      transform: patch.transform,
+      reframe: { ...(c.reframe || newReframe()), ...patch.reframe },
+    } : c)))
   }
   function upsertKeyframe(clip, localT, cx, cy, extra = {}) {
     let newId = null
@@ -472,6 +519,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   const onMainDown = createMainDownHandler({
     mainCanvasRef, framingModeRef, playingRef, stopPlayback, setFramingMode,
     selectedClip, mainTextBox, changeStyle, mediaEls, playhead, upsertKeyframe, outAspect,
+    changeReframe,
+  })
+  const onResultDown = createResultDownHandler({
+    resultCanvasRef, selectedClip, playhead, mediaEls, outW, outH,
+    changeTransform, playingRef, stopPlayback,
   })
 
   // --- Teclado ---
@@ -508,6 +560,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   })
 
   const canEditFrame = selectedClip?.kind === 'video'
+  const overlayOn = isOverlay(selectedClip)
   const isTextSel = selectedClip?.kind === 'text'
   const selTrackObj = tracks.find((t) => t.id === selTrackId)
   const isTextTrackSel = !selectedClip && selTrackObj?.kind === 'text'
@@ -535,7 +588,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             style={{ cursor: (canEditFrame || isTextSel || framingMode) ? 'crosshair' : 'default' }}>
             <canvas ref={mainCanvasRef} width={520} height={292} className="ed-main-canvas" />
             {clips.length === 0 && !framingMode && <div className="ed-stage-empty">Agrega clips o texto al timeline</div>}
-            {canEditFrame && <div className="ed-stage-hint">Arrastra el recuadro · esquinas para zoom</div>}
+            {canEditFrame && !overlayOn && <div className="ed-stage-hint">Arrastra el recuadro · esquinas para zoom</div>}
+            {canEditFrame && overlayOn && <div className="ed-stage-hint">Esquinas: encuadre de la fuente · el tamaño en Resultado no cambia</div>}
             {isTextSel && <div className="ed-stage-hint">Arrastra el texto para moverlo · botón Global para aplicar a todos</div>}
             {framingMode && <div className="ed-stage-hint">Ajusta el recuadro amarillo y pulsa Guardar</div>}
           </div>
@@ -557,6 +611,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
               <Icon name="construction" size={15} /> Construir
             </button>
             {canEditFrame && (
+              <label className="ed-chip" title="Colocar este clip encima del canvas sin rellenar el formato de salida">
+                <input type="checkbox" checked={overlayOn}
+                  onChange={(e) => toggleOverlay(selectedClip, e.target.checked)} /> Superponer
+              </label>
+            )}
+            {canEditFrame && !overlayOn && (
               <label className="ed-chip" title="Doble encuadre">
                 <input type="checkbox" checked={!!selectedClip.reframe?.dual_crop}
                   onChange={(e) => changeReframe(selectedClip.id, { dual_crop: e.target.checked })} /> 📱
@@ -596,7 +656,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             </div>
           </div>
           <div className="ed-result-stage">
-            <canvas ref={resultCanvasRef} width={360} height={640} className="ed-result-canvas" />
+            <canvas
+              ref={resultCanvasRef}
+              width={360}
+              height={640}
+              className="ed-result-canvas"
+              onPointerDown={onResultDown}
+              style={{ cursor: overlayOn ? 'move' : 'default' }}
+            />
+            {overlayOn && <div className="ed-stage-hint">Arrastra el recuadro para colocar · esquinas escala · punto rota</div>}
             {exporting && (
               <div className="ed-result-exporting">
                 <div className="progress"><span style={{ width: `${(exportJob.progress || 0.05) * 100}%` }} /></div>
@@ -657,6 +725,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
           onDeleteClip={deleteClip}
           onDropAsset={dropAsset}
           onTrackToggle={trackToggle}
+          onTrackCompact={compactTrack}
           onAddTrack={addTrack}
           onAddTextTrack={addTextTrack}
           onMoveKeyframe={moveKeyframe}

@@ -71,6 +71,7 @@ export function makeClip(assetKind, item, trackId, start, dur) {
     source_duration: +Math.max(0.3, dur || 1).toFixed(3),
     volume: 1,
     reframe: kind === 'video' ? newReframe() : null,
+    layout: kind === 'video' ? 'fill' : undefined,
   }
 }
 

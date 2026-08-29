@@ -82,6 +82,8 @@ class Reframe(BaseModel):
     split_orientation: str = "vertical"  # "vertical" | "horizontal"
     zoom2: Optional[float] = None
     keyframes2: list[Keyframe] = []
+    crop_w: Optional[float] = Field(default=None, ge=0.05, le=1.0)
+    crop_h: Optional[float] = Field(default=None, ge=0.05, le=1.0)
 
 
 class ReframePrep(BaseModel):
@@ -258,6 +260,8 @@ class TimelineClip(BaseModel):
     reframe: Optional[Reframe] = None
     text: Optional[str] = None            # contenido (clips de tipo "text")
     style: Optional[dict] = None          # estilo del texto (fuente, color, borde…)
+    layout: str = "fill"                  # "fill" | "overlay"
+    transform: Optional[dict] = None     # {x, y, scale, rotation} si layout=overlay
 
 
 class Timeline(BaseModel):
