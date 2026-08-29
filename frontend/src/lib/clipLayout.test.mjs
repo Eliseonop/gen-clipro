@@ -150,4 +150,14 @@ assert.equal(full.layout, 'fill')
 assert.equal(full.frame, 'full')
 assert.equal(isOverlay(full), false)
 
+const containClip = {
+  layout: 'fill',
+  reframe: { keyframes: [{ t: 0, cx: 0.2, cy: 0.2, zoom: 0.4, fit: 'contain' }] },
+}
+const containWin = cropWindow(containClip, 16 / 9, 9 / 16, 0)
+assert.equal(containWin.wf, 1)
+assert.equal(containWin.hf, 1)
+assert.equal(containWin.cx, 0.5)
+assert.equal(containWin.cy, 0.5)
+
 console.log('clipLayout overlay crop/transform ok')
