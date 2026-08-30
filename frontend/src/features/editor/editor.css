@@ -114,7 +114,7 @@
 
 /* ===== Panel Material (biblioteca) ===== */
 .ed-material {
-  width: 300px; flex-shrink: 0; background: var(--card); border: 1px solid var(--line);
+  width: 500px; min-width: 500px; flex-shrink: 0; background: var(--card); border: 1px solid var(--line);
   border-radius: var(--radius-lg); padding: 10px; display: flex; flex-direction: column; min-height: 0;
 }
 .ed-mat-head {
@@ -168,6 +168,33 @@
 }
 .ed-sfx-search input { flex: 1; background: none; border: none; color: var(--text); font-size: 12.5px; outline: none; }
 .ed-sfx-cat { width: 100%; }
+.ed-sfx-cat-row {
+  display: flex; align-items: center; gap: 6px; padding: 0 0 2px;
+}
+.ed-sfx-cat-row .ed-sfx-cat { flex: 1; min-width: 0; }
+.ed-fav-row-label {
+  flex: 1; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+}
+.ed-fav-filter, .ed-fav-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; flex-shrink: 0; border-radius: 6px; cursor: pointer;
+  background: var(--card-2); border: 1px solid var(--line); color: var(--muted);
+}
+.ed-fav-btn { width: 24px; height: 22px; }
+.ed-fav-filter:hover, .ed-fav-btn:hover { border-color: var(--line-bright); color: #ffc107; }
+.ed-fav-filter.on, .ed-fav-btn.on { color: #ffc107; border-color: #e6b800; background: rgba(255, 193, 7, 0.14); }
+.ed-text-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ed-fav-style { position: relative; padding-right: 2px; }
+.ed-fav-apply {
+  display: flex; flex-direction: column; gap: 2px; align-items: stretch;
+  background: none; border: none; color: inherit; padding: 0; cursor: pointer; width: 100%;
+}
+.ed-fav-del {
+  position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--card-3); border: 1px solid var(--line); border-radius: 4px; color: var(--muted); cursor: pointer;
+}
+.ed-fav-del:hover { color: #fff; border-color: var(--accent); }
 .ed-sfx-list { flex: 1; }
 .ed-sfx-count { font-size: 11px; color: var(--muted); text-align: center; }
 .ed-sfx-meta { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 0 9px 5px; }
@@ -396,7 +423,12 @@
   border-radius: var(--radius-lg); display: flex; flex-direction: column; overflow: hidden;
 }
 .ed-text-body { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 7px; }
-.ed-text-content { width: 100%; background: var(--card-2); border: 1px solid var(--line); border-radius: var(--radius-sm); color: var(--text); padding: 7px; font-size: 12.5px; resize: vertical; }
+.ed-text-content {
+  width: 100%; min-height: 8.2em; max-height: 50vh; flex-shrink: 0;
+  background: var(--card-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  color: var(--text); padding: 7px; font-size: 12.5px; line-height: 1.35;
+  resize: vertical; overflow: auto;
+}
 .ed-text-presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
 .ed-preset { background: var(--card-2); border: 1px solid var(--line); color: var(--text-secondary); border-radius: 6px; padding: 5px 3px; font-size: 10.5px; cursor: pointer; }
 .ed-preset:hover { background: var(--card-3); color: #fff; }
@@ -515,16 +547,31 @@
 .ed-tl-scroll::-webkit-scrollbar-track, .ed-tl-body::-webkit-scrollbar-track { background: transparent; }
 .ed-timeline-wrap * { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.18) transparent; }
 
-/* ===== SFX: cards rectangulares en 2 columnas ===== */
-.ed-sfx-grid { grid-template-columns: repeat(2, 1fr); align-content: start; }
-.ed-card.sfx-rect {
-  display: flex; align-items: center; gap: 7px; padding: 7px 8px; min-height: 44px;
+/* ===== SFX: nombre arriba, botones compactos abajo ===== */
+.ed-sfx-grid {
+  grid-template-columns: repeat(2, 1fr);
+  align-content: start;
+  grid-auto-rows: min-content;
 }
-.ed-card.sfx-rect .ed-play-round { width: 26px; height: 26px; flex-shrink: 0; }
-.ed-sfx-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.ed-sfx-name { font-size: 11px; color: var(--text); line-height: 1.15; overflow-wrap: anywhere; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.ed-sfx-sub { font-size: 9.5px; color: var(--accent-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ed-card.sfx-rect .ed-add-btn { width: 24px; height: 22px; flex-shrink: 0; }
+.ed-card.sfx-rect {
+  position: relative;
+  display: flex; flex-direction: column; align-items: stretch; align-self: start;
+  gap: 5px; padding: 7px 8px 6px; height: auto; min-height: min-content;
+}
+.ed-card.sfx-rect audio { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
+.ed-sfx-name {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; word-break: break-word; white-space: normal;
+  font-size: 12.5px; font-weight: 600; color: var(--text); line-height: 1.3;
+  flex: 0 0 auto; min-height: 1.3em;
+}
+.ed-sfx-row { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 0 0 auto; height: 28px; }
+.ed-card.sfx-rect .ed-play-round {
+  width: 28px; height: 28px; flex-shrink: 0; background: var(--accent); color: #fff;
+}
+.ed-sfx-sub { flex: 1; min-width: 0; font-size: 10px; color: var(--accent-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ed-card.sfx-rect .ed-fav-btn,
+.ed-card.sfx-rect .ed-add-btn { width: 22px; height: 22px; flex-shrink: 0; padding: 0; }
 
 /* Herramientas de encuadre de texto (panel de estilo de pista) */
 .ed-frame-tools { display: flex; align-items: center; gap: 6px; }

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Icon from '../../components/Icon'
+import ConfirmModal from '../../components/ConfirmModal'
 import { fmt } from '../../lib/utils'
 import { getTimeline, saveTimeline } from '../../services/api'
 import { clamp, clampCenter, frameAt } from '../../lib/panning'
@@ -8,11 +9,14 @@ import { applyThemeToStyle } from '../../lib/textKaraoke'
 import {
   uid, FORMATS, mediaUrl, defaultTracks, newReframe, withKfIds,
   makeClip, makeTextClip, clipDur, clipEnd, clipPlaybackMuted,
+  canCaptionClip, removeTrack, shouldConfirmTrackDelete,
 } from './editorModel'
 import { applyFrame, disableOverlay, enableOverlay, isOverlay, newTransform, videosAt } from '../../lib/clipLayout'
 import { drawComposite, drawMainView } from './render/canvas'
 import { useExportJob } from './hooks/useExportJob'
 import { useSubtitles } from './hooks/useSubtitles'
+import { useFavorites } from './hooks/useFavorites'
+import { snapshotTextStyle } from '../../lib/favorites'
 import { createMainDownHandler, createResultDownHandler } from './interactions'
 import EdMaterial from './EdMaterial'
 import EdTimeline from './EdTimeline'
@@ -43,6 +47,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   const [rowH, setRowH] = useState(52)
 
   const [ctxMenu, setCtxMenu] = useState(null)      // { x, y, clip }
+  const [trackToDelete, setTrackToDelete] = useState(null)
   const [dragInfo, setDragInfo] = useState(null)    // { kind, duration, name }
   const [framingMode, setFramingMode] = useState(null) // { trackId, x, y, w } o null
   const [builder, setBuilder] = useState(null)
@@ -330,6 +335,23 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     const id = addTrack('text')
     setSelClipId(null); setSelKfId(null); setSelTrackId(id)
   }
+  function applyRemoveTrack(trackId) {
+    const next = removeTrack(tracksRef.current, clipsRef.current, trackId)
+    setTracks(next.tracks)
+    setClips(next.clips)
+    if (selTrackId === trackId) setSelTrackId(next.tracks[0]?.id || null)
+    if (selClipId && !next.clips.some((c) => c.id === selClipId)) {
+      setSelClipId(null)
+      setSelKfId(null)
+    }
+    if (framingMode?.trackId === trackId) setFramingMode(null)
+    setTrackToDelete(null)
+  }
+  function requestDeleteTrack(track) {
+    if (!track) return
+    if (shouldConfirmTrackDelete(clipsRef.current, track.id)) setTrackToDelete(track)
+    else applyRemoveTrack(track.id)
+  }
   function selectTrack(id) { setSelTrackId(id); setSelClipId(null); setSelKfId(null); setFramingMode(null) }
 
   // --- Encuadres / keyframes ---
@@ -540,6 +562,20 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     }))
   }
 
+  function applyTextFavorite(item) {
+    const st = snapshotTextStyle(item?.style)
+    if (selectedClip?.kind === 'text') {
+      setClips((prev) => prev.map((c) => (c.id === selectedClip.id ? { ...c, style: st } : c)))
+      return
+    }
+    if (selTrackObj?.kind === 'text') {
+      setTracks((prev) => prev.map((t) => (t.id === selTrackObj.id ? { ...t, style: st } : t)))
+      setClips((prev) => prev.map((c) => (
+        c.kind === 'text' && c.track_id === selTrackObj.id ? { ...c, style: { ...st } } : c
+      )))
+    }
+  }
+
   // --- Export ---
   // Para el export, el texto se ajusta a su caja (wrap) antes de renderizar.
   function exportPayload() {
@@ -551,8 +587,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
 
   // --- Subtítulos ---
   const { subJob, setSubJob, requestSubtitles } = useSubtitles(project.id, {
-    tracksRef, ensureTextTrack, setClips, setCtxMenu,
+    tracksRef, ensureTextTrack, setClips, setCtxMenu, onChange,
   })
+  const fav = useFavorites(project.id)
 
   // --- Arrastrar en el Main: mover texto o reencuadrar ---
   const onMainDown = createMainDownHandler({
@@ -617,6 +654,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
           onBack={onBack}
           onOpenVideo={onOpenVideo}
           onOpenAudio={onOpenAudio}
+          fav={fav}
         />
 
         {/* MAIN: vídeo original + encuadre */}
@@ -766,6 +804,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
           onAddKf={addKeyframeAtPlayhead}
           onDeleteKf={deleteSelectedKeyframe}
           onContextClip={(e, clip) => { e.preventDefault(); setSelClipId(clip.id); setCtxMenu({ x: e.clientX, y: e.clientY, clip }) }}
+          onContextTrack={(_e, track) => requestDeleteTrack(track)}
         />
         {isTextSel ? (
           <EdText mode="segment" clip={selectedClip} style={selectedClip.style}
@@ -774,15 +813,23 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             onApplyPreset={(p) => applyPreset(selectedClip.id, p)}
             onChangeDur={(d) => mutateClip(selectedClip.id, { out_point: +(selectedClip.in_point + d).toFixed(3), source_duration: +(selectedClip.in_point + d).toFixed(3) })}
             onApplyAsGlobalTemplate={() => applyGlobalTemplate(selectedClip)}
+            textFavorites={fav.favs.textStyles}
+            onSaveFavorite={(st) => fav.saveTextStyle(st)}
+            onApplyFavorite={applyTextFavorite}
+            onDeleteFavorite={(id) => fav.removeTextStyle(id)}
           />
         ) : isTextTrackSel ? (
-          <EdText mode="track" style={selTrackObj.style} trackName={selTrackObj.name}
+          <EdText mode="track" style={selTrackObj.style}
             onChangeStyle={(patch) => changeTrackStyle(selTrackObj.id, patch)}
             onApplyPreset={(p) => applyTrackPreset(selTrackObj.id, p)}
             framing={!!framingMode && framingMode.trackId === selTrackObj.id}
             onStartFraming={() => startFraming(selTrackObj)}
             onSaveFraming={saveFraming}
             onCancelFraming={cancelFraming}
+            textFavorites={fav.favs.textStyles}
+            onSaveFavorite={(st) => fav.saveTextStyle(st)}
+            onApplyFavorite={applyTextFavorite}
+            onDeleteFavorite={(id) => fav.removeTextStyle(id)}
           />
         ) : (
           <EdCrops
@@ -803,8 +850,17 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
         <>
           <div className="ed-ctx-backdrop" onPointerDown={() => setCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null) }} />
           <AnchoredMenu className="ed-ctx-menu" x={ctxMenu.x} y={ctxMenu.y}>
-            {(ctxMenu.clip.asset_kind === 'audios' || ctxMenu.clip.asset_kind === 'sfx') && (
-              <button onClick={() => requestSubtitles(ctxMenu.clip)}><Icon name="subtitles" size={15} /> Generar subtítulos</button>
+            {(ctxMenu.clip.asset_kind === 'sfx' || ctxMenu.clip.asset_kind === 'audios') && (
+              <button onClick={() => { fav.toggleClipFav(ctxMenu.clip); setCtxMenu(null) }}>
+                <Icon name={fav.isClipFav(ctxMenu.clip) ? 'star' : 'star_border'} size={15} />
+                {fav.isClipFav(ctxMenu.clip) ? 'Quitar de favoritos' : 'Favorito'}
+              </button>
+            )}
+            {canCaptionClip(ctxMenu.clip) && (
+              <button onClick={() => requestSubtitles(ctxMenu.clip)}>
+                <Icon name={ctxMenu.clip.kind === 'video' ? 'notes' : 'subtitles'} size={15} />
+                {ctxMenu.clip.kind === 'video' ? 'Generar transcripción' : 'Generar subtítulos'}
+              </button>
             )}
             {ctxMenu.clip.kind === 'text' && (
               <button onClick={() => { applyGlobalTemplate(ctxMenu.clip); setCtxMenu(null) }}>
@@ -819,7 +875,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
 
       {/* Progreso de subtítulos */}
       {subJob && (subJob.status === 'pending' || subJob.status === 'running') && (
-        <div className="ed-sub-toast"><Icon name="subtitles" size={16} /> {subJob.message || 'Generando subtítulos…'}</div>
+        <div className="ed-sub-toast"><Icon name="subtitles" size={16} /> {subJob.message || (subJob.srcClip?.kind === 'video' ? 'Transcribiendo…' : 'Generando subtítulos…')}</div>
       )}
       {subJob?.status === 'error' && (
         <div className="ed-sub-toast error" onClick={() => setSubJob(null)}>⚠️ {subJob.error}</div>
@@ -839,6 +895,17 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
           onChange={onChange}
         />
       )}
+
+      <ConfirmModal
+        open={!!trackToDelete}
+        title={`¿Eliminar la pista ${trackToDelete?.name || ''}?`}
+        message={trackToDelete
+          ? `Se borrarán los ${clips.filter((c) => c.track_id === trackToDelete.id).length} clips de esta línea.`
+          : ''}
+        confirmText="Eliminar pista"
+        onConfirm={() => applyRemoveTrack(trackToDelete.id)}
+        onCancel={() => setTrackToDelete(null)}
+      />
     </div>
   )
 }

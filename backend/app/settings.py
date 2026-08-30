@@ -14,15 +14,29 @@ _FILE = config.DATA_DIR / "settings.json"
 
 DEFAULTS = {
     "tts": {"voice": "ef_dora", "speed": 1.0},
+    "favorites": {"sfx": [], "audios": [], "textStyles": []},
 }
+
+
+def _merge_favorites(raw) -> dict:
+    base = {"sfx": [], "audios": [], "textStyles": []}
+    if not isinstance(raw, dict):
+        return base
+    return {
+        "sfx": [str(x) for x in (raw.get("sfx") or [])],
+        "audios": [str(x) for x in (raw.get("audios") or [])],
+        "textStyles": list(raw.get("textStyles") or []),
+    }
 
 
 def load() -> dict:
     if not _FILE.exists():
-        return dict(DEFAULTS)
+        return {"tts": dict(DEFAULTS["tts"]), "favorites": _merge_favorites(None)}
     try:
         data = json.loads(_FILE.read_text(encoding="utf-8"))
-        return {**DEFAULTS, **data}
+        out = {**DEFAULTS, **data}
+        out["favorites"] = _merge_favorites(out.get("favorites"))
+        return out
     except Exception:
         return dict(DEFAULTS)
 

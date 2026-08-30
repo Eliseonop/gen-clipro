@@ -17,6 +17,42 @@ export function clipPlaybackMuted(clip, track) {
   return !!(track?.muted || clip?.muted)
 }
 
+/** Pista con clips: hay que confirmar. Vacía: se borra al momento. */
+export function shouldConfirmTrackDelete(clips, trackId) {
+  return (clips || []).some((c) => c.track_id === trackId)
+}
+
+export function removeTrack(tracks, clips, trackId) {
+  return {
+    tracks: (tracks || []).filter((t) => t.id !== trackId),
+    clips: (clips || []).filter((c) => c.track_id !== trackId),
+  }
+}
+
+/** Vídeo de biblioteca o audio/sfx: se puede transcribir a pista de texto. */
+export function canCaptionClip(clip) {
+  if (!clip || clip.kind === 'text') return false
+  if (clip.asset_kind === 'audios' || clip.asset_kind === 'sfx') return true
+  return clip.kind === 'video' && !!(clip.asset_id || clip.index != null)
+}
+
+/** Segmentos del Whisper → clips de texto en la timeline, recortados al tramo del clip. */
+export function textClipsFromTranscript(src, segments, trackId, style) {
+  const clipLen = src.out_point - src.in_point
+  const news = []
+  for (const s of segments || []) {
+    const ls = s.start - src.in_point
+    const le = s.end - src.in_point
+    if (le <= 0 || ls >= clipLen) continue
+    const start = src.start + Math.max(0, ls)
+    const end = src.start + Math.min(clipLen, le)
+    const text = (s.text || '').trim()
+    if (!text) continue
+    news.push(makeTextClip(trackId, start, Math.max(0.4, end - start), text, style))
+  }
+  return news
+}
+
 // Orden en pantalla: texto (arriba), luego vídeo (capa superior arriba), luego audio.
 export function displayTracks(tracks) {
   const txt = tracks.filter((t) => t.kind === 'text')

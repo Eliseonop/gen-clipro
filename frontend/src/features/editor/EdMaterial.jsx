@@ -1,14 +1,17 @@
 import { useState, useEffect, useCallback } from 'react'
 import Icon from '../../components/Icon'
 import { fmt } from '../../lib/utils'
+import { FAV_CAT } from '../../lib/favorites'
 import { listSfx, setSfxFolder, pickFolder } from '../../services/api'
 import MaterialClipGrid, { dragPayload, useToggle, useExclusiveMedia, Empty } from './MaterialClipGrid'
 
 // Panel izquierdo (biblioteca): Video | Audio | Sound Effects.
-export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenVideo, onOpenAudio }) {
+export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenVideo, onOpenAudio, fav }) {
   const [tab, setTab] = useState('video')
+  const [audioFavOnly, setAudioFavOnly] = useState(false)
   const clips = project.clips || []
   const audios = project.audios || []
+  const shownAudios = audioFavOnly ? audios.filter((a) => fav?.isAudioFav(a.id)) : audios
   const onPlayMedia = useExclusiveMedia()
   const di = onDragInfo || (() => {})
 
@@ -53,18 +56,53 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
 
       {tab === 'audio' && (
         <div className="ed-mat-list">
-          {audios.length === 0
-            ? <Empty text="Sin audios. Pulsa Audio para generar narración." />
-            : audios.map((a) => <AudioCard key={a.id} audio={a} onAdd={() => onAdd('audios', a)} onPlay={onPlayMedia} di={di} />)}
+          <div className="ed-sfx-cat-row">
+            <span className="ed-fav-row-label">Audios</span>
+            <button
+              type="button"
+              className={`ed-fav-filter ${audioFavOnly ? 'on' : ''}`}
+              title="Mostrar favoritos"
+              onClick={() => setAudioFavOnly((v) => !v)}
+            >
+              <Icon name={audioFavOnly ? 'star' : 'star_border'} size={16} />
+            </button>
+          </div>
+          {shownAudios.length === 0
+            ? <Empty text={audioFavOnly ? 'Sin audios favoritos.' : 'Sin audios. Pulsa Audio para generar narración.'} />
+            : shownAudios.map((a) => (
+              <AudioCard
+                key={a.id}
+                audio={a}
+                onAdd={() => onAdd('audios', a)}
+                onPlay={onPlayMedia}
+                di={di}
+                favOn={!!fav?.isAudioFav(a.id)}
+                onToggleFav={() => fav?.toggleAudio(a.id)}
+              />
+            ))}
         </div>
       )}
 
-      {tab === 'sfx' && <SfxTab onAdd={onAdd} onPlay={onPlayMedia} di={di} />}
+      {tab === 'sfx' && <SfxTab onAdd={onAdd} onPlay={onPlayMedia} di={di} fav={fav} />}
     </div>
   )
 }
 
-function SfxCard({ sfx, onAdd, onPlay, di }) {
+function FavStar({ on, onToggle, title }) {
+  return (
+    <button
+      type="button"
+      className={`ed-fav-btn ${on ? 'on' : ''}`}
+      title={title || (on ? 'Quitar de favoritos' : 'Favorito')}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => { e.stopPropagation(); onToggle?.() }}
+    >
+      <Icon name={on ? 'star' : 'star_border'} size={15} />
+    </button>
+  )
+}
+
+function SfxCard({ sfx, onAdd, onPlay, di, favOn, onToggleFav }) {
   const { ref, playing, setPlaying, toggle } = useToggle(onPlay)
   const [dur, setDur] = useState(null)
   return (
@@ -75,21 +113,22 @@ function SfxCard({ sfx, onAdd, onPlay, di }) {
       <audio ref={ref} src={sfx.url} preload="none"
         onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)}
         onLoadedMetadata={(e) => setDur(e.target.duration)} />
-      <button className="ed-play-round" onClick={toggle} title={playing ? 'Pausa' : 'Reproducir'}>
-        <Icon name={playing ? 'pause' : 'play_arrow'} size={16} />
-      </button>
-      <div className="ed-sfx-info">
-        <span className="ed-sfx-name" title={sfx.name}>{sfx.name}</span>
+      <span className="ed-sfx-name" title={sfx.name}>{sfx.name}</span>
+      <div className="ed-sfx-row">
+        <button className="ed-play-round" onClick={toggle} title={playing ? 'Pausa' : 'Reproducir'}>
+          <Icon name={playing ? 'pause' : 'play_arrow'} size={18} />
+        </button>
         <span className="ed-sfx-sub">{sfx.category}{dur != null ? ` · ${fmt(dur)}` : ''}</span>
+        <FavStar on={favOn} onToggle={onToggleFav} />
+        <button className="ed-add-btn" onClick={(e) => { e.stopPropagation(); onAdd() }} title="Agregar al proyecto">
+          <Icon name="add" size={15} />
+        </button>
       </div>
-      <button className="ed-add-btn" onClick={(e) => { e.stopPropagation(); onAdd() }} title="Agregar al proyecto">
-        <Icon name="add" size={15} />
-      </button>
     </div>
   )
 }
 
-function AudioCard({ audio, onAdd, onPlay, di }) {
+function AudioCard({ audio, onAdd, onPlay, di, favOn, onToggleFav }) {
   const { ref, playing, toggle, setPlaying } = useToggle(onPlay)
   return (
     <div className="ed-card audio row"
@@ -103,12 +142,13 @@ function AudioCard({ audio, onAdd, onPlay, di }) {
       </button>
       <span className="ed-card-name" title={audio.filename}>{audio.label || audio.filename}</span>
       <span className="ed-card-dur">{fmt(audio.duration || 0)}</span>
+      <FavStar on={favOn} onToggle={onToggleFav} />
       <button className="ed-add-btn" onClick={onAdd} title="Agregar al proyecto"><Icon name="add" size={15} /></button>
     </div>
   )
 }
 
-function SfxTab({ onAdd, onPlay, di }) {
+function SfxTab({ onAdd, onPlay, di, fav }) {
   const [q, setQ] = useState('')
   const [data, setData] = useState({ available: true, items: [], categories: [], total: 0 })
   const [category, setCategory] = useState('')
@@ -135,6 +175,11 @@ function SfxTab({ onAdd, onPlay, di }) {
     setBusy(false)
   }
 
+  async function toggleSfxFav(id) {
+    await fav?.toggleSfx(id)
+    await refresh(q, category)
+  }
+
   if (!loading && !data.available) {
     return (
       <div className="ed-sfx">
@@ -148,6 +193,9 @@ function SfxTab({ onAdd, onPlay, di }) {
     )
   }
 
+  const cats = data.categories || []
+  const hasFavOption = cats.some((c) => c.id === FAV_CAT)
+
   return (
     <div className="ed-sfx">
       <div className="ed-sfx-search">
@@ -155,15 +203,36 @@ function SfxTab({ onAdd, onPlay, di }) {
         <input placeholder="Buscar (explosion, laugh…)" value={q} onChange={(e) => setQ(e.target.value)} />
         {q && <button className="icon-btn" onClick={() => setQ('')}><Icon name="close" size={15} /></button>}
       </div>
-      <select className="select mini ed-sfx-cat" value={category} onChange={(e) => setCategory(e.target.value)}>
-        <option value="">Todas las categorías</option>
-        {data.categories.map((c) => <option key={c.id} value={c.id}>{c.label} ({c.count})</option>)}
-      </select>
+      <div className="ed-sfx-cat-row">
+        <select className="select mini ed-sfx-cat" value={category} onChange={(e) => setCategory(e.target.value)}>
+          <option value="">Todas las categorías</option>
+          {!hasFavOption && <option value={FAV_CAT}>Favoritos</option>}
+          {cats.map((c) => <option key={c.id} value={c.id}>{c.label}{c.count != null ? ` (${c.count})` : ''}</option>)}
+        </select>
+        <button
+          type="button"
+          className={`ed-fav-filter ${category === FAV_CAT ? 'on' : ''}`}
+          title="Mostrar favoritos"
+          onClick={() => setCategory((c) => (c === FAV_CAT ? '' : FAV_CAT))}
+        >
+          <Icon name={category === FAV_CAT ? 'star' : 'star_border'} size={16} />
+        </button>
+      </div>
 
       <div className="ed-mat-grid ed-sfx-grid">
         {loading ? <Empty text="Cargando…" />
           : data.items.length === 0 ? <Empty text="Sin resultados." />
-            : data.items.map((s) => <SfxCard key={s.id} sfx={s} onAdd={() => onAdd('sfx', s)} onPlay={onPlay} di={di} />)}
+            : data.items.map((s) => (
+              <SfxCard
+                key={s.id}
+                sfx={s}
+                onAdd={() => onAdd('sfx', s)}
+                onPlay={onPlay}
+                di={di}
+                favOn={!!fav?.isSfxFav(s.id)}
+                onToggleFav={() => toggleSfxFav(s.id)}
+              />
+            ))}
       </div>
       {!loading && <div className="ed-sfx-count">{data.total} sonidos</div>}
     </div>

@@ -13,7 +13,7 @@ export default function EdTimeline({
   tracks, clips, pps, setPps, duration, playhead, rowH, setRowH,
   selectedClipId, selectedTrackId, selectedClip, selKfId, dragInfo,
   onSeek, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onSplit, onDeleteClip,
-  onDropAsset, onTrackToggle, onTrackCompact, onAddTrack, onAddTextTrack, onMoveKeyframe, onSelectKf, onAddKf, onDeleteKf, onContextClip,
+  onDropAsset, onTrackToggle, onTrackCompact, onAddTrack, onAddTextTrack, onMoveKeyframe, onSelectKf, onAddKf, onDeleteKf, onContextClip, onContextTrack,
 }) {
   const lanesRef = useRef(null)
   const bodyRef = useRef(null)
@@ -208,7 +208,8 @@ export default function EdTimeline({
           {rows.map((t) => (
             <div key={t.id}
               className={`ed-track-head ${t.kind} ${selectedTrackId === t.id ? 'sel' : ''} ${dragKind && laneKindFor(dragKind) === t.kind ? 'drop-ok' : ''}`}
-              onClick={() => onSelectTrack(t.id)}>
+              onClick={() => onSelectTrack(t.id)}
+              onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextTrack?.(e, t) }}>
               <span className="ed-th-name">{t.name}</span>
               <span className="ed-th-btns">
                 <button className={`ed-th-btn ${t.hidden ? 'off' : ''}`} title="Visibilidad"
