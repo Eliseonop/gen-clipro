@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { FONTS, cssFont, defaultTextStyle, TEXT_PRESETS } from './textstyles.js'
+import { FONTS, cssFont, defaultTextStyle, TEXT_PRESETS, effectiveTextStyle } from './textstyles.js'
 import { SUBTITLE_THEMES } from './subtitleThemes.js'
 
 assert.ok(FONTS.includes('Anton'))
@@ -24,5 +24,14 @@ const shorts = SUBTITLE_THEMES.find((t) => t.style.font === 'Anton')
 assert.ok(shorts, 'algún tema debe poder usar Anton')
 assert.equal(shorts.style.color, '#ffffff')
 assert.ok((shorts.style.border_width || 0) >= 5)
+
+// Herencia pista→texto (espejo del backend effective_text_style).
+assert.deepEqual(
+  effectiveTextStyle({ font: 'Anton', color: '#fff', max_words: 6 }, { color: '#f00' }),
+  { font: 'Anton', color: '#f00', max_words: 6 },   // clip override; resto heredado
+)
+assert.deepEqual(effectiveTextStyle(null, null), {})
+assert.deepEqual(effectiveTextStyle({ font: 'Anton' }, null), { font: 'Anton' })
+assert.equal(effectiveTextStyle({ opacity: 0.8 }, {}).opacity, 0.8)   // opacidad heredada
 
 console.log('text fonts ok')

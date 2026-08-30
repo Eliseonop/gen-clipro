@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import {
-  activeWordIndex, splitCaptionWords, applyThemeToStyle,
+  activeWordIndex, activeWordIndexFromWords, splitCaptionWords, applyThemeToStyle,
   wordFxList, hasWordFx, toggleWordFx, karaokeOn, chunkCaptionText, styleOpacity, wordOpacity,
 } from './textKaraoke.js'
 import { SUBTITLE_THEMES, themeById } from './subtitleThemes.js'
@@ -81,5 +81,15 @@ assert.equal(keepPos.font, karaoke.style.font)
 const classic = themeById('classic')
 assert.equal(classic.style.inactive_opacity, 0.55)
 assert.equal(classic.style.active_opacity, 1)
+
+// activeWordIndexFromWords: usa el timing real (relativo al clip).
+const rw = [{ start: 0, end: 0.4 }, { start: 2, end: 2.5 }, { start: 3, end: 4 }]
+assert.equal(activeWordIndexFromWords(rw, -1), 0)    // antes de la 1ª → la primera
+assert.equal(activeWordIndexFromWords(rw, 0), 0)
+assert.equal(activeWordIndexFromWords(rw, 1.9), 0)   // sigue activa hasta que empieza la 2ª
+assert.equal(activeWordIndexFromWords(rw, 2), 1)
+assert.equal(activeWordIndexFromWords(rw, 3.5), 2)
+assert.equal(activeWordIndexFromWords(rw, 99), 2)    // más allá → la última
+assert.equal(activeWordIndexFromWords([], 1), -1)
 
 console.log('textKaraoke ok')

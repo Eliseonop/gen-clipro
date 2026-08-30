@@ -54,39 +54,91 @@ export function canCaptionClip(clip) {
   return clip.kind === 'video' && !!(clip.asset_id || clip.index != null)
 }
 
-/** Segmentos del Whisper → clips de texto en la timeline, recortados al tramo del clip. */
-export function textClipsFromTranscript(src, segments, trackId, style) {
+/** Palabras de un segmento mapeadas a tiempos RELATIVOS al inicio del text clip.
+ *  Conserva todas las palabras (no filtra) para que el conteo cuadre con el texto;
+ *  recorta cada tiempo a [0, dur] sin perder ninguna. */
+function relSegmentWords(segment, src, clipStart, dur) {
+  const ws = Array.isArray(segment?.words) ? segment.words : []
+  if (!ws.length) return []
+  return ws.map((w) => {
+    const tlStart = src.start + ((w.start ?? 0) - src.in_point)
+    const tlEnd = src.start + ((w.end ?? w.start ?? 0) - src.in_point)
+    const rs = Math.min(Math.max(0, tlStart - clipStart), dur)
+    const re = Math.min(Math.max(0, tlEnd - clipStart), dur)
+    const out = { text: (w.text || '').trim(), start: +rs.toFixed(3), end: +Math.max(rs, re).toFixed(3) }
+    if (w.prob != null) out.prob = w.prob
+    return out
+  })
+}
+
+/** Segmentos del Whisper → clips de texto en la timeline, recortados al tramo del clip.
+ *  Si el segmento trae ``words[]`` (timing real), cada fragmento hereda solo sus
+ *  palabras (relativas al fragmento) y conserva ``origin`` hacia su transcripción. */
+export function textClipsFromTranscript(src, segments, trackId, style, transcript = null) {
   const clipLen = src.out_point - src.in_point
   const news = []
-  for (const s of segments || []) {
+  ;(segments || []).forEach((s, segIndex) => {
     const ls = s.start - src.in_point
     const le = s.end - src.in_point
-    if (le <= 0 || ls >= clipLen) continue
+    if (le <= 0 || ls >= clipLen) return
     const start = src.start + Math.max(0, ls)
     const end = src.start + Math.min(clipLen, le)
     const text = (s.text || '').trim()
-    if (!text) continue
+    if (!text) return
     const made = makeTextClip(trackId, start, Math.max(0.4, end - start), text, style)
+    made.words = relSegmentWords(s, src, made.start, clipDur(made))
+    made.origin = {
+      transcript_id: transcript?.id ?? null,
+      segment_index: s.index ?? segIndex,
+      source_range: { start: s.start, end: s.end },
+      word_range: [0, splitCaptionWords(text).length],
+    }
     news.push(...splitClipByMaxWords(made, style?.max_words ?? 8))
-  }
+  })
   return news
 }
 
-/** Parte un clip de texto en cuadros consecutivos de como máximo `maxWords` palabras. */
+/** Parte un clip de texto en cuadros consecutivos de como máximo `maxWords` palabras.
+ *
+ *  Las palabras se asignan a cada fragmento por su ÍNDICE en la secuencia (los
+ *  cortes caen ENTRE palabras, nunca a través de una), así ninguna se pierde ni
+ *  se duplica. Con ``words[]`` reales cuyo conteo cuadra con el texto, cada
+ *  fragmento toma su rebanada de palabras y su tiempo sale de esas marcas
+ *  (relativas al fragmento). Sin ``words[]`` → reparto uniforme (igual que antes). */
 export function splitClipByMaxWords(clip, maxWords) {
   const chunks = chunkCaptionText(clip?.text || '', maxWords)
   if (chunks.length <= 1) return clip ? [clip] : []
   const total = splitCaptionWords(clip.text || '').length || 1
   const dur = clipDur(clip)
-  const origin = clip.start
+  const base = clip.start
+  const hasWords = Array.isArray(clip.words) && clip.words.length === total
+  const originStart = clip.origin?.word_range?.[0] ?? 0
   let acc = 0
   return chunks.map((text, i) => {
     const n = splitCaptionWords(text).length
-    const start = origin + dur * (acc / total)
-    acc += n
-    const end = i === chunks.length - 1 ? origin + dur : origin + dur * (acc / total)
-    const d = Math.max(0.05, end - start)
-    return {
+    const from = acc
+    const to = acc + n
+    acc = to
+    let start
+    let d
+    let words = []
+    if (hasWords) {
+      const slice = clip.words.slice(from, to)
+      const w0 = slice[0]?.start ?? dur * (from / total)
+      const wN = slice[slice.length - 1]?.end ?? dur * (to / total)
+      start = base + w0
+      d = Math.max(0.05, wN - w0)
+      words = slice.map((w) => {
+        const out = { text: w.text, start: +Math.max(0, w.start - w0).toFixed(3), end: +Math.max(0, w.end - w0).toFixed(3) }
+        if (w.prob != null) out.prob = w.prob
+        return out
+      })
+    } else {
+      start = base + dur * (from / total)
+      const end = i === chunks.length - 1 ? base + dur : base + dur * (to / total)
+      d = Math.max(0.05, end - start)
+    }
+    const frag = {
       ...clip,
       id: uid('c'),
       asset_id: uid('t'),
@@ -97,7 +149,12 @@ export function splitClipByMaxWords(clip, maxWords) {
       out_point: +d.toFixed(3),
       source_duration: +d.toFixed(3),
       style: { ...(clip.style || {}) },
+      words,
     }
+    if (clip.origin) {
+      frag.origin = { ...clip.origin, fragment_index: i, word_range: [originStart + from, originStart + to] }
+    }
+    return frag
   })
 }
 
@@ -282,5 +339,6 @@ export function makeTextClip(trackId, start, dur, text, style) {
     filename: '', name: (text || 'Texto').slice(0, 22), start: +Math.max(0, start).toFixed(3),
     in_point: 0, out_point: +Math.max(0.5, dur).toFixed(3), source_duration: +Math.max(0.5, dur).toFixed(3),
     volume: 1, muted: false, reframe: null, text: text || 'Texto', style: { ...(style || defaultTextStyle()) },
+    words: [],
   }
 }

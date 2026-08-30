@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config
+from . import config, migrations
 from .schemas import AudioInfo, ClipInfo, Project, Transcript
 
 _lock = threading.Lock()
@@ -39,14 +39,21 @@ def _save(data: dict) -> None:
     tmp.replace(_FILE)   # reemplazo atómico
 
 
+def _project_from_dict(p: dict) -> Project:
+    """Construye un Project migrando su timeline al schema actual (lazy)."""
+    if p.get("timeline"):
+        p = {**p, "timeline": migrations.migrate_timeline(p["timeline"])}
+    return Project(**p)
+
+
 def list_projects() -> list[Project]:
-    return [Project(**p) for p in _load()["projects"]]
+    return [_project_from_dict(p) for p in _load()["projects"]]
 
 
 def get_project(pid: str) -> Project | None:
     for p in _load()["projects"]:
         if p["id"] == pid:
-            return Project(**p)
+            return _project_from_dict(p)
     return None
 
 
