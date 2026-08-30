@@ -231,13 +231,14 @@ class ClipTranscribeRequest(BaseModel):
 # --- Editor de vídeo (timeline multipista) -----------------------------
 
 class TimelineTrack(BaseModel):
-    """Una pista del editor (V1, V2… / A1, A2…)."""
+    """Una pista del editor (V1, V2… / A1, A2… / T1)."""
     id: str
-    kind: str                     # "video" | "audio"
+    kind: str                     # "video" | "audio" | "text"
     name: str
     hidden: bool = False
     muted: bool = False
     locked: bool = False
+    style: Optional[dict] = None  # plantilla de la pista de texto (tema, fuente, karaoke…)
 
 
 class TimelineClip(BaseModel):

@@ -28,7 +28,7 @@ from .diagnostics import timed
 from .recipe_layout import contain_scale_filter, dual_slot_wh, join_dual_filters, split_orientation_for
 from .reframe_math import frame_at
 from .clip_audio import clip_mixes_audio
-from .schemas import Keyframe, Project, Reframe, Timeline, TimelineClip
+from .text_ass import ass_filter_path, build_ass
 
 ProgressCb = Callable[[float, str], None]
 
@@ -180,9 +180,15 @@ _FONTS = {
     "Arial": "arial.ttf", "Arial Black": "ariblk.ttf", "Impact": "impact.ttf",
     "Georgia": "georgia.ttf", "Verdana": "verdana.ttf", "Times New Roman": "times.ttf",
     "Courier New": "cour.ttf", "Comic Sans MS": "comic.ttf", "Trebuchet MS": "trebuc.ttf",
+    "Segoe UI": "segoeui.ttf", "Segoe UI Black": "seguibl.ttf", "Calibri": "calibri.ttf",
+    "Bahnschrift": "bahnschrift.ttf", "Tahoma": "tahoma.ttf", "Consolas": "consola.ttf",
 }
-_FONTS_BOLD = {"Arial": "arialbd.ttf", "Georgia": "georgiab.ttf", "Verdana": "verdanab.ttf",
-               "Times New Roman": "timesbd.ttf", "Courier New": "courbd.ttf", "Trebuchet MS": "trebucbd.ttf"}
+_FONTS_BOLD = {
+    "Arial": "arialbd.ttf", "Georgia": "georgiab.ttf", "Verdana": "verdanab.ttf",
+    "Times New Roman": "timesbd.ttf", "Courier New": "courbd.ttf", "Trebuchet MS": "trebucbd.ttf",
+    "Segoe UI": "segoeuib.ttf", "Calibri": "calibrib.ttf", "Tahoma": "tahomabd.ttf",
+    "Consolas": "consolab.ttf",
+}
 
 
 def _fontfile(name: str, bold: bool) -> str:
@@ -243,9 +249,9 @@ def _drawtext(clip: TimelineClip, W: int, H: int) -> str:
     if bw > 0:
         parts.append(f"borderw={bw}")
         parts.append(f"bordercolor={_color(st.get('border_color', '#000000'))}")
-    if st.get("shadow"):
-        parts.append("shadowx=2")
-        parts.append("shadowy=2")
+    if st.get("shadow") or st.get("glow"):
+        parts.append("shadowx=2" if st.get("shadow") and not st.get("glow") else "shadowx=0")
+        parts.append("shadowy=2" if st.get("shadow") and not st.get("glow") else "shadowy=0")
         parts.append(f"shadowcolor={_color(st.get('shadow_color', 'black@0.6'))}")
     bg = st.get("bg")
     if bg and bg != "none":
@@ -271,7 +277,8 @@ def _text_chain(timeline: Timeline, W: int, H: int, in_label: str) -> tuple[list
     return steps, last
 
 
-def build_command(project: Project, timeline: Timeline, out_path: Path) -> list[str]:
+def build_command(project: Project, timeline: Timeline, out_path: Path,
+                  ass_path: Optional[Path] = None) -> list[str]:
     """Construye la lista de argumentos de ffmpeg para renderizar la timeline."""
     W = int(timeline.width or config.OUTPUT_WIDTH)
     H = int(timeline.height or config.OUTPUT_HEIGHT)
@@ -369,8 +376,13 @@ def build_command(project: Project, timeline: Timeline, out_path: Path) -> list[
         n += 1
 
     # Texto / subtítulos por encima de todo el vídeo compuesto.
-    text_steps, last_label = _text_chain(timeline, W, H, last_label)
-    filt.extend(text_steps)
+    if ass_path is not None:
+        out = "txass"
+        filt.append(f"[{last_label}]ass='{ass_filter_path(str(ass_path))}'[{out}]")
+        last_label = out
+    else:
+        text_steps, last_label = _text_chain(timeline, W, H, last_label)
+        filt.extend(text_steps)
 
     filt.append(f"[{last_label}]format=yuv420p[vout]")
 
@@ -427,7 +439,16 @@ def render(project: Project, timeline: Timeline, out_path: Path,
     """Renderiza la timeline al archivo ``out_path`` y lo devuelve."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     on_progress(0.05, "Preparando la composición…")
-    cmd = build_command(project, timeline, out_path)
+    W = int(timeline.width or config.OUTPUT_WIDTH)
+    H = int(timeline.height or config.OUTPUT_HEIGHT)
+    W -= W % 2
+    H -= H % 2
+    texts = [c for c in timeline.clips if c.kind == "text" and (c.text or "").strip()]
+    ass_path = None
+    if texts:
+        ass_path = out_path.with_suffix(".ass")
+        ass_path.write_text(build_ass(timeline.clips, W, H), encoding="utf-8")
+    cmd = build_command(project, timeline, out_path, ass_path=ass_path)
     on_progress(0.15, "Renderizando el vídeo final con FFmpeg…")
     log.info("Export: %d clip(s), encoder=%s preset=%s crf=%s → %s",
              len(timeline.clips), "libx264", config.VIDEO_PRESET, config.VIDEO_CRF,

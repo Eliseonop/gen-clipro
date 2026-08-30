@@ -128,7 +128,7 @@ export function drawComposite(ctx, head, selClipId, env) {
     const activeText = head >= c.start - 0.02 && head < c.start + clipDur(c)
     if (!activeText) continue
     const isSel = c.id === selClipId
-    const r = drawTextClip(ctx, c, cw, ch, { selected: isSel })
+    const r = drawTextClip(ctx, c, cw, ch, { selected: isSel, time: head })
     if (isSel) selRender = r
   }
   if (overlayDestSel) drawTransformHandles(ctx, overlayDestSel)

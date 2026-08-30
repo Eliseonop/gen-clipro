@@ -3,7 +3,8 @@ import Icon from '../../components/Icon'
 import { fmt } from '../../lib/utils'
 import { getTimeline, saveTimeline } from '../../services/api'
 import { clamp, clampCenter, frameAt } from '../../lib/panning'
-import { defaultTextStyle, wrappedText } from '../../lib/textstyles'
+import { defaultTextStyle, subtitleStyle, wrappedText } from '../../lib/textstyles'
+import { applyThemeToStyle } from '../../lib/textKaraoke'
 import {
   uid, FORMATS, mediaUrl, defaultTracks, newReframe, withKfIds,
   makeClip, makeTextClip, clipDur, clipEnd, clipPlaybackMuted,
@@ -18,6 +19,7 @@ import EdTimeline from './EdTimeline'
 import EdCrops from './EdCrops'
 import EdText from './EdText'
 import ClipEditor from '../video/ClipEditor'
+import AnchoredMenu from '../../components/AnchoredMenu'
 import './editor.css'
 
 const AUDIO_DB_PRESETS = [-24, -18, -16, -14, -12, -10, -8]
@@ -314,7 +316,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     const n = (nums.length ? Math.max(...nums) : 0) + 1
     const id = `${prefix}${n}-${uid('')}`
     const nt = { id, kind, name: `${prefix}${n}`, hidden: false, muted: false, locked: false }
-    if (kind === 'text') nt.style = style || defaultTextStyle()
+    if (kind === 'text') nt.style = style || subtitleStyle()
     setTracks((prev) => {
       if (kind === 'video') {
         const lastVid = prev.map((t, i) => (t.kind === 'video' ? i : -1)).reduce((a, b) => Math.max(a, b), -1)
@@ -495,8 +497,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   function applyPreset(id, preset) {
     setClips((prev) => prev.map((c) => {
       if (c.id !== id) return c
-      const cur = c.style || {}
-      return { ...c, style: { ...preset.style, preset: preset.id, x: cur.x ?? preset.style.x, y: cur.y ?? preset.style.y, w: cur.w ?? preset.style.w } }
+      return { ...c, style: applyThemeToStyle(c.style, preset) }
     }))
   }
   // Estilo general de la pista: se aplica a la pista y a todos sus segmentos.
@@ -505,11 +506,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     setClips((prev) => prev.map((c) => (c.kind === 'text' && c.track_id === trackId ? { ...c, style: { ...(c.style || {}), ...patch } } : c)))
   }
   function applyTrackPreset(trackId, preset) {
-    setTracks((prev) => prev.map((t) => (t.id === trackId ? { ...t, style: { ...preset.style, preset: preset.id } } : t)))
+    setTracks((prev) => prev.map((t) => (t.id === trackId ? { ...t, style: applyThemeToStyle(t.style, preset) } : t)))
     setClips((prev) => prev.map((c) => {
       if (!(c.kind === 'text' && c.track_id === trackId)) return c
-      const cur = c.style || {}
-      return { ...c, style: { ...preset.style, preset: preset.id, x: cur.x, y: cur.y, w: cur.w } }
+      return { ...c, style: applyThemeToStyle(c.style, preset) }
     }))
   }
 
@@ -802,7 +802,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
       {ctxMenu && (
         <>
           <div className="ed-ctx-backdrop" onPointerDown={() => setCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null) }} />
-          <div className="ed-ctx-menu" style={{ left: ctxMenu.x, top: ctxMenu.y }}>
+          <AnchoredMenu className="ed-ctx-menu" x={ctxMenu.x} y={ctxMenu.y}>
             {(ctxMenu.clip.asset_kind === 'audios' || ctxMenu.clip.asset_kind === 'sfx') && (
               <button onClick={() => requestSubtitles(ctxMenu.clip)}><Icon name="subtitles" size={15} /> Generar subtítulos</button>
             )}
@@ -813,7 +813,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             )}
             <button onClick={() => { splitClip(ctxMenu.clip.id, playhead); setCtxMenu(null) }}><Icon name="content_cut" size={15} /> Dividir aquí</button>
             <button className="danger" onClick={() => { deleteClip(ctxMenu.clip.id); setCtxMenu(null) }}><Icon name="delete" size={15} /> Eliminar</button>
-          </div>
+          </AnchoredMenu>
         </>
       )}
 

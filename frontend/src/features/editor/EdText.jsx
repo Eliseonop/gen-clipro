@@ -1,22 +1,36 @@
 import Icon from '../../components/Icon'
+import FlipSelect from '../../components/FlipSelect'
 import { fmt } from '../../lib/utils'
-import { TEXT_PRESETS, FONTS, FONT_SIZES, FONT_SIZE_REF } from '../../lib/textstyles'
+import { FONTS, FONT_SIZES, FONT_SIZE_REF, cssFont } from '../../lib/textstyles'
+import { SUBTITLE_THEMES, WORD_FX_OPTIONS, BLOCK_APPEAR_OPTIONS } from '../../lib/subtitleThemes'
 
-// Convierte fracción interna → px (aproximado al tamaño predefinido más cercano)
 function sizeToNearestPx(size) {
   const px = Math.round((size ?? 0.009375) * FONT_SIZE_REF)
   return FONT_SIZES.reduce((a, b) => Math.abs(b - px) < Math.abs(a - px) ? b : a)
 }
 
-// Panel de propiedades de texto. mode='segment' edita un segmento (contenido,
-// posición, duración + estilo); mode='track' edita el estilo GENERAL de la pista.
+function themePreviewStyle(theme) {
+  const s = theme.style || {}
+  return {
+    fontFamily: cssFont(s.font),
+    fontWeight: s.bold ? 800 : 600,
+    color: s.color,
+    background: s.bg && s.bg !== 'none' ? s.bg : 'transparent',
+    textShadow: s.glow
+      ? `0 0 8px ${s.shadow_color || s.highlight_color}`
+      : s.border_width
+        ? `0 1px 0 ${s.border_color || '#000'}, 0 -1px 0 ${s.border_color || '#000'}, 1px 0 0 ${s.border_color || '#000'}, -1px 0 0 ${s.border_color || '#000'}`
+        : 'none',
+  }
+}
+
 export default function EdText({ mode = 'segment', clip, style, trackName, onChangeText, onChangeStyle, onApplyPreset, onChangeDur, onApplyAsGlobalTemplate, framing, onStartFraming, onSaveFraming, onCancelFraming }) {
   const st = style || {}
   const isTrack = mode === 'track'
   const set = (patch) => onChangeStyle(patch)
   const dur = clip ? clip.out_point - clip.in_point : 0
-
   const currentPx = sizeToNearestPx(st.size)
+  const themeId = st.theme || st.preset
 
   return (
     <div className="ed-text-panel">
@@ -59,75 +73,115 @@ export default function EdText({ mode = 'segment', clip, style, trackName, onCha
             placeholder="Escribe el texto…" onChange={(e) => onChangeText(e.target.value)} />
         )}
 
-        <div className="ed-text-presets">
-          {TEXT_PRESETS.map((p) => (
-            <button key={p.id} className={`ed-preset ${st.preset === p.id ? 'on' : ''}`}
-              onClick={() => onApplyPreset(p)} title={p.name}>{p.name}</button>
+        <div className="ed-theme-label">Temas</div>
+        <div className="ed-theme-grid">
+          {SUBTITLE_THEMES.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              className={`ed-theme-card ${themeId === t.id ? 'on' : ''}`}
+              onClick={() => onApplyPreset(t)}
+              title={t.name}
+            >
+              <span className="ed-theme-chip" style={themePreviewStyle(t)}>
+                <span className="idle">Aa</span>
+                <span className="hot" style={{ color: t.style.highlight_color }}>Aa</span>
+              </span>
+              <span className="ed-theme-name">{t.name}</span>
+            </button>
           ))}
         </div>
 
-        <div className="ed-text-row">
-          <select className="select mini" value={st.font || 'Arial'} onChange={(e) => set({ font: e.target.value })}>
-            {FONTS.map((f) => <option key={f} value={f}>{f}</option>)}
-          </select>
-          <select className="select mini" value={st.align || 'center'} onChange={(e) => set({ align: e.target.value })}>
-            <option value="left">◀</option><option value="center">■</option><option value="right">▶</option>
-          </select>
+        <div className="ed-text-dense five">
+          <label className="ed-mini" title="Tipo de letra">
+            <span>Fuente</span>
+            <FlipSelect className="mini" title={st.font || 'Arial'} value={st.font || 'Arial'}
+              options={FONTS.map((f) => ({ value: f, label: f }))} onChange={(v) => set({ font: v })} />
+          </label>
+          <label className="ed-mini" title="Tamaño">
+            <span>Px</span>
+            <FlipSelect className="mini" value={String(currentPx)}
+              options={FONT_SIZES.map((px) => ({ value: String(px), label: `${px}` }))}
+              onChange={(v) => set({ size: +(Number(v) / FONT_SIZE_REF).toFixed(6) })} />
+          </label>
+          <label className="ed-mini" title="Alineación">
+            <span>Alin</span>
+            <FlipSelect className="mini" value={st.align || 'center'}
+              options={[{ value: 'left', label: '◀' }, { value: 'center', label: '■' }, { value: 'right', label: '▶' }]}
+              onChange={(v) => set({ align: v })} />
+          </label>
+          <label className="ed-mini" title="Palabra activa">
+            <span>Activa</span>
+            <FlipSelect className="mini" value={st.word_fx || 'none'} options={WORD_FX_OPTIONS}
+              onChange={(v) => set({ word_fx: v })} />
+          </label>
+          <label className="ed-mini" title="Entrada del bloque">
+            <span>In</span>
+            <FlipSelect className="mini" value={st.block_appear || 'none'} options={BLOCK_APPEAR_OPTIONS}
+              onChange={(v) => set({ block_appear: v })} />
+          </label>
         </div>
 
-        <label className="ed-text-field"><span>Tamaño</span>
-          <select
-            className="select mini"
-            value={currentPx}
-            onChange={(e) => set({ size: +(Number(e.target.value) / FONT_SIZE_REF).toFixed(6) })}
-            style={{ width: '100%' }}
-          >
-            {FONT_SIZES.map((px) => (
-              <option key={px} value={px}>{px} px</option>
-            ))}
-          </select>
-        </label>
-
-        <div className="ed-text-row">
-          <label className="ed-color"><span>Color</span>
+        <div className="ed-text-dense five">
+          <label className="ed-mini ed-swatch" title="Color del texto">
+            <span>Texto</span>
             <input type="color" value={st.color || '#ffffff'} onChange={(e) => set({ color: e.target.value })} />
           </label>
-          <label className="ed-color"><span>Borde</span>
+          <label className="ed-mini ed-swatch" title="Color de la palabra activa">
+            <span>Resalte</span>
+            <input type="color" value={st.highlight_color || '#ffe566'} onChange={(e) => set({ highlight_color: e.target.value })} />
+          </label>
+          <label className="ed-mini ed-swatch" title="Color del borde">
+            <span>Borde</span>
             <input type="color" value={st.border_color || '#000000'} onChange={(e) => set({ border_color: e.target.value })} />
           </label>
+          <label className="ed-mini ed-swatch" title="Fondo">
+            <span>Fondo</span>
+            <input type="color" value={st.bg && st.bg !== 'none' ? st.bg : '#111318'}
+              onChange={(e) => set({ bg: e.target.value })} />
+          </label>
+          <label className="ed-mini" title="Grosor del borde">
+            <span>Grosor</span>
+            <input type="range" min="0" max="14" step="1" value={st.border_width || 0}
+              onChange={(e) => set({ border_width: Number(e.target.value) })} />
+          </label>
         </div>
-        <label className="ed-text-field"><span>Grosor borde: {st.border_width || 0}</span>
-          <input type="range" min="0" max="14" step="1" value={st.border_width || 0} onChange={(e) => set({ border_width: Number(e.target.value) })} />
-        </label>
 
-        <div className="ed-text-row">
+        <div className="ed-text-dense four">
           <label className="ed-chip"><input type="checkbox" checked={!!st.shadow} onChange={(e) => set({ shadow: e.target.checked })} /> Sombra</label>
           <label className="ed-chip"><input type="checkbox" checked={!!st.glow} onChange={(e) => set({ glow: e.target.checked })} /> Brillo</label>
           <label className="ed-chip"><input type="checkbox" checked={!!st.bold} onChange={(e) => set({ bold: e.target.checked })} /> Negrita</label>
-        </div>
-
-        <div className="ed-text-row">
-          <label className="ed-chip pad">
-            <input type="checkbox" checked={st.bg && st.bg !== 'none'} onChange={(e) => set({ bg: e.target.checked ? '#111318' : 'none' })} /> Fondo
+          <label className="ed-chip">
+            <input type="checkbox" checked={st.bg && st.bg !== 'none'} onChange={(e) => set({ bg: e.target.checked ? (st.bg && st.bg !== 'none' ? st.bg : '#111318') : 'none' })} /> Caja
           </label>
-          {st.bg && st.bg !== 'none' && <input type="color" value={st.bg} onChange={(e) => set({ bg: e.target.value })} />}
-          {st.bg && st.bg !== 'none' && <input type="range" min="0.1" max="1" step="0.05" value={st.bg_opacity ?? 0.55} onChange={(e) => set({ bg_opacity: Number(e.target.value) })} />}
         </div>
+        {st.bg && st.bg !== 'none' && (
+          <label className="ed-mini"><span>Opacidad fondo</span>
+            <input type="range" min="0.1" max="1" step="0.05" value={st.bg_opacity ?? 0.55}
+              onChange={(e) => set({ bg_opacity: Number(e.target.value) })} />
+          </label>
+        )}
 
         {!isTrack && (
           <>
-            <label className="ed-text-field"><span>Ancho de caja: {Math.round((st.w ?? 0.8) * 100)}%</span>
-              <input type="range" min="0.15" max="1" step="0.01" value={st.w ?? 0.8} onChange={(e) => set({ w: Number(e.target.value) })} />
-            </label>
-            <label className="ed-text-field"><span>Posición X</span>
-              <input type="range" min="0" max="1" step="0.01" value={st.x ?? 0.5} onChange={(e) => set({ x: Number(e.target.value) })} />
-            </label>
-            <label className="ed-text-field"><span>Posición Y</span>
-              <input type="range" min="0" max="1" step="0.01" value={st.y ?? 0.5} onChange={(e) => set({ y: Number(e.target.value) })} />
-            </label>
-            <label className="ed-text-field"><span>Duración: {fmt(dur)}</span>
-              <input type="range" min="0.5" max="15" step="0.1" value={dur} onChange={(e) => onChangeDur(Number(e.target.value))} />
-            </label>
+            <div className="ed-text-dense four">
+              <label className="ed-mini" title="Posición X">
+                <span>X {Math.round((st.x ?? 0.5) * 100)}</span>
+                <input type="range" min="0" max="1" step="0.01" value={st.x ?? 0.5} onChange={(e) => set({ x: Number(e.target.value) })} />
+              </label>
+              <label className="ed-mini" title="Posición Y">
+                <span>Y {Math.round((st.y ?? 0.5) * 100)}</span>
+                <input type="range" min="0" max="1" step="0.01" value={st.y ?? 0.5} onChange={(e) => set({ y: Number(e.target.value) })} />
+              </label>
+              <label className="ed-mini" title="Ancho de caja">
+                <span>Ancho {Math.round((st.w ?? 0.8) * 100)}</span>
+                <input type="range" min="0.15" max="1" step="0.01" value={st.w ?? 0.8} onChange={(e) => set({ w: Number(e.target.value) })} />
+              </label>
+              <label className="ed-mini" title="Duración">
+                <span>Dur {fmt(dur)}</span>
+                <input type="range" min="0.5" max="15" step="0.1" value={dur} onChange={(e) => onChangeDur(Number(e.target.value))} />
+              </label>
+            </div>
             <p className="muted small"><Icon name="drag_pan" size={13} /> Arrastra el texto y sus manijas en el Main.</p>
           </>
         )}

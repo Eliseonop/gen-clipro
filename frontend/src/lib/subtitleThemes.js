@@ -1,0 +1,160 @@
+// Temas de subtítulos para la pista de texto (look + animación en un clic).
+
+const sub = {
+  size: 0.048,
+  bold: true,
+  align: 'center',
+  x: 0.5,
+  y: 0.86,
+  w: 0.88,
+  bg: 'none',
+  bg_opacity: 0.55,
+  shadow: false,
+  glow: false,
+  inactive_opacity: 0.5,
+}
+
+export const SUBTITLE_THEMES = [
+  {
+    id: 'classic',
+    name: 'Clásico',
+    sample: 'hola mundo',
+    style: {
+      ...sub,
+      font: 'Arial Black',
+      color: '#ffffff',
+      border_width: 5,
+      border_color: '#111111',
+      highlight_color: '#ffe566',
+      word_fx: 'highlight',
+      block_appear: 'fade',
+      inactive_opacity: 0.55,
+    },
+  },
+  {
+    id: 'neon',
+    name: 'Neón',
+    sample: 'hola mundo',
+    style: {
+      ...sub,
+      font: 'Segoe UI Black',
+      color: '#f4fbff',
+      border_width: 2,
+      border_color: '#063a48',
+      shadow: true,
+      glow: true,
+      shadow_color: '#00e5ff',
+      highlight_color: '#00f0ff',
+      word_fx: 'glow',
+      block_appear: 'fade',
+      inactive_opacity: 0.42,
+    },
+  },
+  {
+    id: 'fire',
+    name: 'Fuego',
+    sample: 'hola mundo',
+    style: {
+      ...sub,
+      font: 'Impact',
+      size: 0.056,
+      color: '#fff6e8',
+      border_width: 7,
+      border_color: '#1a0a00',
+      highlight_color: '#ff4b1f',
+      word_fx: 'pop',
+      block_appear: 'slide_up',
+      inactive_opacity: 0.5,
+    },
+  },
+  {
+    id: 'ice',
+    name: 'Hielo',
+    sample: 'hola mundo',
+    style: {
+      ...sub,
+      font: 'Calibri',
+      color: '#f2f7ff',
+      border_width: 3,
+      border_color: '#12324a',
+      shadow: true,
+      glow: true,
+      shadow_color: '#7ee8ff',
+      highlight_color: '#7ee8ff',
+      word_fx: 'glow',
+      block_appear: 'fade',
+      inactive_opacity: 0.4,
+    },
+  },
+  {
+    id: 'karaoke',
+    name: 'Karaoke',
+    sample: 'hola mundo',
+    style: {
+      ...sub,
+      font: 'Arial Black',
+      color: '#ffffff',
+      border_width: 5,
+      border_color: '#14060a',
+      shadow: true,
+      glow: true,
+      shadow_color: '#ff3b5c',
+      highlight_color: '#ff3b5c',
+      word_fx: 'glow',
+      block_appear: 'fade',
+      inactive_opacity: 0.35,
+    },
+  },
+  {
+    id: 'minimal',
+    name: 'Minimal',
+    sample: 'hola mundo',
+    style: {
+      ...sub,
+      font: 'Segoe UI',
+      color: '#ffffff',
+      border_width: 0,
+      border_color: '#000000',
+      highlight_color: '#ffffff',
+      word_fx: 'highlight',
+      block_appear: 'fade',
+      inactive_opacity: 0.28,
+    },
+  },
+  {
+    id: 'box',
+    name: 'Caja',
+    sample: 'hola mundo',
+    style: {
+      ...sub,
+      font: 'Tahoma',
+      color: '#ffffff',
+      border_width: 0,
+      border_color: '#000000',
+      bg: '#111318',
+      bg_opacity: 0.72,
+      highlight_color: '#ffe566',
+      word_fx: 'highlight',
+      block_appear: 'pop',
+      inactive_opacity: 0.45,
+    },
+  },
+]
+
+export function themeById(id) {
+  return SUBTITLE_THEMES.find((t) => t.id === id) || null
+}
+
+export const WORD_FX_OPTIONS = [
+  { value: 'none', label: 'Sin resalte' },
+  { value: 'highlight', label: 'Color' },
+  { value: 'glow', label: 'Brillo' },
+  { value: 'pop', label: 'Pop' },
+]
+
+export const BLOCK_APPEAR_OPTIONS = [
+  { value: 'none', label: 'Nada' },
+  { value: 'fade', label: 'Fade' },
+  { value: 'pop', label: 'Pop' },
+  { value: 'slide_up', label: 'Slide up' },
+]
