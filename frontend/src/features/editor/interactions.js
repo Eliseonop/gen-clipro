@@ -11,6 +11,7 @@ import {
 } from '../../lib/clipLayout'
 import { framingRect } from './render/canvas'
 import { snapAlign, textAlignTargets } from '../../lib/alignGuides'
+import { clipEnd, timelineToSource } from './editorModel'
 
 export function createMainDownHandler(ctx) {
   const {
@@ -111,7 +112,7 @@ export function createMainDownHandler(ctx) {
     // Al reproducir, Main enseña el compuesto: el clic solo pausa, no recorta.
     if (playingRef.current) { stopPlayback(); return }
     const srcAspect = el.videoWidth / el.videoHeight
-    const localT = clamp(clip.in_point + (playhead - clip.start), clip.in_point, clip.out_point)
+    const localT = clamp(timelineToSource(clip, playhead), clip.in_point, clip.out_point)
     const crop = cropWindow(clip, srcAspect, outAspect, localT)
     const toNorm = (ev) => [clamp((ev.clientX - rect.left) / rect.width, 0, 1), clamp((ev.clientY - rect.top) / rect.height, 0, 1)]
     const [nx0, ny0] = toNorm(e)
@@ -172,14 +173,14 @@ export function createResultDownHandler(ctx) {
   return function onResultDown(e) {
     const clip = selectedClip
     if (!isOverlay(clip) || clip.kind !== 'video') return
-    const end = clip.start + Math.max(0, clip.out_point - clip.in_point)
+    const end = clipEnd(clip)
     if (playhead < clip.start - 0.02 || playhead >= end) return
     const canvas = resultCanvasRef.current
     const el = mediaEls.current.get(clip.id)
     if (!canvas || !el?.videoWidth) return
     if (playingRef.current) stopPlayback()
 
-    const localT = clamp(clip.in_point + (playhead - clip.start), clip.in_point, clip.out_point)
+    const localT = clamp(timelineToSource(clip, playhead), clip.in_point, clip.out_point)
     const crop = cropWindow(clip, el.videoWidth / el.videoHeight, outW / outH, localT)
     const pxCrop = sourceCropPx(crop, el.videoWidth, el.videoHeight)
     const dest = destRectOnCanvas(clip.transform, pxCrop, outW, outH, canvas.width, canvas.height)

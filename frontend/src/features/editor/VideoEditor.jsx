@@ -8,7 +8,7 @@ import { defaultTextStyle, subtitleStyle, wrappedText, ensureEditorFonts } from 
 import { applyThemeToStyle } from '../../lib/textKaraoke'
 import {
   uid, FORMATS, mediaUrl, defaultTracks, newReframe, withKfIds,
-  makeClip, makeTextClip, clipDur, clipEnd, clipPlaybackMuted,
+  makeClip, makeTextClip, clipDur, clipEnd, clipPlaybackMuted, clipSpeed, timelineToSource, sourceToTimeline, splitClipAt,
   canCaptionClip, removeTrack, shouldConfirmTrackDelete,
   extraClipsAfterSplit, splitTrackTextByMaxWords,
   nextClipSelection, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
@@ -113,6 +113,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             exit: c.exit || 'none',
             look: c.look || 'none',
             muted: !!c.muted,
+            speed: c.speed,
+            keep_pitch: !!c.keep_pitch,
+            reverse: !!c.reverse,
+            speed_curve: c.speed_curve || null,
             frame: c.frame || (c.layout === 'overlay' ? 'free' : 'full'),
           })))
           if (tl.tracks[0]) setSelTrackId(tl.tracks[0].id)
@@ -187,12 +191,18 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
         const track = tracksRef.current.find((t) => t.id === c.track_id)
         const cd = clipDur(c)
         const active = head >= c.start - 0.02 && head < c.start + cd
-        const expected = clamp(c.in_point + (head - c.start), 0, (el.duration || c.out_point))
+        const expected = clamp(timelineToSource(c, head), c.in_point, c.out_point)
         if (active && playingRef.current) {
           el.muted = clipPlaybackMuted(c, track)
           el.volume = previewElementVolume(c.volume ?? 1, previewVolRef.current, clipPlaybackMuted(c, track))
-          if (el.paused) { try { el.currentTime = expected } catch { /* noop */ }; el.play().catch(() => {}) }
-          else if (Math.abs(el.currentTime - expected) > 0.35) { try { el.currentTime = expected } catch { /* noop */ } }
+          if (c.reverse) {
+            if (!el.paused) el.pause()
+            if (Math.abs(el.currentTime - expected) > 0.04) { try { el.currentTime = expected } catch { /* noop */ } }
+          } else {
+            try { el.playbackRate = clipSpeed(c) } catch { /* noop */ }
+            if (el.paused) { try { el.currentTime = expected } catch { /* noop */ }; el.play().catch(() => {}) }
+            else if (Math.abs(el.currentTime - expected) > 0.35) { try { el.currentTime = expected } catch { /* noop */ } }
+          }
         } else if (!el.paused) {
           el.pause()
         }
@@ -203,7 +213,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
         for (const c of videosAt(head, clipsRef.current, tracksRef.current)) {
           const el = mediaEls.current.get(c.id)
           if (el && el.videoWidth) {
-            const expected = clamp(c.in_point + (head - c.start), 0, el.duration || c.out_point)
+            const expected = clamp(timelineToSource(c, head), c.in_point, c.out_point)
             if (Math.abs(el.currentTime - expected) > 0.06) { try { el.currentTime = expected } catch { /* noop */ } }
           }
         }
@@ -301,11 +311,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
       const out = []
       for (const c of prev) {
         if (!ids.has(c.id)) { out.push(c); continue }
-        const localOut = c.in_point + (at - c.start)
-        if (localOut <= c.in_point + 0.1 || localOut >= c.out_point - 0.1) { out.push(c); continue }
-        const left = { ...c, out_point: +localOut.toFixed(3) }
+        const parts = splitClipAt(c, at, uid('c'))
+        if (!parts) { out.push(c); continue }
+        const left = parts.left
         const right = {
-          ...c, id: uid('c'), in_point: +localOut.toFixed(3), start: +at.toFixed(3),
+          ...parts.right,
           reframe: c.reframe ? withKfIds({
             ...c.reframe,
             keyframes: remap(c.reframe.keyframes),
@@ -440,7 +450,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
       const el = mediaEls.current.get(c.id)
       const srcW = el?.videoWidth || 1920
       const srcH = el?.videoHeight || 1080
-      const localT = clamp(c.in_point + (playhead - c.start), c.in_point, c.out_point)
+      const localT = clamp(timelineToSource(c, playhead), c.in_point, c.out_point)
       const patch = applyFrame(c, slot, srcW / srcH, outAspect, localT, srcW, srcH, outW, outH)
       return {
         ...c,
@@ -460,7 +470,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     const el = mediaEls.current.get(clip.id)
     const srcW = el?.videoWidth || 1920
     const srcH = el?.videoHeight || 1080
-    const localT = clamp(clip.in_point + (playhead - clip.start), clip.in_point, clip.out_point)
+    const localT = clamp(timelineToSource(clip, playhead), clip.in_point, clip.out_point)
     const patch = enableOverlay(clip, srcW / srcH, outAspect, localT, srcW, srcH, outW, outH)
     setClips((prev) => prev.map((c) => (c.id === clip.id ? {
       ...c,
@@ -505,7 +515,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   function addKeyframeAtPlayhead() {
     const clip = selectedClip
     if (!clip || clip.kind !== 'video') return
-    const localT = clamp(clip.in_point + (playhead - clip.start), clip.in_point, clip.out_point)
+    const localT = clamp(timelineToSource(clip, playhead), clip.in_point, clip.out_point)
     const fr = frameAt(clip.reframe?.keyframes, localT, clip.reframe?.zoom ?? 1, clip.reframe?.pan_mode || 'smooth')
     const el = mediaEls.current.get(clip.id)
     const srcAspect = el?.videoWidth ? el.videoWidth / el.videoHeight : 16 / 9
@@ -557,7 +567,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
       return { ...c, reframe: { ...c.reframe, keyframes: kfs } }
     }))
     const c = clips.find((x) => x.id === clipId)
-    if (c) seek(c.start + (newT - c.in_point))
+    if (c) seek(sourceToTimeline(c, newT))
   }
   function toggleKfHidden(id) {
     setHiddenKf((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
@@ -980,7 +990,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             onChangeFx={(patch) => {
               const ids = new Set(selIdsRef.current)
               setClips((prev) => prev.map((c) => (
-                ids.has(c.id) && c.kind === 'video' ? { ...c, ...patch } : c
+                ids.has(c.id) && c.kind !== 'text' ? { ...c, ...patch } : c
               )))
             }}
             onChangeFrame={(slot) => applyClipFrame(selectedClip, slot)}

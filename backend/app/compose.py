@@ -28,6 +28,7 @@ from .diagnostics import timed
 from .recipe_layout import contain_scale_filter, dual_slot_wh, join_dual_filters, split_orientation_for
 from .reframe_math import frame_at
 from .clip_audio import clip_mixes_audio
+from .clip_speed import audio_speed_filters, clip_source_duration, clip_timeline_duration, video_speed_filters
 from .text_ass import ass_filter_path, build_ass
 
 ProgressCb = Callable[[float, str], None]
@@ -98,7 +99,7 @@ def _overlay_video_filter(path: Path, clip: TimelineClip, W: int, H: int, dur: f
 
 
 def _clip_duration(clip: TimelineClip) -> float:
-    return max(0.0, round(clip.out_point - clip.in_point, 3))
+    return clip_timeline_duration(clip)
 
 
 def _has_audio(path: Path) -> bool:
@@ -377,19 +378,22 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         start = max(0.0, c.start)
         end = start + dur
         overlay_xy = "x=0:y=0"
+        src_dur = clip_source_duration(c)
         if is_overlay(c) and c.reframe and c.reframe.crop_w and c.reframe.crop_h:
-            cropscale, overlay_xy = _overlay_video_filter(path, c, W, H, dur)
+            cropscale, overlay_xy = _overlay_video_filter(path, c, W, H, src_dur)
         elif c.reframe and (c.reframe.keyframes or c.reframe.dual_crop):
-            cropscale = _reframe_cropscale(path, c.reframe, c.in_point, dur, W, H)
+            cropscale = _reframe_cropscale(path, c.reframe, c.in_point, src_dur, W, H)
         else:
             cropscale = _plain_scale(W, H)
         fx = video_fx_chain(c, dur, W, H)
         fx_part = f",{fx}" if fx else ""
+        spd = video_speed_filters(c)
+        spd_part = f",{spd}" if spd else ""
         overlay_xy = overlay_xy_for_fx(overlay_xy, c, start, dur, W, H)
         vlabel = f"v{n}"
         filt.append(
             f"[{k}:v]trim={c.in_point:.3f}:{c.out_point:.3f},setpts=PTS-STARTPTS,"
-            f"{cropscale},fps={fps}{fx_part},setpts=PTS-STARTPTS+{start:.3f}/TB[{vlabel}]"
+            f"{cropscale},fps={fps}{spd_part}{fx_part},setpts=PTS-STARTPTS+{start:.3f}/TB[{vlabel}]"
         )
         out_label = f"ov{n}"
         ov_fmt = ":format=auto" if fx else ""
@@ -419,7 +423,9 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         start_ms = int(round(max(0.0, c.start) * 1000))
         vol = max(0.0, c.volume if c.volume is not None else 1.0)
         alabel = f"a{m}"
-        chain = (f"[{k}:a]atrim={c.in_point:.3f}:{c.out_point:.3f},asetpts=PTS-STARTPTS,"
+        asp = audio_speed_filters(c)
+        asp_part = f",{asp}" if asp else ""
+        chain = (f"[{k}:a]atrim={c.in_point:.3f}:{c.out_point:.3f},asetpts=PTS-STARTPTS{asp_part},"
                  f"aresample=async=1,volume={vol:.3f}")
         if start_ms > 0:
             chain += f",adelay={start_ms}:all=1"

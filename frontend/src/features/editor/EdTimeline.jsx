@@ -3,7 +3,8 @@ import Icon from '../../components/Icon'
 import FlipPopover from '../../components/FlipPopover'
 import { fmt } from '../../lib/utils'
 import { pseudoWaveform, clamp, kfColor } from '../../lib/panning'
-import { clipDur, displayTracks } from './editorModel'
+import { clipDur, clipSourceDur, clipSpeed, displayTracks } from './editorModel'
+import { stackViewForTrack } from './clipStack.js'
 import { headerScrollPad, timelineWheelAction } from './timelineWheel'
 
 const MIN_DUR = 0.15
@@ -61,12 +62,22 @@ export default function EdTimeline({
   const headersRef = useRef(null)
   const drag = useRef(null)
   const [dropHint, setDropHint] = useState(null)   // { trackId, time }
+  const [expandedClusterId, setExpandedClusterId] = useState(null)
 
   const rows = displayTracks(tracks)
   const totalW = Math.max(duration + 4, 12) * pps
   const isVideoSel = selectedClip?.kind === 'video'
   const dragKind = dragInfo?.kind || null
   const selectedIds = selectedClipIds?.length ? selectedClipIds : (selectedClipId ? [selectedClipId] : [])
+  const viewsByTrack = new Map()
+  for (const t of rows) {
+    viewsByTrack.set(t.id, stackViewForTrack(clips, t.id, selectedIds, expandedClusterId, rowH))
+  }
+  const liveExpandedId = [...viewsByTrack.values()].find((view) => view.liveExpandedId)?.liveExpandedId || null
+
+  useEffect(() => {
+    setExpandedClusterId(liveExpandedId)
+  }, [liveExpandedId])
 
   function xToTime(clientX) {
     const el = lanesRef.current
@@ -138,6 +149,7 @@ export default function EdTimeline({
   }, [pps])
 
   function onRulerDown(e) {
+    setExpandedClusterId(null)
     onSeek(xToTime(e.clientX))
     const move = (ev) => onSeek(xToTime(ev.clientX))
     const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
@@ -147,6 +159,12 @@ export default function EdTimeline({
   function startClipDrag(e, clip, mode) {
     if (e.button !== 0) return
     e.stopPropagation()
+    const home = clips.find((x) => x.id === clip.id)
+    const view = viewsByTrack.get(home?.track_id)
+    const lay = view?.layouts.get(clip.id)
+    if (liveExpandedId && lay?.clusterId && lay.clusterId !== liveExpandedId) {
+      setExpandedClusterId(null)
+    }
     if (e.ctrlKey || e.metaKey || e.shiftKey) e.preventDefault()
     const track = tracks.find((t) => t.id === clip.track_id)
     if (track?.locked) { onSelectClip?.(clip, e); return }
@@ -177,12 +195,16 @@ export default function EdTimeline({
         }
         onMutateClip(o.id, patch)
       } else if (d.mode === 'trim-left') {
-        const ni = clamp(o.in_point + deltaT, 0, o.out_point - MIN_DUR)
-        const ns = Math.max(0, o.start + (ni - o.in_point))
+        const sp = clipSpeed(o)
+        const minSrc = MIN_DUR * sp
+        const ni = clamp(o.in_point + deltaT * sp, 0, o.out_point - minSrc)
+        const ns = Math.max(0, o.start + (ni - o.in_point) / sp)
         onMutateClip(o.id, { in_point: +ni.toFixed(3), start: +ns.toFixed(3) })
       } else if (d.mode === 'trim-right') {
+        const sp = clipSpeed(o)
+        const minSrc = MIN_DUR * sp
         const maxOut = o.source_duration > 0 ? o.source_duration : o.out_point + 3600
-        const no = clamp(o.out_point + deltaT, o.in_point + MIN_DUR, maxOut)
+        const no = clamp(o.out_point + deltaT * sp, o.in_point + minSrc, maxOut)
         onMutateClip(o.id, { out_point: +no.toFixed(3) })
       }
     }
@@ -259,32 +281,37 @@ export default function EdTimeline({
       <div className="ed-tl-body" ref={bodyRef}>
         <div className="ed-tl-headers" ref={headersRef}>
           <div className="ed-ruler-corner">{fmt(playhead)}</div>
-          {rows.map((t) => (
-            <div key={t.id}
-              className={`ed-track-head ${t.kind} ${selectedTrackId === t.id ? 'sel' : ''} ${dragKind && laneKindFor(dragKind) === t.kind ? 'drop-ok' : ''}`}
-              onClick={() => onSelectTrack(t.id)}
-              onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextTrack?.(e, t) }}>
-              <span className="ed-th-name">{t.name}</span>
-              <span className="ed-th-btns">
-                <button className={`ed-th-btn ${t.hidden ? 'off' : ''}`} title="Visibilidad"
-                  onClick={(e) => { e.stopPropagation(); onTrackToggle(t.id, 'hidden') }} disabled={t.kind === 'audio'}>
-                  <Icon name={t.hidden ? 'visibility_off' : 'visibility'} size={14} />
-                </button>
-                <button className={`ed-th-btn ${t.muted ? 'off' : ''}`} title="Silenciar"
-                  onClick={(e) => { e.stopPropagation(); onTrackToggle(t.id, 'muted') }} disabled={t.kind === 'text'}>
-                  <Icon name={t.muted ? 'volume_off' : 'volume_up'} size={14} />
-                </button>
-                <button className="ed-th-btn" title="Juntar clips (sin huecos ni solapes)"
-                  onClick={(e) => { e.stopPropagation(); onTrackCompact(t.id) }} disabled={t.locked}>
-                  <Icon name="compress" size={14} />
-                </button>
-                <button className={`ed-th-btn ${t.locked ? 'on' : ''}`} title="Bloquear"
-                  onClick={(e) => { e.stopPropagation(); onTrackToggle(t.id, 'locked') }}>
-                  <Icon name={t.locked ? 'lock' : 'lock_open'} size={14} />
-                </button>
-              </span>
-            </div>
-          ))}
+          {rows.map((t) => {
+            const view = viewsByTrack.get(t.id)
+            const vh = view.height
+            return (
+              <div key={t.id}
+                className={`ed-track-head ${t.kind} ${selectedTrackId === t.id ? 'sel' : ''} ${dragKind && laneKindFor(dragKind) === t.kind ? 'drop-ok' : ''} ${vh > rowH ? 'stack-open' : ''}`}
+                style={{ height: vh, minHeight: vh, maxHeight: vh }}
+                onClick={() => onSelectTrack(t.id)}
+                onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextTrack?.(e, t) }}>
+                <span className="ed-th-name">{t.name}</span>
+                <span className="ed-th-btns">
+                  <button className={`ed-th-btn ${t.hidden ? 'off' : ''}`} title="Visibilidad"
+                    onClick={(e) => { e.stopPropagation(); onTrackToggle(t.id, 'hidden') }} disabled={t.kind === 'audio'}>
+                    <Icon name={t.hidden ? 'visibility_off' : 'visibility'} size={14} />
+                  </button>
+                  <button className={`ed-th-btn ${t.muted ? 'off' : ''}`} title="Silenciar"
+                    onClick={(e) => { e.stopPropagation(); onTrackToggle(t.id, 'muted') }} disabled={t.kind === 'text'}>
+                    <Icon name={t.muted ? 'volume_off' : 'volume_up'} size={14} />
+                  </button>
+                  <button className="ed-th-btn" title="Juntar clips (sin huecos ni solapes)"
+                    onClick={(e) => { e.stopPropagation(); onTrackCompact(t.id) }} disabled={t.locked}>
+                    <Icon name="compress" size={14} />
+                  </button>
+                  <button className={`ed-th-btn ${t.locked ? 'on' : ''}`} title="Bloquear"
+                    onClick={(e) => { e.stopPropagation(); onTrackToggle(t.id, 'locked') }}>
+                    <Icon name={t.locked ? 'lock' : 'lock_open'} size={14} />
+                  </button>
+                </span>
+              </div>
+            )
+          })}
         </div>
 
         <div className="ed-tl-scroll" ref={lanesRef}>
@@ -295,29 +322,51 @@ export default function EdTimeline({
               ))}
             </div>
 
-            {rows.map((t) => (
-              <div key={t.id}
-                className={`ed-lane ${t.kind} ${t.locked ? 'locked' : ''} ${selectedTrackId === t.id ? 'sel' : ''} ${dragKind && laneKindFor(dragKind) === t.kind ? 'drop-ok' : ''}`}
-                data-track={t.id}
-                onPointerDown={() => onSelectTrack(t.id)}
-                onDragOver={(e) => onLaneDragOver(e, t)}
-                onDragLeave={() => setDropHint((h) => (h?.trackId === t.id ? null : h))}
-                onDrop={(e) => onLaneDrop(e, t)}>
-                {clips.filter((c) => c.track_id === t.id).map((c) => (
-                  <ClipBlock key={c.id} clip={c} pps={pps}
-                    selected={selectedIds.includes(c.id)} selKfId={selKfId}
-                    onDown={(e, mode) => startClipDrag(e, c, mode)}
-                    onKfDown={(e, kf, idx) => startKfDrag(e, c, kf, idx)}
-                    onContext={(e) => onContextClip?.(e, c)}
-                    onDouble={() => onDoubleClip?.(c)} />
-                ))}
-                {dropHint?.trackId === t.id && dragInfo && (
-                  <div className="ed-drop-ghost" style={{ left: dropHint.time * pps, width: Math.max(20, (dragInfo.duration || 1) * pps) }}>
-                    <span>{dragInfo.name}</span>
-                  </div>
-                )}
-              </div>
-            ))}
+            {rows.map((t) => {
+              const view = viewsByTrack.get(t.id)
+              const vh = view.height
+              return (
+                <div key={t.id}
+                  className={`ed-lane ${t.kind} ${t.locked ? 'locked' : ''} ${selectedTrackId === t.id ? 'sel' : ''} ${dragKind && laneKindFor(dragKind) === t.kind ? 'drop-ok' : ''} ${vh > rowH ? 'stack-open' : ''}`}
+                  style={{ height: vh, minHeight: vh }}
+                  data-track={t.id}
+                  onPointerDown={(e) => {
+                    onSelectTrack(t.id)
+                    if (e.target === e.currentTarget) setExpandedClusterId(null)
+                  }}
+                  onDragOver={(e) => onLaneDragOver(e, t)}
+                  onDragLeave={() => setDropHint((h) => (h?.trackId === t.id ? null : h))}
+                  onDrop={(e) => onLaneDrop(e, t)}>
+                  {clips.filter((c) => c.track_id === t.id).map((c) => {
+                    const lay = view.layouts.get(c.id)
+                    if (!lay || lay.variant === 'hidden') return null
+                    return (
+                      <ClipBlock key={c.id} clip={c} pps={pps} layout={lay}
+                        selected={selectedIds.includes(c.id)} selKfId={selKfId}
+                        onDown={(e, mode) => startClipDrag(e, c, mode)}
+                        onKfDown={(e, kf, idx) => startKfDrag(e, c, kf, idx)}
+                        onContext={(e) => onContextClip?.(e, c)}
+                        onDouble={() => onDoubleClip?.(c)} />
+                    )
+                  })}
+                  {view.toggle && (
+                    <button type="button" className="ed-stack-toggle"
+                      data-cluster-id={view.toggle.clusterId}
+                      style={{ left: view.toggle.start * pps, top: 2 }}
+                      title="Cerrar pila"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => { e.stopPropagation(); setExpandedClusterId(null) }}>
+                      <Icon name="expand_less" size={14} />
+                    </button>
+                  )}
+                  {dropHint?.trackId === t.id && dragInfo && (
+                    <div className="ed-drop-ghost" style={{ left: dropHint.time * pps, width: Math.max(20, (dragInfo.duration || 1) * pps) }}>
+                      <span>{dragInfo.name}</span>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
 
             <div className="ed-playhead" style={{ left: playhead * pps }}><span className="ed-playhead-knob" /></div>
           </div>
@@ -327,33 +376,41 @@ export default function EdTimeline({
   )
 }
 
-function ClipBlock({ clip, pps, selected, selKfId, onDown, onKfDown, onContext, onDouble }) {
+function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onContext, onDouble }) {
   const dur = clipDur(clip)
+  const srcDur = clipSourceDur(clip)
+  const sp = clipSpeed(clip)
   const w = Math.max(6, dur * pps)
   const left = clip.start * pps
   const isVideo = clip.kind === 'video'
   const isText = clip.kind === 'text'
   const kfs = isVideo ? [...(clip.reframe?.keyframes || [])].sort((a, b) => a.t - b.t) : []
   const bars = clip.kind === 'audio' ? pseudoWaveform(clip.asset_id, Math.max(16, Math.round(w / 5))) : null
+  const speedBadge = !isText && sp !== 1 ? (
+    <em className="ed-clip-speed">{sp % 1 === 0 ? `${sp}x` : `${sp.toFixed(1)}x`}</em>
+  ) : null
 
   return (
-    <div className={`ed-clip ${clip.kind} ${selected ? 'sel' : ''} ${clip.muted ? 'muted' : ''}`}
-      style={{ left, width: w }} title={clip.name}
-      onPointerDown={(e) => onDown(e, 'move')} onContextMenu={onContext} onDoubleClick={onDouble}>
+    <div className={`ed-clip ${clip.kind} ${layout.variant !== 'solo' ? layout.variant : ''} ${selected ? 'sel' : ''} ${clip.muted ? 'muted' : ''}`}
+      style={{ left, width: w, top: layout.top, height: layout.height, zIndex: layout.z }}
+      title={clip.name}
+      data-cluster-id={layout.clusterId || undefined}
+      onPointerDown={(e) => onDown(e, 'move')}
+      onContextMenu={onContext} onDoubleClick={onDouble}>
       <div className="ed-clip-handle left" onPointerDown={(e) => onDown(e, 'trim-left')} />
       <div className="ed-clip-handle right" onPointerDown={(e) => onDown(e, 'trim-right')} />
 
-      {isVideo && <div className="ed-clip-label"><Icon name={clip.muted ? 'volume_off' : 'movie'} size={12} /> {clip.name}</div>}
+      {isVideo && <div className="ed-clip-label"><Icon name={clip.muted ? 'volume_off' : 'movie'} size={12} /> {clip.name}{speedBadge}</div>}
       {isText && <div className="ed-clip-label"><Icon name="title" size={12} /> {clip.text || clip.name}</div>}
       {clip.kind === 'audio' && (
         <div className="ed-clip-wave">
           {bars.map((h, i) => <span key={i} style={{ height: `${Math.round(h * 100)}%` }} />)}
-          <span className="ed-clip-label audio"><Icon name={clip.muted ? 'volume_off' : 'graphic_eq'} size={12} /> {clip.name}</span>
+          <span className="ed-clip-label audio"><Icon name={clip.muted ? 'volume_off' : 'graphic_eq'} size={12} /> {clip.name}{speedBadge}</span>
         </div>
       )}
 
       {selected && isVideo && kfs.map((k, i) => {
-        const kl = ((k.t - clip.in_point) / (dur || 1)) * w
+        const kl = ((k.t - clip.in_point) / (srcDur || 1)) * w
         if (kl < -3 || kl > w + 3) return null
         return (
           <span key={k.id || i} className={`ed-kf-dot ${k.pan_mode === 'direct' ? 'direct' : ''} ${k.id === selKfId ? 'sel' : ''}`}

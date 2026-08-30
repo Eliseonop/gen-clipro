@@ -6,6 +6,11 @@ import { fmt } from '../../lib/utils'
 import { kfColor } from '../../lib/panning'
 import { APPEAR_OPTIONS, EXIT_OPTIONS, LOOK_OPTIONS } from '../../lib/clipFx'
 import { FRAME_OPTIONS, frameOf } from '../../lib/clipLayout'
+import { SPEED_MAX, SPEED_MIN, SPEED_PRESETS, clipSpeed, sourceToTimeline } from './editorModel'
+
+function speedLabel(n) {
+  return n % 1 === 0 ? `${n}x` : `${n.toFixed(1)}x`
+}
 
 // Panel junto a la timeline: recorte (keyframes) y propiedades del clip.
 export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHidden, onDelete, onSeek, onPanMode, onChangeFx, onChangeFrame }) {
@@ -59,6 +64,48 @@ export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHid
               <Icon name={clip.muted ? 'volume_off' : 'volume_up'} size={15} />
               Mute
             </button>
+            <div className="ed-speed">
+              <div className="ed-speed-head">
+                <span>Velocidad</span>
+                <strong>{speedLabel(clipSpeed(clip))}</strong>
+              </div>
+              <div className="ed-speed-presets">
+                {SPEED_PRESETS.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    className={clipSpeed(clip) === p ? 'on' : ''}
+                    onClick={() => onChangeFx({ speed: p })}>
+                    {speedLabel(p)}
+                  </button>
+                ))}
+              </div>
+              <input
+                type="range"
+                min={SPEED_MIN}
+                max={SPEED_MAX}
+                step="0.1"
+                value={clipSpeed(clip)}
+                aria-label="Velocidad del clip"
+                onChange={(e) => onChangeFx({ speed: Number(e.target.value) })}
+              />
+              <div className="ed-speed-toggles">
+                <button
+                  type="button"
+                  className={`ed-mute ${clip.keep_pitch ? 'on' : ''}`}
+                  title="Mantener el tono de la voz"
+                  onClick={() => onChangeFx({ keep_pitch: !clip.keep_pitch })}>
+                  Tono
+                </button>
+                <button
+                  type="button"
+                  className={`ed-mute ${clip.reverse ? 'on' : ''}`}
+                  title="Reproducir hacia atrás"
+                  onClick={() => onChangeFx({ reverse: !clip.reverse })}>
+                  Reversa
+                </button>
+              </div>
+            </div>
             {isVideo && (
               <>
                 <label className="ed-prop">
@@ -122,7 +169,7 @@ export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHid
                 <div key={k.id || i}
                   className={`ed-crop-row ${selKfId === k.id ? 'sel' : ''} ${panMode}`}
                   style={{ borderLeftColor: kfColor(i) }}
-                  onClick={() => { onSelect(k.id); onSeek(clip.start + local) }}>
+                  onClick={() => { onSelect(k.id); onSeek(sourceToTimeline(clip, k.t)) }}>
                   <span className={`ed-crop-swatch ${panMode}`} style={{ background: kfColor(i) }} />
                   <div className="ed-crop-info">
                     <span className="ed-crop-time">{fmt(local)}</span>
