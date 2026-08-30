@@ -1,7 +1,8 @@
 """Subtítulos ASS para el export: karaoke por palabra y temas de pista.
 
-Los tiempos por palabra se estiman repartiendo la duración del clip
-(hasta que la transcripción traiga timestamps reales).
+Si el clip de texto trae ``words[]`` (timing real por palabra, relativo al inicio
+del clip), el karaoke usa esas marcas. Si no, se reparte la duración del clip a
+partes iguales (fallback retrocompatible).
 """
 from __future__ import annotations
 
@@ -11,6 +12,18 @@ from .schemas import TimelineClip
 
 _FX_NONE = "none"
 _KNOWN_FX = ("highlight", "glow", "pop")
+
+
+def effective_text_style(track_style: dict | None, clip_style: dict | None) -> dict:
+    """Estilo efectivo de un text clip: la pista aporta la base y el clip la
+    sobre-escribe campo a campo.
+
+    Cubre de forma uniforme apariencia, opacidad, efectos (``word_fx``) y
+    fragmentación (``max_words``). Retrocompatible: si el clip guarda el estilo
+    completo (como hoy), gana el clip; si guarda solo overrides parciales, la
+    pista rellena el resto.
+    """
+    return {**(track_style or {}), **(clip_style or {})}
 
 
 def word_fx_set(st: dict) -> set[str]:
@@ -131,8 +144,8 @@ def _alignment(st: dict) -> tuple[int, int, int, int]:
     return 5, side, side, 0
 
 
-def _style_line(clip: TimelineClip, W: int, H: int) -> str:
-    st = clip.style or {}
+def _style_line(clip: TimelineClip, W: int, H: int, style: dict | None = None) -> str:
+    st = style if style is not None else (clip.style or {})
     fontsize = max(8, int(round(float(st.get("size", 0.048)) * H)))
     bold = -1 if st.get("bold", True) else 0
     outline = int(st.get("border_width", 0) or 0)
@@ -165,8 +178,37 @@ def _style_line(clip: TimelineClip, W: int, H: int) -> str:
     )
 
 
-def caption_dialogues(clip: TimelineClip, W: int, H: int) -> list[str]:
-    st = clip.style or {}
+def word_windows(clip: TimelineClip) -> list[tuple[float, float]]:
+    """Ventana temporal absoluta ``(t0, t1)`` de cada palabra.
+
+    Usa ``clip.words`` (relativos al inicio del clip) si su número coincide con
+    las palabras del texto; una palabra permanece activa hasta que empieza la
+    siguiente. Si no hay ``words[]`` o no cuadran, reparte la duración a partes
+    iguales (retrocompatible con el karaoke estimado anterior).
+    """
+    words_txt = split_words(clip.text or "")
+    n = len(words_txt)
+    if n == 0:
+        return []
+    start = max(0.0, float(clip.start or 0))
+    dur = _clip_dur(clip)
+    real = list(clip.words or [])
+    if len(real) == n:
+        rels = [min(max(0.0, float(w.start)), dur) for w in real]
+        wins: list[tuple[float, float]] = []
+        for i in range(n):
+            t0 = start + rels[i]
+            t1 = start + (rels[i + 1] if i + 1 < n else dur)
+            if t1 <= t0:
+                t1 = t0 + 0.04
+            wins.append((t0, t1))
+        return wins
+    slot = dur / n
+    return [(start + i * slot, start + (i + 1) * slot) for i in range(n)]
+
+
+def caption_dialogues(clip: TimelineClip, W: int, H: int, style: dict | None = None) -> list[str]:
+    st = style if style is not None else (clip.style or {})
     words = split_words(clip.text or "")
     if not words:
         return []
@@ -182,11 +224,8 @@ def caption_dialogues(clip: TimelineClip, W: int, H: int) -> list[str]:
         return [
             f"Dialogue: 0,{ass_time(start)},{ass_time(end)},{style},,0,0,0,," + text
         ]
-    slot = dur / len(words)
     lines: list[str] = []
-    for i in range(len(words)):
-        t0 = start + i * slot
-        t1 = start + (i + 1) * slot
+    for i, (t0, t1) in enumerate(word_windows(clip)):
         body = fad + _line_for_active(words, i, st)
         lines.append(
             f"Dialogue: 0,{ass_time(t0)},{ass_time(t1)},{style},,0,0,0,," + body
@@ -194,12 +233,14 @@ def caption_dialogues(clip: TimelineClip, W: int, H: int) -> list[str]:
     return lines
 
 
-def build_ass(clips: Iterable[TimelineClip], W: int, H: int) -> str:
+def build_ass(clips: Iterable[TimelineClip], W: int, H: int, tracks: Iterable | None = None) -> str:
+    track_style = {t.id: (getattr(t, "style", None) or {}) for t in (tracks or [])}
     texts = [c for c in clips if (c.kind == "text") and _clip_dur(c) > 0.02 and split_words(c.text or "")]
-    styles = [_style_line(c, W, H) for c in texts]
+    eff = {c.id: effective_text_style(track_style.get(c.track_id), c.style) for c in texts}
+    styles = [_style_line(c, W, H, eff[c.id]) for c in texts]
     events: list[str] = []
     for c in texts:
-        events.extend(caption_dialogues(c, W, H))
+        events.extend(caption_dialogues(c, W, H, eff[c.id]))
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"

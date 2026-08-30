@@ -3,7 +3,7 @@
 // x/y son el centro del texto en coordenadas normalizadas (0-1) de la salida.
 
 import { clipFxAt } from './clipFx.js'
-import { activeWordIndex, applyThemeToStyle, hasWordFx, karaokeOn, wordOpacity } from './textKaraoke.js'
+import { activeWordIndex, activeWordIndexFromWords, applyThemeToStyle, hasWordFx, karaokeOn, wordOpacity } from './textKaraoke.js'
 import { themeById } from './subtitleThemes.js'
 
 export const FONTS = [
@@ -51,6 +51,13 @@ const FONT_CSS = {
   'Trebuchet MS': '"Trebuchet MS", sans-serif',
 }
 export const cssFont = (name) => FONT_CSS[name] || 'Arial, sans-serif'
+
+/** Estilo efectivo de un text clip: la pista aporta la base y el clip la
+ *  sobre-escribe campo a campo. Espejo de effective_text_style (backend).
+ *  Cubre apariencia, opacidad, word_fx y max_words de forma uniforme. */
+export function effectiveTextStyle(trackStyle, clipStyle) {
+  return { ...(trackStyle || {}), ...(clipStyle || {}) }
+}
 
 const CUSTOM_FONTS = ['Anton']
 
@@ -137,7 +144,9 @@ function paintWord(ctx, word, x, y, size, st, active, motionOff) {
 
 // Dibuja el texto (con wrap) en el canvas. Devuelve caja y manijas en píxeles.
 export function drawTextClip(ctx, clip, cw, ch, opts = {}) {
-  const st = clip.style || {}
+  // Con opts.trackStyle, el estilo hereda de la pista (clip = override); si no,
+  // usa el estilo del clip tal cual (retrocompatible).
+  const st = opts.trackStyle ? effectiveTextStyle(opts.trackStyle, clip.style) : (clip.style || {})
   const size = Math.max(10, (st.size ?? 0.07) * ch)
   const align = st.align || 'center'
   const dur = Math.max(0.01, (clip.out_point ?? 0) - (clip.in_point ?? 0))
@@ -178,7 +187,12 @@ export function drawTextClip(ctx, clip, cw, ch, opts = {}) {
   }
 
   const words = rows.flat()
-  const active = karaoke ? activeWordIndex(words.length, localT, dur) : -1
+  // Con words[] reales alineadas al texto, el karaoke usa esas marcas (igual que
+  // el export); si no, cae al reparto uniforme por posición.
+  const realWords = Array.isArray(clip.words) && clip.words.length === words.length
+  const active = karaoke
+    ? (realWords ? activeWordIndexFromWords(clip.words, localT) : activeWordIndex(words.length, localT, dur))
+    : -1
 
   ctx.textAlign = 'left'
   let gi = 0

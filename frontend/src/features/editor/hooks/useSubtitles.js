@@ -23,7 +23,7 @@ export function useSubtitles(projectId, { tracksRef, ensureTextTrack, setClips, 
     const existing = tracksRef.current.find((t) => t.kind === 'text')
     const style = existing?.style || subtitleStyle()
     const tid = ensureTextTrack(style)
-    const news = textClipsFromTranscript(src, job.transcript.segments || [], tid, style)
+    const news = textClipsFromTranscript(src, job.transcript.segments || [], tid, style, job.transcript)
     if (news.length) setClips((prev) => [...prev, ...news])
   }
 

@@ -12,6 +12,19 @@ export function activeWordIndex(wordCount, localT, duration) {
   return Math.min(wordCount - 1, Math.floor((localT / duration) * wordCount))
 }
 
+/** Palabra activa usando el timing REAL de words[] (relativo al clip).
+ *  Cada palabra queda activa desde su ``start`` hasta que empieza la siguiente
+ *  (mismo criterio de ventanas que el export). Antes de la primera: la primera. */
+export function activeWordIndexFromWords(words, localT) {
+  if (!Array.isArray(words) || !words.length) return -1
+  let idx = 0
+  for (let i = 0; i < words.length; i++) {
+    if ((words[i]?.start ?? 0) <= localT) idx = i
+    else break
+  }
+  return idx
+}
+
 const WORD_FX = ['highlight', 'glow', 'pop']
 
 export function wordFxList(fx) {

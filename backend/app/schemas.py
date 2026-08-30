@@ -162,10 +162,24 @@ class SetFolderRequest(BaseModel):
 
 # --- Transcripción (guion) ---------------------------------------------
 
+class Word(BaseModel):
+    """Una palabra con su marca de tiempo real (de faster-whisper).
+
+    ``start``/``end`` son segundos absolutos del audio transcrito. ``prob`` es la
+    confianza (0-1) del reconocimiento. Es la base del karaoke real, del
+    resaltado por palabra y de mantener la sincronía al fragmentar/editar.
+    """
+    text: str
+    start: float
+    end: float
+    prob: Optional[float] = None
+
+
 class TranscriptSegment(BaseModel):
     start: float
     end: float
     text: str
+    words: list[Word] = []   # vacío si el modelo no dio timing por palabra
 
 
 class Transcript(BaseModel):
@@ -271,10 +285,12 @@ class TimelineClip(BaseModel):
     exit: str = "none"                    # none | fade | zoom | slide_down | slide_right | pop
     look: str = "none"                    # none | bw | cinematic | vintage | contrast | warm | cool | saturated
     muted: bool = False                 # silencia este clip (la pista puede seguir sonando)
+    words: list[Word] = []                # (texto) timing real por palabra, RELATIVO al inicio del clip
 
 
 class Timeline(BaseModel):
     version: int = 1
+    schema_version: int = 2   # formato del JSON; migrado al cargar (ver migrations.py)
     fps: int = 30
     width: int = 720               # tamaño de salida (formato configurable)
     height: int = 1280

@@ -470,7 +470,7 @@ def render(project: Project, timeline: Timeline, out_path: Path,
     ass_path = None
     if texts:
         ass_path = out_path.with_suffix(".ass")
-        ass_path.write_text(build_ass(timeline.clips, W, H), encoding="utf-8")
+        ass_path.write_text(build_ass(timeline.clips, W, H, timeline.tracks), encoding="utf-8")
     cmd = build_command(project, timeline, out_path, ass_path=ass_path)
     on_progress(0.15, "Renderizando el vídeo final con FFmpeg…")
     log.info("Export: %d clip(s), encoder=%s preset=%s crf=%s → %s",

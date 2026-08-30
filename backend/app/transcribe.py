@@ -22,6 +22,35 @@ MODELS = ["tiny", "base", "small", "medium", "large-v3"]
 _models: dict[str, WhisperModel] = {}
 
 
+def _attr(w, name, default=None):
+    """Lee un campo de un Word de faster-whisper (objeto) o de un dict."""
+    if isinstance(w, dict):
+        return w.get(name, default)
+    return getattr(w, name, default)
+
+
+def shape_words(raw) -> list[dict]:
+    """Normaliza las palabras de un segmento a dicts persistibles.
+
+    Descarta palabras vacías o sin marcas de tiempo. ``text`` viene con un
+    espacio inicial desde el modelo, se recorta. Función pura (testeable sin
+    cargar Whisper).
+    """
+    out: list[dict] = []
+    for w in raw or []:
+        text = (_attr(w, "word", "") or "").strip()
+        start = _attr(w, "start")
+        end = _attr(w, "end")
+        if not text or start is None or end is None:
+            continue
+        prob = _attr(w, "probability")
+        item = {"text": text, "start": round(float(start), 2), "end": round(float(end), 2)}
+        if prob is not None:
+            item["prob"] = round(float(prob), 3)
+        out.append(item)
+    return out
+
+
 def _get_model(size: str) -> WhisperModel:
     """Carga (y cachea) un modelo. CPU + int8 para ir ligero sin GPU."""
     if size not in _models:
@@ -64,12 +93,19 @@ def _transcribe_path(path: str, model_size: str, language: Optional[str],
     model = _get_model(model_size)
 
     on_progress(base, "Transcribiendo…")
-    segments, info = model.transcribe(str(path), language=language or None)
+    segments, info = model.transcribe(
+        str(path), language=language or None, word_timestamps=True
+    )
 
     total = info.duration or 0.0
     out: list[dict] = []
     for s in segments:
-        out.append({"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()})
+        out.append({
+            "start": round(s.start, 2),
+            "end": round(s.end, 2),
+            "text": s.text.strip(),
+            "words": shape_words(getattr(s, "words", None)),
+        })
         if total:
             on_progress(min(0.99, base + (1 - base) * (s.end / total)), "Transcribiendo…")
 
