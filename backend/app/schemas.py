@@ -286,6 +286,7 @@ class TimelineClip(BaseModel):
     look: str = "none"                    # none | bw | cinematic | vintage | contrast | warm | cool | saturated
     muted: bool = False                 # silencia este clip (la pista puede seguir sonando)
     words: list[Word] = []                # (texto) timing real por palabra, RELATIVO al inicio del clip
+    origin: Optional[dict] = None         # (texto) procedencia: {transcript_id, segment_index, fragment_index, word_range, source_range}
 
 
 class Timeline(BaseModel):

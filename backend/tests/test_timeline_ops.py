@@ -158,6 +158,52 @@ class SetProjectFormatTest(unittest.TestCase):
             ops.set_project_format(base_tl(), aspect="21:9")
 
 
+class AddSubtitlesTest(unittest.TestCase):
+    def _tl_with_source(self):
+        tl = base_tl()
+        # clip fuente de vídeo que abarca [0,6] de la timeline
+        tl.clips[0].out_point = 6.0
+        tl.clips[0].source_duration = 10.0
+        return tl
+
+    def _segments(self):
+        return [{"start": 0, "end": 6, "text": "uno dos tres cuatro",
+                 "words": [{"text": "uno", "start": 0.0, "end": 1.0},
+                           {"text": "dos", "start": 1.0, "end": 2.0},
+                           {"text": "tres", "start": 3.0, "end": 4.0},
+                           {"text": "cuatro", "start": 4.0, "end": 5.0}]}]
+
+    def test_crea_pista_de_texto_y_clips(self):
+        r = ops.add_subtitles(self._tl_with_source(), "c1", self._segments(),
+                              style={"max_words": 2}, transcript_id="tr1")
+        text_tracks = [t for t in r.timeline.tracks if t.kind == "text"]
+        self.assertEqual(len(text_tracks), 1)
+        text_clips = [c for c in r.timeline.clips if c.kind == "text"]
+        self.assertEqual(len(text_clips), 2)               # 4 palabras / 2 por cuadro
+        self.assertEqual(len(r.changed), 3)                # pista + 2 clips
+        self.assertEqual(ops.validate_timeline(r.timeline), [])
+
+    def test_words_y_origin_sobreviven_al_schema(self):
+        r = ops.add_subtitles(self._tl_with_source(), "c1", self._segments(),
+                              style={"max_words": 2}, transcript_id="tr1")
+        tc = [c for c in r.timeline.clips if c.kind == "text"][0]
+        self.assertEqual([w.text for w in tc.words], ["uno", "dos"])   # words[] persisten
+        self.assertEqual(tc.origin["transcript_id"], "tr1")            # origin persiste
+        self.assertEqual(tc.origin["fragment_index"], 0)
+
+    def test_round_trip_del_timeline_conserva_origin(self):
+        r = ops.add_subtitles(self._tl_with_source(), "c1", self._segments(), style={"max_words": 2})
+        # Serializar y re-parsear como haría PUT /timeline no debe perder origin/words.
+        again = Timeline(**r.timeline.model_dump())
+        tc = [c for c in again.clips if c.kind == "text"][0]
+        self.assertIsNotNone(tc.origin)
+        self.assertTrue(tc.words)
+
+    def test_pista_destino_no_texto_falla(self):
+        with self.assertRaises(ValueError):
+            ops.add_subtitles(self._tl_with_source(), "c1", self._segments(), track_id="V1")
+
+
 class ValidateTest(unittest.TestCase):
     def test_detecta_estado_invalido(self):
         tl = base_tl()

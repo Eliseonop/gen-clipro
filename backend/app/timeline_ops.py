@@ -18,6 +18,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 
+from . import fragment
 from .schemas import Timeline, TimelineClip, TimelineTrack, Word
 
 TRACK_KINDS = ("video", "audio", "text")
@@ -217,6 +218,46 @@ def split_clip(tl: Timeline, clip_id: str, at_time: float) -> EditResult:
     idx = out.clips.index(c)
     out.clips[idx:idx + 1] = [a, b]
     return EditResult(out, changed=[a.id, b.id], warnings=_warn_overlaps(out, c.track_id))
+
+
+def add_subtitles(tl: Timeline, source_clip_id: str, segments, style: dict | None = None,
+                  track_id: str | None = None, transcript_id: str | None = None) -> EditResult:
+    """Genera clips de texto desde una transcripción y los coloca en una pista de
+    texto, alineados al clip fuente. Usa el mismo motor que el editor
+    (``fragment.py``, espejo de editorModel.js): `words[]` reales + `origin`.
+
+    Si ``track_id`` es None usa la primera pista de texto o crea una. ``style`` por
+    defecto = el de la pista destino (para heredar tema/estilo).
+    """
+    out = _copy(tl)
+    src = _find_clip(out, source_clip_id)
+
+    created: list[str] = []
+    if track_id is not None:
+        track = _find_track(out, track_id)
+        if track.kind != "text":
+            raise ValueError(f"la pista {track_id} no es de texto")
+        tid = track_id
+    else:
+        existing = next((t for t in out.tracks if t.kind == "text"), None)
+        if existing is None:
+            tid = _uid("T")
+            out.tracks.append(TimelineTrack(id=tid, kind="text", name="Subtítulos"))
+            track = out.tracks[-1]
+            created = [tid]
+        else:
+            tid, track = existing.id, existing
+
+    st = style if style is not None else (track.style or {})
+    src_dict = {"start": src.start, "in_point": src.in_point, "out_point": src.out_point}
+    made = fragment.text_clips_from_transcript(src_dict, list(segments or []), tid, st, transcript_id)
+
+    new_ids: list[str] = []
+    for cd in made:
+        c = TimelineClip(**cd)
+        out.clips.append(c)
+        new_ids.append(c.id)
+    return EditResult(out, changed=[*created, *new_ids], warnings=_warn_overlaps(out, tid))
 
 
 def set_project_format(tl: Timeline, aspect: str | None = None, width: int | None = None,
