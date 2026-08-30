@@ -13,6 +13,8 @@ from urllib.parse import quote
 
 from . import config, settings
 
+FAVORITES_CAT = "favoritos"
+
 _DEFAULT_BASE = config.BASE_DIR.parent / "SFX_LIBRARY"
 _AUDIO_EXT = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac"}
 
@@ -92,22 +94,46 @@ def load_index() -> dict:
     return {"available": True, "base": str(base), "categories": categories, "items": items}
 
 
-def search(q: str = "", category: str = "", limit: int = 300) -> dict:
-    idx = load_index()
-    items = idx["items"]
-    ql = (q or "").strip().lower()
+def _favorite_sfx_ids() -> set[str]:
+    favs = ((settings.load() or {}).get("favorites") or {}).get("sfx") or []
+    return {str(x) for x in favs}
+
+
+def filter_sfx_items(items: list, q: str = "", category: str = "", favorite_ids: list | None = None) -> list:
+    """Filtra por búsqueda y categoría. ``favoritos`` usa ids marcados con estrella."""
+    out = list(items or [])
     cat = (category or "").strip().lower()
-    if cat:
-        items = [it for it in items if cat in (it["folder"].lower() + " " + it["category"].lower())]
+    if cat == FAVORITES_CAT:
+        favs = set(favorite_ids or [])
+        out = [it for it in out if it.get("id") in favs]
+    elif cat:
+        out = [it for it in out if cat in (str(it.get("folder", "")).lower() + " " + str(it.get("category", "")).lower())]
+    ql = (q or "").strip().lower()
     if ql:
         def match(it: dict) -> bool:
-            hay = f"{it['name']} {it['category']} {it['uso']} {it['folder']}".lower()
+            hay = f"{it.get('name', '')} {it.get('category', '')} {it.get('uso', '')} {it.get('folder', '')}".lower()
             return all(tok in hay for tok in ql.split())
-        items = [it for it in items if match(it)]
+        out = [it for it in out if match(it)]
+    return out
+
+
+def with_favorites_category(categories: list, items: list, favorite_ids: list | None) -> list:
+    favs = set(favorite_ids or [])
+    count = sum(1 for it in (items or []) if it.get("id") in favs)
+    extra = {"id": FAVORITES_CAT, "label": "Favoritos", "count": count}
+    rest = [c for c in (categories or []) if c.get("id") != FAVORITES_CAT]
+    return [extra, *rest]
+
+
+def search(q: str = "", category: str = "", limit: int = 300) -> dict:
+    idx = load_index()
+    fav_ids = list(_favorite_sfx_ids())
+    items = filter_sfx_items(idx["items"], q=q, category=category, favorite_ids=fav_ids)
     total = len(items)
     return {
         "available": idx["available"], "base": idx["base"],
-        "categories": idx["categories"], "total": total,
+        "categories": with_favorites_category(idx["categories"], idx["items"], fav_ids),
+        "total": total,
         "items": items[:limit],
     }
 
