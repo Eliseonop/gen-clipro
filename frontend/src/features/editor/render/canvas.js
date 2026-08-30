@@ -7,7 +7,7 @@
 import { drawReframe, kfColor, cropCornerNorms, clamp } from '../../../lib/panning'
 import { drawTextClip } from '../../../lib/textstyles'
 import { drawAlignGuides } from '../../../lib/alignGuides'
-import { clipDur, clipEnd, newReframe } from '../editorModel'
+import { clipDur, clipEnd, newReframe, timelineToSource } from '../editorModel'
 import { applyCanvasFx, clipFxAt } from '../../../lib/clipFx'
 import {
   cropWindow, destRectOnCanvas, isOverlay, sourceCropPx, videosAt,
@@ -170,7 +170,7 @@ export function drawMainView(head, env) {
     if (canvas.width !== cw2 || canvas.height !== ch2) { canvas.width = cw2; canvas.height = ch2 }
     const active = head >= clip.start - 0.02 && head < clipEnd(clip)
     const clampedHead = clamp(head, clip.start, clipEnd(clip))
-    const srcTime = clamp(clip.in_point + (clampedHead - clip.start), clip.in_point, clip.out_point)
+    const srcTime = clamp(timelineToSource(clip, clampedHead), clip.in_point, clip.out_point)
     if (!(playingRef.current && active)) {
       if (Math.abs(el.currentTime - srcTime) > 0.06) { try { el.currentTime = srcTime } catch { /* noop */ } }
     }

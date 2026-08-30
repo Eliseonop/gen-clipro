@@ -9,9 +9,43 @@ import { chunkCaptionText, splitCaptionWords } from '../../lib/textKaraoke.js'
 let _uid = 1
 export const uid = (p) => `${p}${Date.now().toString(36)}${(_uid++).toString(36)}`
 
-// --- Duración/fin de un clip (tiempo de timeline) ---
-export const clipDur = (c) => Math.max(0, c.out_point - c.in_point)
+// --- Velocidad (CapCut): in/out son fuente; la barra usa tiempo de timeline ---
+export const SPEED_MIN = 0.1
+export const SPEED_MAX = 10
+export const SPEED_PRESETS = [0.3, 0.5, 1, 1.5, 2, 3, 5, 10]
+
+export function clipSpeed(c) {
+  if (!c || c.kind === 'text') return 1
+  const s = Number(c.speed)
+  if (!Number.isFinite(s) || s <= 0) return 1
+  return Math.min(SPEED_MAX, Math.max(SPEED_MIN, s))
+}
+
+export const clipSourceDur = (c) => Math.max(0, (c?.out_point ?? 0) - (c?.in_point ?? 0))
+export const clipDur = (c) => clipSourceDur(c) / clipSpeed(c)
 export const clipEnd = (c) => c.start + clipDur(c)
+
+export function timelineToSource(c, t) {
+  const local = (t - c.start) * clipSpeed(c)
+  if (c.reverse) return c.out_point - local
+  return c.in_point + local
+}
+
+export function sourceToTimeline(c, src) {
+  const sp = clipSpeed(c)
+  if (c.reverse) return c.start + (c.out_point - src) / sp
+  return c.start + (src - c.in_point) / sp
+}
+
+export function splitClipAt(c, at, rightId) {
+  const src = timelineToSource(c, at)
+  if (src <= c.in_point + 0.1 || src >= c.out_point - 0.1) return null
+  const cut = +src.toFixed(3)
+  return {
+    left: { ...c, out_point: cut },
+    right: { ...c, id: rightId, in_point: cut, start: +at.toFixed(3) },
+  }
+}
 
 /** El clip no suena: silenciado él o su pista. */
 export function clipPlaybackMuted(clip, track) {
@@ -330,6 +364,10 @@ export function makeClip(assetKind, item, trackId, start, dur) {
     source_duration: +Math.max(0.3, dur || 1).toFixed(3),
     volume: 1,
     muted: false,
+    speed: 1,
+    keep_pitch: false,
+    reverse: false,
+    speed_curve: null,
     reframe: kind === 'video'
       ? (fromLib ? withKfIds({ ...newReframe(), ...item.reframe }) : newReframe())
       : null,
@@ -347,7 +385,8 @@ export function makeTextClip(trackId, start, dur, text, style) {
     id: uid('c'), track_id: trackId, kind: 'text', asset_kind: 'text', asset_id: uid('t'),
     filename: '', name: (text || 'Texto').slice(0, 22), start: +Math.max(0, start).toFixed(3),
     in_point: 0, out_point: +Math.max(0.5, dur).toFixed(3), source_duration: +Math.max(0.5, dur).toFixed(3),
-    volume: 1, muted: false, reframe: null, text: text || 'Texto', style: { ...(style || defaultTextStyle()) },
+    volume: 1, muted: false, speed: 1, keep_pitch: false, reverse: false, speed_curve: null,
+    reframe: null, text: text || 'Texto', style: { ...(style || defaultTextStyle()) },
     words: [],
   }
 }

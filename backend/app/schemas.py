@@ -278,8 +278,9 @@ class TimelineClip(BaseModel):
 
     ``start`` es la posición en la timeline (s). El fragmento usado del material
     es ``[in_point, out_point]`` del archivo fuente; su duración en la timeline
-    es ``out_point - in_point``. Los keyframes de ``reframe`` son relativos al
-    inicio del material fuente (0..source_duration).
+    es ``(out_point - in_point) / speed``. Los keyframes de ``reframe`` son relativos al
+    inicio del material fuente (0..source_duration). ``speed`` no recorta la fuente:
+    2x acorta la barra a la mitad. El texto ignora ``speed``.
     """
     id: str
     track_id: str
@@ -303,6 +304,10 @@ class TimelineClip(BaseModel):
     exit: str = "none"                    # none | fade | zoom | slide_down | slide_right | pop
     look: str = "none"                    # none | bw | cinematic | vintage | contrast | warm | cool | saturated
     muted: bool = False                 # silencia este clip (la pista puede seguir sonando)
+    speed: float = 1.0                  # 0.1–10; timeline = fuente / speed
+    keep_pitch: bool = False            # audio: mantener tono (atempo) en vez de asetrate
+    reverse: bool = False
+    speed_curve: Optional[dict] = None  # reserva; sin motor en esta entrega
     words: list[Word] = []                # (texto) timing real por palabra, RELATIVO al inicio del clip
     origin: Optional[dict] = None         # (texto) procedencia: {transcript_id, segment_index, fragment_index, word_range, source_range}
     asset_scope: str = "project"          # "project" | "library"

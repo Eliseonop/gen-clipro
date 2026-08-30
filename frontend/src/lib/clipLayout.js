@@ -2,6 +2,7 @@
 // de salida: dos niveles independientes. El editor de clips (compose/slots)
 // no usa este módulo.
 import { clamp, clampCenter, frameAt, geomFor } from './panning.js'
+import { clipEnd } from '../features/editor/editorModel.js'
 
 export const newTransform = () => ({ x: 0.5, y: 0.5, scale: 1, rotation: 0 })
 
@@ -162,8 +163,7 @@ export function videosAt(head, clips, tracks) {
       if (c.kind !== 'video') return false
       const track = (tracks || []).find((t) => t.id === c.track_id)
       if (!track || track.hidden) return false
-      const end = c.start + Math.max(0, c.out_point - c.in_point)
-      return head >= c.start - 0.02 && head < end
+      return head >= c.start - 0.02 && head < clipEnd(c)
     })
     .sort((a, b) => layer(a.track_id) - layer(b.track_id))
 }

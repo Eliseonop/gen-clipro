@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import {
+  SPEED_MIN, SPEED_MAX, SPEED_PRESETS,
+  clipSpeed, clipSourceDur, clipDur, clipEnd,
+  timelineToSource, sourceToTimeline, splitClipAt,
   clipPlaybackMuted, makeClip, mediaUrl, newReframe,
   shouldConfirmTrackDelete, removeTrack,
   canCaptionClip, textClipsFromTranscript,
@@ -7,6 +10,32 @@ import {
   nextClipSelection, rangeSelectOnTrack, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
   previewElementVolume, parsePreviewVolume,
 } from './editorModel.js'
+
+const vFast = { kind: 'video', start: 10, in_point: 2, out_point: 6, speed: 2 }
+assert.equal(clipSourceDur(vFast), 4)
+assert.equal(clipDur(vFast), 2)
+assert.equal(clipEnd(vFast), 12)
+assert.equal(clipSpeed(vFast), 2)
+assert.equal(clipSpeed({ kind: 'text', speed: 4 }), 1)
+assert.equal(clipSpeed({ kind: 'video' }), 1)
+assert.equal(clipSpeed({ kind: 'audio', speed: 99 }), SPEED_MAX)
+assert.equal(clipSpeed({ kind: 'video', speed: 0 }), 1)
+assert.equal(timelineToSource(vFast, 10), 2)
+assert.equal(timelineToSource(vFast, 12), 6)
+assert.equal(sourceToTimeline(vFast, 4), 11)
+const vRev = { ...vFast, reverse: true }
+assert.equal(timelineToSource(vRev, 10), 6)
+assert.equal(timelineToSource(vRev, 12), 2)
+assert.deepEqual(SPEED_PRESETS, [0.3, 0.5, 1, 1.5, 2, 3, 5, 10])
+assert.equal(SPEED_MIN, 0.1)
+assert.equal(SPEED_MAX, 10)
+const splitParts = splitClipAt(vFast, 11, 'c-right')
+assert.equal(splitParts.left.out_point, 4)
+assert.equal(splitParts.right.in_point, 4)
+assert.equal(splitParts.right.start, 11)
+assert.equal(splitParts.right.speed, 2)
+assert.equal(splitClipAt(vFast, 10.02, 'x'), null)
+console.log('clip speed ok')
 
 const legacy = makeClip('clips', { index: 1, filename: 'a.mp4', end: 5, start: 0 }, 'V1', 0, 5)
 assert.equal(legacy.reframe.dual_crop, false)
@@ -27,6 +56,9 @@ assert.equal(master.reframe.keyframes[0].cx, 0.3)
 assert.ok(master.reframe.keyframes[0].id)
 assert.equal(newReframe().split_layout, 'auto')
 assert.equal(legacy.muted, false)
+assert.equal(legacy.speed, 1)
+assert.equal(legacy.keep_pitch, false)
+assert.equal(legacy.reverse, false)
 assert.equal(clipPlaybackMuted(legacy, { muted: false }), false)
 assert.equal(clipPlaybackMuted({ muted: true }, { muted: false }), true)
 assert.equal(clipPlaybackMuted({ muted: false }, { muted: true }), true)
