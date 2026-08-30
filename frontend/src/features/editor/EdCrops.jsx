@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import Icon from '../../components/Icon'
+import FlipSelect from '../../components/FlipSelect'
 import PanModeToggle from '../../components/PanModeToggle'
 import { fmt } from '../../lib/utils'
 import { kfColor } from '../../lib/panning'
@@ -62,27 +63,35 @@ export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHid
               <>
                 <label className="ed-prop">
                   Encuadre
-                  <select className="select" value={frameOf(clip)} onChange={(e) => onChangeFrame(e.target.value)}>
-                    {FRAME_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-                  </select>
+                  <FlipSelect
+                    value={frameOf(clip)}
+                    options={FRAME_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
+                    onChange={(v) => onChangeFrame(v)}
+                  />
                 </label>
                 <label className="ed-prop">
                   Aparición
-                  <select className="select" value={clip.appear || 'none'} onChange={(e) => onChangeFx({ appear: e.target.value })}>
-                    {APPEAR_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-                  </select>
+                  <FlipSelect
+                    value={clip.appear || 'none'}
+                    options={APPEAR_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
+                    onChange={(v) => onChangeFx({ appear: v })}
+                  />
                 </label>
                 <label className="ed-prop">
                   Salida
-                  <select className="select" value={clip.exit || 'none'} onChange={(e) => onChangeFx({ exit: e.target.value })}>
-                    {EXIT_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-                  </select>
+                  <FlipSelect
+                    value={clip.exit || 'none'}
+                    options={EXIT_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
+                    onChange={(v) => onChangeFx({ exit: v })}
+                  />
                 </label>
                 <label className="ed-prop">
                   Filtros
-                  <select className="select" value={clip.look || 'none'} onChange={(e) => onChangeFx({ look: e.target.value })}>
-                    {LOOK_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-                  </select>
+                  <FlipSelect
+                    value={clip.look || 'none'}
+                    options={LOOK_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
+                    onChange={(v) => onChangeFx({ look: v })}
+                  />
                 </label>
               </>
             )}

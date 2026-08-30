@@ -1,4 +1,6 @@
+import { useRef } from 'react'
 import Icon from '../../components/Icon'
+import FlipPopover from '../../components/FlipPopover'
 import { fmt } from '../../lib/utils'
 
 function formatDate(isoStr) {
@@ -150,38 +152,14 @@ export default function ClipsLibraryPanel({
                           <Icon name="movie_edit" size={15} /> Editar
                         </button>
 
-                        {/* Menú de opciones ⋮ */}
-                        <div className="options-menu-wrap">
-                          <button
-                            className="ghost small icon-only menu-trigger"
-                            onClick={() => setActiveMenuIndex(isMenuOpen ? null : c.index)}
-                            title="Opciones del clip"
-                          >
-                            <Icon name="more_vert" size={18} />
-                          </button>
-
-                          {isMenuOpen && (
-                            <div className="options-dropdown" onMouseLeave={() => setActiveMenuIndex(null)}>
-                              <a className="dropdown-item" href={c.url} download onClick={() => setActiveMenuIndex(null)}>
-                                <Icon name="download" size={15} /> Descargar
-                              </a>
-                              <button
-                                className="dropdown-item"
-                                onClick={() => onTranscribe(c)}
-                                disabled={transcribingIndex === c.index}
-                              >
-                                <Icon name="notes" size={15} />
-                                {transcribingIndex === c.index ? 'Transcribiendo…' : 'Transcribir'}
-                              </button>
-                              <button
-                                className="dropdown-item danger"
-                                onClick={() => onDeleteClip(c)}
-                              >
-                                <Icon name="delete" size={15} /> Eliminar
-                              </button>
-                            </div>
-                          )}
-                        </div>
+                        <ClipOptions
+                          clip={c}
+                          isMenuOpen={isMenuOpen}
+                          transcribingIndex={transcribingIndex}
+                          setActiveMenuIndex={setActiveMenuIndex}
+                          onTranscribe={onTranscribe}
+                          onDeleteClip={onDeleteClip}
+                        />
                       </div>
                     </div>
                   )
@@ -192,5 +170,41 @@ export default function ClipsLibraryPanel({
         )}
       </div>
     </aside>
+  )
+}
+
+function ClipOptions({ clip, isMenuOpen, transcribingIndex, setActiveMenuIndex, onTranscribe, onDeleteClip }) {
+  const btnRef = useRef(null)
+  const close = () => setActiveMenuIndex(null)
+  return (
+    <div className="options-menu-wrap">
+      <button
+        ref={btnRef}
+        className="ghost small icon-only menu-trigger"
+        onClick={() => setActiveMenuIndex(isMenuOpen ? null : clip.index)}
+        title="Opciones del clip"
+      >
+        <Icon name="more_vert" size={18} />
+      </button>
+      <FlipPopover open={isMenuOpen} anchorRef={btnRef} onClose={close} className="options-dropdown">
+        <a className="dropdown-item" href={clip.url} download onClick={close}>
+          <Icon name="download" size={15} /> Descargar
+        </a>
+        <button
+          className="dropdown-item"
+          onClick={() => onTranscribe(clip)}
+          disabled={transcribingIndex === clip.index}
+        >
+          <Icon name="notes" size={15} />
+          {transcribingIndex === clip.index ? 'Transcribiendo…' : 'Transcribir'}
+        </button>
+        <button
+          className="dropdown-item danger"
+          onClick={() => onDeleteClip(clip)}
+        >
+          <Icon name="delete" size={15} /> Eliminar
+        </button>
+      </FlipPopover>
+    </div>
   )
 }
