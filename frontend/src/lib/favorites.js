@@ -34,7 +34,6 @@ export function audioFavKey(projectId, audioId) {
 export function clipFavRef(projectId, clip) {
   if (!clip) return null
   if (clip.asset_kind === 'sfx') return { bucket: 'sfx', id: String(clip.filename || clip.asset_id || '') }
-  if (clip.asset_kind === 'audios') return { bucket: 'audios', id: audioFavKey(projectId, clip.asset_id) }
   return null
 }
 

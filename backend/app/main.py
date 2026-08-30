@@ -21,11 +21,13 @@ from .schemas import (
     ClipTranscribeRequest,
     ExportRequest,
     ReframePrepareRequest,
+    SaveLibraryRequest,
     SetFolderRequest,
     Timeline,
     TranscribeRequest,
     TTSRequest,
     UpdateMaterialRequest,
+    YouTubeAudioRequest,
 )
 
 _MEDIA_KIND = {"clips": "video", "audios": "audio"}
@@ -322,7 +324,10 @@ def generate_subtitles(project_id: str, body: dict = Body(...)) -> Job:
     if not filename:
         raise HTTPException(status_code=400, detail="Falta el archivo de audio.")
     job = jobs.create_job()
-    jobs.start_subtitles_job(job, project_id, filename, asset_kind, model, language)
+    jobs.start_subtitles_job(
+        job, project_id, filename, asset_kind, model, language,
+        (body or {}).get("asset_scope") or "project",
+    )
     return job
 
 
@@ -477,6 +482,58 @@ def create_tts(req: TTSRequest) -> Job:
     job = jobs.create_job()
     jobs.start_tts_job(job, req)
     return job
+
+
+@app.post("/api/youtube-audio", response_model=Job)
+def create_youtube_audio(req: YouTubeAudioRequest) -> Job:
+    from . import youtube_audio
+    if not youtube_audio.is_youtube_url(req.url):
+        raise HTTPException(status_code=400, detail="URL de YouTube no válida.")
+    if projects.get_project(req.project_id) is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    job = jobs.create_job()
+    jobs.start_youtube_audio_job(job, req)
+    return job
+
+
+@app.get("/api/library")
+def get_library() -> dict:
+    from . import library
+    return library.list_library()
+
+
+@app.post("/api/library/save")
+def save_library_item(req: SaveLibraryRequest) -> dict:
+    from . import library
+    if req.resource_type not in ("audio", "clip"):
+        raise HTTPException(status_code=400, detail="Tipo no válido.")
+    try:
+        return library.save_from_project(req.project_id, req.resource_type, req.ident)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc) or "Material no encontrado.") from exc
+
+
+@app.delete("/api/library/{item_id}")
+def delete_library_item(item_id: str) -> dict:
+    from . import library
+    try:
+        return library.unsave(item_id)
+    except library.LibraryInUseError as exc:
+        raise HTTPException(status_code=409, detail={
+            "code": "in_use",
+            "message": str(exc),
+            "projects": exc.projects,
+        }) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc) or "Recurso no encontrado.") from exc
+
+
+@app.get("/api/library/media/{kind}/{filename}")
+def library_media(kind: str, filename: str) -> FileResponse:
+    path = storage.resolve_library_media(kind, filename)
+    if path is None or not path.exists():
+        raise HTTPException(status_code=404, detail="Archivo no encontrado.")
+    return FileResponse(str(path))
 
 
 @app.get("/api/settings")

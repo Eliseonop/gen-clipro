@@ -18,8 +18,7 @@ assert.equal(audioFavKey('p1', 'au9'), 'p1:au9')
 
 const sfxClip = { asset_kind: 'sfx', filename: '01_REACTIONS/hit.mp3', asset_id: '01_REACTIONS/hit.mp3' }
 assert.deepEqual(clipFavRef('p1', sfxClip), { bucket: 'sfx', id: '01_REACTIONS/hit.mp3' })
-const audioClip = { asset_kind: 'audios', asset_id: 'abc', filename: 'n.wav' }
-assert.deepEqual(clipFavRef('p1', audioClip), { bucket: 'audios', id: 'p1:abc' })
+assert.equal(clipFavRef('p1', { asset_kind: 'audios', asset_id: 'abc', filename: 'n.wav' }), null)
 assert.equal(clipFavRef('p1', { asset_kind: 'clips', asset_id: '1' }), null)
 assert.equal(clipFavRef('p1', { kind: 'text', asset_kind: 'text' }), null)
 

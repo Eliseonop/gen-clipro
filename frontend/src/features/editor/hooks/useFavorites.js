@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getSettings, putSettings } from '../../../services/api'
 import {
-  audioFavKey,
   clipFavRef,
   emptyFavorites,
   makeTextStyleFavorite,
@@ -26,16 +25,9 @@ export function useFavorites(projectId) {
   }, [])
 
   const isSfxFav = useCallback((id) => favs.sfx.includes(String(id)), [favs.sfx])
-  const isAudioFav = useCallback((audioId) => (
-    !!projectId && favs.audios.includes(audioFavKey(projectId, audioId))
-  ), [favs.audios, projectId])
 
   function toggleSfx(id) {
     return persist({ ...favs, sfx: toggleId(favs.sfx, id) })
-  }
-  function toggleAudio(audioId) {
-    if (!projectId) return Promise.resolve()
-    return persist({ ...favs, audios: toggleId(favs.audios, audioFavKey(projectId, audioId)) })
   }
   function isClipFav(clip) {
     const ref = clipFavRef(projectId, clip)
@@ -57,7 +49,7 @@ export function useFavorites(projectId) {
   }
 
   return {
-    favs, isSfxFav, isAudioFav, toggleSfx, toggleAudio,
+    favs, isSfxFav, toggleSfx,
     isClipFav, toggleClipFav, saveTextStyle, removeTextStyle,
   }
 }

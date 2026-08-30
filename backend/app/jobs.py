@@ -22,6 +22,7 @@ from .schemas import (
     Transcript,
     TranscriptSegment,
     TTSRequest,
+    YouTubeAudioRequest,
 )
 
 _jobs: dict[str, Job] = {}
@@ -260,6 +261,8 @@ def _run_tts(job_id: str, req: TTSRequest) -> None:
             text=req.text,
             duration=info["duration"],
             created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            origin="tts",
+            source="generated",
         )
         projects.add_audio(req.project_id, audio)
         job.audio = audio
@@ -274,6 +277,74 @@ def _run_tts(job_id: str, req: TTSRequest) -> None:
 
 def start_tts_job(job: Job, req: TTSRequest) -> None:
     thread = threading.Thread(target=_run_tts, args=(job.id, req), daemon=True)
+    thread.start()
+
+
+def _run_youtube_audio(job_id: str, req: YouTubeAudioRequest) -> None:
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+    out_path = None
+
+    def on_progress(frac: float, message: str) -> None:
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from urllib.parse import quote
+
+        from . import storage, youtube_audio
+
+        project = projects.get_project(req.project_id)
+        if project is None:
+            raise RuntimeError("Proyecto no encontrado.")
+        base = storage.ensure_dirs(storage.project_base(project))
+        aid = uuid.uuid4().hex[:8]
+        stem = storage.safe_name(req.name or "youtube")
+        filename = f"{stem}_{aid}.m4a"
+        out_path = base / "audio" / filename
+        result = youtube_audio.extract_audio(req.url, out_path, on_progress)
+        stem2 = storage.safe_name(req.name or result.get("title") or "youtube")
+        filename2 = f"{stem2}_{aid}.m4a"
+        dest2 = base / "audio" / filename2
+        if dest2 != out_path:
+            try:
+                out_path.replace(dest2)
+                out_path = dest2
+                filename = filename2
+            except Exception:
+                pass
+        audio = AudioInfo(
+            id=aid,
+            filename=filename,
+            url=f"/api/media/{req.project_id}/audio/{quote(filename)}",
+            origin="youtube",
+            source="external",
+            youtube_url=req.url,
+            youtube_id=result.get("video_id") or youtube_audio.youtube_id_from_url(req.url),
+            label=req.name or result.get("title") or None,
+            duration=result.get("duration"),
+            created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+        projects.add_audio(req.project_id, audio)
+        job.audio = audio
+        job.progress = 1.0
+        job.message = f"Audio extraído ({audio.duration or 0}s)."
+        job.status = JobStatus.done
+    except Exception as exc:  # noqa: BLE001
+        if out_path is not None:
+            try:
+                if out_path.exists():
+                    out_path.unlink()
+            except Exception:
+                pass
+        from . import ytdlp
+        job.status = JobStatus.error
+        job.error = ytdlp.friendly_error(exc)
+        job.message = "Error extrayendo el audio."
+
+
+def start_youtube_audio_job(job: Job, req: YouTubeAudioRequest) -> None:
+    thread = threading.Thread(target=_run_youtube_audio, args=(job.id, req), daemon=True)
     thread.start()
 
 
@@ -364,7 +435,7 @@ def start_export_job(job: Job, pid: str, timeline_dict: dict) -> None:
     thread.start()
 
 
-def _run_subtitles(job_id: str, pid: str, filename: str, asset_kind: str, model: str, language) -> None:
+def _run_subtitles(job_id: str, pid: str, filename: str, asset_kind: str, model: str, language, asset_scope: str = "project") -> None:
     job = _jobs[job_id]
     job.status = JobStatus.running
 
@@ -380,8 +451,10 @@ def _run_subtitles(job_id: str, pid: str, filename: str, asset_kind: str, model:
             raise RuntimeError("Proyecto no encontrado.")
         if asset_kind == "sfx":
             path = sfx.resolve(filename)
+        elif (asset_scope or "project") == "library":
+            path = storage.resolve_library_media("audio" if asset_kind == "audios" else "video", filename)
         else:
-            path = storage.resolve_media(project, "audio", filename)
+            path = storage.resolve_media(project, "audio" if asset_kind == "audios" else "video", filename)
         if path is None or not path.exists():
             raise RuntimeError("No se encuentra el archivo de audio.")
 
@@ -406,6 +479,6 @@ def _run_subtitles(job_id: str, pid: str, filename: str, asset_kind: str, model:
         job.message = "Error generando subtítulos."
 
 
-def start_subtitles_job(job: Job, pid: str, filename: str, asset_kind: str, model: str, language) -> None:
-    thread = threading.Thread(target=_run_subtitles, args=(job.id, pid, filename, asset_kind, model, language), daemon=True)
+def start_subtitles_job(job: Job, pid: str, filename: str, asset_kind: str, model: str, language, asset_scope: str = "project") -> None:
+    thread = threading.Thread(target=_run_subtitles, args=(job.id, pid, filename, asset_kind, model, language, asset_scope), daemon=True)
     thread.start()

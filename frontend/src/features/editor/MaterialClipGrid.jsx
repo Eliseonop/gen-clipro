@@ -4,15 +4,19 @@ import { fmt } from '../../lib/utils'
 import './editor.css'
 
 export function dragPayload(assetKind, item) {
+  const fromLibrary = item?.scope === 'library' || String(item?.id || '').startsWith('lib_')
   return JSON.stringify({
     asset_kind: assetKind,
-    asset_id: assetKind === 'clips' ? String(item.index) : String(item.id),
+    asset_id: fromLibrary
+      ? String(item.id)
+      : (assetKind === 'clips' ? String(item.index) : String(item.id)),
     filename: assetKind === 'sfx' ? item.id : item.filename,
     name: item.label || item.name || item.filename,
     url: item.url,
-    duration: assetKind === 'clips' ? (item.end - item.start) : (item.duration || 0),
+    duration: assetKind === 'clips' ? ((item.end ?? item.duration ?? 0) - (item.start ?? 0)) : (item.duration || 0),
     kind: assetKind === 'clips' ? 'video' : 'audio',
     reframe: item.reframe || null,
+    scope: fromLibrary ? 'library' : 'project',
   })
 }
 
@@ -45,10 +49,12 @@ export function Empty({ text }) {
 export function VideoCard({
   clip, onAdd, onPlay, di, draggable = true,
   addTitle = 'Agregar al proyecto',
+  saved = false, onToggleSave,
 }) {
   const { ref, playing, setPlaying, toggle } = useToggle(onPlay)
-  const title = clip.label || `Clip #${clip.index}`
+  const title = clip.label || (clip.scope === 'library' ? (clip.filename || 'Guardado') : `Clip #${clip.index}`)
   const desc = (clip.description || '').trim()
+  const dur = (clip.end != null && clip.start != null) ? (clip.end - clip.start) : (clip.duration || 0)
 
   function onPlayClick(e) {
     e?.stopPropagation()
@@ -61,7 +67,7 @@ export function VideoCard({
       draggable={draggable}
       onDragStart={draggable ? (e) => {
         e.dataTransfer.setData('application/x-material', dragPayload('clips', clip))
-        di?.({ kind: 'video', duration: clip.end - clip.start, name: title })
+        di?.({ kind: 'video', duration: dur || 1, name: title })
       } : undefined}
       onDragEnd={draggable ? () => di?.(null) : undefined}
     >
@@ -74,7 +80,18 @@ export function VideoCard({
         <button className="ed-add-corner" onClick={(e) => { e.stopPropagation(); onAdd() }} title={addTitle}>
           <Icon name="add" size={16} />
         </button>
-        <span className="ed-card-dur">{fmt(clip.end - clip.start)}</span>
+        {onToggleSave && (
+          <button
+            type="button"
+            className={`ed-save-corner ${saved ? 'on' : ''}`}
+            title={saved ? 'Quitar de guardados' : 'Guardar'}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onToggleSave() }}
+          >
+            <Icon name={saved ? 'bookmark' : 'bookmark_border'} size={15} />
+          </button>
+        )}
+        <span className="ed-card-dur">{fmt(dur)}</span>
       </div>
       <div className="ed-card-name" title={title}>{title}</div>
       {desc ? <div className="ed-card-desc" title={desc}>{desc}</div> : null}
@@ -91,6 +108,7 @@ export default function MaterialClipGrid({
   draggable = true,
   addTitle = 'Agregar al proyecto',
   emptyText = 'Sin clips. Pulsa Cargar video para añadir material.',
+  onToggleSave,
 }) {
   const internalPlay = useExclusiveMedia()
   const play = onPlay || internalPlay
@@ -100,13 +118,15 @@ export default function MaterialClipGrid({
         ? <Empty text={emptyText} />
         : clips.map((c) => (
           <VideoCard
-            key={c.index}
+            key={c.scope === 'library' ? c.id : c.index}
             clip={c}
             onAdd={() => onAdd(c)}
             onPlay={play}
             di={di}
             draggable={draggable}
             addTitle={addTitle}
+            saved={c.scope === 'library' || !!c.is_saved}
+            onToggleSave={onToggleSave ? () => onToggleSave(c) : undefined}
           />
         ))}
     </div>

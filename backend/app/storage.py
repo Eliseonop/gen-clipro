@@ -57,6 +57,24 @@ def resolve_media(project, kind: str, filename: str) -> Path | None:
     return target
 
 
+def library_root() -> Path:
+    root = config.DATA_DIR / "library"
+    (root / "audio").mkdir(parents=True, exist_ok=True)
+    (root / "video").mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def resolve_library_media(kind: str, filename: str) -> Path | None:
+    """Ruta segura bajo data/library/audio|video. None si el tipo es inválido o hay traversal."""
+    if kind not in ("video", "audio") or not filename:
+        return None
+    folder = (config.DATA_DIR / "library" / kind).resolve()
+    target = (folder / filename).resolve()
+    if target.parent != folder:
+        return None
+    return target
+
+
 def pick_folder() -> str | None:
     """Abre un diálogo nativo de "seleccionar carpeta" en la máquina local.
 

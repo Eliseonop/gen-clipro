@@ -51,7 +51,9 @@ export function removeTrack(tracks, clips, trackId) {
 export function canCaptionClip(clip) {
   if (!clip || clip.kind === 'text') return false
   if (clip.asset_kind === 'audios' || clip.asset_kind === 'sfx') return true
-  return clip.kind === 'video' && !!(clip.asset_id || clip.index != null)
+  if (clip.kind !== 'video') return false
+  if ((clip.asset_scope || 'project') === 'library') return false
+  return !!(clip.asset_id || clip.index != null)
 }
 
 /** Palabras de un segmento mapeadas a tiempos RELATIVOS al inicio del text clip.
@@ -277,6 +279,9 @@ export const FORMATS = [
 export function mediaUrl(pid, clip) {
   if (clip.asset_kind === 'sfx') return `/api/sfx/file/${clip.filename.split('/').map(encodeURIComponent).join('/')}`
   const kind = clip.asset_kind === 'audios' ? 'audio' : 'video'
+  if ((clip.asset_scope || 'project') === 'library') {
+    return `/api/library/media/${kind}/${encodeURIComponent(clip.filename)}`
+  }
   return `/api/media/${pid}/${kind}/${encodeURIComponent(clip.filename)}`
 }
 
@@ -306,13 +311,17 @@ export function withKfIds(reframe) {
 // Crea un clip de vídeo/audio a partir de un asset de la biblioteca.
 export function makeClip(assetKind, item, trackId, start, dur) {
   const kind = assetKind === 'clips' ? 'video' : 'audio'
+  const fromLibrary = item?.scope === 'library' || String(item?.id || '').startsWith('lib_')
   const fromLib = kind === 'video' && isMasterReframe(item.reframe)
   return {
     id: uid('c'),
     track_id: trackId,
     kind,
     asset_kind: assetKind,
-    asset_id: assetKind === 'clips' ? String(item.index) : String(item.id),
+    asset_id: fromLibrary
+      ? String(item.id)
+      : (assetKind === 'clips' ? String(item.index) : String(item.id)),
+    asset_scope: fromLibrary ? 'library' : 'project',
     filename: assetKind === 'sfx' ? item.id : item.filename,
     name: item.label || item.name || item.filename,
     start: +Math.max(0, start).toFixed(3),

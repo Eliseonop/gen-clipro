@@ -149,6 +149,8 @@ class ClipInfo(BaseModel):
     description: Optional[str] = None
     reframe: Optional[Reframe] = None
     transcript: Optional["Transcript"] = None   # guion del fragmento (relativo al clip)
+    origin: Optional[str] = None              # "youtube" | "compose"
+    source: Optional[str] = None              # "external" | "generated"
 
 
 class CreateProjectRequest(BaseModel):
@@ -207,7 +209,7 @@ class AudioInfo(BaseModel):
     id: str
     filename: str
     url: str
-    voice: str
+    voice: Optional[str] = None
     voice2: Optional[str] = None
     blend: Optional[float] = None
     speed: float = 1.0
@@ -218,6 +220,10 @@ class AudioInfo(BaseModel):
     engine: Optional[str] = None       # "kokoro" | "piper"
     label: Optional[str] = None
     description: Optional[str] = None
+    origin: Optional[str] = None              # "tts" | "youtube"
+    source: Optional[str] = None              # "generated" | "external"
+    youtube_url: Optional[str] = None
+    youtube_id: Optional[str] = None
 
 
 class TTSRequest(BaseModel):
@@ -230,6 +236,18 @@ class TTSRequest(BaseModel):
     speed: float = 1.0
     pause: float = 0.4                 # pausa (s) entre frases/párrafos
     name: Optional[str] = None
+
+
+class YouTubeAudioRequest(BaseModel):
+    project_id: str
+    url: str
+    name: Optional[str] = None
+
+
+class SaveLibraryRequest(BaseModel):
+    project_id: str
+    resource_type: str                    # "audio" | "clip"
+    ident: str
 
 
 class UpdateMaterialRequest(BaseModel):
@@ -287,6 +305,7 @@ class TimelineClip(BaseModel):
     muted: bool = False                 # silencia este clip (la pista puede seguir sonando)
     words: list[Word] = []                # (texto) timing real por palabra, RELATIVO al inicio del clip
     origin: Optional[dict] = None         # (texto) procedencia: {transcript_id, segment_index, fragment_index, word_range, source_range}
+    asset_scope: str = "project"          # "project" | "library"
 
 
 class Timeline(BaseModel):

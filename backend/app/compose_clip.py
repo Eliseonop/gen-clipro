@@ -163,4 +163,6 @@ def generate_composition(
         label=label,
         description=description,
         reframe=None,
+        origin="compose",
+        source="generated",
     )

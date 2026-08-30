@@ -4,7 +4,12 @@ async function req(path, options) {
   const res = await fetch(path, options)
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || `Error ${res.status}`)
+    const d = err.detail
+    const msg = typeof d === 'string' ? d : (d && d.message) || `Error ${res.status}`
+    const e = new Error(msg)
+    e.status = res.status
+    e.detail = d
+    throw e
   }
   return res.json()
 }
@@ -49,6 +54,10 @@ export const setProjectFolder = (id, path) => post(`/api/projects/${id}/folder`,
 // --- Audio (TTS) + ajustes ---
 export const listVoices = () => get('/api/voices')
 export const createTtsJob = (params) => post('/api/tts', params)
+export const createYoutubeAudioJob = (params) => post('/api/youtube-audio', params)
+export const listLibrary = () => get('/api/library')
+export const saveLibraryItem = (params) => post('/api/library/save', params)
+export const unsaveLibraryItem = (id) => del(`/api/library/${id}`)
 export const getSettings = () => get('/api/settings')
 export const putSettings = (data) => put('/api/settings', data)
 

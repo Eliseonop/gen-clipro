@@ -321,6 +321,8 @@ def generate_clips(
                     label=seg.label,
                     description=seg.description,
                     reframe=clip_reframe,
+                    origin="youtube",
+                    source="external",
                 )
             )
             # El recorte ocupa del 40% al 100% de la barra global.

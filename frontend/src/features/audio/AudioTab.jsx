@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
-import { listVoices, createTtsJob, getJob, getSettings, putSettings } from '../../services/api'
+import { listVoices, createTtsJob, createYoutubeAudioJob, getJob, getSettings, putSettings } from '../../services/api'
 import Icon from '../../components/Icon'
 import { buildScriptPrompt } from './scriptPrompt'
 import TtsControls from './TtsControls'
 import AudioProjectList from './AudioProjectList'
 
 export default function AudioTab({ project, onChange }) {
+  const [mode, setMode] = useState('narrator')
   const [engines, setEngines] = useState([])
   const [engine, setEngine] = useState('kokoro')
   const [text, setText] = useState('')
@@ -17,6 +18,8 @@ export default function AudioTab({ project, onChange }) {
   const [name, setName] = useState('')
   const [topic, setTopic] = useState('')
   const [copied, setCopied] = useState(false)
+  const [ytUrl, setYtUrl] = useState('')
+  const [ytName, setYtName] = useState('')
   const [job, setJob] = useState(null)
   const [error, setError] = useState('')
 
@@ -24,7 +27,6 @@ export default function AudioTab({ project, onChange }) {
   const voices = curEngine?.voices || []
   const available = curEngine?.available ?? true
   const isKokoro = engine === 'kokoro'
-  const anyAvailable = engines.some((e) => e.available)
 
   useEffect(() => {
     (async () => {
@@ -48,7 +50,6 @@ export default function AudioTab({ project, onChange }) {
     })()
   }, [])
 
-  // Al cambiar de motor, asegura que la voz elegida exista en ese motor.
   useEffect(() => {
     if (!voices.length) return
     if (!voices.some((v) => v.id === voice)) setVoice(voices[0].id)
@@ -87,79 +88,125 @@ export default function AudioTab({ project, onChange }) {
     } catch (e) { setError(e.message) }
   }
 
-  const busy = job && (job.status === 'pending' || job.status === 'running')
-
-  if (engines.length > 0 && !anyAvailable) {
-    return (
-      <section className="card">
-        <h2>Audio</h2>
-        <div className="warn">Faltan los modelos de Kokoro en <code>backend/models</code>. Descárgalos (ver README).</div>
-      </section>
-    )
+  async function extractYoutube() {
+    setError('')
+    if (!ytUrl.trim()) { setError('Pega un enlace de YouTube.'); return }
+    try {
+      setJob(await createYoutubeAudioJob({
+        project_id: project.id,
+        url: ytUrl.trim(),
+        name: ytName.trim() || undefined,
+      }))
+    } catch (e) { setError(e.message) }
   }
+
+  const busy = job && (job.status === 'pending' || job.status === 'running')
 
   return (
     <div className="audio-grid">
       <section className="card">
-        <div className="tx-head">
-          <h3>Narrador (texto → voz)</h3>
-        </div>
-
-        <div className="prompt-box">
-          <label className="field"><span>Mi guion debe hablar de esto</span>
-            <input
-              className="time-input"
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-              placeholder="ej. cómo el silicio de la arena termina en una GPU"
-            />
-          </label>
-          <button className="ghost small" onClick={copyPrompt} title="Copia un prompt listo para pedirle el guion a una IA">
-            <Icon name={copied ? 'check' : 'content_copy'} size={16} /> {copied ? 'Copiado' : 'Copiar prompt'}
+        <div className="audio-subtabs">
+          <button type="button" className={`ed-tab ${mode === 'narrator' ? 'on' : ''}`} onClick={() => { setMode('narrator'); setError('') }}>
+            Narrador
           </button>
-          <p className="muted" style={{ fontSize: 12, margin: '2px 0 0' }}>
-            Copia el prompt, pídeselo a una IA, y pega el guion que te devuelva abajo.
-          </p>
+          <button type="button" className={`ed-tab ${mode === 'youtube' ? 'on' : ''}`} onClick={() => { setMode('youtube'); setError('') }}>
+            YouTube → Audio
+          </button>
         </div>
 
-        <label className="field"><span>Este es mi guion (texto a narrar)</span>
-          <textarea
-            className="tts-text"
-            placeholder="Pega o escribe aquí el guion que se va a narrar…"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            rows={9}
-          />
-        </label>
+        {mode === 'narrator' ? (
+          <>
+            <div className="tx-head">
+              <h3>Narrador (texto → voz)</h3>
+            </div>
 
-        <TtsControls
-          engines={engines} engine={engine} setEngine={setEngine}
-          voices={voices} voice={voice} setVoice={setVoice}
-          voice2={voice2} setVoice2={setVoice2} isKokoro={isKokoro}
-          blend={blend} setBlend={setBlend} speed={speed} setSpeed={setSpeed}
-          pause={pause} setPause={setPause} name={name} setName={setName}
-        />
+            <div className="prompt-box">
+              <label className="field"><span>Mi guion debe hablar de esto</span>
+                <input
+                  className="time-input"
+                  value={topic}
+                  onChange={(e) => setTopic(e.target.value)}
+                  placeholder="ej. cómo el silicio de la arena termina en una GPU"
+                />
+              </label>
+              <button className="ghost small" onClick={copyPrompt} title="Copia un prompt listo para pedirle el guion a una IA">
+                <Icon name={copied ? 'check' : 'content_copy'} size={16} /> {copied ? 'Copiado' : 'Copiar prompt'}
+              </button>
+              <p className="muted" style={{ fontSize: 12, margin: '2px 0 0' }}>
+                Copia el prompt, pídeselo a una IA, y pega el guion que te devuelva abajo.
+              </p>
+            </div>
 
-        <p className="muted" style={{ fontSize: 13 }}>
-          {isKokoro
-            ? 'Consejo: frases cortas y saltos de línea suenan más natural que cualquier parámetro. Mezclar dos voces crea un timbre propio.'
-            : 'Voces en español mexicano (Piper). Consejo: velocidad 0.95–1.0 y frases cortas para el tono más natural.'}
-        </p>
+            <label className="field"><span>Este es mi guion (texto a narrar)</span>
+              <textarea
+                className="tts-text"
+                placeholder="Pega o escribe aquí el guion que se va a narrar…"
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                rows={9}
+              />
+            </label>
 
-        {!available && (
-          <div className="warn">
-            El motor <strong>{curEngine?.label || engine}</strong> no está instalado.
-            {engine === 'piper'
-              ? <> Ejecuta <code>python get_piper.py</code> en la carpeta <code>backend/</code> y reinicia el backend.</>
-              : <> Faltan los modelos en <code>backend/models</code> (ver README).</>}
-          </div>
+            <TtsControls
+              engines={engines} engine={engine} setEngine={setEngine}
+              voices={voices} voice={voice} setVoice={setVoice}
+              voice2={voice2} setVoice2={setVoice2} isKokoro={isKokoro}
+              blend={blend} setBlend={setBlend} speed={speed} setSpeed={setSpeed}
+              pause={pause} setPause={setPause} name={name} setName={setName}
+            />
+
+            <p className="muted" style={{ fontSize: 13 }}>
+              {isKokoro
+                ? 'Consejo: frases cortas y saltos de línea suenan más natural que cualquier parámetro. Mezclar dos voces crea un timbre propio.'
+                : 'Voces en español mexicano (Piper). Consejo: velocidad 0.95–1.0 y frases cortas para el tono más natural.'}
+            </p>
+
+            {!available && (
+              <div className="warn">
+                El motor <strong>{curEngine?.label || engine}</strong> no está instalado.
+                {engine === 'piper'
+                  ? <> Ejecuta <code>python get_piper.py</code> en la carpeta <code>backend/</code> y reinicia el backend.</>
+                  : <> Faltan los modelos en <code>backend/models</code> (ver README).</>}
+              </div>
+            )}
+
+            {error && <div className="error">⚠️ {error}</div>}
+
+            <button className="primary big" onClick={generate} disabled={busy || !available}>
+              {busy ? 'Generando…' : '🔊 Generar audio'}
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="tx-head">
+              <h3>YouTube → Audio</h3>
+            </div>
+            <p className="muted" style={{ fontSize: 13 }}>
+              Pega un enlace. Se extrae el audio completo del vídeo y queda como material de este proyecto. Luego puedes Guardarlo para reutilizarlo en otros.
+            </p>
+            <label className="field"><span>Enlace de YouTube</span>
+              <input
+                className="url"
+                placeholder="https://www.youtube.com/watch?v=…"
+                value={ytUrl}
+                onChange={(e) => setYtUrl(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && extractYoutube()}
+              />
+            </label>
+            <label className="field"><span>Nombre (opcional)</span>
+              <input
+                className="time-input"
+                value={ytName}
+                onChange={(e) => setYtName(e.target.value)}
+                placeholder="Si lo dejas vacío, se usa el título del vídeo"
+              />
+            </label>
+            {error && <div className="error">⚠️ {error}</div>}
+            <button className="primary big" onClick={extractYoutube} disabled={busy}>
+              {busy ? 'Extrayendo…' : 'Extraer audio'}
+            </button>
+          </>
         )}
-
-        {error && <div className="error">⚠️ {error}</div>}
-
-        <button className="primary big" onClick={generate} disabled={busy || !available}>
-          {busy ? 'Generando…' : '🔊 Generar audio'}
-        </button>
 
         {busy && (
           <>
@@ -170,7 +217,7 @@ export default function AudioTab({ project, onChange }) {
         {job?.status === 'error' && <div className="error">⚠️ {job.error}</div>}
       </section>
 
-      <AudioProjectList audios={project.audios} />
+      <AudioProjectList audios={project.audios} projectId={project.id} onSaved={onChange} />
     </div>
   )
 }
