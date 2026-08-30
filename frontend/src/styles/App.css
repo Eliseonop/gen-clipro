@@ -573,8 +573,8 @@ button.select.flip-select::after {
 
 .saved-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .clip-card {
@@ -678,18 +678,48 @@ button.select.flip-select::after {
   backdrop-filter: blur(4px);
 }
 
+.clip-card.saved-card-grid {
+  padding: 6px;
+  gap: 5px;
+}
+.clip-card.saved-card-grid:hover {
+  transform: translateY(-1px);
+}
+
 .saved-card-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
+  min-width: 0;
 }
 .saved-title-row strong {
-  font-size: 13px;
+  font-size: 11px;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   display: block;
+}
+.saved-card-grid .clip-time {
+  font-size: 10.5px;
+}
+.saved-card-grid .clip-date {
+  font-size: 9.5px;
+  margin-top: 0;
+}
+.saved-card-grid .clip-card-actions {
+  gap: 4px;
+  margin-top: 0;
+}
+.saved-card-grid .clip-card-actions .edit-btn {
+  padding: 4px 6px;
+  font-size: 10.5px;
+}
+.saved-card-grid .thumb-dur {
+  bottom: 4px;
+  right: 4px;
+  font-size: 9px;
+  padding: 1px 4px;
 }
 
 .clip-card-actions {
@@ -833,8 +863,9 @@ button.select.flip-select::after {
 .tool-modal .clips-panel-title h2 { font-size: 15px; }
 .tool-modal .panel-tab { font-size: 12.5px; padding: 8px 10px; }
 .tool-modal .clips-panel-body { padding: 14px; }
-.tool-modal .saved-grid { grid-template-columns: 1fr; gap: 10px; }
-.tool-modal .clip-card { padding: 12px; gap: 8px; }
+.tool-modal .saved-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.tool-modal .clip-card.rec-card { padding: 10px; gap: 8px; }
+.tool-modal .clip-card.saved-card-grid { padding: 6px; gap: 5px; }
 .tool-modal .audio-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(280px, 380px);
@@ -866,6 +897,8 @@ button.select.flip-select::after {
   gap: 10px;
 }
 .tool-modal .prompt-box .field { flex: 1; min-width: 220px; }
+.audio-subtabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.audio-item-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .tool-modal .primary.big { margin-top: 14px; }
 
 .modal-editor.ultra-workspace {
@@ -1340,7 +1373,7 @@ button.select.flip-select::after {
   .project-view { min-height: auto; }
   .video-tab-layout { flex-direction: column; }
   .clips-right-panel { width: 100%; position: static; height: auto; max-height: 600px; }
-  .saved-grid { grid-template-columns: 1fr; }
+  .saved-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .modal-editor.ultra-workspace { height: auto; max-height: 94vh; overflow-y: auto; }
   .ed-grid-workspace { grid-template-columns: 1fr; }
   .tool-modal .video-tab-layout { flex-direction: row; align-items: stretch; }

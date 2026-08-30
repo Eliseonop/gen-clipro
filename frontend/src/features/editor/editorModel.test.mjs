@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import {
-  clipPlaybackMuted, makeClip, newReframe,
+  clipPlaybackMuted, makeClip, mediaUrl, newReframe,
   shouldConfirmTrackDelete, removeTrack,
   canCaptionClip, textClipsFromTranscript,
   splitClipByMaxWords, splitTrackTextByMaxWords, extraClipsAfterSplit,
@@ -30,6 +30,16 @@ assert.equal(legacy.muted, false)
 assert.equal(clipPlaybackMuted(legacy, { muted: false }), false)
 assert.equal(clipPlaybackMuted({ muted: true }, { muted: false }), true)
 assert.equal(clipPlaybackMuted({ muted: false }, { muted: true }), true)
+
+assert.equal(legacy.asset_scope, 'project')
+assert.equal(mediaUrl('p1', legacy), '/api/media/p1/video/a.mp4')
+
+const libAudio = makeClip('audios', {
+  id: 'lib_abc123def456', filename: 'yt.m4a', duration: 12, scope: 'library',
+}, 'A1', 0, 12)
+assert.equal(libAudio.asset_scope, 'library')
+assert.equal(libAudio.asset_id, 'lib_abc123def456')
+assert.equal(mediaUrl('p1', libAudio), '/api/library/media/audio/yt.m4a')
 
 console.log('makeClip reframe copy ok')
 

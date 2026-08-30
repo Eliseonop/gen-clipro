@@ -43,6 +43,8 @@ def _clip_path(project: Project, clip: TimelineClip) -> Optional[Path]:
     kind = _MEDIA_KIND.get(clip.asset_kind)
     if kind is None:
         return None
+    if (getattr(clip, "asset_scope", None) or "project") == "library":
+        return storage.resolve_library_media(kind, clip.filename)
     return storage.resolve_media(project, kind, clip.filename)
 
 

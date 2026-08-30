@@ -12,7 +12,10 @@ export function useSubtitles(projectId, { tracksRef, ensureTextTrack, setClips, 
     if (!canCaptionClip(clip)) return
     const start = clip.kind === 'video'
       ? transcribeClip(projectId, clip.asset_id || clip.index, 'base')
-      : generateSubtitles(projectId, { filename: clip.filename, asset_kind: clip.asset_kind, model: 'base' })
+      : generateSubtitles(projectId, {
+        filename: clip.filename, asset_kind: clip.asset_kind, model: 'base',
+        asset_scope: clip.asset_scope || 'project',
+      })
     start
       .then((job) => setSubJob({ ...job, srcClip: clip }))
       .catch((e) => setSubJob({ status: 'error', error: e.message }))

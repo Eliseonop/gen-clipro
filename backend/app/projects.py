@@ -210,6 +210,29 @@ def save_timeline(pid: str, timeline: dict) -> Project | None:
     return None
 
 
+def retarget_timeline_asset(
+    pid: str, asset_kind: str, old_id: str, old_filename: str,
+    new_id: str, new_filename: str,
+) -> None:
+    """Reescribe punteros de la timeline de un proyecto hacia un ítem de biblioteca."""
+    with _lock:
+        data = _load()
+        for p in data["projects"]:
+            if p["id"] != pid:
+                continue
+            tl = p.get("timeline")
+            if isinstance(tl, dict):
+                for c in tl.get("clips") or []:
+                    if c.get("asset_kind") != asset_kind:
+                        continue
+                    if str(c.get("asset_id")) == str(old_id) or c.get("filename") == old_filename:
+                        c["asset_scope"] = "library"
+                        c["asset_id"] = new_id
+                        c["filename"] = new_filename
+            _save(data)
+            return
+
+
 def add_audio(pid: str, audio: AudioInfo) -> None:
     with _lock:
         data = _load()

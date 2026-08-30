@@ -2,18 +2,82 @@ import { useState, useEffect, useCallback } from 'react'
 import Icon from '../../components/Icon'
 import { fmt } from '../../lib/utils'
 import { FAV_CAT } from '../../lib/favorites'
-import { listSfx, setSfxFolder, pickFolder } from '../../services/api'
+import { listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryItem, unsaveLibraryItem } from '../../services/api'
 import MaterialClipGrid, { dragPayload, useToggle, useExclusiveMedia, Empty } from './MaterialClipGrid'
 
-// Panel izquierdo (biblioteca): Video | Audio | Sound Effects.
-export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenVideo, onOpenAudio, fav }) {
+function ScopeFilter({ value, onChange }) {
+  return (
+    <div className="ed-scope-filter">
+      <button type="button" className={`ed-tab ${value === 'all' ? 'on' : ''}`} onClick={() => onChange('all')}>Todos</button>
+      <button type="button" className={`ed-tab ${value === 'saved' ? 'on' : ''}`} onClick={() => onChange('saved')}>Guardados</button>
+    </div>
+  )
+}
+
+function SaveMark({ on, onToggle, title }) {
+  return (
+    <button
+      type="button"
+      className={`ed-fav-btn ${on ? 'on' : ''}`}
+      title={title || (on ? 'Quitar de guardados' : 'Guardar')}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => { e.stopPropagation(); onToggle?.() }}
+    >
+      <Icon name={on ? 'bookmark' : 'bookmark_border'} size={15} />
+    </button>
+  )
+}
+
+function withProjectScope(items, kind) {
+  return (items || []).map((it) => ({
+    ...it,
+    scope: 'project',
+    is_saved: false,
+    resource_type: kind,
+    id: kind === 'clip' ? it.id || String(it.index) : it.id,
+  }))
+}
+
+export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenVideo, onOpenAudio, onRefresh, fav }) {
   const [tab, setTab] = useState('video')
-  const [audioFavOnly, setAudioFavOnly] = useState(false)
+  const [videoFilter, setVideoFilter] = useState('all')
+  const [audioFilter, setAudioFilter] = useState('all')
+  const [library, setLibrary] = useState({ clips: [], audios: [] })
+  const [err, setErr] = useState('')
   const clips = project.clips || []
   const audios = project.audios || []
-  const shownAudios = audioFavOnly ? audios.filter((a) => fav?.isAudioFav(a.id)) : audios
   const onPlayMedia = useExclusiveMedia()
   const di = onDragInfo || (() => {})
+
+  const reloadLibrary = useCallback(() => {
+    listLibrary().then(setLibrary).catch(() => {})
+  }, [])
+
+  useEffect(() => { reloadLibrary() }, [reloadLibrary, project.id, clips.length, audios.length])
+
+  async function toggleSave(resourceType, item) {
+    setErr('')
+    try {
+      if (item.scope === 'library' || item.is_saved) {
+        await unsaveLibraryItem(item.id)
+      } else {
+        await saveLibraryItem({
+          project_id: project.id,
+          resource_type: resourceType,
+          ident: resourceType === 'clip' ? String(item.index) : String(item.id),
+        })
+      }
+      reloadLibrary()
+      onRefresh?.()
+    } catch (e) {
+      setErr(e.message)
+    }
+  }
+
+  const projectClips = withProjectScope(clips, 'clip')
+  const projectAudios = withProjectScope(audios, 'audio')
+  const shownClips = videoFilter === 'saved' ? (library.clips || []) : [...projectClips, ...(library.clips || [])]
+  const shownAudios = audioFilter === 'saved' ? (library.audios || []) : [...projectAudios, ...(library.audios || [])]
 
   return (
     <div className="ed-material">
@@ -35,49 +99,45 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
       </div>
       <div className="ed-mat-tabs">
         <button className={`ed-tab ${tab === 'video' ? 'on' : ''}`} onClick={() => setTab('video')}>
-          <Icon name="movie" size={15} /> Video <span className="ed-count">{clips.length}</span>
+          <Icon name="movie" size={15} /> Video <span className="ed-count">{clips.length + (library.clips || []).length}</span>
         </button>
         <button className={`ed-tab ${tab === 'audio' ? 'on' : ''}`} onClick={() => setTab('audio')}>
-          <Icon name="mic" size={15} /> Audio <span className="ed-count">{audios.length}</span>
+          <Icon name="mic" size={15} /> Audio <span className="ed-count">{audios.length + (library.audios || []).length}</span>
         </button>
         <button className={`ed-tab ${tab === 'sfx' ? 'on' : ''}`} onClick={() => setTab('sfx')}>
           <Icon name="graphic_eq" size={15} /> SFX
         </button>
       </div>
+      {err && <div className="ed-mat-err">{err}</div>}
 
       {tab === 'video' && (
-        <MaterialClipGrid
-          clips={clips}
-          onAdd={(c) => onAdd('clips', c)}
-          onPlay={onPlayMedia}
-          di={di}
-        />
+        <div className="ed-mat-list">
+          <ScopeFilter value={videoFilter} onChange={setVideoFilter} />
+          <MaterialClipGrid
+            clips={shownClips}
+            onAdd={(c) => onAdd('clips', c)}
+            onPlay={onPlayMedia}
+            di={di}
+            onToggleSave={(c) => toggleSave('clip', c)}
+            emptyText={videoFilter === 'saved' ? 'No hay clips guardados.' : 'Sin clips. Pulsa Cargar video para añadir material.'}
+          />
+        </div>
       )}
 
       {tab === 'audio' && (
         <div className="ed-mat-list">
-          <div className="ed-sfx-cat-row">
-            <span className="ed-fav-row-label">Audios</span>
-            <button
-              type="button"
-              className={`ed-fav-filter ${audioFavOnly ? 'on' : ''}`}
-              title="Mostrar favoritos"
-              onClick={() => setAudioFavOnly((v) => !v)}
-            >
-              <Icon name={audioFavOnly ? 'star' : 'star_border'} size={16} />
-            </button>
-          </div>
+          <ScopeFilter value={audioFilter} onChange={setAudioFilter} />
           {shownAudios.length === 0
-            ? <Empty text={audioFavOnly ? 'Sin audios favoritos.' : 'Sin audios. Pulsa Audio para generar narración.'} />
+            ? <Empty text={audioFilter === 'saved' ? 'No hay audios guardados.' : 'Sin audios. Pulsa Audio para generar narración.'} />
             : shownAudios.map((a) => (
               <AudioCard
-                key={a.id}
+                key={`${a.scope}-${a.id}`}
                 audio={a}
                 onAdd={() => onAdd('audios', a)}
                 onPlay={onPlayMedia}
                 di={di}
-                favOn={!!fav?.isAudioFav(a.id)}
-                onToggleFav={() => fav?.toggleAudio(a.id)}
+                saved={a.scope === 'library' || !!a.is_saved}
+                onToggleSave={() => toggleSave('audio', a)}
               />
             ))}
         </div>
@@ -128,7 +188,7 @@ function SfxCard({ sfx, onAdd, onPlay, di, favOn, onToggleFav }) {
   )
 }
 
-function AudioCard({ audio, onAdd, onPlay, di, favOn, onToggleFav }) {
+function AudioCard({ audio, onAdd, onPlay, di, saved, onToggleSave }) {
   const { ref, playing, toggle, setPlaying } = useToggle(onPlay)
   return (
     <div className="ed-card audio row"
@@ -142,7 +202,7 @@ function AudioCard({ audio, onAdd, onPlay, di, favOn, onToggleFav }) {
       </button>
       <span className="ed-card-name" title={audio.filename}>{audio.label || audio.filename}</span>
       <span className="ed-card-dur">{fmt(audio.duration || 0)}</span>
-      <FavStar on={favOn} onToggle={onToggleFav} />
+      <SaveMark on={saved} onToggle={onToggleSave} />
       <button className="ed-add-btn" onClick={onAdd} title="Agregar al proyecto"><Icon name="add" size={15} /></button>
     </div>
   )

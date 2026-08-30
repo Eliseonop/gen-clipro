@@ -269,7 +269,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     const kind = assetKind === 'clips' ? 'video' : 'audio'
     const track = targetTrackFor(kind)
     if (!track) return
-    const dur = assetKind === 'clips' ? (item.end - item.start) : (item.duration || 0)
+    const dur = assetKind === 'clips'
+      ? ((item.end ?? item.duration ?? 0) - (item.start ?? 0))
+      : (item.duration || 0)
     const trackEnd = clips.filter((c) => c.track_id === track.id).reduce((m, c) => Math.max(m, clipEnd(c)), 0)
     const clip = makeClip(assetKind, item, track.id, trackEnd, dur)
     setClips((prev) => [...prev, clip])
@@ -282,6 +284,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
       index: payload.asset_id, id: payload.asset_id, filename: payload.filename,
       name: payload.name, label: payload.name, duration: payload.duration, end: payload.duration, start: 0,
       reframe: payload.reframe,
+      scope: payload.scope,
     }, trackId, startTime, payload.duration)
     setClips((prev) => [...prev, clip])
     setSelClipId(clip.id)
@@ -759,6 +762,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
           onBack={onBack}
           onOpenVideo={onOpenVideo}
           onOpenAudio={onOpenAudio}
+          onRefresh={onChange}
           fav={fav}
         />
 
@@ -989,7 +993,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
         <>
           <div className="ed-ctx-backdrop" onPointerDown={() => setCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null) }} />
           <AnchoredMenu className="ed-ctx-menu" x={ctxMenu.x} y={ctxMenu.y}>
-            {(ctxMenu.clip.asset_kind === 'sfx' || ctxMenu.clip.asset_kind === 'audios') && (
+            {(ctxMenu.clip.asset_kind === 'sfx') && (
               <button onClick={() => { fav.toggleClipFav(ctxMenu.clip); setCtxMenu(null) }}>
                 <Icon name={fav.isClipFav(ctxMenu.clip) ? 'star' : 'star_border'} size={15} />
                 {fav.isClipFav(ctxMenu.clip) ? 'Quitar de favoritos' : 'Favorito'}
