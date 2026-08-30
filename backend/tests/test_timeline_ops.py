@@ -204,6 +204,58 @@ class AddSubtitlesTest(unittest.TestCase):
             ops.add_subtitles(self._tl_with_source(), "c1", self._segments(), track_id="V1")
 
 
+class ReframeClipTest(unittest.TestCase):
+    def test_center(self):
+        r = ops.reframe_clip(base_tl(), "c1", mode="center", zoom=0.8)
+        rf = r.timeline.clips[0].reframe
+        self.assertAlmostEqual(rf.zoom, 0.8)
+        self.assertEqual(len(rf.keyframes), 1)
+        self.assertAlmostEqual(rf.keyframes[0].cx, 0.5)
+        self.assertAlmostEqual(rf.keyframes[0].cy, 0.5)
+
+    def test_manual_con_paneo(self):
+        r = ops.reframe_clip(base_tl(), "c1", mode="manual", zoom=0.6,
+                             pan_from={"cx": 0.2, "cy": 0.4}, pan_to={"cx": 0.8, "cy": 0.5})
+        rf = r.timeline.clips[0].reframe
+        self.assertEqual(len(rf.keyframes), 2)
+        self.assertAlmostEqual(rf.keyframes[0].cx, 0.2)
+        self.assertAlmostEqual(rf.keyframes[1].cx, 0.8)
+        # t en tiempo de fuente: in_point (0) → out_point (5)
+        self.assertAlmostEqual(rf.keyframes[0].t, 0.0)
+        self.assertAlmostEqual(rf.keyframes[1].t, 5.0)
+
+    def test_manual_estatico(self):
+        r = ops.reframe_clip(base_tl(), "c1", mode="manual", pan_from={"cx": 0.3, "cy": 0.7})
+        self.assertEqual(len(r.timeline.clips[0].reframe.keyframes), 1)
+
+    def test_keyframes_explicitos(self):
+        r = ops.reframe_clip(base_tl(), "c1", mode="keyframes",
+                             keyframes=[{"t": 0, "cx": 0.5, "cy": 0.5}, {"t": 2, "cx": 0.6, "cy": 0.4}])
+        self.assertEqual(len(r.timeline.clips[0].reframe.keyframes), 2)
+
+    def test_clamp_de_pan_fuera_de_rango(self):
+        r = ops.reframe_clip(base_tl(), "c1", mode="manual", pan_from={"cx": 1.5, "cy": -0.2})
+        kf = r.timeline.clips[0].reframe.keyframes[0]
+        self.assertAlmostEqual(kf.cx, 1.0)
+        self.assertAlmostEqual(kf.cy, 0.0)
+
+    def test_zoom_invalido(self):
+        with self.assertRaises(ValueError):
+            ops.reframe_clip(base_tl(), "c1", mode="center", zoom=2.0)
+
+    def test_reframe_en_audio_falla(self):
+        tl = base_tl()
+        tl.clips.append(TimelineClip(id="a1", track_id="A1", kind="audio", asset_kind="audios",
+                                     asset_id="x", filename="v.wav", start=0.0, in_point=0.0,
+                                     out_point=3.0, source_duration=3.0))
+        with self.assertRaises(ValueError):
+            ops.reframe_clip(tl, "a1", mode="center")
+
+    def test_mode_invalido(self):
+        with self.assertRaises(ValueError):
+            ops.reframe_clip(base_tl(), "c1", mode="magic")
+
+
 class ValidateTest(unittest.TestCase):
     def test_detecta_estado_invalido(self):
         tl = base_tl()

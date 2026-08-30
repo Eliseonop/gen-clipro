@@ -46,8 +46,8 @@ precondición inválida → `ValueError`; estado inválido → `validate_timelin
 - [x] `validate_timeline` + `track_overlaps`
 - [x] `add_subtitles` — port a Python de la fragmentación (`fragment.py`, espejo de editorModel.js) + **golden fixtures** compartidos (`shared/fragmentation_cases.json`) verificados por Python Y JS
 - [x] Tests: 30 timeline_ops+fragment, suite backend 125 OK · 14 archivos JS (incl. golden) · lint 0
-- [ ] `reframe_clip` (auto vía `reframe.prepare` / center / manual)
-- [ ] Capa de snapshot / undo / redo / checkpoints (transacción para el agente)
+- [x] `reframe_clip` (center / manual con paneo+zoom / keyframes explícitos; `auto` se orquesta como job en la capa de tool)
+- [~] Capa de snapshot / undo / redo / checkpoints (transacción para el agente)
 - [ ] Adaptador HTTP: endpoints granulares que envuelven `timeline_ops`
 
 ---

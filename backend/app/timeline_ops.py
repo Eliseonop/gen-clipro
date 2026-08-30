@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from . import fragment
-from .schemas import Timeline, TimelineClip, TimelineTrack, Word
+from .schemas import Keyframe, Reframe, Timeline, TimelineClip, TimelineTrack, Word
 
 TRACK_KINDS = ("video", "audio", "text")
 FRAME_POSITIONS = ("full", "top", "bottom", "free")
@@ -68,6 +68,13 @@ def _find_track(tl: Timeline, track_id: str) -> TimelineTrack:
 
 def _round(v: float) -> float:
     return round(float(v), 3)
+
+
+def _clamp01(v, default: float = 0.5) -> float:
+    try:
+        return max(0.0, min(1.0, float(v)))
+    except (TypeError, ValueError):
+        return default
 
 
 # --- Lectura / validación ------------------------------------------------
@@ -279,6 +286,55 @@ def set_project_format(tl: Timeline, aspect: str | None = None, width: int | Non
             raise ValueError("fps debe ser > 0")
         out.fps = int(fps)
     return EditResult(out)
+
+
+REFRAME_MODES = ("center", "manual", "keyframes")
+
+
+def reframe_clip(tl: Timeline, clip_id: str, mode: str = "center", zoom: float | None = None,
+                 pan_from: dict | None = None, pan_to: dict | None = None,
+                 keyframes: list | None = None) -> EditResult:
+    """Encuadra un clip de vídeo (reframe/paneo/zoom) como verbo semántico.
+
+    * ``center``   → recorte centrado (con ``zoom``).
+    * ``manual``   → ``zoom`` + paneo: estático en ``pan_from``, o animado
+      ``pan_from → pan_to`` (cada uno ``{"cx", "cy"}`` en 0-1).
+    * ``keyframes``→ aplica keyframes ya calculados (lo usa el modo ``auto`` de
+      face-tracking, que corre como job en la capa de tool y luego llama aquí).
+
+    El agente casi nunca escribe keyframes a mano; el MCP los genera. ``t`` de los
+    keyframes va en tiempo de FUENTE (in_point..out_point).
+    """
+    if mode not in REFRAME_MODES:
+        raise ValueError(f"mode inválido: {mode} (usa {REFRAME_MODES})")
+    out = _copy(tl)
+    c = _find_clip(out, clip_id)
+    if c.kind != "video":
+        raise ValueError("reframe solo aplica a clips de vídeo")
+    z = 1.0 if zoom is None else float(zoom)
+    if not (0.1 <= z <= 1.0):
+        raise ValueError("zoom debe estar en [0.1, 1.0]")
+
+    if mode == "center":
+        kfs = [Keyframe(t=c.in_point, cx=0.5, cy=0.5)]
+    elif mode == "manual":
+        frm = pan_from or {"cx": 0.5, "cy": 0.5}
+        fcx, fcy = _clamp01(frm.get("cx", 0.5)), _clamp01(frm.get("cy", 0.5))
+        if pan_to is None:
+            kfs = [Keyframe(t=c.in_point, cx=fcx, cy=fcy)]
+        else:
+            kfs = [Keyframe(t=c.in_point, cx=fcx, cy=fcy),
+                   Keyframe(t=c.out_point, cx=_clamp01(pan_to.get("cx", 0.5)), cy=_clamp01(pan_to.get("cy", 0.5)))]
+    else:  # keyframes
+        if not keyframes:
+            raise ValueError("mode 'keyframes' requiere una lista de keyframes")
+        kfs = [k if isinstance(k, Keyframe) else Keyframe(**k) for k in keyframes]
+
+    reframe = c.reframe.model_copy(deep=True) if c.reframe else Reframe()
+    reframe.zoom = z
+    reframe.keyframes = kfs
+    c.reframe = reframe
+    return EditResult(out, changed=[clip_id])
 
 
 def set_clip_layout(tl: Timeline, clip_id: str, position: str | None = None,
