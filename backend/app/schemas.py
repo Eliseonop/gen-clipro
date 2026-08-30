@@ -269,6 +269,7 @@ class TimelineClip(BaseModel):
     appear: str = "none"                  # none | fade | zoom | slide_up | slide_left | pop
     exit: str = "none"                    # none | fade | zoom | slide_down | slide_right | pop
     look: str = "none"                    # none | bw | cinematic | vintage | contrast | warm | cool | saturated
+    muted: bool = False                 # silencia este clip (la pista puede seguir sonando)
 
 
 class Timeline(BaseModel):

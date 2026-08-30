@@ -6,13 +6,19 @@ import { kfColor } from '../../lib/panning'
 import { APPEAR_OPTIONS, EXIT_OPTIONS, LOOK_OPTIONS } from '../../lib/clipFx'
 import { FRAME_OPTIONS, frameOf } from '../../lib/clipLayout'
 
-// Panel junto a la timeline: recorte (keyframes) y propiedades del clip de vídeo.
+// Panel junto a la timeline: recorte (keyframes) y propiedades del clip.
 export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHidden, onDelete, onSeek, onPanMode, onChangeFx, onChangeFrame }) {
   const [tab, setTab] = useState('crop')
   const [track, setTrack] = useState(1)
   const dual = !!(clip?.kind === 'video' && clip.reframe?.dual_crop)
+  const isVideo = clip?.kind === 'video'
+  const isAudio = clip?.kind === 'audio'
+  const hasClip = isVideo || isAudio
   useEffect(() => { setTrack(1) }, [clip?.id])
-  const kfs = clip?.kind === 'video'
+  useEffect(() => {
+    if (clip?.kind === 'audio') setTab('props')
+  }, [clip?.id, clip?.kind])
+  const kfs = isVideo
     ? [...((dual && track === 2 ? clip.reframe?.keyframes2 : clip.reframe?.keyframes) || [])].sort((a, b) => a.t - b.t)
     : []
   const typeLabel = clip?.frame === 'top'
@@ -27,13 +33,12 @@ export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHid
             ? 'Dividido L/R'
             : clip.reframe.split_layout === 'auto' ? 'Dividido auto' : 'Dividido T/B')
           : 'Vertical'
-  const isVideo = clip?.kind === 'video'
 
   return (
     <div className="ed-crops">
       <div className="ed-crops-tabs">
         <button type="button" className={`ed-tab ${tab === 'crop' ? 'on' : ''}`} onClick={() => setTab('crop')}>
-          Posición de recorte
+          Recorte
         </button>
         <button type="button" className={`ed-tab ${tab === 'props' ? 'on' : ''}`} onClick={() => setTab('props')}>
           Propiedades
@@ -41,38 +46,50 @@ export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHid
       </div>
 
       {tab === 'props' ? (
-        !isVideo ? (
-          <div className="ed-crops-empty">Selecciona un clip de vídeo para ver sus propiedades.</div>
+        !hasClip ? (
+          <div className="ed-crops-empty">Selecciona un clip para ver sus propiedades.</div>
         ) : (
           <div className="ed-props">
-            <label className="ed-prop">
-              Encuadre
-              <select className="select" value={frameOf(clip)} onChange={(e) => onChangeFrame(e.target.value)}>
-                {FRAME_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-              </select>
-            </label>
-            <label className="ed-prop">
-              Aparición
-              <select className="select" value={clip.appear || 'none'} onChange={(e) => onChangeFx({ appear: e.target.value })}>
-                {APPEAR_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-              </select>
-            </label>
-            <label className="ed-prop">
-              Salida
-              <select className="select" value={clip.exit || 'none'} onChange={(e) => onChangeFx({ exit: e.target.value })}>
-                {EXIT_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-              </select>
-            </label>
-            <label className="ed-prop">
-              Filtros
-              <select className="select" value={clip.look || 'none'} onChange={(e) => onChangeFx({ look: e.target.value })}>
-                {LOOK_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-              </select>
-            </label>
+            <button
+              type="button"
+              className={`ed-mute ${clip.muted ? 'on' : ''}`}
+              onClick={() => onChangeFx({ muted: !clip.muted })}
+              title="Silenciar solo este clip (la pista sigue igual)">
+              <Icon name={clip.muted ? 'volume_off' : 'volume_up'} size={15} />
+              Mute
+            </button>
+            {isVideo && (
+              <>
+                <label className="ed-prop">
+                  Encuadre
+                  <select className="select" value={frameOf(clip)} onChange={(e) => onChangeFrame(e.target.value)}>
+                    {FRAME_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+                  </select>
+                </label>
+                <label className="ed-prop">
+                  Aparición
+                  <select className="select" value={clip.appear || 'none'} onChange={(e) => onChangeFx({ appear: e.target.value })}>
+                    {APPEAR_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+                  </select>
+                </label>
+                <label className="ed-prop">
+                  Salida
+                  <select className="select" value={clip.exit || 'none'} onChange={(e) => onChangeFx({ exit: e.target.value })}>
+                    {EXIT_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+                  </select>
+                </label>
+                <label className="ed-prop">
+                  Filtros
+                  <select className="select" value={clip.look || 'none'} onChange={(e) => onChangeFx({ look: e.target.value })}>
+                    {LOOK_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+                  </select>
+                </label>
+              </>
+            )}
           </div>
         )
       ) : !isVideo ? (
-        <div className="ed-crops-empty">Selecciona un clip de vídeo para ver sus encuadres.</div>
+        <div className="ed-crops-empty">{isAudio ? 'El recorte aplica a clips de vídeo.' : 'Selecciona un clip de vídeo para ver sus encuadres.'}</div>
       ) : (
         <>
           {dual && (

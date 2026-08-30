@@ -27,6 +27,7 @@ from .clip_layout import dest_rect_even, is_overlay, source_crop_px
 from .diagnostics import timed
 from .recipe_layout import contain_scale_filter, dual_slot_wh, join_dual_filters, split_orientation_for
 from .reframe_math import frame_at
+from .clip_audio import clip_mixes_audio
 from .schemas import Keyframe, Project, Reframe, Timeline, TimelineClip
 
 ProgressCb = Callable[[float, str], None]
@@ -301,11 +302,11 @@ def build_command(project: Project, timeline: Timeline, out_path: Path) -> list[
         if track.kind == "video" and c.kind == "video":
             if not track.hidden:
                 vclips.append((c, path, track))
-            # el audio de un clip de vídeo suena si su pista no está muteada
-            if not track.muted and _has_audio(path):
+            # el audio de un clip de vídeo suena si ni la pista ni el clip están muteados
+            if clip_mixes_audio(c, track) and _has_audio(path):
                 aclips.append((c, path, track))
         elif track.kind == "audio":
-            if not track.muted and _has_audio(path):
+            if clip_mixes_audio(c, track) and _has_audio(path):
                 aclips.append((c, path, track))
 
     total = 0.0

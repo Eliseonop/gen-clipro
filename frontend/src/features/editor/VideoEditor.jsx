@@ -6,7 +6,7 @@ import { clamp, clampCenter, frameAt } from '../../lib/panning'
 import { defaultTextStyle, wrappedText } from '../../lib/textstyles'
 import {
   uid, FORMATS, mediaUrl, defaultTracks, newReframe, withKfIds,
-  makeClip, makeTextClip, clipDur, clipEnd,
+  makeClip, makeTextClip, clipDur, clipEnd, clipPlaybackMuted,
 } from './editorModel'
 import { applyFrame, disableOverlay, enableOverlay, isOverlay, newTransform, videosAt } from '../../lib/clipLayout'
 import { drawComposite, drawMainView } from './render/canvas'
@@ -91,6 +91,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             appear: c.appear || 'none',
             exit: c.exit || 'none',
             look: c.look || 'none',
+            muted: !!c.muted,
             frame: c.frame || (c.layout === 'overlay' ? 'free' : 'full'),
           })))
           if (tl.tracks[0]) setSelTrackId(tl.tracks[0].id)
@@ -160,8 +161,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
         const active = head >= c.start - 0.02 && head < c.start + cd
         const expected = clamp(c.in_point + (head - c.start), 0, (el.duration || c.out_point))
         if (active && playingRef.current) {
-          el.muted = !!track?.muted
-          el.volume = clamp(c.volume ?? 1, 0, 1)
+          el.muted = clipPlaybackMuted(c, track)
+          el.volume = clipPlaybackMuted(c, track) ? 0 : clamp(c.volume ?? 1, 0, 1)
           if (el.paused) { try { el.currentTime = expected } catch { /* noop */ }; el.play().catch(() => {}) }
           else if (Math.abs(el.currentTime - expected) > 0.35) { try { el.currentTime = expected } catch { /* noop */ } }
         } else if (!el.paused) {

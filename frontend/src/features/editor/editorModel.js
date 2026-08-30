@@ -12,6 +12,11 @@ export const uid = (p) => `${p}${Date.now().toString(36)}${(_uid++).toString(36)
 export const clipDur = (c) => Math.max(0, c.out_point - c.in_point)
 export const clipEnd = (c) => c.start + clipDur(c)
 
+/** El clip no suena: silenciado él o su pista. */
+export function clipPlaybackMuted(clip, track) {
+  return !!(track?.muted || clip?.muted)
+}
+
 // Orden en pantalla: texto (arriba), luego vídeo (capa superior arriba), luego audio.
 export function displayTracks(tracks) {
   const txt = tracks.filter((t) => t.kind === 'text')
@@ -76,6 +81,7 @@ export function makeClip(assetKind, item, trackId, start, dur) {
     out_point: +Math.max(0.3, dur || 1).toFixed(3),
     source_duration: +Math.max(0.3, dur || 1).toFixed(3),
     volume: 1,
+    muted: false,
     reframe: kind === 'video'
       ? (fromLib ? withKfIds({ ...newReframe(), ...item.reframe }) : newReframe())
       : null,
@@ -93,6 +99,6 @@ export function makeTextClip(trackId, start, dur, text, style) {
     id: uid('c'), track_id: trackId, kind: 'text', asset_kind: 'text', asset_id: uid('t'),
     filename: '', name: (text || 'Texto').slice(0, 22), start: +Math.max(0, start).toFixed(3),
     in_point: 0, out_point: +Math.max(0.5, dur).toFixed(3), source_duration: +Math.max(0.5, dur).toFixed(3),
-    volume: 1, reframe: null, text: text || 'Texto', style: { ...(style || defaultTextStyle()) },
+    volume: 1, muted: false, reframe: null, text: text || 'Texto', style: { ...(style || defaultTextStyle()) },
   }
 }
