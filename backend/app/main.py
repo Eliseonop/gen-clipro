@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, diagnostics, heatmap, jobs, projects, settings, storage, tts
+from . import config, diagnostics, heatmap, jobs, projects, settings, storage, timeline_store, tts
 from .schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
@@ -242,6 +242,57 @@ def put_timeline(project_id: str, timeline: Timeline) -> dict:
     if proj is None:
         raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
     return proj.timeline.model_dump() if proj.timeline else {}
+
+
+# --- Editor estructural (timeline_ops vía adaptador con undo/checkpoints) ---
+
+@app.post("/api/projects/{project_id}/timeline/op")
+def timeline_op(project_id: str, body: dict = Body(...)) -> dict:
+    """Aplica una operación estructural (add_clip, split_clip, reframe_clip,
+    add_subtitles, set_project_format…) de forma transaccional: snapshot →
+    aplicar → validar → guardar. Devuelve el timeline nuevo + changed/warnings."""
+    op = (body or {}).get("op") or ""
+    params = (body or {}).get("params") or {}
+    try:
+        return timeline_store.apply_op(project_id, op, params)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/projects/{project_id}/timeline/undo")
+def timeline_undo(project_id: str) -> dict:
+    try:
+        return timeline_store.undo(project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/projects/{project_id}/timeline/redo")
+def timeline_redo(project_id: str) -> dict:
+    try:
+        return timeline_store.redo(project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/projects/{project_id}/timeline/checkpoint")
+def timeline_checkpoint(project_id: str, body: dict = Body(...)) -> dict:
+    name = (body or {}).get("name") or ""
+    if not name:
+        raise HTTPException(status_code=400, detail="Falta el nombre del checkpoint.")
+    try:
+        return timeline_store.checkpoint(project_id, name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/projects/{project_id}/timeline/restore")
+def timeline_restore(project_id: str, body: dict = Body(...)) -> dict:
+    name = (body or {}).get("name") or ""
+    try:
+        return timeline_store.restore_checkpoint(project_id, name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.post("/api/projects/{project_id}/export", response_model=Job)

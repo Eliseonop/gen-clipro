@@ -33,7 +33,7 @@ editor). Se actualiza conforme se avanza. Leyenda: `[x]` hecho · `[~]` en curso
 
 ---
 
-## ETAPA 1 — `timeline_ops.py` (núcleo estructural, fuente única) 🔨 · commit `3ae72e0`
+## ETAPA 1 — `timeline_ops.py` (núcleo estructural, fuente única) ✅ COMPLETA · commits `3ae72e0` → `15958ca` → `a376252` → `72b279d` → adaptador
 
 Contrato: funciones puras `Timeline → EditResult{timeline, changed, warnings}`, no mutan la entrada;
 precondición inválida → `ValueError`; estado inválido → `validate_timeline`.
@@ -47,8 +47,11 @@ precondición inválida → `ValueError`; estado inválido → `validate_timelin
 - [x] `add_subtitles` — port a Python de la fragmentación (`fragment.py`, espejo de editorModel.js) + **golden fixtures** compartidos (`shared/fragmentation_cases.json`) verificados por Python Y JS
 - [x] Tests: 30 timeline_ops+fragment, suite backend 125 OK · 14 archivos JS (incl. golden) · lint 0
 - [x] `reframe_clip` (center / manual con paneo+zoom / keyframes explícitos; `auto` se orquesta como job en la capa de tool)
-- [x] Capa de snapshot / undo / redo / checkpoints (`timeline_history.py`, core puro; cableado a disco/proyecto irá con el adaptador)
-- [ ] Adaptador HTTP: endpoints granulares que envuelven `timeline_ops` + `timeline_history` (persistencia por proyecto)
+- [x] Capa de snapshot / undo / redo / checkpoints (`timeline_history.py`, core puro)
+- [x] Adaptador stateful `timeline_store.py` (liga proyecto + ops + historial; snapshot→aplicar→validar→guardar; solo rechaza errores NUEVOS; historial en `data/history/<pid>.json`)
+- [x] Endpoints HTTP: `POST .../timeline/op` · `/undo` · `/redo` · `/checkpoint` · `/restore`
+- [x] Tests: 15 timeline_ops + 5 fragment + 9 history + 6 store; **suite backend 148 OK**; 14 archivos JS; lint 0
+- [ ] (pendiente frontend, a tu ritmo) migrar botones estructurales del editor para consumir estos endpoints (elimina la duplicación estructural)
 
 ---
 
@@ -124,4 +127,4 @@ Tools mínimas (~14): `get_project_context`, `get_timeline`, `analyze_youtube`,
 
 ---
 
-_Última actualización: 2026-08-30 — Etapa 1 casi cerrada: primitivas + `add_subtitles` + `reframe_clip` + snapshot/undo hechos. Falta solo el adaptador HTTP (persistencia por proyecto)._
+_Última actualización: 2026-08-30 — **ETAPA 1 COMPLETA** (núcleo estructural + historial + adaptador + endpoints, 148 tests). Siguiente: Etapa 2 (MCP Server base)._
