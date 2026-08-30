@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { makeClip, newReframe } from './editorModel.js'
+import { clipPlaybackMuted, makeClip, newReframe } from './editorModel.js'
 
 const legacy = makeClip('clips', { index: 1, filename: 'a.mp4', end: 5, start: 0 }, 'V1', 0, 5)
 assert.equal(legacy.reframe.dual_crop, false)
@@ -19,5 +19,9 @@ assert.equal(master.reframe.dual_crop, true)
 assert.equal(master.reframe.keyframes[0].cx, 0.3)
 assert.ok(master.reframe.keyframes[0].id)
 assert.equal(newReframe().split_layout, 'auto')
+assert.equal(legacy.muted, false)
+assert.equal(clipPlaybackMuted(legacy, { muted: false }), false)
+assert.equal(clipPlaybackMuted({ muted: true }, { muted: false }), true)
+assert.equal(clipPlaybackMuted({ muted: false }, { muted: true }), true)
 
 console.log('makeClip reframe copy ok')

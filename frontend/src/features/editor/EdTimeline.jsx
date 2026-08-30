@@ -3,6 +3,7 @@ import Icon from '../../components/Icon'
 import { fmt } from '../../lib/utils'
 import { pseudoWaveform, clamp, kfColor } from '../../lib/panning'
 import { clipDur, displayTracks } from './editorModel'
+import { headerScrollPad, timelineWheelAction } from './timelineWheel'
 
 const MIN_DUR = 0.15
 
@@ -16,6 +17,7 @@ export default function EdTimeline({
 }) {
   const lanesRef = useRef(null)
   const bodyRef = useRef(null)
+  const headersRef = useRef(null)
   const drag = useRef(null)
   const [dropHint, setDropHint] = useState(null)   // { trackId, time }
 
@@ -39,18 +41,45 @@ export default function EdTimeline({
     return null
   }
 
-  // --- Rueda: zoom temporal (anclado al cursor); ctrl=alto de pista; shift=scroll ---
+  // Las pistas mandan el scroll vertical; las cabeceras copian (A1/A2 si no, se recortan).
+  useEffect(() => {
+    const lanes = lanesRef.current
+    const headers = headersRef.current
+    if (!lanes || !headers) return
+    const matchPad = () => {
+      headers.style.paddingBottom = `${headerScrollPad(lanes.offsetHeight, lanes.clientHeight)}px`
+    }
+    const follow = () => { headers.scrollTop = lanes.scrollTop }
+    matchPad()
+    follow()
+    lanes.addEventListener('scroll', follow)
+    const ro = new ResizeObserver(() => { matchPad(); follow() })
+    ro.observe(lanes)
+    return () => {
+      lanes.removeEventListener('scroll', follow)
+      ro.disconnect()
+    }
+  }, [rows.length, rowH])
+
+  // Rueda: zoom solo sobre la regla; en pistas, scroll vertical. ctrl=alto; shift=horizontal.
   useEffect(() => {
     const body = bodyRef.current
     const scroll = lanesRef.current
     if (!body || !scroll) return
     const onWheel = (e) => {
+      const overRuler = !!e.target?.closest?.('.ed-ruler')
+      const action = timelineWheelAction(e, { overRuler })
+      if (action === 'scrollY') {
+        e.preventDefault()
+        scroll.scrollTop += e.deltaY
+        return
+      }
       e.preventDefault()
-      if (e.ctrlKey) {
+      if (action === 'rowHeight') {
         setRowH((h) => clamp(Math.round(h * (e.deltaY < 0 ? 1.1 : 0.9)), 34, 120))
         return
       }
-      if (e.shiftKey) { scroll.scrollLeft += e.deltaY; return }
+      if (action === 'scrollX') { scroll.scrollLeft += e.deltaY; return }
       const t = xToTime(e.clientX)
       setPps((p) => {
         const np = clamp(e.deltaY < 0 ? p * 1.15 : p / 1.15, 8, 500)
@@ -174,7 +203,7 @@ export default function EdTimeline({
       </div>
 
       <div className="ed-tl-body" ref={bodyRef}>
-        <div className="ed-tl-headers">
+        <div className="ed-tl-headers" ref={headersRef}>
           <div className="ed-ruler-corner">{fmt(playhead)}</div>
           {rows.map((t) => (
             <div key={t.id}
@@ -205,7 +234,7 @@ export default function EdTimeline({
 
         <div className="ed-tl-scroll" ref={lanesRef}>
           <div className="ed-tl-inner" style={{ width: totalW }}>
-            <div className="ed-ruler" onPointerDown={onRulerDown}>
+            <div className="ed-ruler" title="Rueda: zoom de tiempo" onPointerDown={onRulerDown}>
               {buildTicks(duration + 4, pps).map((tk) => (
                 <span key={tk.t} className="ed-tick" style={{ left: tk.t * pps }}><i />{tk.major ? <em>{fmt(tk.t)}</em> : null}</span>
               ))}
@@ -253,18 +282,18 @@ function ClipBlock({ clip, pps, selected, selKfId, onDown, onKfDown, onContext, 
   const bars = clip.kind === 'audio' ? pseudoWaveform(clip.asset_id, Math.max(16, Math.round(w / 5))) : null
 
   return (
-    <div className={`ed-clip ${clip.kind} ${selected ? 'sel' : ''}`}
+    <div className={`ed-clip ${clip.kind} ${selected ? 'sel' : ''} ${clip.muted ? 'muted' : ''}`}
       style={{ left, width: w }} title={clip.name}
       onPointerDown={(e) => onDown(e, 'move')} onContextMenu={onContext} onDoubleClick={onDouble}>
       <div className="ed-clip-handle left" onPointerDown={(e) => onDown(e, 'trim-left')} />
       <div className="ed-clip-handle right" onPointerDown={(e) => onDown(e, 'trim-right')} />
 
-      {isVideo && <div className="ed-clip-label"><Icon name="movie" size={12} /> {clip.name}</div>}
+      {isVideo && <div className="ed-clip-label"><Icon name={clip.muted ? 'volume_off' : 'movie'} size={12} /> {clip.name}</div>}
       {isText && <div className="ed-clip-label"><Icon name="title" size={12} /> {clip.text || clip.name}</div>}
       {clip.kind === 'audio' && (
         <div className="ed-clip-wave">
           {bars.map((h, i) => <span key={i} style={{ height: `${Math.round(h * 100)}%` }} />)}
-          <span className="ed-clip-label audio"><Icon name="graphic_eq" size={12} /> {clip.name}</span>
+          <span className="ed-clip-label audio"><Icon name={clip.muted ? 'volume_off' : 'graphic_eq'} size={12} /> {clip.name}</span>
         </div>
       )}
 

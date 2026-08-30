@@ -186,10 +186,14 @@
 .ed-tl-sep { width: 1px; height: 18px; background: var(--line-bright); margin: 0 3px; }
 .ed-zoom { display: flex; align-items: center; gap: 2px; margin-left: 4px; }
 
-.ed-tl-body { flex: 1; display: flex; min-height: 0; overflow-y: auto; overflow-x: hidden; }
-.ed-tl-headers { width: var(--ed-head-w); flex-shrink: 0; background: var(--card-2); border-right: 1px solid var(--line); }
+.ed-tl-body { flex: 1; display: flex; min-height: 0; overflow: hidden; }
+.ed-tl-headers {
+  width: var(--ed-head-w); flex-shrink: 0; min-height: 0;
+  overflow-x: hidden; overflow-y: hidden;
+  background: var(--card-2); border-right: 1px solid var(--line);
+}
 .ed-ruler-corner { height: var(--ed-ruler-h); display: flex; align-items: center; padding: 0 10px; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--card-2); z-index: 2; }
-.ed-track-head { height: var(--ed-row-h); display: flex; flex-direction: column; justify-content: center; gap: 4px; padding: 0 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.ed-track-head { height: var(--ed-row-h); min-height: var(--ed-row-h); max-height: var(--ed-row-h); overflow: hidden; display: flex; flex-direction: column; justify-content: center; gap: 4px; padding: 0 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
 .ed-track-head.sel { background: rgba(255,59,92,0.12); }
 .ed-track-head.audio { background: rgba(99,102,241,0.06); }
 .ed-track-head.audio.sel { background: rgba(99,102,241,0.16); }
@@ -201,14 +205,14 @@
 .ed-th-btn.on { color: var(--accent-2); }
 .ed-th-btn:disabled { opacity: 0.25; cursor: default; }
 
-.ed-tl-scroll { flex: 1; overflow-x: auto; overflow-y: hidden; }
+.ed-tl-scroll { flex: 1; min-width: 0; min-height: 0; overflow-x: auto; overflow-y: auto; overscroll-behavior: contain; }
 .ed-tl-inner { position: relative; min-width: 100%; }
 .ed-ruler { height: var(--ed-ruler-h); position: relative; border-bottom: 1px solid var(--line); background: var(--card-2); cursor: pointer; position: sticky; top: 0; z-index: 2; }
 .ed-tick { position: absolute; top: 0; height: 100%; }
 .ed-tick i { position: absolute; left: 0; top: 0; width: 1px; height: 100%; background: var(--line-bright); }
 .ed-tick em { position: absolute; left: 4px; top: 4px; font-size: 9.5px; color: var(--muted); font-style: normal; font-variant-numeric: tabular-nums; }
 
-.ed-lane { height: var(--ed-row-h); position: relative; border-bottom: 1px solid var(--line); }
+.ed-lane { height: var(--ed-row-h); min-height: var(--ed-row-h); position: relative; border-bottom: 1px solid var(--line); }
 .ed-lane.audio { background: rgba(99,102,241,0.04); }
 .ed-lane.sel { background: rgba(255,59,92,0.05); }
 .ed-lane.locked { background: repeating-linear-gradient(45deg, transparent, transparent 8px, rgba(255,255,255,0.02) 8px, rgba(255,255,255,0.02) 16px); }
@@ -221,6 +225,8 @@
 .ed-clip.video { background: linear-gradient(135deg, #3a2740, #26203a); }
 .ed-clip.audio { background: linear-gradient(135deg, #1e2a4d, #182138); }
 .ed-clip.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 6px 16px rgba(0,0,0,0.4); z-index: 3; }
+.ed-clip.muted { opacity: 0.72; }
+.ed-clip.muted.audio .ed-clip-wave > span { opacity: 0.28; }
 .ed-clip:active { cursor: grabbing; }
 .ed-clip-handle { position: absolute; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 4; }
 .ed-clip-handle.left { left: 0; } .ed-clip-handle.right { right: 0; }
@@ -250,7 +256,7 @@
 }
 .ed-crops-tabs .ed-tab {
   border: none; border-radius: 0; border-bottom: 2px solid transparent;
-  font-size: 10.5px; padding: 8px 6px; line-height: 1.25; text-align: center;
+  font-size: 10px; padding: 6px 6px; line-height: 1.2; text-align: center;
   background: transparent;
 }
 .ed-crops-tabs .ed-tab:hover { background: var(--card-2); color: #fff; }
@@ -263,9 +269,31 @@
 .ed-crops-count { font-size: 11px; color: var(--muted); padding: 8px 12px 4px; }
 .ed-crops-list { flex: 1; overflow-y: auto; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 5px; }
 .ed-crops-empty { color: var(--muted); font-size: 11.5px; padding: 16px 12px; text-align: center; }
-.ed-props { padding: 10px 12px; display: flex; flex-direction: column; gap: 9px; }
-.ed-prop { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-secondary); font-weight: 600; }
-.ed-prop .select { width: 100%; padding: 6px 8px; font-size: 12px; }
+.ed-props {
+  padding: 8px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  align-content: start;
+  overflow-y: auto;
+}
+.ed-mute {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  height: 28px; border-radius: 6px; cursor: pointer;
+  background: var(--card-2); border: 1px solid var(--line);
+  color: var(--text-secondary); font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.ed-mute:hover { background: var(--card-3); color: #fff; }
+.ed-mute.on {
+  background: rgba(255, 59, 92, 0.14);
+  border-color: var(--accent);
+  color: #fff;
+}
+.ed-mute.on .material-icons { color: var(--accent); }
+.ed-prop { display: flex; flex-direction: column; gap: 2px; font-size: 9.5px; color: var(--muted); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+.ed-prop .select { width: 100%; min-width: 0; padding: 4px 6px; font-size: 11px; }
 .ed-crop-row {
   display: flex; align-items: center; gap: 7px; background: var(--card-2); border: 1px solid var(--line);
   border-left: 3px solid var(--muted); border-radius: 6px; padding: 5px 7px; cursor: pointer; transition: var(--transition);
@@ -424,6 +452,7 @@
 }
 .ed-tl-scroll:hover::-webkit-scrollbar-thumb, .ed-tl-body:hover::-webkit-scrollbar-thumb,
 .ed-mat-grid:hover::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.28); }
+.ed-tl-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.22); }
 .ed-tl-scroll::-webkit-scrollbar-track, .ed-tl-body::-webkit-scrollbar-track { background: transparent; }
 .ed-timeline-wrap * { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.18) transparent; }
 
