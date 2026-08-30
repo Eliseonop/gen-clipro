@@ -6,6 +6,7 @@
 // de la llamada, igual que hacía el componente. Así el comportamiento por frame no cambia.
 import { drawReframe, kfColor, cropCornerNorms, clamp } from '../../../lib/panning'
 import { drawTextClip } from '../../../lib/textstyles'
+import { drawAlignGuides } from '../../../lib/alignGuides'
 import { clipDur, clipEnd, newReframe } from '../editorModel'
 import { applyCanvasFx, clipFxAt } from '../../../lib/clipFx'
 import {
@@ -96,8 +97,9 @@ function drawTransformHandles(ctx, dest) {
 }
 
 // Dibuja el compuesto (todas las pistas de vídeo, fondo→frente + textos) en un canvas.
-export function drawComposite(ctx, head, selClipId, env) {
+export function drawComposite(ctx, head, selClipIds, env) {
   const { clipsRef, tracksRef, mediaEls, outRef } = env
+  const selected = new Set(Array.isArray(selClipIds) ? selClipIds : (selClipIds ? [selClipIds] : []))
   const cw = ctx.canvas.width, ch = ctx.canvas.height
   const outW = outRef.current.w, outH = outRef.current.h
   ctx.fillStyle = '#000'
@@ -111,7 +113,7 @@ export function drawComposite(ctx, head, selClipId, env) {
     const fx = fxForClip(clip, head)
     if (isOverlay(clip)) {
       const dest = drawOverlayLayer(ctx, el, clip, srcTime, outW, outH, fx)
-      if (clip.id === selClipId) overlayDestSel = dest
+      if (selected.has(clip.id)) overlayDestSel = dest
     } else {
       ctx.save()
       applyCanvasFx(ctx, fx, cw, ch)
@@ -127,7 +129,7 @@ export function drawComposite(ctx, head, selClipId, env) {
     if (track?.hidden) continue
     const activeText = head >= c.start - 0.02 && head < c.start + clipDur(c)
     if (!activeText) continue
-    const isSel = c.id === selClipId
+    const isSel = selected.has(c.id)
     const r = drawTextClip(ctx, c, cw, ch, { selected: isSel, time: head })
     if (isSel) selRender = r
   }
@@ -139,8 +141,8 @@ export function drawComposite(ctx, head, selClipId, env) {
 // La selección de un clip sólo afecta al borde de resaltado, nunca a la visibilidad temporal.
 export function drawMainView(head, env) {
   const {
-    mainCanvasRef, clipsRef, mediaEls, outRef, selRef, selKfRef, hiddenKfRef,
-    playingRef, framingModeRef, mainTextBox,
+    mainCanvasRef, clipsRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
+    playingRef, framingModeRef, mainTextBox, alignGuidesRef,
   } = env
   const canvas = mainCanvasRef.current
   if (!canvas) return
@@ -210,6 +212,7 @@ export function drawMainView(head, env) {
 
   // Para texto, vacío, o sin selección: mostrar siempre el compuesto según el cabezal.
   // drawComposite ya respeta la visibilidad temporal de cada texto.
-  mainTextBox.current = drawComposite(ctx, head, clip?.id ?? null, env)
+  mainTextBox.current = drawComposite(ctx, head, selIdsRef?.current?.length ? selIdsRef.current : (clip?.id ? [clip.id] : []), env)
   if (framingModeRef.current) drawFramingOverlay(ctx, canvas.width, canvas.height, framingModeRef.current)
+  drawAlignGuides(ctx, canvas.width, canvas.height, alignGuidesRef?.current)
 }

@@ -62,6 +62,7 @@ export default function FlipSelect({ value, options, onChange, className = '', t
                 className={o.value === value ? 'on' : ''}
                 role="option"
                 aria-selected={o.value === value}
+                style={o.previewStyle}
                 onClick={() => { onChange(o.value); setOpen(false) }}
               >
                 {o.label}

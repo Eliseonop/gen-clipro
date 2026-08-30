@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
-import { activeWordIndex, splitCaptionWords, applyThemeToStyle } from './textKaraoke.js'
+import {
+  activeWordIndex, splitCaptionWords, applyThemeToStyle,
+  wordFxList, hasWordFx, toggleWordFx, karaokeOn, chunkCaptionText, styleOpacity, wordOpacity,
+} from './textKaraoke.js'
 import { SUBTITLE_THEMES, themeById } from './subtitleThemes.js'
 
 assert.deepEqual(splitCaptionWords('  hola   mundo  '), ['hola', 'mundo'])
@@ -35,8 +38,48 @@ for (const t of SUBTITLE_THEMES) {
   assert.ok(t.style.font)
   assert.ok(t.style.color)
   assert.ok(t.style.highlight_color)
-  assert.ok(['none', 'highlight', 'glow', 'pop'].includes(t.style.word_fx))
+  assert.ok(wordFxList(t.style.word_fx).every((x) => ['highlight', 'glow', 'pop'].includes(x)))
+  assert.ok(typeof t.style.active_opacity === 'number')
+  assert.ok(typeof t.style.inactive_opacity === 'number')
   assert.ok(['none', 'fade', 'pop', 'slide_up'].includes(t.style.block_appear))
 }
+
+assert.deepEqual(wordFxList('none'), [])
+assert.deepEqual(wordFxList('glow'), ['glow'])
+assert.deepEqual(wordFxList(['glow', 'pop']), ['glow', 'pop'])
+assert.equal(hasWordFx({ word_fx: 'glow' }, 'glow'), true)
+assert.equal(hasWordFx({ word_fx: 'glow' }, 'pop'), false)
+assert.equal(hasWordFx({ word_fx: ['glow', 'pop'] }, 'pop'), true)
+assert.equal(karaokeOn({ word_fx: 'none' }), false)
+assert.equal(karaokeOn({ word_fx: ['pop'] }), true)
+assert.deepEqual(toggleWordFx('glow', 'pop'), ['glow', 'pop'])
+assert.deepEqual(toggleWordFx(['glow', 'pop'], 'glow'), ['pop'])
+assert.equal(toggleWordFx(['pop'], 'pop'), 'none')
+
+assert.deepEqual(chunkCaptionText('uno dos tres cuatro cinco', 2), ['uno dos', 'tres cuatro', 'cinco'])
+assert.deepEqual(chunkCaptionText('hola mundo', 10), ['hola mundo'])
+assert.deepEqual(chunkCaptionText('hola mundo', 0), ['hola mundo'])
+assert.deepEqual(chunkCaptionText('', 4), [])
+
+assert.equal(styleOpacity({}), 1)
+assert.equal(styleOpacity({ opacity: 0.4 }), 0.4)
+assert.equal(styleOpacity({ opacity: 0 }), 0)
+assert.equal(styleOpacity({ opacity: 2 }), 1)
+
+assert.equal(wordOpacity({ word_fx: 'highlight', active_opacity: 1, inactive_opacity: 0.4 }, true), 1)
+assert.equal(wordOpacity({ word_fx: 'highlight', active_opacity: 1, inactive_opacity: 0.4 }, false), 0.4)
+assert.equal(wordOpacity({ word_fx: 'none', active_opacity: 0.8, inactive_opacity: 0.2 }, false), 0.8)
+assert.equal(wordOpacity({ word_fx: 'highlight' }, false), 1)
+
+const keepPos = applyThemeToStyle({ x: 0.4, y: 0.9, w: 0.7, inactive_opacity: 1, max_words: 4 }, karaoke)
+assert.equal(keepPos.x, 0.4)
+assert.equal(keepPos.max_words, 4)
+assert.equal(keepPos.inactive_opacity, karaoke.style.inactive_opacity)
+assert.equal(keepPos.active_opacity, karaoke.style.active_opacity)
+assert.equal(keepPos.font, karaoke.style.font)
+
+const classic = themeById('classic')
+assert.equal(classic.style.inactive_opacity, 0.55)
+assert.equal(classic.style.active_opacity, 1)
 
 console.log('textKaraoke ok')

@@ -3,16 +3,16 @@
 // x/y son el centro del texto en coordenadas normalizadas (0-1) de la salida.
 
 import { clipFxAt } from './clipFx.js'
-import { activeWordIndex, applyThemeToStyle } from './textKaraoke.js'
+import { activeWordIndex, applyThemeToStyle, hasWordFx, karaokeOn, wordOpacity } from './textKaraoke.js'
 import { themeById } from './subtitleThemes.js'
 
 export const FONTS = [
-  'Arial', 'Arial Black', 'Segoe UI', 'Segoe UI Black', 'Calibri', 'Bahnschrift',
+  'Arial', 'Arial Black', 'Anton', 'Segoe UI', 'Segoe UI Black', 'Calibri', 'Bahnschrift',
   'Tahoma', 'Impact', 'Georgia', 'Verdana', 'Times New Roman', 'Courier New',
   'Consolas', 'Trebuchet MS',
 ]
 
-const base = { font: 'Arial', size: 0.009375, color: '#ffffff', bold: true, align: 'center', x: 0.5, y: 0.5, w: 0.8, border_width: 0, border_color: '#000000', shadow: false, shadow_color: '#000000', glow: false, bg: 'none', bg_opacity: 0.55, highlight_color: '#ffe566', word_fx: 'none', block_appear: 'none', inactive_opacity: 1 }
+const base = { font: 'Arial', size: 0.009375, color: '#ffffff', bold: true, align: 'center', x: 0.5, y: 0.5, w: 0.8, border_width: 0, border_color: '#000000', shadow: false, shadow_color: '#000000', glow: false, bg: 'none', bg_opacity: 0.55, highlight_color: '#ffe566', word_fx: 'none', block_appear: 'none', inactive_opacity: 1, active_opacity: 1, max_words: 8 }
 
 // Altura de referencia para convertir px ↔ fracción (resolución máxima 9:16 = 1280)
 export const FONT_SIZE_REF = 1280
@@ -36,6 +36,7 @@ export const subtitleStyle = () => applyThemeToStyle({}, themeById('classic'))
 const FONT_CSS = {
   'Arial': 'Arial, sans-serif',
   'Arial Black': '"Arial Black", Arial, sans-serif',
+  'Anton': 'Anton, sans-serif',
   'Segoe UI': '"Segoe UI", sans-serif',
   'Segoe UI Black': '"Segoe UI Black", "Arial Black", sans-serif',
   'Calibri': 'Calibri, "Segoe UI", sans-serif',
@@ -50,6 +51,14 @@ const FONT_CSS = {
   'Trebuchet MS': '"Trebuchet MS", sans-serif',
 }
 export const cssFont = (name) => FONT_CSS[name] || 'Arial, sans-serif'
+
+const CUSTOM_FONTS = ['Anton']
+
+/** Carga las fuentes embebidas para que el canvas las pinte de verdad (no un sustituto). */
+export function ensureEditorFonts() {
+  if (typeof document === 'undefined' || !document.fonts?.load) return Promise.resolve()
+  return Promise.all(CUSTOM_FONTS.map((f) => document.fonts.load(`64px "${f}"`)))
+}
 
 // Divide el texto en líneas ajustadas al ancho máximo (respeta saltos del usuario).
 export function wrapLines(ctx, text, maxW) {
@@ -98,20 +107,20 @@ function reduceMotionOn() {
 function paintWord(ctx, word, x, y, size, st, active, motionOff) {
   const w = ctx.measureText(word).width
   const cx = x + w / 2
-  const pop = active && st.word_fx === 'pop' && !motionOff
+  const pop = active && hasWordFx(st, 'pop') && !motionOff
   ctx.save()
   if (pop) {
     ctx.translate(cx, y)
     ctx.scale(1.14, 1.14)
     ctx.translate(-cx, -y)
   }
-  const idle = st.inactive_opacity ?? 0.5
-  ctx.globalAlpha *= active || st.word_fx === 'none' ? 1 : idle
-  if (st.shadow || st.glow || (active && st.word_fx === 'glow')) {
+  ctx.globalAlpha *= wordOpacity(st, active)
+  const glowWord = active && hasWordFx(st, 'glow')
+  if (st.shadow || st.glow || glowWord) {
     ctx.shadowColor = (active && st.highlight_color) || st.shadow_color || 'rgba(0,0,0,0.7)'
-    ctx.shadowBlur = (st.glow || (active && st.word_fx === 'glow')) ? size * 0.7 : size * 0.14
-    ctx.shadowOffsetX = (st.glow || (active && st.word_fx === 'glow')) ? 0 : 2
-    ctx.shadowOffsetY = (st.glow || (active && st.word_fx === 'glow')) ? 0 : 2
+    ctx.shadowBlur = (st.glow || glowWord) ? size * 0.7 : size * 0.14
+    ctx.shadowOffsetX = (st.glow || glowWord) ? 0 : 2
+    ctx.shadowOffsetY = (st.glow || glowWord) ? 0 : 2
   }
   if ((st.border_width || 0) > 0) {
     ctx.lineWidth = st.border_width * 2
@@ -120,7 +129,7 @@ function paintWord(ctx, word, x, y, size, st, active, motionOff) {
     ctx.strokeText(word, x, y)
   }
   ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0
-  ctx.fillStyle = (active && st.highlight_color) || st.color || '#fff'
+  ctx.fillStyle = (active && karaokeOn(st) && st.highlight_color) || st.color || '#fff'
   ctx.fillText(word, x, y)
   ctx.restore()
   return w
@@ -135,7 +144,7 @@ export function drawTextClip(ctx, clip, cw, ch, opts = {}) {
   const localT = opts.time == null ? 0 : opts.time - (clip.start || 0)
   const motionOff = opts.reduceMotion ?? reduceMotionOn()
   const skipBlock = motionOff || opts.selected
-  const fxName = st.word_fx && st.word_fx !== 'none' ? st.word_fx : 'none'
+  const karaoke = karaokeOn(st)
 
   ctx.save()
   ctx.font = `${st.bold ? 'bold ' : ''}${size}px ${cssFont(st.font)}`
@@ -162,14 +171,14 @@ export function drawTextClip(ctx, clip, cw, ch, opts = {}) {
 
   if (st.bg && st.bg !== 'none') {
     ctx.save()
-    ctx.globalAlpha = st.bg_opacity ?? 0.55
+    ctx.globalAlpha *= st.bg_opacity ?? 0.55
     ctx.fillStyle = st.bg
     ctx.fillRect(boxLeft, boxTop - size * 0.15, boxW, blockH + size * 0.3)
     ctx.restore()
   }
 
   const words = rows.flat()
-  const active = fxName === 'none' ? -1 : activeWordIndex(words.length, localT, dur)
+  const active = karaoke ? activeWordIndex(words.length, localT, dur) : -1
 
   ctx.textAlign = 'left'
   let gi = 0
@@ -179,7 +188,7 @@ export function drawTextClip(ctx, clip, cw, ch, opts = {}) {
     const total = row.reduce((acc, w, n) => acc + ctx.measureText(w).width + (n ? space : 0), 0)
     let x = align === 'left' ? boxLeft + size * 0.2 : align === 'right' ? boxLeft + boxW - size * 0.2 - total : cx - total / 2
     row.forEach((w) => {
-      const isA = fxName !== 'none' && gi === active
+      const isA = karaoke && gi === active
       const ww = paintWord(ctx, w, x, ly, size, st, isA, motionOff)
       x += ww + space
       gi += 1

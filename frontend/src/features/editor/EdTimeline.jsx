@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState } from 'react'
 import Icon from '../../components/Icon'
+import FlipPopover from '../../components/FlipPopover'
 import { fmt } from '../../lib/utils'
 import { pseudoWaveform, clamp, kfColor } from '../../lib/panning'
 import { clipDur, displayTracks } from './editorModel'
@@ -7,12 +8,52 @@ import { headerScrollPad, timelineWheelAction } from './timelineWheel'
 
 const MIN_DUR = 0.15
 
+function PreviewVolButton({ value = 1, onChange }) {
+  const [open, setOpen] = useState(false)
+  const btnRef = useRef(null)
+  const pct = Math.round(value * 100)
+  const icon = pct <= 0 ? 'volume_off' : pct < 50 ? 'volume_down' : 'volume_up'
+  return (
+    <div className={`ed-preview-vol ${open ? 'open' : ''}`}>
+      <button
+        ref={btnRef}
+        type="button"
+        className="icon-btn"
+        title="Volumen de escucha (solo el editor, no el export)"
+        aria-expanded={open}
+        aria-label="Volumen de escucha"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Icon name={icon} size={17} />
+      </button>
+      <FlipPopover open={open} anchorRef={btnRef} onClose={() => setOpen(false)} className="ed-preview-vol-pop">
+        <span className="ed-preview-vol-pct">{pct}</span>
+        <div className="ed-preview-vol-track">
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            value={pct}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={pct}
+            aria-label="Volumen de escucha"
+            onChange={(e) => onChange?.(Number(e.target.value) / 100)}
+          />
+        </div>
+      </FlipPopover>
+    </div>
+  )
+}
+
 const laneKindFor = (assetKind) => (assetKind === 'clips' || assetKind === 'video' ? 'video' : 'audio')
 
 export default function EdTimeline({
   tracks, clips, pps, setPps, duration, playhead, rowH, setRowH,
-  selectedClipId, selectedTrackId, selectedClip, selKfId, dragInfo,
-  onSeek, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onSplit, onDeleteClip,
+  selectedClipId, selectedClipIds, selectedTrackId, selectedClip, selKfId, dragInfo,
+  onSeek, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onMoveGroup, onSplit, onDeleteClip,
+  previewVol, onPreviewVol,
   onDropAsset, onTrackToggle, onTrackCompact, onAddTrack, onAddTextTrack, onMoveKeyframe, onSelectKf, onAddKf, onDeleteKf, onContextClip, onContextTrack,
 }) {
   const lanesRef = useRef(null)
@@ -25,6 +66,7 @@ export default function EdTimeline({
   const totalW = Math.max(duration + 4, 12) * pps
   const isVideoSel = selectedClip?.kind === 'video'
   const dragKind = dragInfo?.kind || null
+  const selectedIds = selectedClipIds?.length ? selectedClipIds : (selectedClipId ? [selectedClipId] : [])
 
   function xToTime(clientX) {
     const el = lanesRef.current
@@ -105,17 +147,27 @@ export default function EdTimeline({
   function startClipDrag(e, clip, mode) {
     if (e.button !== 0) return
     e.stopPropagation()
+    if (e.ctrlKey || e.metaKey || e.shiftKey) e.preventDefault()
     const track = tracks.find((t) => t.id === clip.track_id)
-    if (track?.locked) { onSelectClip(clip.id); return }
-    onSelectClip(clip.id)
+    if (track?.locked) { onSelectClip?.(clip, e); return }
+    const next = onSelectClip?.(clip, e) || { ids: [clip.id] }
+    const idSet = new Set(next.ids || [clip.id])
+    const origs = clips.filter((c) => idSet.has(c.id)).map((c) => ({ ...c }))
     const startX = e.clientX
-    drag.current = { mode, startX, orig: { ...clip } }
+    const waitDrag = !!(e.ctrlKey || e.metaKey || e.shiftKey)
+    drag.current = { mode, startX, orig: { ...clip }, origs, waitDrag }
     const move = (ev) => {
       const d = drag.current
       if (!d) return
+      if (d.waitDrag && Math.abs(ev.clientX - d.startX) < 5) return
+      d.waitDrag = false
       const deltaT = (ev.clientX - d.startX) / pps
       const o = d.orig
       if (d.mode === 'move') {
+        if (d.origs.length > 1 && onMoveGroup) {
+          onMoveGroup(d.origs, deltaT)
+          return
+        }
         const ns = Math.max(0, o.start + deltaT)
         const patch = { start: +ns.toFixed(3) }
         const tid = trackUnderPointer(ev.clientX, ev.clientY)
@@ -173,12 +225,14 @@ export default function EdTimeline({
     <div className="ed-timeline-wrap" style={{ '--ed-row-h': `${rowH}px` }}>
       <div className="ed-tl-toolbar">
         <div className="ed-tl-tools-left">
-          <button className="ghost small" onClick={() => onSplit(selectedClipId, playhead)} disabled={!selectedClipId} title="Dividir en el cursor (S)">
+          <button className="ghost small" onClick={() => onSplit(selectedClipId, playhead)} disabled={!selectedIds.length} title="Dividir en el cursor (S)">
             <Icon name="content_cut" size={15} /> Dividir
           </button>
-          <button className="ghost small danger" onClick={() => onDeleteClip(selectedClipId)} disabled={!selectedClipId} title="Eliminar clip (Supr)">
+          <button className="ghost small danger" onClick={() => onDeleteClip(selectedClipId)} disabled={!selectedIds.length} title="Eliminar clip (Supr)">
             <Icon name="delete" size={15} /> Eliminar
           </button>
+          <span className="ed-tl-sep" />
+          <PreviewVolButton value={previewVol} onChange={onPreviewVol} />
           {isVideoSel && (
             <>
               <span className="ed-tl-sep" />
@@ -251,7 +305,7 @@ export default function EdTimeline({
                 onDrop={(e) => onLaneDrop(e, t)}>
                 {clips.filter((c) => c.track_id === t.id).map((c) => (
                   <ClipBlock key={c.id} clip={c} pps={pps}
-                    selected={c.id === selectedClipId} selKfId={selKfId}
+                    selected={selectedIds.includes(c.id)} selKfId={selKfId}
                     onDown={(e, mode) => startClipDrag(e, c, mode)}
                     onKfDown={(e, kf, idx) => startKfDrag(e, c, kf, idx)}
                     onContext={(e) => onContextClip?.(e, c)}

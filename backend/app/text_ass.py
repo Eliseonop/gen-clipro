@@ -10,6 +10,39 @@ from typing import Iterable
 from .schemas import TimelineClip
 
 _FX_NONE = "none"
+_KNOWN_FX = ("highlight", "glow", "pop")
+
+
+def word_fx_set(st: dict) -> set[str]:
+    fx = (st or {}).get("word_fx") or _FX_NONE
+    if isinstance(fx, (list, tuple)):
+        return {x for x in fx if x in _KNOWN_FX}
+    if fx == _FX_NONE:
+        return set()
+    return {fx} if fx in _KNOWN_FX else set()
+
+
+def _clamp01(n, fallback: float = 1.0) -> float:
+    try:
+        op = float(n)
+    except (TypeError, ValueError):
+        return fallback
+    return max(0.0, min(1.0, op))
+
+
+def word_opacity(st: dict, active: bool) -> float:
+    st = st or {}
+    if active or not word_fx_set(st):
+        return _clamp01(st.get("active_opacity", 1), 1.0)
+    return _clamp01(st.get("inactive_opacity", 1), 1.0)
+
+
+def opacity_tag(st: dict, active: bool = True) -> str:
+    op = word_opacity(st, active)
+    if op >= 0.999:
+        return ""
+    aa = f"{int(round((1.0 - op) * 255)):02X}"
+    return f"\\1a&H{aa}&"
 
 
 def active_word_index(word_count: int, local_t: float, duration: float) -> int:
@@ -56,18 +89,25 @@ def _esc_ass(s: str) -> str:
 
 def _active_override(st: dict) -> str:
     color = st.get("highlight_color") or "#ffffff"
-    fx = st.get("word_fx") or _FX_NONE
+    fx = word_fx_set(st)
     parts = [f"\\c{ass_bgr(color)}"]
-    if fx == "glow":
+    alpha = opacity_tag(st, True)
+    if alpha:
+        parts.append(alpha)
+    if "glow" in fx:
         parts.append("\\blur3")
-    if fx == "pop":
+    if "pop" in fx:
         parts.append("\\fscx118\\fscy118")
     return "{" + "".join(parts) + "}"
 
 
 def _idle_override(st: dict) -> str:
     color = st.get("color") or "#ffffff"
-    return "{" + f"\\c{ass_bgr(color)}" + "}"
+    parts = [f"\\c{ass_bgr(color)}"]
+    alpha = opacity_tag(st, False)
+    if alpha:
+        parts.append(alpha)
+    return "{" + "".join(parts) + "}"
 
 
 def _line_for_active(words: list[str], active: int, st: dict) -> str:
@@ -132,11 +172,11 @@ def caption_dialogues(clip: TimelineClip, W: int, H: int) -> list[str]:
         return []
     dur = _clip_dur(clip)
     start = max(0.0, float(clip.start or 0))
-    fx = st.get("word_fx") or _FX_NONE
+    fx = word_fx_set(st)
     appear = st.get("block_appear") or _FX_NONE
     fad = "{\\fad(180,0)}" if appear in ("fade", "pop", "slide_up") else ""
     style = f"s{clip.id}"
-    if fx == _FX_NONE or len(words) == 1:
+    if not fx or len(words) == 1:
         end = start + max(0.04, dur)
         text = fad + _idle_override(st) + _esc_ass(" ".join(words))
         return [
