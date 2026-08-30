@@ -44,5 +44,58 @@ class TextAssTest(unittest.TestCase):
         self.assertIn("Dialogue:", doc)
 
 
+    def test_combined_glow_and_pop(self):
+        clip = TimelineClip(
+            id="c1", track_id="T1", kind="text", asset_kind="text", asset_id="t1",
+            filename="", start=0.0, in_point=0.0, out_point=2.0, source_duration=2.0,
+            text="hola mundo",
+            style={
+                "word_fx": ["glow", "pop"],
+                "color": "#ffffff",
+                "highlight_color": "#ff3b5c",
+            },
+        )
+        lines = caption_dialogues(clip, 720, 1280)
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(any("\\blur3" in ln and "\\fscx118" in ln for ln in lines))
+
+    def test_word_opacities_in_karaoke(self):
+        clip = TimelineClip(
+            id="c1", track_id="T1", kind="text", asset_kind="text", asset_id="t1",
+            filename="", start=0.0, in_point=0.0, out_point=2.0, source_duration=2.0,
+            text="hola mundo",
+            style={
+                "word_fx": "highlight",
+                "color": "#ffffff",
+                "highlight_color": "#ff3b5c",
+                "active_opacity": 1,
+                "inactive_opacity": 0.5,
+            },
+        )
+        lines = caption_dialogues(clip, 720, 1280)
+        self.assertTrue(any("\\1a&H80&" in ln for ln in lines))
+
+    def test_active_opacity_without_karaoke(self):
+        clip = TimelineClip(
+            id="c1", track_id="T1", kind="text", asset_kind="text", asset_id="t1",
+            filename="", start=0.0, in_point=0.0, out_point=1.0, source_duration=1.0,
+            text="hola",
+            style={"font": "Arial", "size": 0.05, "color": "#ffffff", "word_fx": "none", "active_opacity": 0.5},
+        )
+        doc = build_ass([clip], 720, 1280)
+        self.assertIn("\\1a&H80&", doc)
+
+    def test_anton_font_name_in_ass(self):
+        clip = TimelineClip(
+            id="c1", track_id="T1", kind="text", asset_kind="text", asset_id="t1",
+            filename="", start=0.0, in_point=0.0, out_point=1.0, source_duration=1.0,
+            text="hola",
+            style={"font": "Anton", "size": 0.05, "color": "#ffffff", "bold": True, "border_width": 6, "border_color": "#000000"},
+        )
+        doc = build_ass([clip], 720, 1280)
+        self.assertIn("Anton", doc)
+        self.assertIn("Style: sc1,Anton,", doc)
+
+
 if __name__ == "__main__":
     unittest.main()

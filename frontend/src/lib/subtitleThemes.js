@@ -12,6 +12,8 @@ const sub = {
   shadow: false,
   glow: false,
   inactive_opacity: 0.5,
+  active_opacity: 1,
+  max_words: 8,
 }
 
 export const SUBTITLE_THEMES = [
@@ -139,6 +141,26 @@ export const SUBTITLE_THEMES = [
       inactive_opacity: 0.45,
     },
   },
+  {
+    id: 'shorts',
+    name: 'Shorts',
+    sample: 'hola mundo',
+    style: {
+      ...sub,
+      font: 'Anton',
+      size: 0.05,
+      color: '#ffffff',
+      bold: true,
+      border_width: 6,
+      border_color: '#000000',
+      highlight_color: '#ffffff',
+      word_fx: 'highlight',
+      block_appear: 'none',
+      inactive_opacity: 1,
+      glow: false,
+      shadow: false,
+    },
+  },
 ]
 
 export function themeById(id) {
@@ -146,11 +168,12 @@ export function themeById(id) {
 }
 
 export const WORD_FX_OPTIONS = [
-  { value: 'none', label: 'Sin resalte' },
   { value: 'highlight', label: 'Color' },
   { value: 'glow', label: 'Brillo' },
   { value: 'pop', label: 'Pop' },
 ]
+
+export const WORDS_PER_BOX = [4, 6, 8, 10, 12]
 
 export const BLOCK_APPEAR_OPTIONS = [
   { value: 'none', label: 'Nada' },

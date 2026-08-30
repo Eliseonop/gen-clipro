@@ -3,6 +3,9 @@ import {
   clipPlaybackMuted, makeClip, newReframe,
   shouldConfirmTrackDelete, removeTrack,
   canCaptionClip, textClipsFromTranscript,
+  splitClipByMaxWords, splitTrackTextByMaxWords, extraClipsAfterSplit,
+  nextClipSelection, rangeSelectOnTrack, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
+  previewElementVolume, parsePreviewVolume,
 } from './editorModel.js'
 
 const legacy = makeClip('clips', { index: 1, filename: 'a.mp4', end: 5, start: 0 }, 'V1', 0, 5)
@@ -68,5 +71,134 @@ assert.equal(captions[0].text, 'hola')
 assert.equal(captions[0].start, 10)
 assert.equal(+(captions[0].out_point - captions[0].in_point).toFixed(3), 2)
 
+const longCaps = textClipsFromTranscript(
+  { start: 0, in_point: 0, out_point: 6 },
+  [{ start: 0, end: 6, text: 'uno dos tres cuatro cinco seis' }],
+  'T1',
+  { font: 'Arial', max_words: 2 },
+)
+assert.equal(longCaps.length, 3)
+assert.equal(longCaps[0].text, 'uno dos')
+assert.equal(longCaps[1].text, 'tres cuatro')
+assert.equal(longCaps[2].text, 'cinco seis')
+assert.equal(longCaps[0].start, 0)
+assert.equal(longCaps[1].start, 2)
+assert.equal(longCaps[2].start, 4)
+assert.equal(+(longCaps[0].out_point - longCaps[0].in_point).toFixed(3), 2)
+
+const autoSplit = textClipsFromTranscript(
+  { start: 0, in_point: 0, out_point: 8 },
+  [{ start: 0, end: 8, text: 'a b c d e f g h i j k l' }],
+  'T1',
+  { font: 'Arial' },
+)
+assert.equal(autoSplit.length, 2)
+assert.equal(autoSplit[0].text, 'a b c d e f g h')
+assert.equal(autoSplit[1].text, 'i j k l')
+
+const srcClip = {
+  id: 'c1', track_id: 'T1', kind: 'text', text: 'a b c d e f',
+  start: 10, in_point: 0, out_point: 6, style: { font: 'Arial' },
+}
+const parts = splitClipByMaxWords(srcClip, 4)
+assert.equal(parts.length, 2)
+assert.equal(parts[0].text, 'a b c d')
+assert.equal(parts[1].text, 'e f')
+assert.equal(parts[0].start, 10)
+assert.equal(parts[1].start, 14)
+assert.equal(+(parts[0].out_point).toFixed(3), 4)
+assert.equal(+(parts[1].out_point).toFixed(3), 2)
+assert.notEqual(parts[0].id, parts[1].id)
+
+const untouched = splitClipByMaxWords({ ...srcClip, text: 'hola' }, 4)
+assert.equal(untouched.length, 1)
+assert.equal(untouched[0].text, 'hola')
+
+const mixed = [
+  { id: 'v1', track_id: 'V1', kind: 'video' },
+  { id: 't1', track_id: 'T1', kind: 'text', text: 'uno dos tres cuatro', start: 0, in_point: 0, out_point: 4, style: {} },
+  { id: 't2', track_id: 'T2', kind: 'text', text: 'otro largo de mas de cuatro palabras ya', start: 1, in_point: 0, out_point: 2, style: {} },
+]
+assert.equal(extraClipsAfterSplit(mixed, 'T1', 4), 0)
+assert.equal(extraClipsAfterSplit(mixed, 'T1', 2), 1)
+const splitT1 = splitTrackTextByMaxWords(mixed, 'T1', 2)
+assert.equal(splitT1.filter((c) => c.track_id === 'T1').length, 2)
+assert.equal(splitT1.filter((c) => c.track_id === 'T2').length, 1)
+assert.equal(splitT1.filter((c) => c.kind === 'video').length, 1)
+
 console.log('track delete + captions ok')
+
+const selClips = [
+  { id: 'a', track_id: 'T1', kind: 'text', start: 0 },
+  { id: 'b', track_id: 'T1', kind: 'text', start: 2 },
+  { id: 'c', track_id: 'T1', kind: 'text', start: 4 },
+  { id: 'd', track_id: 'T2', kind: 'text', start: 1 },
+  { id: 'v', track_id: 'V1', kind: 'video', start: 0 },
+]
+
+assert.deepEqual(rangeSelectOnTrack(selClips, 'T1', 'a', 'c'), ['a', 'b', 'c'])
+assert.deepEqual(rangeSelectOnTrack(selClips, 'T1', 'c', 'a'), ['a', 'b', 'c'])
+
+let next = nextClipSelection(selClips, ['a'], 'a', 'b', {})
+assert.deepEqual(next, { ids: ['b'], anchorId: 'b' })
+
+next = nextClipSelection(selClips, ['a'], 'a', 'b', { additive: true })
+assert.deepEqual(next.ids.sort(), ['a', 'b'])
+assert.equal(next.anchorId, 'b')
+
+next = nextClipSelection(selClips, ['a', 'b'], 'b', 'a', { additive: true })
+assert.deepEqual(next.ids, ['b'])
+assert.equal(next.anchorId, 'b')
+
+next = nextClipSelection(selClips, ['a'], 'a', 'v', { additive: true })
+assert.deepEqual(next, { ids: ['v'], anchorId: 'v' })
+
+next = nextClipSelection(selClips, ['a'], 'a', 'c', { range: true })
+assert.deepEqual(next.ids, ['a', 'b', 'c'])
+assert.equal(next.anchorId, 'c')
+
+next = nextClipSelection(selClips, ['a'], 'a', 'd', { range: true })
+assert.deepEqual(next, { ids: ['d'], anchorId: 'd' })
+
+next = nextClipSelection(selClips, ['a', 'b', 'c'], 'a', 'b', { keepGroup: true })
+assert.deepEqual(next.ids, ['a', 'b', 'c'])
+assert.equal(next.anchorId, 'b')
+
+const moved = groupMoveFromOrig(
+  selClips.map((c) => ({ ...c })),
+  [{ id: 'a', start: 1 }, { id: 'b', start: 3 }],
+  -5,
+)
+assert.equal(moved.find((c) => c.id === 'a').start, 0)
+assert.equal(moved.find((c) => c.id === 'b').start, 2)
+assert.equal(moved.find((c) => c.id === 'c').start, 4)
+
+const styled = patchClipsStyle(
+  [
+    { id: 'a', kind: 'text', style: { font: 'Arial', color: '#fff' } },
+    { id: 'b', kind: 'text', style: { font: 'Arial', color: '#fff' } },
+    { id: 'v', kind: 'video', style: { font: 'Arial' } },
+  ],
+  ['a', 'b'],
+  { font: 'Anton' },
+)
+assert.equal(styled.find((c) => c.id === 'a').style.font, 'Anton')
+assert.equal(styled.find((c) => c.id === 'b').style.font, 'Anton')
+assert.equal(styled.find((c) => c.id === 'v').style.font, 'Arial')
+
+const left = removeClipsByIds(selClips, ['a', 'c'])
+assert.deepEqual(left.map((c) => c.id), ['b', 'd', 'v'])
+
+console.log('clip multi-select ok')
+
+assert.equal(previewElementVolume(1, 1, false), 1)
+assert.equal(previewElementVolume(1, 0.3, false), 0.3)
+assert.equal(previewElementVolume(0.5, 0.5, false), 0.25)
+assert.equal(previewElementVolume(1, 0.3, true), 0)
+assert.equal(parsePreviewVolume('0.4'), 0.4)
+assert.equal(parsePreviewVolume('nope'), 1)
+assert.equal(parsePreviewVolume('2'), 1)
+assert.equal(parsePreviewVolume(null), 1)
+
+console.log('preview volume ok')
 

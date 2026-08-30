@@ -4,12 +4,15 @@ import ConfirmModal from '../../components/ConfirmModal'
 import { fmt } from '../../lib/utils'
 import { getTimeline, saveTimeline } from '../../services/api'
 import { clamp, clampCenter, frameAt } from '../../lib/panning'
-import { defaultTextStyle, subtitleStyle, wrappedText } from '../../lib/textstyles'
+import { defaultTextStyle, subtitleStyle, wrappedText, ensureEditorFonts } from '../../lib/textstyles'
 import { applyThemeToStyle } from '../../lib/textKaraoke'
 import {
   uid, FORMATS, mediaUrl, defaultTracks, newReframe, withKfIds,
   makeClip, makeTextClip, clipDur, clipEnd, clipPlaybackMuted,
   canCaptionClip, removeTrack, shouldConfirmTrackDelete,
+  extraClipsAfterSplit, splitTrackTextByMaxWords,
+  nextClipSelection, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
+  previewElementVolume, parsePreviewVolume, PREVIEW_VOL_KEY,
 } from './editorModel'
 import { applyFrame, disableOverlay, enableOverlay, isOverlay, newTransform, videosAt } from '../../lib/clipLayout'
 import { drawComposite, drawMainView } from './render/canvas'
@@ -37,6 +40,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   const [playhead, setPlayhead] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [selClipId, setSelClipId] = useState(null)
+  const [selClipIds, setSelClipIds] = useState([])
   const [selTrackId, setSelTrackId] = useState('V1')
   const [selKfId, setSelKfId] = useState(null)
   const [hiddenKf, setHiddenKf] = useState(() => new Set())
@@ -44,10 +48,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   const [outW, setOutW] = useState(720)
   const [outH, setOutH] = useState(1280)
   const [audioDb, setAudioDb] = useState(-14)
+  const [previewVol, setPreviewVol] = useState(() => {
+    try { return parsePreviewVolume(localStorage.getItem(PREVIEW_VOL_KEY)) }
+    catch { return 1 }
+  })
   const [rowH, setRowH] = useState(52)
 
   const [ctxMenu, setCtxMenu] = useState(null)      // { x, y, clip }
   const [trackToDelete, setTrackToDelete] = useState(null)
+  const [fragmentAsk, setFragmentAsk] = useState(null)
   const [dragInfo, setDragInfo] = useState(null)    // { kind, duration, name }
   const [framingMode, setFramingMode] = useState(null) // { trackId, x, y, w } o null
   const [builder, setBuilder] = useState(null)
@@ -65,10 +74,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   const clipsRef = useRef(clips); clipsRef.current = clips
   const tracksRef = useRef(tracks); tracksRef.current = tracks
   const selRef = useRef(selClipId); selRef.current = selClipId
+  const selIdsRef = useRef(selClipIds); selIdsRef.current = selClipIds
   const selKfRef = useRef(selKfId); selKfRef.current = selKfId
   const hiddenKfRef = useRef(hiddenKf); hiddenKfRef.current = hiddenKf
   const outRef = useRef({ w: outW, h: outH }); outRef.current = { w: outW, h: outH }
   const framingModeRef = useRef(null); framingModeRef.current = framingMode
+  const previewVolRef = useRef(previewVol); previewVolRef.current = previewVol
+  const alignGuidesRef = useRef(null)
 
   const duration = clips.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
   const selectedClip = clips.find((c) => c.id === selClipId) || null
@@ -82,6 +94,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     if (a >= 1) { c.width = 640; c.height = Math.round(640 / a) }
     else { c.height = 640; c.width = Math.round(640 * a) }
   }, [outW, outH])
+
+  useEffect(() => { ensureEditorFonts() }, [])
 
   // --- Carga inicial ---
   useEffect(() => {
@@ -118,6 +132,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     version: 1, fps: 30, width: outW, height: outH, audio_target_db: audioDb, tracks, clips,
   }), [outW, outH, audioDb, tracks, clips])
 
+  function setListenVolume(v) {
+    const n = parsePreviewVolume(v)
+    setPreviewVol(n)
+    previewVolRef.current = n
+    try { localStorage.setItem(PREVIEW_VOL_KEY, String(n)) } catch { /* noop */ }
+  }
+
   useEffect(() => {
     if (!loaded) return
     const id = setTimeout(() => { saveTimeline(project.id, timelinePayload()).catch(() => {}) }, 800)
@@ -147,8 +168,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   useEffect(() => {
     const resultCtx = resultCanvasRef.current?.getContext('2d')
     const env = {
-      clipsRef, tracksRef, mediaEls, outRef, selRef, selKfRef, hiddenKfRef,
-      playingRef, framingModeRef, mainCanvasRef, mainTextBox, topVideoAt,
+      clipsRef, tracksRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
+      playingRef, framingModeRef, mainCanvasRef, mainTextBox, topVideoAt, alignGuidesRef,
     }
     const tick = () => {
       const total = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
@@ -169,7 +190,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
         const expected = clamp(c.in_point + (head - c.start), 0, (el.duration || c.out_point))
         if (active && playingRef.current) {
           el.muted = clipPlaybackMuted(c, track)
-          el.volume = clipPlaybackMuted(c, track) ? 0 : clamp(c.volume ?? 1, 0, 1)
+          el.volume = previewElementVolume(c.volume ?? 1, previewVolRef.current, clipPlaybackMuted(c, track))
           if (el.paused) { try { el.currentTime = expected } catch { /* noop */ }; el.play().catch(() => {}) }
           else if (Math.abs(el.currentTime - expected) > 0.35) { try { el.currentTime = expected } catch { /* noop */ } }
         } else if (!el.paused) {
@@ -253,6 +274,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     const clip = makeClip(assetKind, item, track.id, trackEnd, dur)
     setClips((prev) => [...prev, clip])
     setSelClipId(clip.id)
+    setSelClipIds([clip.id])
   }
 
   function dropAsset(payload, trackId, startTime) {
@@ -263,32 +285,45 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     }, trackId, startTime, payload.duration)
     setClips((prev) => [...prev, clip])
     setSelClipId(clip.id)
+    setSelClipIds([clip.id])
   }
 
   function splitClip(id, at) {
+    const ids = new Set(
+      id && selIdsRef.current.includes(id) ? selIdsRef.current : (id ? [id] : selIdsRef.current)
+    )
+    if (!ids.size) return
     setClips((prev) => {
-      const c = prev.find((x) => x.id === id)
-      if (!c) return prev
-      const localOut = c.in_point + (at - c.start)
-      if (localOut <= c.in_point + 0.1 || localOut >= c.out_point - 0.1) return prev
-      const left = { ...c, out_point: +localOut.toFixed(3) }
       const remap = (arr) => (arr || []).map((k) => ({ ...k, id: uid('k') }))
-      const right = {
-        ...c, id: uid('c'), in_point: +localOut.toFixed(3), start: +at.toFixed(3),
-        reframe: c.reframe ? withKfIds({
-          ...c.reframe,
-          keyframes: remap(c.reframe.keyframes),
-          keyframes2: remap(c.reframe.keyframes2),
-        }) : null,
+      const out = []
+      for (const c of prev) {
+        if (!ids.has(c.id)) { out.push(c); continue }
+        const localOut = c.in_point + (at - c.start)
+        if (localOut <= c.in_point + 0.1 || localOut >= c.out_point - 0.1) { out.push(c); continue }
+        const left = { ...c, out_point: +localOut.toFixed(3) }
+        const right = {
+          ...c, id: uid('c'), in_point: +localOut.toFixed(3), start: +at.toFixed(3),
+          reframe: c.reframe ? withKfIds({
+            ...c.reframe,
+            keyframes: remap(c.reframe.keyframes),
+            keyframes2: remap(c.reframe.keyframes2),
+          }) : null,
+        }
+        out.push(left, right)
       }
-      return prev.flatMap((x) => (x.id === id ? [left, right] : [x]))
+      return out
     })
   }
 
   function deleteClip(id) {
-    if (!id) return
-    setClips((prev) => prev.filter((c) => c.id !== id))
-    if (selClipId === id) { setSelClipId(null); setSelKfId(null) }
+    const ids = id && selIdsRef.current.includes(id)
+      ? selIdsRef.current
+      : (id ? [id] : selIdsRef.current)
+    if (!ids.length) return
+    setClips((prev) => removeClipsByIds(prev, ids))
+    setSelClipId(null)
+    setSelClipIds([])
+    setSelKfId(null)
   }
 
   function trackToggle(id, prop) {
@@ -333,7 +368,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   }
   function addTextTrack() {
     const id = addTrack('text')
-    setSelClipId(null); setSelKfId(null); setSelTrackId(id)
+    setSelClipId(null)
+    setSelClipIds([])
+    setSelKfId(null)
+    setSelTrackId(id)
   }
   function applyRemoveTrack(trackId) {
     const next = removeTrack(tracksRef.current, clipsRef.current, trackId)
@@ -344,6 +382,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
       setSelClipId(null)
       setSelKfId(null)
     }
+    setSelClipIds((prev) => prev.filter((id) => next.clips.some((c) => c.id === id)))
     if (framingMode?.trackId === trackId) setFramingMode(null)
     setTrackToDelete(null)
   }
@@ -352,7 +391,33 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     if (shouldConfirmTrackDelete(clipsRef.current, track.id)) setTrackToDelete(track)
     else applyRemoveTrack(track.id)
   }
-  function selectTrack(id) { setSelTrackId(id); setSelClipId(null); setSelKfId(null); setFramingMode(null) }
+  function selectTrack(id) {
+    setSelTrackId(id)
+    setSelClipId(null)
+    setSelClipIds([])
+    setSelKfId(null)
+    setFramingMode(null)
+  }
+  function handleSelectClip(clip, e) {
+    if (!clip) return { ids: [], anchorId: null }
+    const additive = !!(e?.ctrlKey || e?.metaKey)
+    const range = !!e?.shiftKey
+    const keepGroup = !additive && !range && selIdsRef.current.includes(clip.id)
+    const next = nextClipSelection(clipsRef.current, selIdsRef.current, selRef.current, clip.id, {
+      additive, range, keepGroup,
+    })
+    setSelClipIds(next.ids)
+    setSelClipId(next.anchorId)
+    selIdsRef.current = next.ids
+    selRef.current = next.anchorId
+    setSelKfId(null)
+    if (clip.track_id) setSelTrackId(clip.track_id)
+    if (!keepGroup) setFramingMode(null)
+    return next
+  }
+  function moveGroup(origs, deltaT) {
+    setClips((prev) => groupMoveFromOrig(prev, origs, deltaT))
+  }
 
   // --- Encuadres / keyframes ---
   function changeReframe(id, patch) {
@@ -365,18 +430,23 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   }
   function applyClipFrame(clip, slot) {
     if (!clip || clip.kind !== 'video') return
-    const el = mediaEls.current.get(clip.id)
-    const srcW = el?.videoWidth || 1920
-    const srcH = el?.videoHeight || 1080
-    const localT = clamp(clip.in_point + (playhead - clip.start), clip.in_point, clip.out_point)
-    const patch = applyFrame(clip, slot, srcW / srcH, outAspect, localT, srcW, srcH, outW, outH)
-    setClips((prev) => prev.map((c) => (c.id === clip.id ? {
-      ...c,
-      layout: patch.layout,
-      frame: patch.frame,
-      transform: patch.transform,
-      reframe: { ...(c.reframe || newReframe()), ...patch.reframe },
-    } : c)))
+    const group = clipsRef.current.filter((c) => selIdsRef.current.includes(c.id) && c.kind === 'video')
+    const targets = group.length ? group : [clip]
+    setClips((prev) => prev.map((c) => {
+      if (!targets.some((t) => t.id === c.id)) return c
+      const el = mediaEls.current.get(c.id)
+      const srcW = el?.videoWidth || 1920
+      const srcH = el?.videoHeight || 1080
+      const localT = clamp(c.in_point + (playhead - c.start), c.in_point, c.out_point)
+      const patch = applyFrame(c, slot, srcW / srcH, outAspect, localT, srcW, srcH, outW, outH)
+      return {
+        ...c,
+        layout: patch.layout,
+        frame: patch.frame,
+        transform: patch.transform,
+        reframe: { ...(c.reframe || newReframe()), ...patch.reframe },
+      }
+    }))
   }
   function toggleOverlay(clip, on) {
     if (!clip || clip.kind !== 'video') return
@@ -508,17 +578,22 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     const style = baseTextStyle()
     const tid = ensureTextTrack(style)
     const clip = makeTextClip(tid, playhead, 3, 'Texto', style)
-    setClips((prev) => [...prev, clip]); setSelClipId(clip.id); setSelKfId(null)
+    setClips((prev) => [...prev, clip])
+    setSelClipId(clip.id)
+    setSelClipIds([clip.id])
+    setSelKfId(null)
   }
   function changeText(id, text) {
     setClips((prev) => prev.map((c) => (c.id === id ? { ...c, text, name: (text || 'Texto').slice(0, 22) } : c)))
   }
   function changeStyle(id, patch) {
-    setClips((prev) => prev.map((c) => (c.id === id ? { ...c, style: { ...(c.style || defaultTextStyle()), ...patch } } : c)))
+    const ids = selIdsRef.current.includes(id) ? selIdsRef.current : [id]
+    setClips((prev) => patchClipsStyle(prev, ids, patch))
   }
   function applyPreset(id, preset) {
+    const ids = new Set(selIdsRef.current.includes(id) ? selIdsRef.current : [id])
     setClips((prev) => prev.map((c) => {
-      if (c.id !== id) return c
+      if (!ids.has(c.id) || c.kind !== 'text') return c
       return { ...c, style: applyThemeToStyle(c.style, preset) }
     }))
   }
@@ -539,20 +614,43 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   function startFraming(track) {
     const st = track.style || defaultTextStyle()
     const h = clamp((st.size ?? 0.07) * 1.5, 0.05, 0.5)
-    setSelClipId(null); setSelKfId(null); setSelTrackId(track.id)
+    setSelClipId(null)
+    setSelClipIds([])
+    setSelKfId(null)
+    setSelTrackId(track.id)
     setFramingMode({ trackId: track.id, x: st.x ?? 0.5, y: st.y ?? 0.5, w: st.w ?? 0.8, h })
+  }
+  function startFramingSelection() {
+    const ids = selIdsRef.current.filter((id) => clipsRef.current.find((c) => c.id === id)?.kind === 'text')
+    if (!ids.length) return
+    const st = clipsRef.current.find((c) => c.id === ids[0])?.style || defaultTextStyle()
+    const h = clamp((st.size ?? 0.07) * 1.5, 0.05, 0.5)
+    setFramingMode({ clipIds: ids, x: st.x ?? 0.5, y: st.y ?? 0.5, w: st.w ?? 0.8, h })
   }
   function saveFraming() {
     const fm = framingMode
     if (!fm) return
     const size = +clamp(fm.h / 1.22, 0.02, 0.4).toFixed(4)
-    changeTrackStyle(fm.trackId, { x: +fm.x.toFixed(4), y: +fm.y.toFixed(4), w: +fm.w.toFixed(4), size })
+    const patch = { x: +fm.x.toFixed(4), y: +fm.y.toFixed(4), w: +fm.w.toFixed(4), size }
+    if (fm.clipIds?.length) setClips((prev) => patchClipsStyle(prev, fm.clipIds, patch))
+    else if (fm.trackId) changeTrackStyle(fm.trackId, patch)
     setFramingMode(null)
   }
   function cancelFraming() { setFramingMode(null) }
 
+  function requestFragmentTrack(trackId) {
+    const maxWords = Math.max(1, Math.floor(Number(tracksRef.current.find((t) => t.id === trackId)?.style?.max_words) || 8))
+    const extra = extraClipsAfterSplit(clipsRef.current, trackId, maxWords)
+    if (extra <= 0) return
+    setFragmentAsk({ trackId, maxWords, extra })
+  }
+  function applyFragmentTrack() {
+    if (!fragmentAsk) return
+    setClips((prev) => splitTrackTextByMaxWords(prev, fragmentAsk.trackId, fragmentAsk.maxWords))
+    setFragmentAsk(null)
+  }
+
   // Aplica el estilo de un clip de texto a TODOS los clips de texto del Timeline.
-  // Actúa como "estado inicial común": después cada texto sigue siendo editable individualmente.
   function applyGlobalTemplate(sourceClip) {
     if (!sourceClip || sourceClip.kind !== 'text') return
     const template = { ...(sourceClip.style || {}) }
@@ -565,7 +663,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   function applyTextFavorite(item) {
     const st = snapshotTextStyle(item?.style)
     if (selectedClip?.kind === 'text') {
-      setClips((prev) => prev.map((c) => (c.id === selectedClip.id ? { ...c, style: st } : c)))
+      const ids = new Set(selIdsRef.current.length ? selIdsRef.current : [selectedClip.id])
+      setClips((prev) => prev.map((c) => (
+        ids.has(c.id) && c.kind === 'text' ? { ...c, style: st } : c
+      )))
       return
     }
     if (selTrackObj?.kind === 'text') {
@@ -595,7 +696,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   const onMainDown = createMainDownHandler({
     mainCanvasRef, framingModeRef, playingRef, stopPlayback, setFramingMode,
     selectedClip, mainTextBox, changeStyle, mediaEls, playhead, upsertKeyframe, outAspect,
-    changeReframe,
+    changeReframe, clipsRef, tracksRef, playheadRef, alignGuidesRef,
   })
   const onResultDown = createResultDownHandler({
     resultCanvasRef, selectedClip, playhead, mediaEls, outW, outH,
@@ -608,8 +709,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
       const tag = document.activeElement?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
       if (e.code === 'Space') { e.preventDefault(); togglePlay() }
-      else if (e.key === 'Delete' || e.key === 'Backspace') { if (selRef.current) { e.preventDefault(); deleteClip(selRef.current) } }
-      else if (e.key.toLowerCase() === 's') { if (selRef.current) { e.preventDefault(); splitClip(selRef.current, playheadRef.current) } }
+      else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selIdsRef.current.length) { e.preventDefault(); deleteClip(selIdsRef.current[0]) }
+      }
+      else if (e.key.toLowerCase() === 's') {
+        if (selIdsRef.current.length) { e.preventDefault(); splitClip(selIdsRef.current[0], playheadRef.current) }
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -667,7 +772,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             {clips.length === 0 && !framingMode && <div className="ed-stage-empty">Agrega clips o texto al timeline</div>}
             {canEditFrame && !overlayOn && <div className="ed-stage-hint">Arrastra el recuadro · esquinas para zoom</div>}
             {canEditFrame && overlayOn && <div className="ed-stage-hint">Esquinas: encuadre de la fuente · el tamaño en Resultado no cambia</div>}
-            {isTextSel && <div className="ed-stage-hint">Arrastra el texto para moverlo · botón Global para aplicar a todos</div>}
+            {isTextSel && (
+              <div className="ed-stage-hint">
+                {selClipIds.length > 1
+                  ? `${selClipIds.length} textos · arrastra en el timeline para mover el grupo`
+                  : 'Arrastra el texto para moverlo · botón Global para aplicar a todos'}
+              </div>
+            )}
             {framingMode && <div className="ed-stage-hint">Ajusta el recuadro amarillo y pulsa Guardar</div>}
           </div>
           <div className="ed-main-tools">
@@ -785,15 +896,23 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
         <EdTimeline
           tracks={tracks} clips={clips} pps={pps} setPps={setPps}
           duration={duration} playhead={playhead} rowH={rowH} setRowH={setRowH}
-          selectedClipId={selClipId} selectedTrackId={selTrackId}
+          selectedClipId={selClipId} selectedClipIds={selClipIds} selectedTrackId={selTrackId}
           selectedClip={selectedClip} selKfId={selKfId} dragInfo={dragInfo}
           onSeek={seek}
-          onSelectClip={(id) => { setSelClipId(id); setSelKfId(null); setFramingMode(null) }}
+          onSelectClip={handleSelectClip}
           onSelectTrack={selectTrack}
-          onDoubleClip={(clip) => { seek(clip.start + 0.03); setSelClipId(clip.id); setSelKfId(null) }}
+          onDoubleClip={(clip) => {
+            seek(clip.start + 0.03)
+            setSelClipId(clip.id)
+            setSelClipIds([clip.id])
+            setSelKfId(null)
+          }}
           onMutateClip={mutateClip}
+          onMoveGroup={moveGroup}
           onSplit={splitClip}
           onDeleteClip={deleteClip}
+          previewVol={previewVol}
+          onPreviewVol={setListenVolume}
           onDropAsset={dropAsset}
           onTrackToggle={trackToggle}
           onTrackCompact={compactTrack}
@@ -803,16 +922,30 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
           onSelectKf={setSelKfId}
           onAddKf={addKeyframeAtPlayhead}
           onDeleteKf={deleteSelectedKeyframe}
-          onContextClip={(e, clip) => { e.preventDefault(); setSelClipId(clip.id); setCtxMenu({ x: e.clientX, y: e.clientY, clip }) }}
+          onContextClip={(e, clip) => {
+            e.preventDefault()
+            if (!selIdsRef.current.includes(clip.id)) {
+              setSelClipId(clip.id)
+              setSelClipIds([clip.id])
+              selIdsRef.current = [clip.id]
+              selRef.current = clip.id
+            }
+            setCtxMenu({ x: e.clientX, y: e.clientY, clip })
+          }}
           onContextTrack={(_e, track) => requestDeleteTrack(track)}
         />
         {isTextSel ? (
           <EdText mode="segment" clip={selectedClip} style={selectedClip.style}
+            selectionCount={selClipIds.length}
             onChangeText={(v) => changeText(selectedClip.id, v)}
             onChangeStyle={(patch) => changeStyle(selectedClip.id, patch)}
             onApplyPreset={(p) => applyPreset(selectedClip.id, p)}
             onChangeDur={(d) => mutateClip(selectedClip.id, { out_point: +(selectedClip.in_point + d).toFixed(3), source_duration: +(selectedClip.in_point + d).toFixed(3) })}
             onApplyAsGlobalTemplate={() => applyGlobalTemplate(selectedClip)}
+            framing={!!framingMode && (framingMode.clipIds?.length > 0)}
+            onStartFraming={startFramingSelection}
+            onSaveFraming={saveFraming}
+            onCancelFraming={cancelFraming}
             textFavorites={fav.favs.textStyles}
             onSaveFavorite={(st) => fav.saveTextStyle(st)}
             onApplyFavorite={applyTextFavorite}
@@ -830,6 +963,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             onSaveFavorite={(st) => fav.saveTextStyle(st)}
             onApplyFavorite={applyTextFavorite}
             onDeleteFavorite={(id) => fav.removeTextStyle(id)}
+            onFragment={() => requestFragmentTrack(selTrackObj.id)}
           />
         ) : (
           <EdCrops
@@ -839,7 +973,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             onDelete={(kf) => deleteKeyframe(selectedClip, kf)}
             onSeek={seek}
             onPanMode={(kf, mode) => patchKeyframePan(selectedClip, kf, mode)}
-            onChangeFx={(patch) => selectedClip && mutateClip(selectedClip.id, patch)}
+            onChangeFx={(patch) => {
+              const ids = new Set(selIdsRef.current)
+              setClips((prev) => prev.map((c) => (
+                ids.has(c.id) && c.kind === 'video' ? { ...c, ...patch } : c
+              )))
+            }}
             onChangeFrame={(slot) => applyClipFrame(selectedClip, slot)}
           />
         )}
@@ -905,6 +1044,17 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
         confirmText="Eliminar pista"
         onConfirm={() => applyRemoveTrack(trackToDelete.id)}
         onCancel={() => setTrackToDelete(null)}
+      />
+      <ConfirmModal
+        open={!!fragmentAsk}
+        title="¿Fragmentar los textos?"
+        message={fragmentAsk
+          ? `Los cuadros con más de ${fragmentAsk.maxWords} palabras se partirán en ${fragmentAsk.extra} clip${fragmentAsk.extra === 1 ? '' : 's'} extra, conservando los tiempos.`
+          : ''}
+        confirmText="Fragmentar"
+        danger={false}
+        onConfirm={applyFragmentTrack}
+        onCancel={() => setFragmentAsk(null)}
       />
     </div>
   )

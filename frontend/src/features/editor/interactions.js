@@ -10,12 +10,13 @@ import {
   hitTransformHandle, isOverlay, newTransform, sourceCropPx,
 } from '../../lib/clipLayout'
 import { framingRect } from './render/canvas'
+import { snapAlign, textAlignTargets } from '../../lib/alignGuides'
 
 export function createMainDownHandler(ctx) {
   const {
     mainCanvasRef, framingModeRef, playingRef, stopPlayback, setFramingMode,
     selectedClip, mainTextBox, changeStyle, mediaEls, playhead, upsertKeyframe, outAspect,
-    changeReframe,
+    changeReframe, clipsRef, tracksRef, playheadRef, alignGuidesRef,
   } = ctx
 
   return function onMainDown(e) {
@@ -41,7 +42,14 @@ export function createMainDownHandler(ctx) {
         setFramingMode((prev) => {
           if (!prev) return prev
           const n = { ...prev }
-          if (mode === 'move') { n.x = clamp(s0.x + dxN, 0, 1); n.y = clamp(s0.y + dyN, 0, 1) }
+          if (mode === 'move') {
+            const rawX = clamp(s0.x + dxN, 0, 1)
+            const rawY = clamp(s0.y + dyN, 0, 1)
+            const snapped = snapAlign(rawX, rawY, textAlignTargets(clipsRef?.current, tracksRef?.current, playheadRef?.current ?? 0, null))
+            if (alignGuidesRef) alignGuidesRef.current = snapped.guides
+            n.x = snapped.x
+            n.y = snapped.y
+          }
           else if (mode === 'width-r') n.w = clamp(s0.w + dxN * 2, 0.05, 1)
           else if (mode === 'width-l') n.w = clamp(s0.w - dxN * 2, 0.05, 1)
           else if (mode === 'height') n.h = clamp(s0.h + dyN * 2, 0.03, 0.95)
@@ -49,7 +57,10 @@ export function createMainDownHandler(ctx) {
           return n
         })
       }
-      const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+      const up = () => {
+        if (alignGuidesRef) alignGuidesRef.current = null
+        window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up)
+      }
       window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
       return
     }
@@ -75,12 +86,21 @@ export function createMainDownHandler(ctx) {
       const s0 = { x: st.x ?? 0.5, y: st.y ?? 0.5, w: st.w ?? 0.8, size: st.size ?? 0.07, cx: e.clientX, cy: e.clientY }
       const move = (ev) => {
         const dxN = (ev.clientX - s0.cx) / rect.width, dyN = (ev.clientY - s0.cy) / rect.height
-        if (mode === 'move') changeStyle(clip.id, { x: +clamp(s0.x + dxN, 0, 1).toFixed(4), y: +clamp(s0.y + dyN, 0, 1).toFixed(4) })
+        if (mode === 'move') {
+          const rawX = clamp(s0.x + dxN, 0, 1)
+          const rawY = clamp(s0.y + dyN, 0, 1)
+          const snapped = snapAlign(rawX, rawY, textAlignTargets(clipsRef?.current, tracksRef?.current, playheadRef?.current ?? playhead, clip.id))
+          if (alignGuidesRef) alignGuidesRef.current = snapped.guides
+          changeStyle(clip.id, { x: +snapped.x.toFixed(4), y: +snapped.y.toFixed(4) })
+        }
         else if (mode === 'width-r') changeStyle(clip.id, { w: +clamp(s0.w + dxN * 2, 0.1, 1).toFixed(4) })
         else if (mode === 'width-l') changeStyle(clip.id, { w: +clamp(s0.w - dxN * 2, 0.1, 1).toFixed(4) })
         else if (mode === 'size') changeStyle(clip.id, { size: +clamp(s0.size + dyN * 0.3, 0.02, 0.3).toFixed(4) })
       }
-      const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+      const up = () => {
+        if (alignGuidesRef) alignGuidesRef.current = null
+        window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up)
+      }
       window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
       return
     }

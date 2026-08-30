@@ -174,8 +174,9 @@ def _plain_scale(W: int, H: int) -> str:
     return contain_scale_filter(W, H)
 
 
-# Fuentes del sistema (Windows) disponibles para el texto.
+# Fuentes del sistema (Windows) + fuentes embebidas del proyecto.
 _FONT_DIR = Path("C:/Windows/Fonts")
+_BUNDLED_FONT_DIR = Path(__file__).resolve().parent / "fonts"
 _FONTS = {
     "Arial": "arial.ttf", "Arial Black": "ariblk.ttf", "Impact": "impact.ttf",
     "Georgia": "georgia.ttf", "Verdana": "verdana.ttf", "Times New Roman": "times.ttf",
@@ -189,15 +190,37 @@ _FONTS_BOLD = {
     "Segoe UI": "segoeuib.ttf", "Calibri": "calibrib.ttf", "Tahoma": "tahomabd.ttf",
     "Consolas": "consolab.ttf",
 }
+_BUNDLED_FONTS = {
+    "Anton": "Anton-Regular.ttf",
+}
 
 
-def _fontfile(name: str, bold: bool) -> str:
+def resolve_font_path(name: str, bold: bool = False) -> Path:
+    """Ruta al TTF: primero fuentes embebidas (Anton…), luego Windows/Fonts."""
+    bundled = _BUNDLED_FONTS.get(name)
+    if bundled:
+        p = _BUNDLED_FONT_DIR / bundled
+        if p.exists():
+            return p
     fn = (_FONTS_BOLD.get(name) if bold else None) or _FONTS.get(name, "arial.ttf")
     p = _FONT_DIR / fn
     if not p.exists():
         p = _FONT_DIR / "arial.ttf"
+    return p
+
+
+def _fontfile(name: str, bold: bool) -> str:
+    p = resolve_font_path(name, bold)
     # Va entre comillas simples y con ':' escapado → fontfile='C\:/Windows/...'.
     return str(p).replace("\\", "/").replace(":", "\\:")
+
+
+def ass_overlay_filter(ass_path: Path) -> str:
+    """Filtro ass= de ffmpeg, con fontsdir si hay TTF embebidos (Anton…)."""
+    spec = f"ass='{ass_filter_path(str(ass_path))}'"
+    if _BUNDLED_FONT_DIR.is_dir() and any(_BUNDLED_FONT_DIR.glob("*.ttf")):
+        spec += f":fontsdir='{ass_filter_path(str(_BUNDLED_FONT_DIR))}'"
+    return spec
 
 
 def _color(c: str) -> str:
@@ -378,7 +401,7 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
     # Texto / subtítulos por encima de todo el vídeo compuesto.
     if ass_path is not None:
         out = "txass"
-        filt.append(f"[{last_label}]ass='{ass_filter_path(str(ass_path))}'[{out}]")
+        filt.append(f"[{last_label}]{ass_overlay_filter(ass_path)}[{out}]")
         last_label = out
     else:
         text_steps, last_label = _text_chain(timeline, W, H, last_label)
