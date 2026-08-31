@@ -117,10 +117,16 @@ recorte, borrado). Los jobs se esperan con `wait_for_job` (Etapa 3).
 
 ---
 
-## ETAPA 6 — Transcripción / Audio
+## ETAPA 6 — Transcripción / Audio ✅ COMPLETA
 
-- [ ] `transcribe` (source / clip) · `generate_subtitles`
-- [ ] `generate_voice` (TTS) · `search_sfx`
+Módulo `tools_audio.py`. Envuelven whisper (transcripción), Kokoro/Piper (TTS) y
+la biblioteca SFX. Las que lanzan job se esperan con `wait_for_job`.
+
+- [x] `transcribe` (source URL → guion del proyecto **o** `clip_index` → guion del clip; modelo tiny…large-v3) · write
+- [x] `generate_subtitles` (transcribe un audio de la timeline → pista de texto) · write
+- [x] `generate_voice` (TTS Kokoro/Piper → audio del proyecto; valida disponibilidad del motor) · write
+- [x] `search_sfx` (busca en la biblioteca de efectos; sin proyecto) · read
+- [x] Tests: 11 nuevos (mock whisper/TTS/SFX); **suite backend 252 OK**. Total MCP: **27 tools** (8 read · 16 write · 3 destructive)
 
 ---
 
@@ -156,4 +162,4 @@ Tools mínimas (~14): `get_project_context`, `get_timeline`, `analyze_youtube`,
 
 ---
 
-_Última actualización: 2026-08-30 — **ETAPA 5 COMPLETA** (23 tools MCP: 7 lectura + 13 escritura + 3 destructivas; YouTube→clips vía job operativo por IA; 241 tests). Siguiente: Etapa 6 (Transcripción/Audio: `transcribe`, `generate_subtitles`, `generate_voice`, `search_sfx`) — con `transcribe` + `add_subtitles` (ya hecha) el bloque de subtítulos del MVP1 queda cerrado._
+_Última actualización: 2026-08-30 — **ETAPA 6 COMPLETA** (27 tools MCP: 8 lectura + 16 escritura + 3 destructivas; transcripción/TTS/SFX por IA; 252 tests). Siguiente: Etapa 7 (Render/Export: `render_frame`, `render_preview`, `export_project`, `list_jobs`, `cancel_job`) — cierra el pipeline y el MVP1._
