@@ -130,10 +130,17 @@ la biblioteca SFX. Las que lanzan job se esperan con `wait_for_job`.
 
 ---
 
-## ETAPA 7 — Render / Export + Jobs
+## ETAPA 7 — Render / Export + Jobs ✅ COMPLETA (alcance MVP1)
 
-- [ ] `render_frame` (verificar) · `render_preview` (draft) · `export_project` (final)
-- [ ] `list_jobs` · `cancel_job` · persistencia de jobs
+Módulo `tools_render.py`. Alcance elegido: cierre seguro del MVP1 sin tocar
+`compose.py`.
+
+- [x] `export_project` (render final del vídeo; reusa `jobs.start_export_job`+`compose.py`; usa la timeline guardada o una pasada) · write
+- [x] `list_jobs` (todos los jobs del proceso con su estado) · read
+- [x] `cancel_job` (cancelación **cooperativa best-effort**: marca `cancel_requested`; los bucles de job abortan en el siguiente `on_progress` vía `JobCancelled`; `dto.job_dto` lo reporta como `cancelled`) · write
+- [~] `render_frame` (verificar) · `render_preview` (draft) — **pospuestas** (requieren ampliar `compose.py`; fuera del cierre MVP1)
+- [ ] persistencia de jobs — pendiente (siguen en memoria; coherente por el mono-proceso)
+- [x] Tests: 9 nuevos (incl. abort cooperativo real dirigiendo `_run_export`); **suite backend 261 OK**. Total MCP: **30 tools** (9 read · 18 write · 3 destructive)
 
 ---
 
@@ -158,8 +165,8 @@ Tools mínimas (~14): `get_project_context`, `get_timeline`, `analyze_youtube`,
 `set_clip_layout`, `reframe_clip`, `add_subtitles`, `set_project_format`,
 `render_preview`/`export_project`, `get_job`(+`wait_for_job`), `undo`.
 
-- [ ] MVP 1 alcanzado (pipeline analyze→clips→timeline→9:16→subtítulos→export operativo por IA)
+- [x] **MVP 1 alcanzado** (pipeline analyze→clips→timeline→9:16→subtítulos→export operativo por IA). Las 14 tools del MVP existen entre las 30 del MCP. Falta la Etapa 9 (config del cliente MCP + pruebas E2E con IA real) para validarlo de punta a punta.
 
 ---
 
-_Última actualización: 2026-08-30 — **ETAPA 6 COMPLETA** (27 tools MCP: 8 lectura + 16 escritura + 3 destructivas; transcripción/TTS/SFX por IA; 252 tests). Siguiente: Etapa 7 (Render/Export: `render_frame`, `render_preview`, `export_project`, `list_jobs`, `cancel_job`) — cierra el pipeline y el MVP1._
+_Última actualización: 2026-08-30 — **ETAPA 7 COMPLETA (alcance MVP1)** + **MVP1 ALCANZADO** (30 tools MCP: 9 lectura + 18 escritura + 3 destructivas; export final + list/cancel jobs; 261 tests). Pendiente opcional: Etapa 8 (workflows de alto nivel `create_short_from_youtube`, `make_short_from_library`) y Etapa 9 (config del cliente MCP + E2E con IA real). `render_frame`/`render_preview` pospuestas (requieren tocar compose.py)._

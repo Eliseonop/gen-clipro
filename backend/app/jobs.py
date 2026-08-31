@@ -29,6 +29,10 @@ _jobs: dict[str, Job] = {}
 _lock = threading.Lock()
 
 
+class JobCancelled(Exception):
+    """Se lanza dentro del bucle de un job cuando se pidió cancelarlo."""
+
+
 def create_job() -> Job:
     job = Job(id=uuid.uuid4().hex[:12])
     with _lock:
@@ -40,11 +44,32 @@ def get_job(job_id: str) -> Job | None:
     return _jobs.get(job_id)
 
 
+def all_jobs() -> list[Job]:
+    """Todos los jobs conocidos (en memoria, este proceso)."""
+    return list(_jobs.values())
+
+
+def request_cancel(job_id: str) -> bool:
+    """Pide cancelar un job (cooperativo). Devuelve False si no existe o ya terminó.
+
+    Marca ``cancel_requested``; el bucle del job aborta en el siguiente
+    ``on_progress`` (best-effort: no interrumpe un FFmpeg ya en marcha hasta el
+    siguiente tick de progreso).
+    """
+    job = _jobs.get(job_id)
+    if job is None or job.status in (JobStatus.done, JobStatus.error):
+        return False
+    job.cancel_requested = True
+    return True
+
+
 def _run(job_id: str, req: ClipRequest, title: str) -> None:
     job = _jobs[job_id]
     job.status = JobStatus.running
 
     def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
         job.progress = round(frac, 3)
         job.message = message
 
@@ -85,6 +110,8 @@ def _run_compose(job_id: str, req: ComposeClipRequest) -> None:
     job.status = JobStatus.running
 
     def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
         job.progress = round(frac, 3)
         job.message = message
 
@@ -129,6 +156,8 @@ def _run_transcribe(job_id: str, req: TranscribeRequest, title: str) -> None:
     job.status = JobStatus.running
 
     def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
         job.progress = round(frac, 3)
         job.message = message
 
@@ -179,6 +208,8 @@ def _run_clip_transcribe(job_id: str, pid: str, index: str, model: str, language
     job.status = JobStatus.running
 
     def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
         job.progress = round(frac, 3)
         job.message = message
 
@@ -226,6 +257,8 @@ def _run_tts(job_id: str, req: TTSRequest) -> None:
     job.status = JobStatus.running
 
     def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
         job.progress = round(frac, 3)
         job.message = message
 
@@ -286,6 +319,8 @@ def _run_youtube_audio(job_id: str, req: YouTubeAudioRequest) -> None:
     out_path = None
 
     def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
         job.progress = round(frac, 3)
         job.message = message
 
@@ -355,6 +390,8 @@ def _run_reframe_prepare(job_id: str, url: str, start: float, end: float, sample
     job.message = "Iniciando preparación del clip…"
 
     def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
         job.progress = round(frac, 3)
         job.message = message
 
@@ -390,6 +427,8 @@ def _run_export(job_id: str, pid: str, timeline_dict: dict) -> None:
     job.status = JobStatus.running
 
     def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
         job.progress = round(frac, 3)
         job.message = message
 
@@ -440,6 +479,8 @@ def _run_subtitles(job_id: str, pid: str, filename: str, asset_kind: str, model:
     job.status = JobStatus.running
 
     def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
         job.progress = round(frac, 3)
         job.message = message
 
