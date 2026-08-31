@@ -3,7 +3,7 @@ import Icon from '../../components/Icon'
 import FlipPopover from '../../components/FlipPopover'
 import { fmt } from '../../lib/utils'
 import { pseudoWaveform, clamp, kfColor } from '../../lib/panning'
-import { clipDur, clipSourceDur, clipSpeed, displayTracks } from './editorModel'
+import { clipDur, clipSourceDur, clipSpeed, displayTracks, resizeGeneratedClip } from './editorModel'
 import { stackViewForTrack } from './clipStack.js'
 import { headerScrollPad, timelineWheelAction } from './timelineWheel'
 
@@ -194,6 +194,8 @@ export default function EdTimeline({
           if (tt && tt.kind === o.kind && !tt.locked) patch.track_id = tid
         }
         onMutateClip(o.id, patch)
+      } else if (o.kind === 'text' && (d.mode === 'trim-left' || d.mode === 'trim-right')) {
+        onMutateClip(o.id, resizeGeneratedClip(o, d.mode, deltaT))
       } else if (d.mode === 'trim-left') {
         const sp = clipSpeed(o)
         const minSrc = MIN_DUR * sp

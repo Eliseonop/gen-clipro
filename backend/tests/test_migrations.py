@@ -58,6 +58,41 @@ class SchemaConsistencyTest(unittest.TestCase):
         tl = Timeline(**migrations.migrate_timeline(legacy))
         self.assertEqual(tl.schema_version, migrations.CURRENT_SCHEMA_VERSION)
         self.assertEqual(tl.clips[0].text, "hola")
+        self.assertEqual(tl.clips[0].text_role, "free")
+
+
+class TextRoleMigrationTest(unittest.TestCase):
+    def test_v2_sella_caption_y_free(self):
+        tl = {
+            "schema_version": 2,
+            "tracks": [{"id": "T1", "kind": "text", "name": "T1"}],
+            "clips": [
+                {"id": "a", "track_id": "T1", "kind": "text", "asset_kind": "text",
+                 "asset_id": "t", "filename": "", "text": "hola",
+                 "origin": {"transcript_id": "tr1"}},
+                {"id": "b", "track_id": "T1", "kind": "text", "asset_kind": "text",
+                 "asset_id": "t", "filename": "", "text": "marca", "words": []},
+                {"id": "c", "track_id": "T1", "kind": "text", "asset_kind": "text",
+                 "asset_id": "t", "filename": "", "text": "con words",
+                 "words": [{"text": "con", "start": 0, "end": 0.4}]},
+            ],
+        }
+        out = migrations.migrate_timeline(tl)
+        self.assertEqual(out["schema_version"], 3)
+        roles = {c["id"]: c["text_role"] for c in out["clips"]}
+        self.assertEqual(roles, {"a": "caption", "b": "free", "c": "caption"})
+
+    def test_respeta_text_role_ya_puesto(self):
+        tl = {
+            "schema_version": 2,
+            "clips": [
+                {"id": "x", "track_id": "T1", "kind": "text", "asset_kind": "text",
+                 "asset_id": "t", "filename": "", "text": "hola",
+                 "origin": {"transcript_id": "tr1"}, "text_role": "free"},
+            ],
+        }
+        out = migrations.migrate_timeline(tl)
+        self.assertEqual(out["clips"][0]["text_role"], "free")
 
 
 if __name__ == "__main__":

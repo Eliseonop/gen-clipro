@@ -225,6 +225,9 @@ def log_report() -> dict:
                      "(GPU)" if sel["video_encoder"] != "libx264" else "(CPU)")
             log.info("  %s Encoder de vídeo: %s. (Forzar CPU con VIDEOYT_GPU=0.)",
                      mark, sel["video_encoder"])
+            if sel["whisper_device"] == "cpu":
+                log.info("  ⚠ Whisper: CPU. La GPU NVIDIA no se usa si faltan "
+                         "las DLL de cuBLAS (pip install nvidia-cublas-cu12).")
     except Exception:  # noqa: BLE001 - el resumen nunca debe tumbar el arranque
         pass
     log.info("=== fin del diagnóstico ===")

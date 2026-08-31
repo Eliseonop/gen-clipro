@@ -4,6 +4,7 @@
 import { defaultTextStyle } from '../../lib/textstyles.js'
 import { isMasterReframe } from '../../lib/recipeLayout.js'
 import { chunkCaptionText, splitCaptionWords } from '../../lib/textKaraoke.js'
+import { isFreeText } from '../../lib/textRole.js'
 
 // --- Identificadores estables ---
 let _uid = 1
@@ -121,7 +122,7 @@ export function textClipsFromTranscript(src, segments, trackId, style, transcrip
     const end = src.start + Math.min(clipLen, le)
     const text = (s.text || '').trim()
     if (!text) return
-    const made = makeTextClip(trackId, start, Math.max(0.4, end - start), text, style)
+    const made = makeTextClip(trackId, start, Math.max(0.4, end - start), text, style, { text_role: 'caption' })
     made.words = relSegmentWords(s, src, made.start, clipDur(made))
     made.origin = {
       transcript_id: transcript?.id ?? null,
@@ -142,6 +143,7 @@ export function textClipsFromTranscript(src, segments, trackId, style, transcrip
  *  fragmento toma su rebanada de palabras y su tiempo sale de esas marcas
  *  (relativas al fragmento). Sin ``words[]`` → reparto uniforme (igual que antes). */
 export function splitClipByMaxWords(clip, maxWords) {
+  if (isFreeText(clip)) return clip ? [clip] : []
   const chunks = chunkCaptionText(clip?.text || '', maxWords)
   if (chunks.length <= 1) return clip ? [clip] : []
   const total = splitCaptionWords(clip.text || '').length || 1
@@ -286,10 +288,51 @@ export function removeClipsByIds(clips, ids) {
 export function extraClipsAfterSplit(clips, trackId, maxWords) {
   let extra = 0
   for (const c of clips || []) {
-    if (c.kind !== 'text' || c.track_id !== trackId) continue
+    if (c.kind !== 'text' || c.track_id !== trackId || isFreeText(c)) continue
     extra += Math.max(0, splitClipByMaxWords(c, maxWords).length - 1)
   }
   return extra
+}
+
+export const GEN_MIN_DUR = 0.15
+
+export function resizeGeneratedClip(orig, mode, deltaT) {
+  const minDur = GEN_MIN_DUR
+  const start = Number(orig?.start) || 0
+  const inP = Number(orig?.in_point) || 0
+  const outP = Number(orig?.out_point) || 0
+  const src = Number(orig?.source_duration) > 0 ? Number(orig.source_duration) : outP
+  const dur = Math.max(0, outP - inP)
+  const d = Number(deltaT) || 0
+
+  if (mode === 'trim-right') {
+    const newDur = Math.max(minDur, dur + d)
+    const newOut = inP + newDur
+    return {
+      out_point: +newOut.toFixed(3),
+      source_duration: +Math.max(src, newOut).toFixed(3),
+    }
+  }
+  if (mode === 'trim-left') {
+    if (inP <= 1e-9 && d < 0) {
+      const ns = Math.max(0, start + d)
+      const grown = start - ns
+      const newOut = outP + grown
+      return {
+        start: +ns.toFixed(3),
+        in_point: 0,
+        out_point: +newOut.toFixed(3),
+        source_duration: +Math.max(src, newOut).toFixed(3),
+      }
+    }
+    const ni = Math.min(outP - minDur, Math.max(0, inP + d))
+    const ns = Math.max(0, start + (ni - inP))
+    return {
+      in_point: +ni.toFixed(3),
+      start: +ns.toFixed(3),
+    }
+  }
+  return {}
 }
 
 // Orden en pantalla: texto (arriba), luego vídeo (capa superior arriba), luego audio.
@@ -380,13 +423,16 @@ export function makeClip(assetKind, item, trackId, start, dur) {
 }
 
 // Crea un clip de texto.
-export function makeTextClip(trackId, start, dur, text, style) {
+export function makeTextClip(trackId, start, dur, text, style, opts = {}) {
+  const role = opts.text_role === 'caption' ? 'caption' : 'free'
+  const st = { ...(style || defaultTextStyle()) }
+  if (role === 'free') st.word_fx = 'none'
   return {
     id: uid('c'), track_id: trackId, kind: 'text', asset_kind: 'text', asset_id: uid('t'),
     filename: '', name: (text || 'Texto').slice(0, 22), start: +Math.max(0, start).toFixed(3),
     in_point: 0, out_point: +Math.max(0.5, dur).toFixed(3), source_duration: +Math.max(0.5, dur).toFixed(3),
     volume: 1, muted: false, speed: 1, keep_pitch: false, reverse: false, speed_curve: null,
-    reframe: null, text: text || 'Texto', style: { ...(style || defaultTextStyle()) },
-    words: [],
+    reframe: null, text: text || 'Texto', style: st,
+    words: [], text_role: role,
   }
 }

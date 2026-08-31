@@ -14,7 +14,9 @@ de ``Timeline.schema_version`` (en ``schemas.py``) debe coincidir con
 """
 from __future__ import annotations
 
-CURRENT_SCHEMA_VERSION = 2
+from .text_role import resolve_text_role
+
+CURRENT_SCHEMA_VERSION = 3
 
 
 def _v1_to_v2(tl: dict) -> dict:
@@ -27,8 +29,22 @@ def _v1_to_v2(tl: dict) -> dict:
     return tl
 
 
+def _v2_to_v3(tl: dict) -> dict:
+    out = dict(tl)
+    clips = []
+    for c in tl.get("clips") or []:
+        if not isinstance(c, dict) or c.get("kind") != "text":
+            clips.append(c)
+            continue
+        cc = dict(c)
+        cc["text_role"] = resolve_text_role(c)
+        clips.append(cc)
+    out["clips"] = clips
+    return out
+
+
 # from_version -> paso que lleva a from_version + 1
-MIGRATIONS = {1: _v1_to_v2}
+MIGRATIONS = {1: _v1_to_v2, 2: _v2_to_v3}
 
 
 def timeline_version(tl: dict | None) -> int:

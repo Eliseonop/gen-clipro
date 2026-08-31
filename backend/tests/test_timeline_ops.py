@@ -139,6 +139,21 @@ class SetClipLayoutTest(unittest.TestCase):
         self.assertEqual(c.frame, "top")
         self.assertAlmostEqual(c.out_point - c.in_point, 3.0)
 
+    def test_texto_puede_crecer_mas_alla_de_source_duration(self):
+        tl = Timeline(
+            tracks=[TimelineTrack(id="T1", kind="text", name="T1")],
+            clips=[TimelineClip(
+                id="t1", track_id="T1", kind="text", asset_kind="text", asset_id="t",
+                filename="", start=0.0, in_point=0.0, out_point=3.0, source_duration=3.0,
+                text="marca", text_role="free",
+            )],
+        )
+        r = ops.set_clip_layout(tl, "t1", duration=40.0)
+        c = r.timeline.clips[0]
+        self.assertAlmostEqual(c.out_point, 40.0)
+        self.assertAlmostEqual(c.source_duration, 40.0)
+        self.assertEqual(ops.validate_timeline(r.timeline), [])
+
     def test_position_invalida(self):
         with self.assertRaises(ValueError):
             ops.set_clip_layout(base_tl(), "c1", position="diagonal")
@@ -190,6 +205,7 @@ class AddSubtitlesTest(unittest.TestCase):
         self.assertEqual([w.text for w in tc.words], ["uno", "dos"])   # words[] persisten
         self.assertEqual(tc.origin["transcript_id"], "tr1")            # origin persiste
         self.assertEqual(tc.origin["fragment_index"], 0)
+        self.assertEqual(tc.text_role, "caption")
 
     def test_round_trip_del_timeline_conserva_origin(self):
         r = ops.add_subtitles(self._tl_with_source(), "c1", self._segments(), style={"max_words": 2})

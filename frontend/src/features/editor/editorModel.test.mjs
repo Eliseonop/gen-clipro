@@ -5,7 +5,7 @@ import {
   timelineToSource, sourceToTimeline, splitClipAt,
   clipPlaybackMuted, makeClip, mediaUrl, newReframe,
   shouldConfirmTrackDelete, removeTrack,
-  canCaptionClip, textClipsFromTranscript,
+  canCaptionClip, textClipsFromTranscript, makeTextClip, resizeGeneratedClip,
   splitClipByMaxWords, splitTrackTextByMaxWords, extraClipsAfterSplit,
   nextClipSelection, rangeSelectOnTrack, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
   previewElementVolume, parsePreviewVolume,
@@ -110,6 +110,7 @@ const captions = textClipsFromTranscript(
 assert.equal(captions.length, 1)
 assert.equal(captions[0].track_id, 'T1')
 assert.equal(captions[0].text, 'hola')
+assert.equal(captions[0].text_role, 'caption')
 assert.equal(captions[0].start, 10)
 assert.equal(+(captions[0].out_point - captions[0].in_point).toFixed(3), 2)
 
@@ -139,7 +140,7 @@ assert.equal(autoSplit[0].text, 'a b c d e f g h')
 assert.equal(autoSplit[1].text, 'i j k l')
 
 const srcClip = {
-  id: 'c1', track_id: 'T1', kind: 'text', text: 'a b c d e f',
+  id: 'c1', track_id: 'T1', kind: 'text', text_role: 'caption', text: 'a b c d e f',
   start: 10, in_point: 0, out_point: 6, style: { font: 'Arial' },
 }
 const parts = splitClipByMaxWords(srcClip, 4)
@@ -158,7 +159,7 @@ assert.equal(untouched[0].text, 'hola')
 
 const mixed = [
   { id: 'v1', track_id: 'V1', kind: 'video' },
-  { id: 't1', track_id: 'T1', kind: 'text', text: 'uno dos tres cuatro', start: 0, in_point: 0, out_point: 4, style: {} },
+  { id: 't1', track_id: 'T1', kind: 'text', text_role: 'caption', text: 'uno dos tres cuatro', start: 0, in_point: 0, out_point: 4, style: {} },
   { id: 't2', track_id: 'T2', kind: 'text', text: 'otro largo de mas de cuatro palabras ya', start: 1, in_point: 0, out_point: 2, style: {} },
 ]
 assert.equal(extraClipsAfterSplit(mixed, 'T1', 4), 0)
@@ -243,4 +244,39 @@ assert.equal(parsePreviewVolume('2'), 1)
 assert.equal(parsePreviewVolume(null), 1)
 
 console.log('preview volume ok')
+
+const madeFree = makeTextClip('T2', 1, 3, 'Marca', { font: 'Arial' })
+assert.equal(madeFree.kind, 'text')
+assert.equal(madeFree.text_role, 'free')
+assert.equal(madeFree.out_point, 3)
+assert.deepEqual(madeFree.words, [])
+
+const madeCap = makeTextClip('T1', 0, 2, 'Hola', {}, { text_role: 'caption' })
+assert.equal(madeCap.text_role, 'caption')
+
+const watermark = { kind: 'text', text_role: 'free', start: 2, in_point: 0, out_point: 3, source_duration: 3 }
+const grown = resizeGeneratedClip(watermark, 'trim-right', 12)
+assert.equal(grown.out_point, 15)
+assert.equal(grown.source_duration, 15)
+
+const leftGrow = resizeGeneratedClip(watermark, 'trim-left', -1)
+assert.equal(leftGrow.start, 1)
+assert.equal(leftGrow.in_point, 0)
+assert.equal(leftGrow.out_point, 4)
+
+const pinned = resizeGeneratedClip({ ...watermark, start: 0 }, 'trim-left', -4)
+assert.equal(pinned.start, 0)
+assert.equal(pinned.out_point, 3)
+
+const shrunk = resizeGeneratedClip(watermark, 'trim-right', -10)
+assert.equal(shrunk.out_point, 0.15)
+
+const freeLong = {
+  id: 'w1', track_id: 'T1', kind: 'text', text_role: 'free',
+  text: 'uno dos tres cuatro cinco seis', start: 0, in_point: 0, out_point: 20, style: {},
+}
+assert.equal(extraClipsAfterSplit([freeLong], 'T1', 2), 0)
+assert.equal(splitTrackTextByMaxWords([freeLong], 'T1', 2).length, 1)
+
+console.log('text role + generated resize ok')
 

@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import uuid
 
+from .text_role import resolve_text_role
+
 
 def _uid(prefix: str) -> str:
     return f"{prefix}{uuid.uuid4().hex[:8]}"
@@ -53,14 +55,19 @@ def _clip_dur(clip: dict) -> float:
     return max(0.0, float(clip.get("out_point", 0)) - float(clip.get("in_point", 0)))
 
 
-def make_text_clip(track_id: str, start: float, dur: float, text: str, style: dict | None) -> dict:
+def make_text_clip(track_id: str, start: float, dur: float, text: str, style: dict | None,
+                   text_role: str = "free") -> dict:
+    role = "caption" if text_role == "caption" else "free"
+    st = dict(style or {})
+    if role == "free":
+        st["word_fx"] = "none"
     return {
         "id": _uid("c"), "track_id": track_id, "kind": "text", "asset_kind": "text",
         "asset_id": _uid("t"), "filename": "", "name": (text or "Texto")[:22],
         "start": _r3(max(0.0, start)), "in_point": 0.0,
         "out_point": _r3(max(0.5, dur)), "source_duration": _r3(max(0.5, dur)),
         "volume": 1, "muted": False, "reframe": None, "text": text or "Texto",
-        "style": dict(style or {}), "words": [],
+        "style": st, "words": [], "text_role": role,
     }
 
 
@@ -87,6 +94,8 @@ def _rel_segment_words(segment: dict, src: dict, clip_start: float, dur: float) 
 
 
 def split_clip_by_max_words(clip: dict, max_words) -> list[dict]:
+    if resolve_text_role(clip) == "free":
+        return [clip]
     chunks = chunk_caption_text(clip.get("text") or "", max_words)
     if len(chunks) <= 1:
         return [clip]
@@ -152,7 +161,7 @@ def text_clips_from_transcript(src: dict, segments, track_id: str, style: dict |
         text = (_get(s, "text", "") or "").strip()
         if not text:
             continue
-        made = make_text_clip(track_id, start, max(0.4, end - start), text, style)
+        made = make_text_clip(track_id, start, max(0.4, end - start), text, style, text_role="caption")
         made["words"] = _rel_segment_words(s, src, made["start"], _clip_dur(made))
         made["origin"] = {
             "transcript_id": transcript_id,

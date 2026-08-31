@@ -9,6 +9,7 @@ from __future__ import annotations
 from math import gcd
 
 from ..schemas import Project, Timeline
+from ..text_role import resolve_text_role
 
 # Verbos disponibles en el editor (refleja el estado actual tras los últimos
 # cambios: velocidad de clip, biblioteca cross-proyecto…).
@@ -19,6 +20,7 @@ CAPABILITIES = [
     "clip.speed:0.1-10|keep_pitch|reverse",
     "clip.appear|exit:fade|zoom|slide|pop",
     "subtitles.fragmentation:max_words",
+    "text.role:caption|free",
     "format:9:16|1:1|16:9|custom",
     "media.library",
     "history.undo_redo|checkpoints",
@@ -113,6 +115,7 @@ def _clip_summary(c) -> dict:
     }
     if c.kind == "text":
         d["text"] = c.text
+        d["text_role"] = resolve_text_role(c)
         d["word_count"] = len(c.words or [])
     return d
 
