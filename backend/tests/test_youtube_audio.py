@@ -39,13 +39,16 @@ class YoutubeAudioJobTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self._old_file = projects._FILE
+        self._old_data = config.DATA_DIR
         projects._FILE = self.tmp / "projects.json"
+        config.DATA_DIR = self.tmp   # aísla la biblioteca (list_library lee de DATA_DIR)
         self.proj_dir = self.tmp / "proj"
         self.pid = projects.create_project("A").id
         projects.set_folder(self.pid, str(self.proj_dir))
 
     def tearDown(self):
         projects._FILE = self._old_file
+        config.DATA_DIR = self._old_data
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_job_crea_audio_de_proyecto_no_de_biblioteca(self):
