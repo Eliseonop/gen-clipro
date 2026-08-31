@@ -88,12 +88,20 @@ timeline) y `tools_jobs.py` (jobs in-process). Builders en `dto.py`.
 
 ---
 
-## ETAPA 4 — Tools de EDICIÓN
+## ETAPA 4 — Tools de EDICIÓN ✅ COMPLETA
 
-- [ ] `add_to_timeline` · `move_clip` · `split_clip` · `remove_clip`
-- [ ] `set_clip_layout` (top/bottom/full) · `reframe_clip`
-- [ ] `add_subtitles` · `set_project_format`
-- [ ] `undo` / `redo`
+Wrappers semánticos sobre `timeline_store.apply_op` (transaccional: snapshot→
+aplicar→validar→guardar). Módulo `tools_edit.py`. Resultado uniforme
+`{ok, changed, warnings, can_undo, can_redo, checkpoints, timeline}` (timeline
+resumido, no crudo). **Primeras tools `write`/`destructive`** → la política del
+registry ya distingue niveles.
+
+- [x] `add_to_timeline` (resuelve el asset del proyecto → clip; crea pista si falta) · `move_clip` · `split_clip` · `remove_clip` (destructive)
+- [x] `set_clip_layout` (verbo `position: top/bottom/full`) · `reframe_clip` (center/manual con paneo+zoom)
+- [x] `add_subtitles` (desde `segments`, con words[] reales) · `set_project_format` (aspect/w/h/fps)
+- [x] `undo` / `redo`
+- [x] Extra (alcance ampliado): `add_track` · `remove_track` (destructive) · `checkpoint` · `restore_checkpoint`
+- [x] Tests: 16 nuevos (flujos + política de niveles); **suite backend 232 OK**. Total MCP: **20 tools** (6 read · 12 write · 2 destructive)
 
 ---
 
@@ -143,4 +151,4 @@ Tools mínimas (~14): `get_project_context`, `get_timeline`, `analyze_youtube`,
 
 ---
 
-_Última actualización: 2026-08-30 — **ETAPA 3 COMPLETA** (6 tools de LECTURA: get_project_context, get_timeline, inspect_clip, list_media, get_job, wait_for_job; 216 tests). Siguiente: Etapa 4 (tools de EDICIÓN: add_to_timeline, move_clip, split_clip, remove_clip, set_clip_layout, reframe_clip, add_subtitles, set_project_format, undo/redo — envuelven `timeline_store.apply_op`, ya son access=write)._
+_Última actualización: 2026-08-30 — **ETAPA 4 COMPLETA** (20 tools MCP: 6 lectura + 12 escritura + 2 destructivas; edición completa por IA con undo/redo/checkpoints; 232 tests). Siguiente: Etapa 5 (Media/YouTube: `analyze_youtube`, `create_clips_from_segments`, `delete_media` — orquestan jobs) para cerrar el pipeline del MVP1._

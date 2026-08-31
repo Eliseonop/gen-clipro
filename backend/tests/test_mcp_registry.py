@@ -16,11 +16,14 @@ class RegistryTest(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self._old = config.DATA_DIR
         config.DATA_DIR = self.tmp
-        registry.reset()
+        # No destruir el registro global (server.py lo puebla): snapshot + slate limpio.
+        self._saved = dict(registry._registry)
+        registry._registry.clear()
         self.mcp = MCPServer("test")
 
     def tearDown(self):
-        registry.reset()
+        registry._registry.clear()
+        registry._registry.update(self._saved)
         config.DATA_DIR = self._old
         shutil.rmtree(self.tmp, ignore_errors=True)
 
