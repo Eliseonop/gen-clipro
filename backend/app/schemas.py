@@ -357,3 +357,4 @@ class Job(BaseModel):
     reframe_prep: Optional["ReframePrep"] = None
     export_url: Optional[str] = None      # URL del vídeo final exportado
     error: Optional[str] = None
+    cancel_requested: bool = False        # cancelación cooperativa (best-effort)

@@ -215,6 +215,10 @@ def analyze_dto(resp) -> dict:
 def job_dto(job) -> dict:
     """Estado de un job + resumen del resultado según su tipo."""
     status = job.status.value if hasattr(job.status, "value") else job.status
+    # Cancelación cooperativa: si se pidió cancelar y no llegó a 'done', se
+    # reporta como 'cancelled' (aunque internamente acabe en error).
+    if getattr(job, "cancel_requested", False) and status != "done":
+        status = "cancelled"
     d = {"id": job.id, "status": status, "progress": job.progress, "message": job.message}
     if job.error:
         d["error"] = job.error
