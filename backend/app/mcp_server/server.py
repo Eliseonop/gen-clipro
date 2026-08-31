@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 
 from mcp.server.mcpserver import MCPServer
 
-from . import tools_context, tools_edit, tools_jobs, tools_media, tools_read
+from . import tools_audio, tools_context, tools_edit, tools_jobs, tools_media, tools_read
 
 INSTRUCTIONS = (
     "Editor de vídeo (YouTube → clips verticales 9:16 → timeline → subtítulos → "
@@ -33,6 +33,7 @@ tools_read.register(mcp)      # Etapa 3: get_timeline, inspect_clip, list_media
 tools_jobs.register(mcp)      # Etapa 3: get_job, wait_for_job
 tools_edit.register(mcp)      # Etapa 4: edición (write/destructive) + undo/redo/checkpoints
 tools_media.register(mcp)     # Etapa 5: analyze_youtube, create_clips_from_segments, delete_media
+tools_audio.register(mcp)     # Etapa 6: transcribe, generate_subtitles, generate_voice, search_sfx
 
 # Sub-app ASGI para montar en /mcp. El path interno es "/" porque el mount ya
 # aporta el prefijo /mcp.
