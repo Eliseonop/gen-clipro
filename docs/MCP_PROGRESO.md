@@ -144,10 +144,16 @@ Módulo `tools_render.py`. Alcance elegido: cierre seguro del MVP1 sin tocar
 
 ---
 
-## ETAPA 8 — Workflows de alto nivel
+## ETAPA 8 — Workflows de alto nivel ✅ COMPLETA
 
-- [ ] `create_short_from_youtube`
-- [ ] `make_short_from_library`
+Modelo **workflow-as-job**: cada tool lanza UN job que corre todo el pipeline en
+el servidor con progreso por etapas; el agente lo espera con `wait_for_job`.
+Orquestación pura en `shorts.py` (reusa heatmap/clipper/transcribe/timeline_store/
+compose); runners en `jobs.py`; tools en `tools_workflow.py`.
+
+- [x] `create_short_from_youtube` (analyze → clip vertical `crop_mode` → timeline 9:16 → transcribe → subtítulos → export; params: count/model/subtitles/export…) · write
+- [x] `make_short_from_library` (igual pero desde un clip ya en el proyecto, sin descargar) · write
+- [x] Tests: 11 nuevos (orquestación completa con servicios mockeados + capa de tools); **suite backend 280 OK**. Total MCP: **32 tools** (9 read · 20 write · 3 destructive)
 
 ---
 
@@ -169,4 +175,4 @@ Tools mínimas (~14): `get_project_context`, `get_timeline`, `analyze_youtube`,
 
 ---
 
-_Última actualización: 2026-08-30 — **ETAPA 7 COMPLETA (alcance MVP1)** + **MVP1 ALCANZADO** (30 tools MCP: 9 lectura + 18 escritura + 3 destructivas; export final + list/cancel jobs; 261 tests). Pendiente opcional: Etapa 8 (workflows de alto nivel `create_short_from_youtube`, `make_short_from_library`) y Etapa 9 (config del cliente MCP + E2E con IA real). `render_frame`/`render_preview` pospuestas (requieren tocar compose.py)._
+_Última actualización: 2026-08-30 — **ETAPA 8 COMPLETA** (workflow-as-job: `create_short_from_youtube` + `make_short_from_library`; 32 tools MCP: 9 lectura + 20 escritura + 3 destructivas; 280 tests). Siguiente: Etapa 9 (config del cliente MCP + documentación de uso + E2E con IA real para validar los 3 flujos). `render_frame`/`render_preview` pospuestas._

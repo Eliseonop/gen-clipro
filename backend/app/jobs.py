@@ -474,6 +474,58 @@ def start_export_job(job: Job, pid: str, timeline_dict: dict) -> None:
     thread.start()
 
 
+# --- Workflows de alto nivel (shorts) -----------------------------------
+
+def _run_short(job_id: str, builder, kwargs: dict, done_msg: str) -> None:
+    """Runner común para los workflows de short: corre ``builder`` con progreso."""
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+
+    def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from . import shorts
+
+        fn = getattr(shorts, builder)
+        result = fn(on_progress=on_progress, **kwargs)
+        job.export_url = result.get("export_url")
+        job.progress = 1.0
+        job.message = done_msg
+        job.status = JobStatus.done
+    except JobCancelled:
+        job.status = JobStatus.error
+        job.message = "Cancelado."
+        job.error = "cancelado"
+    except Exception as exc:  # noqa: BLE001
+        job.status = JobStatus.error
+        job.error = str(exc)
+        job.message = "Error creando el short."
+
+
+def start_short_youtube_job(job: Job, pid: str, params: dict) -> None:
+    kwargs = {"pid": pid, **params}
+    thread = threading.Thread(
+        target=_run_short,
+        args=(job.id, "build_short_from_youtube", kwargs, "Short de YouTube listo."),
+        daemon=True,
+    )
+    thread.start()
+
+
+def start_short_library_job(job: Job, pid: str, params: dict) -> None:
+    kwargs = {"pid": pid, **params}
+    thread = threading.Thread(
+        target=_run_short,
+        args=(job.id, "build_short_from_library", kwargs, "Short de biblioteca listo."),
+        daemon=True,
+    )
+    thread.start()
+
+
 def _run_subtitles(job_id: str, pid: str, filename: str, asset_kind: str, model: str, language, asset_scope: str = "project") -> None:
     job = _jobs[job_id]
     job.status = JobStatus.running
