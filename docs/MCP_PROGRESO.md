@@ -73,11 +73,18 @@ estado vivo con el editor del humano (jobs en memoria incluidos). Spec:
 
 ---
 
-## ETAPA 3 — Tools de LECTURA
+## ETAPA 3 — Tools de LECTURA ✅ COMPLETA
 
-- [ ] `get_project_context` (resumen semántico eficiente)
-- [ ] `get_timeline` (detalle) · `list_media` · `inspect_clip`
-- [ ] `get_job` (+ `wait_for_job`)
+Todas `access="read"`, registradas en el MCP. Módulos `tools_read.py` (proyecto/
+timeline) y `tools_jobs.py` (jobs in-process). Builders en `dto.py`.
+
+- [x] `get_project_context` (resumen semántico eficiente) — hecho en Etapa 2
+- [x] `get_timeline` (detalle escaneable: formato+pistas+clips, sin words/keyframes)
+- [x] `inspect_clip` (un clip COMPLETO: reframe/keyframes, words, transform, origin)
+- [x] `list_media` (inventario detallado: clips/audios/transcripciones)
+- [x] `get_job` (status/progreso + resumen del resultado)
+- [x] `wait_for_job` (bloquea en threadpool hasta done/error o `timeout_s`; `timed_out`)
+- [x] Tests: 12 nuevos (read/jobs); **suite backend 216 OK**
 
 ---
 
@@ -136,4 +143,4 @@ Tools mínimas (~14): `get_project_context`, `get_timeline`, `analyze_youtube`,
 
 ---
 
-_Última actualización: 2026-08-30 — **ETAPA 2 COMPLETA** (MCP server montado en FastAPI: esqueleto + registro/política + auditoría + DTO/capabilities + `get_project_context`, verificado por handshake HTTP real; 204 tests). Siguiente: Etapa 3 (tools de LECTURA: `get_timeline`, `list_media`, `inspect_clip`, `get_job`)._
+_Última actualización: 2026-08-30 — **ETAPA 3 COMPLETA** (6 tools de LECTURA: get_project_context, get_timeline, inspect_clip, list_media, get_job, wait_for_job; 216 tests). Siguiente: Etapa 4 (tools de EDICIÓN: add_to_timeline, move_clip, split_clip, remove_clip, set_clip_layout, reframe_clip, add_subtitles, set_project_format, undo/redo — envuelven `timeline_store.apply_op`, ya son access=write)._
