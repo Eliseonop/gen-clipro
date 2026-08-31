@@ -105,10 +105,15 @@ registry ya distingue niveles.
 
 ---
 
-## ETAPA 5 — Media / YouTube
+## ETAPA 5 — Media / YouTube ✅ COMPLETA
 
-- [ ] `analyze_youtube` (heatmap) · `create_clips_from_segments` (job)
-- [ ] `delete_media`
+Módulo `tools_media.py`. Envuelven servicios existentes (heatmap síncrono, job de
+recorte, borrado). Los jobs se esperan con `wait_for_job` (Etapa 3).
+
+- [x] `analyze_youtube` (heatmap, síncrono → devuelve `video` + `segments`) · access read
+- [x] `create_clips_from_segments` (lanza job de recorte, devuelve job dto; segments tal cual de analyze_youtube; crop_mode center/smart_face/split_*) · access write
+- [x] `delete_media` (quita clip/audio del proyecto + borra archivo) · access destructive
+- [x] Tests: 9 nuevos (mock de red/recorte); **suite backend 241 OK**. Total MCP: **23 tools** (7 read · 13 write · 3 destructive)
 
 ---
 
@@ -151,4 +156,4 @@ Tools mínimas (~14): `get_project_context`, `get_timeline`, `analyze_youtube`,
 
 ---
 
-_Última actualización: 2026-08-30 — **ETAPA 4 COMPLETA** (20 tools MCP: 6 lectura + 12 escritura + 2 destructivas; edición completa por IA con undo/redo/checkpoints; 232 tests). Siguiente: Etapa 5 (Media/YouTube: `analyze_youtube`, `create_clips_from_segments`, `delete_media` — orquestan jobs) para cerrar el pipeline del MVP1._
+_Última actualización: 2026-08-30 — **ETAPA 5 COMPLETA** (23 tools MCP: 7 lectura + 13 escritura + 3 destructivas; YouTube→clips vía job operativo por IA; 241 tests). Siguiente: Etapa 6 (Transcripción/Audio: `transcribe`, `generate_subtitles`, `generate_voice`, `search_sfx`) — con `transcribe` + `add_subtitles` (ya hecha) el bloque de subtítulos del MVP1 queda cerrado._

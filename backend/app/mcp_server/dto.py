@@ -189,6 +189,29 @@ def media_list(proj: Project) -> dict:
     }
 
 
+def analyze_dto(resp) -> dict:
+    """Resultado de analyze_youtube: info del vídeo + tramos del heatmap."""
+    return {
+        "video": {
+            "id": resp.video.id,
+            "title": resp.video.title,
+            "duration": resp.video.duration,
+            "uploader": resp.video.uploader,
+        },
+        "has_heatmap": resp.has_heatmap,
+        "segments": [
+            {
+                "index": s.index,
+                "start": s.start,
+                "end": s.end,
+                "duration": s.duration,
+                "score": round(s.score, 3),
+            }
+            for s in resp.segments
+        ],
+    }
+
+
 def job_dto(job) -> dict:
     """Estado de un job + resumen del resultado según su tipo."""
     status = job.status.value if hasattr(job.status, "value") else job.status
