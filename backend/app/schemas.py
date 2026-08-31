@@ -310,12 +310,13 @@ class TimelineClip(BaseModel):
     speed_curve: Optional[dict] = None  # reserva; sin motor en esta entrega
     words: list[Word] = []                # (texto) timing real por palabra, RELATIVO al inicio del clip
     origin: Optional[dict] = None         # (texto) procedencia: {transcript_id, segment_index, fragment_index, word_range, source_range}
+    text_role: Optional[str] = None       # "caption" | "free"; None = inferir al usar
     asset_scope: str = "project"          # "project" | "library"
 
 
 class Timeline(BaseModel):
     version: int = 1
-    schema_version: int = 2   # formato del JSON; migrado al cargar (ver migrations.py)
+    schema_version: int = 3   # formato del JSON; migrado al cargar (ver migrations.py)
     fps: int = 30
     width: int = 720               # tamaño de salida (formato configurable)
     height: int = 1280

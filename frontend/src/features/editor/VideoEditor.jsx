@@ -14,6 +14,7 @@ import {
   nextClipSelection, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
   previewElementVolume, parsePreviewVolume, PREVIEW_VOL_KEY,
 } from './editorModel'
+import { textRole, isFreeText } from '../../lib/textRole'
 import { applyFrame, disableOverlay, enableOverlay, isOverlay, newTransform, videosAt } from '../../lib/clipLayout'
 import { drawComposite, drawMainView } from './render/canvas'
 import { useExportJob } from './hooks/useExportJob'
@@ -118,6 +119,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             reverse: !!c.reverse,
             speed_curve: c.speed_curve || null,
             frame: c.frame || (c.layout === 'overlay' ? 'free' : 'full'),
+            ...(c.kind === 'text' ? { text_role: textRole(c) } : {}),
           })))
           if (tl.tracks[0]) setSelTrackId(tl.tracks[0].id)
         }
@@ -588,9 +590,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     return addTrack('text', style)
   }
   function addText() {
-    const style = baseTextStyle()
-    const tid = ensureTextTrack(style)
-    const clip = makeTextClip(tid, playhead, 3, 'Texto', style)
+    const tid = ensureTextTrack()
+    const track = tracksRef.current.find((t) => t.id === tid)
+    const style = { ...(track?.style || baseTextStyle()), word_fx: 'none' }
+    const end = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
+    const dur = Math.max(3, +(end - playhead).toFixed(3))
+    const clip = makeTextClip(tid, playhead, dur, 'Texto', style)
     setClips((prev) => [...prev, clip])
     setSelClipId(clip.id)
     setSelClipIds([clip.id])
@@ -607,19 +612,30 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     const ids = new Set(selIdsRef.current.includes(id) ? selIdsRef.current : [id])
     setClips((prev) => prev.map((c) => {
       if (!ids.has(c.id) || c.kind !== 'text') return c
-      return { ...c, style: applyThemeToStyle(c.style, preset) }
+      const st = applyThemeToStyle(c.style, preset)
+      if (isFreeText(c)) st.word_fx = 'none'
+      return { ...c, style: st }
     }))
   }
   // Estilo general de la pista: se aplica a la pista y a todos sus segmentos.
   function changeTrackStyle(trackId, patch) {
+    const captionKeys = new Set(['word_fx', 'highlight_color', 'active_opacity', 'inactive_opacity', 'max_words'])
     setTracks((prev) => prev.map((t) => (t.id === trackId ? { ...t, style: { ...(t.style || defaultTextStyle()), ...patch } } : t)))
-    setClips((prev) => prev.map((c) => (c.kind === 'text' && c.track_id === trackId ? { ...c, style: { ...(c.style || {}), ...patch } } : c)))
+    setClips((prev) => prev.map((c) => {
+      if (!(c.kind === 'text' && c.track_id === trackId)) return c
+      const applied = isFreeText(c)
+        ? Object.fromEntries(Object.entries(patch).filter(([k]) => !captionKeys.has(k)))
+        : patch
+      return { ...c, style: { ...(c.style || {}), ...applied } }
+    }))
   }
   function applyTrackPreset(trackId, preset) {
     setTracks((prev) => prev.map((t) => (t.id === trackId ? { ...t, style: applyThemeToStyle(t.style, preset) } : t)))
     setClips((prev) => prev.map((c) => {
       if (!(c.kind === 'text' && c.track_id === trackId)) return c
-      return { ...c, style: applyThemeToStyle(c.style, preset) }
+      const st = applyThemeToStyle(c.style, preset)
+      if (isFreeText(c)) st.word_fx = 'none'
+      return { ...c, style: st }
     }))
   }
 
@@ -954,7 +970,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             onChangeText={(v) => changeText(selectedClip.id, v)}
             onChangeStyle={(patch) => changeStyle(selectedClip.id, patch)}
             onApplyPreset={(p) => applyPreset(selectedClip.id, p)}
-            onChangeDur={(d) => mutateClip(selectedClip.id, { out_point: +(selectedClip.in_point + d).toFixed(3), source_duration: +(selectedClip.in_point + d).toFixed(3) })}
+            onChangeDur={(d) => {
+              if (!Number.isFinite(d) || d <= 0) return
+              const next = Math.max(0.15, d)
+              mutateClip(selectedClip.id, {
+                out_point: +(selectedClip.in_point + next).toFixed(3),
+                source_duration: +(selectedClip.in_point + next).toFixed(3),
+              })
+            }}
             onApplyAsGlobalTemplate={() => applyGlobalTemplate(selectedClip)}
             framing={!!framingMode && (framingMode.clipIds?.length > 0)}
             onStartFraming={startFramingSelection}

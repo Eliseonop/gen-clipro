@@ -5,6 +5,7 @@ import { fmt } from '../../lib/utils'
 import { FONTS, FONT_SIZES, FONT_SIZE_REF, cssFont } from '../../lib/textstyles'
 import { SUBTITLE_THEMES, WORD_FX_OPTIONS, BLOCK_APPEAR_OPTIONS, WORDS_PER_BOX } from '../../lib/subtitleThemes'
 import { hasWordFx, toggleWordFx } from '../../lib/textKaraoke'
+import { isFreeText } from '../../lib/textRole'
 
 function sizeToNearestPx(size) {
   const px = Math.round((size ?? 0.009375) * FONT_SIZE_REF)
@@ -34,6 +35,7 @@ export default function EdText({
 }) {
   const st = style || {}
   const isTrack = mode === 'track'
+  const isFree = !isTrack && isFreeText(clip)
   const multi = !isTrack && selectionCount > 1
   const set = (patch) => onChangeStyle(patch)
   const dur = clip ? clip.out_point - clip.in_point : 0
@@ -165,6 +167,8 @@ export default function EdText({
             </label>
           </div>
 
+          {!isFree && (
+          <>
           <div className="ed-theme-label">Palabra activa</div>
           <div className="ed-text-dense four">
             {WORD_FX_OPTIONS.map((o) => (
@@ -178,16 +182,20 @@ export default function EdText({
               </label>
             ))}
           </div>
+          </>
+          )}
 
           <div className="ed-text-dense five">
             <label className="ed-mini ed-swatch" title="Color del texto">
               <span>Texto</span>
               <input type="color" value={st.color || '#ffffff'} onChange={(e) => set({ color: e.target.value })} />
             </label>
+            {!isFree && (
             <label className="ed-mini ed-swatch" title="Color de la palabra activa">
               <span>Resalte</span>
               <input type="color" value={st.highlight_color || '#ffe566'} onChange={(e) => set({ highlight_color: e.target.value })} />
             </label>
+            )}
             <label className="ed-mini ed-swatch" title="Color del borde">
               <span>Borde</span>
               <input type="color" value={st.border_color || '#000000'} onChange={(e) => set({ border_color: e.target.value })} />
@@ -218,6 +226,7 @@ export default function EdText({
                 onChange={(e) => set({ bg_opacity: Number(e.target.value) })} />
             </label>
           )}
+          {!isFree && (
           <div className="ed-text-dense two">
             <label className="ed-mini" title="Opacidad de la palabra que se está diciendo">
               <span>Activa {Math.round((st.active_opacity ?? 1) * 100)}%</span>
@@ -230,6 +239,7 @@ export default function EdText({
                 onChange={(e) => set({ inactive_opacity: Number(e.target.value) / 100 })} />
             </label>
           </div>
+          )}
 
           {isTrack && (
             <>
@@ -276,10 +286,19 @@ export default function EdText({
                 </label>
                 <label className="ed-mini" title="Duración">
                   <span>Dur {fmt(dur)}</span>
-                  <input type="range" min="0.5" max="15" step="0.1" value={dur} onChange={(e) => onChangeDur(Number(e.target.value))} />
+                  {isFree ? (
+                    <input type="number" min="0.15" step="0.1" value={+dur.toFixed(1)}
+                      onChange={(e) => onChangeDur(Number(e.target.value))} />
+                  ) : (
+                    <input type="range" min="0.5" max={Math.max(15, dur)} step="0.1" value={dur}
+                      onChange={(e) => onChangeDur(Number(e.target.value))} />
+                  )}
                 </label>
               </div>
-              <p className="muted small"><Icon name="drag_pan" size={13} /> Arrastra en el Main: las líneas rosa marcan el centro y otros textos.</p>
+              <p className="muted small">
+                {isFree ? 'Arrastra los extremos del clip en la timeline para cambiar la duración. ' : ''}
+                <Icon name="drag_pan" size={13} /> Arrastra en el Main: las líneas rosa marcan el centro y otros textos.
+              </p>
             </>
           )}
           <div className="ed-text-actions">

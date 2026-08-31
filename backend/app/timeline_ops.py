@@ -358,7 +358,11 @@ def set_clip_layout(tl: Timeline, clip_id: str, position: str | None = None,
         if duration <= 0:
             raise ValueError("duration debe ser > 0")
         end = c.in_point + duration
-        if c.source_duration:
-            end = min(end, c.source_duration)
-        c.out_point = _round(end)
+        if c.kind == "text":
+            c.out_point = _round(end)
+            c.source_duration = _round(max(c.source_duration or 0.0, end))
+        else:
+            if c.source_duration:
+                end = min(end, c.source_duration)
+            c.out_point = _round(end)
     return EditResult(out, changed=[clip_id])

@@ -6,11 +6,11 @@ primera vez (tiny ~75MB … large-v3 ~3GB).
 """
 from __future__ import annotations
 
+import logging
 import tempfile
+import threading
 from pathlib import Path
 from typing import Callable, Optional
-
-import logging
 
 from faster_whisper import WhisperModel
 
@@ -23,7 +23,8 @@ ProgressCb = Callable[[float, str], None]
 # Modelos válidos (de más rápido/menos preciso a más lento/más preciso).
 MODELS = ["tiny", "base", "small", "medium", "large-v3"]
 
-_models: dict[str, WhisperModel] = {}
+_models: dict[str, tuple[str, WhisperModel]] = {}
+_infer_lock = threading.Lock()
 
 
 def _attr(w, name, default=None):
@@ -55,20 +56,25 @@ def shape_words(raw) -> list[dict]:
     return out
 
 
-def _get_model(size: str) -> WhisperModel:
+def _get_model(size: str) -> tuple[str, WhisperModel]:
     """Carga (y cachea) un modelo. Usa GPU (cuda/float16) si hay; si no, o si la
     carga en CUDA falla (faltan cuBLAS/cuDNN), cae a CPU (int8)."""
-    if size not in _models:
-        device, compute = gpu.whisper_device()
-        try:
-            _models[size] = WhisperModel(size, device=device, compute_type=compute)
-            log.info("Whisper '%s' cargado en %s (%s).", size, device, compute)
-        except Exception as exc:  # noqa: BLE001 - fallback seguro a CPU
-            if device == "cpu":
-                raise
-            log.warning("Whisper en %s falló (%s); usando CPU (int8).", device, exc)
-            _models[size] = WhisperModel(size, device="cpu", compute_type="int8")
-    return _models[size]
+    cached = _models.get(size)
+    if cached is not None:
+        return cached
+    device, compute = gpu.whisper_device()
+    try:
+        model = WhisperModel(size, device=device, compute_type=compute)
+        log.info("Whisper '%s' cargado en %s (%s).", size, device, compute)
+    except Exception as exc:  # noqa: BLE001 - fallback seguro a CPU
+        if device == "cpu":
+            raise
+        log.warning("Whisper en %s falló (%s); usando CPU (int8).", device, exc)
+        device, compute = "cpu", "int8"
+        model = WhisperModel(size, device=device, compute_type=compute)
+        log.info("Whisper '%s' cargado en cpu (int8).", size)
+    _models[size] = (device, model)
+    return device, model
 
 
 def _download_audio(url: str, dest_dir: Path, on_progress: ProgressCb) -> Path:
@@ -96,20 +102,7 @@ def _download_audio(url: str, dest_dir: Path, on_progress: ProgressCb) -> Path:
     return files[0]
 
 
-def _transcribe_path(path: str, model_size: str, language: Optional[str],
-                     on_progress: ProgressCb, base: float = 0.3) -> dict:
-    """Transcribe un archivo de audio/vídeo ya en disco."""
-    if model_size not in MODELS:
-        model_size = "base"
-
-    on_progress(base * 0.66, f"Cargando modelo {model_size}…")
-    model = _get_model(model_size)
-
-    on_progress(base, "Transcribiendo…")
-    segments, info = model.transcribe(
-        str(path), language=language or None, word_timestamps=True
-    )
-
+def _collect_segments(segments, info, on_progress: ProgressCb, base: float) -> dict:
     total = info.duration or 0.0
     out: list[dict] = []
     for s in segments:
@@ -121,8 +114,39 @@ def _transcribe_path(path: str, model_size: str, language: Optional[str],
         })
         if total:
             on_progress(min(0.99, base + (1 - base) * (s.end / total)), "Transcribiendo…")
-
     return {"language": info.language, "duration": round(total, 1), "segments": out}
+
+
+def _transcribe_path(path: str, model_size: str, language: Optional[str],
+                     on_progress: ProgressCb, base: float = 0.3) -> dict:
+    """Transcribe un archivo de audio/vídeo ya en disco."""
+    if model_size not in MODELS:
+        model_size = "base"
+
+    on_progress(base * 0.66, f"Cargando modelo {model_size}…")
+    with _infer_lock:
+        device, model = _get_model(model_size)
+        on_progress(base, f"Transcribiendo ({device})…")
+        log.info("Whisper '%s' infiriendo en %s: %s", model_size, device, path)
+        try:
+            segments, info = model.transcribe(
+                str(path), language=language or None, word_timestamps=True,
+            )
+            result = _collect_segments(segments, info, on_progress, base)
+        except Exception as exc:  # noqa: BLE001
+            if device == "cpu":
+                raise
+            log.warning("Whisper CUDA falló al inferir (%s); reintento en CPU.", exc)
+            gpu.mark_cuda_broken()
+            _models.pop(model_size, None)
+            device, model = _get_model(model_size)
+            on_progress(base, "Transcribiendo (cpu)…")
+            segments, info = model.transcribe(
+                str(path), language=language or None, word_timestamps=True,
+            )
+            result = _collect_segments(segments, info, on_progress, base)
+        log.info("Whisper '%s' listo: %s segmentos.", model_size, len(result["segments"]))
+        return result
 
 
 def run(url: str, model_size: str, language: Optional[str], on_progress: ProgressCb) -> dict:

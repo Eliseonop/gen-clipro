@@ -19,12 +19,19 @@ class GpuSelectionTest(unittest.TestCase):
 
     # --- Whisper device ---
     def test_whisper_cuda_when_available(self):
-        with patch("ctranslate2.get_cuda_device_count", return_value=1):
+        with patch("ctranslate2.get_cuda_device_count", return_value=1), \
+             patch("app.gpu._cuda_libs_ok", return_value=True):
             gpu._reset_cache()
             self.assertEqual(gpu.whisper_device(), ("cuda", "float16"))
 
     def test_whisper_cpu_when_no_cuda(self):
         with patch("ctranslate2.get_cuda_device_count", return_value=0):
+            gpu._reset_cache()
+            self.assertEqual(gpu.whisper_device(), ("cpu", "int8"))
+
+    def test_whisper_cpu_when_gpu_visible_but_cublas_missing(self):
+        with patch("ctranslate2.get_cuda_device_count", return_value=1), \
+             patch("app.gpu._cuda_libs_ok", return_value=False):
             gpu._reset_cache()
             self.assertEqual(gpu.whisper_device(), ("cpu", "int8"))
 
@@ -75,6 +82,18 @@ class GpuSelectionTest(unittest.TestCase):
             gpu._reset_cache()
             self.assertEqual(gpu.whisper_device(), ("cpu", "int8"))
             self.assertEqual(gpu.selected_encoder(), "libx264")
+
+    def test_cublas_missing_on_windows(self):
+        with patch("app.gpu.os.name", "nt"), \
+             patch("app.gpu._dll_loads", return_value=False):
+            self.assertFalse(gpu._cuda_libs_ok())
+
+    def test_cublas_present_on_windows(self):
+        def loads(name):
+            return name == "cublas64_12.dll"
+        with patch("app.gpu.os.name", "nt"), \
+             patch("app.gpu._dll_loads", side_effect=loads):
+            self.assertTrue(gpu._cuda_libs_ok())
 
     def test_summary_shape(self):
         with patch("ctranslate2.get_cuda_device_count", return_value=0), \

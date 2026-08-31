@@ -5,6 +5,7 @@
 import { clipFxAt } from './clipFx.js'
 import { activeWordIndex, activeWordIndexFromWords, applyThemeToStyle, hasWordFx, karaokeOn, wordOpacity } from './textKaraoke.js'
 import { themeById } from './subtitleThemes.js'
+import { isCaptionText } from './textRole.js'
 
 export const FONTS = [
   'Arial', 'Arial Black', 'Anton', 'Segoe UI', 'Segoe UI Black', 'Calibri', 'Bahnschrift',
@@ -153,7 +154,7 @@ export function drawTextClip(ctx, clip, cw, ch, opts = {}) {
   const localT = opts.time == null ? 0 : opts.time - (clip.start || 0)
   const motionOff = opts.reduceMotion ?? reduceMotionOn()
   const skipBlock = motionOff || opts.selected
-  const karaoke = karaokeOn(st)
+  const karaoke = isCaptionText(clip) && karaokeOn(st)
 
   ctx.save()
   ctx.font = `${st.bold ? 'bold ' : ''}${size}px ${cssFont(st.font)}`

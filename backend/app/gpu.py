@@ -26,8 +26,9 @@ from . import config
 
 log = logging.getLogger("videoyt.gpu")
 
-# Codificadores por hardware que sabemos manejar, por orden de preferencia.
 _HW_ENCODER_PREF = ("h264_nvenc", "h264_qsv", "h264_amf")
+_CUBLAS_DLLS = ("cublas64_12.dll", "cublasLt64_12.dll", "cublas64_11.dll")
+_cuda_broken = False
 
 
 def _gpu_disabled() -> bool:
@@ -35,16 +36,66 @@ def _gpu_disabled() -> bool:
     return v in ("0", "cpu", "off", "false", "no")
 
 
+def _dll_loads(name: str) -> bool:
+    try:
+        import ctypes
+        ctypes.WinDLL(name)
+        return True
+    except OSError:
+        return False
+
+
+def _add_nvidia_dll_dirs() -> None:
+    if os.name != "nt":
+        return
+    try:
+        import nvidia
+    except Exception:  # noqa: BLE001
+        return
+    root = os.path.dirname(nvidia.__file__)
+    for dirpath, _dirnames, filenames in os.walk(root):
+        if any(f.lower().endswith(".dll") for f in filenames):
+            try:
+                os.add_dll_directory(dirpath)
+            except (OSError, AttributeError):
+                pass
+
+
+def _cuda_libs_ok() -> bool:
+    """CTranslate2 puede ver la GPU y aun así no inferir si falta cuBLAS."""
+    if os.name != "nt":
+        return True
+    _add_nvidia_dll_dirs()
+    if any(_dll_loads(name) for name in _CUBLAS_DLLS):
+        return True
+    log.warning(
+        "GPU CUDA visible pero no se puede cargar cuBLAS (%s). "
+        "Whisper usará CPU. Para GPU: CUDA Toolkit o "
+        "`pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`.",
+        ", ".join(_CUBLAS_DLLS),
+    )
+    return False
+
+
+def mark_cuda_broken() -> None:
+    global _cuda_broken
+    _cuda_broken = True
+    cuda_available.cache_clear()
+    log.warning("CUDA no usable para Whisper; se usará CPU.")
+
+
 @lru_cache(maxsize=1)
 def cuda_available() -> bool:
-    """¿Hay CUDA para faster-whisper? (vía CTranslate2, su backend real)."""
-    if _gpu_disabled():
+    """¿CUDA sirve de verdad para faster-whisper? (dispositivo + cuBLAS)."""
+    if _gpu_disabled() or _cuda_broken:
         return False
     try:
         import ctranslate2
-        return ctranslate2.get_cuda_device_count() > 0
+        if ctranslate2.get_cuda_device_count() <= 0:
+            return False
     except Exception:  # noqa: BLE001 - sin CT2/CUDA → CPU
         return False
+    return _cuda_libs_ok()
 
 
 def _encoder_args_for(name: str) -> list[str]:
@@ -135,5 +186,7 @@ def summary() -> dict:
 
 def _reset_cache() -> None:
     """Solo para tests: re-evalúa la detección (limpia los lru_cache)."""
+    global _cuda_broken
+    _cuda_broken = False
     cuda_available.cache_clear()
     hw_encoder.cache_clear()

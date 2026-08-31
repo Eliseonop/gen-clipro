@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Iterable
 
 from .schemas import TimelineClip
+from .text_role import resolve_text_role
 
 _FX_NONE = "none"
 _KNOWN_FX = ("highlight", "glow", "pop")
@@ -215,6 +216,8 @@ def caption_dialogues(clip: TimelineClip, W: int, H: int, style: dict | None = N
     dur = _clip_dur(clip)
     start = max(0.0, float(clip.start or 0))
     fx = word_fx_set(st)
+    if resolve_text_role(clip) == "free":
+        fx = set()
     appear = st.get("block_appear") or _FX_NONE
     fad = "{\\fad(180,0)}" if appear in ("fade", "pop", "slide_up") else ""
     style = f"s{clip.id}"

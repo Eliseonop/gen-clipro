@@ -22,7 +22,7 @@ class TextAssTest(unittest.TestCase):
         clip = TimelineClip(
             id="c1", track_id="T1", kind="text", asset_kind="text", asset_id="t1",
             filename="", start=1.0, in_point=0.0, out_point=2.0, source_duration=2.0,
-            text="hola mundo",
+            text="hola mundo", text_role="caption",
             style={"theme": "karaoke", "word_fx": "glow", "color": "#ffffff", "highlight_color": "#ff3b5c"},
         )
         lines = caption_dialogues(clip, 720, 1280)
@@ -54,6 +54,7 @@ class TextAssTest(unittest.TestCase):
                 "color": "#ffffff",
                 "highlight_color": "#ff3b5c",
             },
+            text_role="caption",
         )
         lines = caption_dialogues(clip, 720, 1280)
         self.assertEqual(len(lines), 2)
@@ -71,6 +72,7 @@ class TextAssTest(unittest.TestCase):
                 "active_opacity": 1,
                 "inactive_opacity": 0.5,
             },
+            text_role="caption",
         )
         lines = caption_dialogues(clip, 720, 1280)
         self.assertTrue(any("\\1a&H80&" in ln for ln in lines))
@@ -95,6 +97,18 @@ class TextAssTest(unittest.TestCase):
         doc = build_ass([clip], 720, 1280)
         self.assertIn("Anton", doc)
         self.assertIn("Style: sc1,Anton,", doc)
+
+
+    def test_texto_free_no_hace_karaoke(self):
+        clip = TimelineClip(
+            id="c1", track_id="T1", kind="text", asset_kind="text", asset_id="t1",
+            filename="", start=0.0, in_point=0.0, out_point=20.0, source_duration=20.0,
+            text="marca de agua", text_role="free",
+            style={"word_fx": "glow", "color": "#ffffff", "highlight_color": "#ff3b5c"},
+        )
+        lines = caption_dialogues(clip, 720, 1280)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("marca de agua", lines[0])
 
 
 if __name__ == "__main__":
