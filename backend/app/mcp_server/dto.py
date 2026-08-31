@@ -86,6 +86,131 @@ def _media_dto(proj: Project) -> dict:
     }
 
 
+def _format_dto(tl: Timeline | None) -> dict:
+    w = tl.width if tl else 720
+    h = tl.height if tl else 1280
+    fps = tl.fps if tl else 30
+    return {"aspect": aspect_ratio(w, h), "width": w, "height": h, "fps": fps}
+
+
+def _clip_summary(c) -> dict:
+    """Resumen escaneable de un clip (sin words/keyframes; eso va en clip_detail)."""
+    d = {
+        "id": c.id,
+        "track_id": c.track_id,
+        "kind": c.kind,
+        "name": c.name,
+        "start": round(c.start or 0.0, 3),
+        "duration": round(_clip_timeline_duration(c), 3),
+        "in_point": c.in_point,
+        "out_point": c.out_point,
+        "frame": c.frame,
+        "layout": c.layout,
+        "look": c.look,
+        "speed": c.speed,
+        "muted": c.muted,
+        "has_reframe": c.reframe is not None,
+    }
+    if c.kind == "text":
+        d["text"] = c.text
+        d["word_count"] = len(c.words or [])
+    return d
+
+
+def timeline_detail(tl: Timeline | None) -> dict:
+    """Timeline en detalle escaneable: formato, pistas y clips (sin datos pesados)."""
+    if tl is None:
+        return {"present": False, "format": _format_dto(None), "tracks": [],
+                "clips": [], "duration": 0.0}
+    end = 0.0
+    for c in tl.clips:
+        end = max(end, (c.start or 0.0) + _clip_timeline_duration(c))
+    return {
+        "present": True,
+        "format": _format_dto(tl),
+        "tracks": [
+            {"id": t.id, "kind": t.kind, "name": t.name,
+             "hidden": t.hidden, "muted": t.muted, "locked": t.locked}
+            for t in tl.tracks
+        ],
+        "clips": [_clip_summary(c) for c in tl.clips],
+        "duration": round(end, 3),
+    }
+
+
+def clip_detail(clip) -> dict:
+    """Un clip en detalle COMPLETO: incluye reframe/keyframes, words, transform, origin."""
+    data = clip.model_dump()
+    data["timeline_duration"] = round(_clip_timeline_duration(clip), 3)
+    return data
+
+
+def media_list(proj: Project) -> dict:
+    """Inventario detallado de material del proyecto."""
+    return {
+        "clips": [
+            {
+                "index": c.index,
+                "filename": c.filename,
+                "label": c.label,
+                "description": c.description,
+                "start": c.start,
+                "end": c.end,
+                "duration": round((c.end or 0.0) - (c.start or 0.0), 3),
+                "origin": c.origin,
+                "source": c.source,
+                "has_transcript": c.transcript is not None,
+            }
+            for c in proj.clips
+        ],
+        "audios": [
+            {
+                "id": a.id,
+                "filename": a.filename,
+                "label": a.label,
+                "duration": a.duration,
+                "voice": a.voice,
+                "engine": a.engine,
+                "origin": a.origin,
+                "source": a.source,
+            }
+            for a in proj.audios
+        ],
+        "transcripts": [
+            {
+                "id": t.id,
+                "title": t.title,
+                "language": t.language,
+                "segment_count": len(t.segments),
+                "duration": t.duration,
+            }
+            for t in proj.transcripts
+        ],
+    }
+
+
+def job_dto(job) -> dict:
+    """Estado de un job + resumen del resultado según su tipo."""
+    status = job.status.value if hasattr(job.status, "value") else job.status
+    d = {"id": job.id, "status": status, "progress": job.progress, "message": job.message}
+    if job.error:
+        d["error"] = job.error
+    result: dict = {}
+    if job.clips:
+        result["clips"] = len(job.clips)
+    if job.export_url:
+        result["export_url"] = job.export_url
+    if job.transcript is not None:
+        result["transcript_id"] = job.transcript.id
+    if job.audio is not None:
+        result["audio_id"] = job.audio.id
+    if job.reframe_prep is not None:
+        result["reframe_prep"] = True
+    if result:
+        d["result"] = result
+    return d
+
+
 def project_context(proj: Project, *, history: dict | None = None) -> dict:
     """DTO de contexto: resumen semántico y eficiente del proyecto."""
     tl = proj.timeline
