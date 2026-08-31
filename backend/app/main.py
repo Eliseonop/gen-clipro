@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException
@@ -10,6 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, diagnostics, heatmap, jobs, projects, settings, storage, timeline_store, tts
+from .mcp_server import server as mcp_server
 from .schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
@@ -41,17 +43,25 @@ def _video_title(url: str) -> str:
         return ""
 
 diagnostics.configure_logging()
-app = FastAPI(title="video-yt", version="0.1.0")
 
 
-@app.on_event("startup")
-def _startup_diagnostics() -> None:
-    """Al arrancar, informa de qué motor usará cada parte (GPU/CPU)."""
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Arranque/parada: diagnóstico de motores + session-manager del MCP.
+
+    Montar la sub-app del MCP (``/mcp``) no ejecuta su lifespan, así que aquí
+    abrimos su session-manager para que el transporte streamable-HTTP funcione.
+    """
     try:
         diagnostics.log_report()
     except Exception:  # noqa: BLE001 - un fallo de diagnóstico nunca debe tumbar el arranque
         import logging
         logging.getLogger("videoyt.diag").exception("No se pudo generar el diagnóstico de arranque.")
+    async with mcp_server.session_lifespan():
+        yield
+
+
+app = FastAPI(title="video-yt", version="0.1.0", lifespan=_lifespan)
 
 # El frontend (React/Vite) corre en otro puerto durante el desarrollo.
 app.add_middleware(
@@ -63,6 +73,9 @@ app.add_middleware(
 
 # Servir los clips generados como archivos estáticos.
 app.mount("/clips", StaticFiles(directory=str(config.OUTPUT_DIR)), name="clips")
+
+# MCP: capa de control para que una IA opere el editor (endpoint POST /mcp).
+app.mount("/mcp", mcp_server.asgi_app)
 
 
 @app.get("/api/health")

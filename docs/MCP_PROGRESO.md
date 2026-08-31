@@ -55,12 +55,21 @@ precondición inválida → `ValueError`; estado inválido → `validate_timelin
 
 ---
 
-## ETAPA 2 — MCP Server base
+## ETAPA 2 — MCP Server base ✅ COMPLETA
 
-- [ ] Esqueleto `backend/mcp_server/` con el SDK `mcp`
-- [ ] Registro de tools + capa de política (lectura/escritura/destructivas)
-- [ ] Auditoría de acciones de la IA (log)
-- [ ] Construcción del DTO semántico + `capabilities[]`
+Topología: MCP montado en el **mismo proceso FastAPI** (SDK oficial `mcp` 2.x,
+`MCPServer`), expuesto en `POST http://localhost:8000/mcp` (streamable-HTTP). Las
+tools llaman in-process a `projects`/`timeline_store`/servicios → comparten el
+estado vivo con el editor del humano (jobs en memoria incluidos). Spec:
+`docs/superpowers/specs/2026-08-30-mcp-server-base-design.md`.
+
+- [x] Esqueleto `backend/mcp_server/` con el SDK `mcp` (`server.py` monta la
+      sub-app; lifespan del session-manager cableado al de FastAPI en `main.py`)
+- [x] Registro de tools + capa de política (`registry.py`: `@tool(access=read|write|destructive)`, wrapper con `functools.wraps` que preserva la firma para la introspección de MCP; hoy no bloquea, punto de control listo)
+- [x] Auditoría de acciones de la IA (`audit.py`: JSONL append-only en `data/mcp_audit.jsonl`; guarda claves de params, nunca valores)
+- [x] Construcción del DTO semántico + `capabilities[]` (`dto.py`)
+- [x] Tool de prueba de tubería: `get_project_context` (lectura) — verificada por handshake MCP real por HTTP (initialize → list_tools → call_tool)
+- [x] Tests: 24 nuevos (audit/registry/dto/context); **suite backend 204** (1 fallo preexistente ajeno: aislamiento de biblioteca en `test_youtube_audio`)
 
 ---
 
@@ -127,4 +136,4 @@ Tools mínimas (~14): `get_project_context`, `get_timeline`, `analyze_youtube`,
 
 ---
 
-_Última actualización: 2026-08-30 — **ETAPA 1 COMPLETA** (núcleo estructural + historial + adaptador + endpoints, 148 tests). Siguiente: Etapa 2 (MCP Server base)._
+_Última actualización: 2026-08-30 — **ETAPA 2 COMPLETA** (MCP server montado en FastAPI: esqueleto + registro/política + auditoría + DTO/capabilities + `get_project_context`, verificado por handshake HTTP real; 204 tests). Siguiente: Etapa 3 (tools de LECTURA: `get_timeline`, `list_media`, `inspect_clip`, `get_job`)._
