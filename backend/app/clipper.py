@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
-from . import config, ytdlp
+from . import config, gpu, ytdlp
 from .diagnostics import timed
 from .recipe_layout import uses_source_trim
 from .reframe_math import frame_at
@@ -255,9 +255,7 @@ def _cut_clip(source: Path, seg: Segment, mode: CropMode, out_path: Path,
         filt = ["-filter_complex", _crop_filter(mode), "-map", "[v]", "-map", "0:a?"]
 
     encode = [
-        "-c:v", "libx264",
-        "-crf", str(config.VIDEO_CRF),
-        "-preset", config.VIDEO_PRESET,
+        *gpu.video_encoder_args(),
         "-c:a", "aac",
         "-b:a", config.AUDIO_BITRATE,
         str(out_path),

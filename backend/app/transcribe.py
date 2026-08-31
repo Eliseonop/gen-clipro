@@ -10,9 +10,13 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 
+import logging
+
 from faster_whisper import WhisperModel
 
-from . import ytdlp
+from . import gpu, ytdlp
+
+log = logging.getLogger("videoyt.transcribe")
 
 ProgressCb = Callable[[float, str], None]
 
@@ -52,9 +56,18 @@ def shape_words(raw) -> list[dict]:
 
 
 def _get_model(size: str) -> WhisperModel:
-    """Carga (y cachea) un modelo. CPU + int8 para ir ligero sin GPU."""
+    """Carga (y cachea) un modelo. Usa GPU (cuda/float16) si hay; si no, o si la
+    carga en CUDA falla (faltan cuBLAS/cuDNN), cae a CPU (int8)."""
     if size not in _models:
-        _models[size] = WhisperModel(size, device="cpu", compute_type="int8")
+        device, compute = gpu.whisper_device()
+        try:
+            _models[size] = WhisperModel(size, device=device, compute_type=compute)
+            log.info("Whisper '%s' cargado en %s (%s).", size, device, compute)
+        except Exception as exc:  # noqa: BLE001 - fallback seguro a CPU
+            if device == "cpu":
+                raise
+            log.warning("Whisper en %s falló (%s); usando CPU (int8).", device, exc)
+            _models[size] = WhisperModel(size, device="cpu", compute_type="int8")
     return _models[size]
 
 

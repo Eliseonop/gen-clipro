@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import quote, unquote
 
-from . import clipper, config, projects, storage
+from . import clipper, config, gpu, projects, storage
 from .compose_layout import slot_pixels
 from .schemas import ClipInfo, CompLayer, Keyframe
 
@@ -123,9 +123,7 @@ def generate_composition(
             "-map", "[vout]",
             "-map", "0:a?",
             "-t", f"{out_dur:.3f}",
-            "-c:v", "libx264",
-            "-crf", str(config.VIDEO_CRF),
-            "-preset", config.VIDEO_PRESET,
+            *gpu.video_encoder_args(),
             "-c:a", "aac",
             "-b:a", config.AUDIO_BITRATE,
             str(out_path),

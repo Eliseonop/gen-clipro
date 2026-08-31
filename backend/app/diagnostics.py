@@ -205,12 +205,28 @@ def log_report() -> dict:
         if hw:
             pretty = ", ".join(_HW_ENCODERS.get(h, h) for h in hw)
             log.info("  ✓ Codificadores por hardware disponibles: %s.", pretty)
-            log.info("    (Ahora se usa 'libx264' = CPU. Para acelerar el render, "
-                     "cambiar a un encoder HW, p. ej. '%s'.)", hw[0])
         else:
             log.warning("  ⚠ Sin codificadores por hardware: el render usa "
                         "'libx264' (CPU). Es correcto pero más lento; en portátiles "
                         "sin GPU el export de timelines largas tardará.")
+
+    # --- Selección efectiva (lo que REALMENTE se va a usar) ---
+    try:
+        from . import gpu
+        sel = gpu.summary()
+        if sel["gpu_disabled"]:
+            log.info("Selección efectiva: GPU DESACTIVADA por VIDEOYT_GPU → "
+                     "whisper=%s/%s · vídeo=%s.",
+                     sel["whisper_device"], sel["whisper_compute"], sel["video_encoder"])
+        else:
+            mark = "✓" if sel["video_encoder"] != "libx264" else "⚠"
+            log.info("Selección efectiva: whisper=%s/%s · vídeo=%s %s",
+                     sel["whisper_device"], sel["whisper_compute"], sel["video_encoder"],
+                     "(GPU)" if sel["video_encoder"] != "libx264" else "(CPU)")
+            log.info("  %s Encoder de vídeo: %s. (Forzar CPU con VIDEOYT_GPU=0.)",
+                     mark, sel["video_encoder"])
+    except Exception:  # noqa: BLE001 - el resumen nunca debe tumbar el arranque
+        pass
     log.info("=== fin del diagnóstico ===")
     return d
 

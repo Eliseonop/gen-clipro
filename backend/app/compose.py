@@ -21,7 +21,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import clipper, config, sfx, storage
+from . import clipper, config, gpu, sfx, storage
 from .clip_fx import overlay_xy_for_fx, video_fx_chain
 from .clip_layout import dest_rect_even, is_overlay, source_crop_px
 from .diagnostics import timed
@@ -457,7 +457,7 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
     else:
         cmd += ["-an"]
     cmd += [
-        "-c:v", "libx264", "-crf", str(config.VIDEO_CRF), "-preset", config.VIDEO_PRESET,
+        *gpu.video_encoder_args(),
         "-pix_fmt", "yuv420p", "-movflags", "+faststart",
         "-t", f"{total:.3f}",
         str(out_path),
@@ -481,8 +481,8 @@ def render(project: Project, timeline: Timeline, out_path: Path,
         ass_path.write_text(build_ass(timeline.clips, W, H, timeline.tracks), encoding="utf-8")
     cmd = build_command(project, timeline, out_path, ass_path=ass_path)
     on_progress(0.15, "Renderizando el vídeo final con FFmpeg…")
-    log.info("Export: %d clip(s), encoder=%s preset=%s crf=%s → %s",
-             len(timeline.clips), "libx264", config.VIDEO_PRESET, config.VIDEO_CRF,
+    log.info("Export: %d clip(s), encoder=%s crf=%s → %s",
+             len(timeline.clips), gpu.selected_encoder(), config.VIDEO_CRF,
              out_path.name)
     with timed("render FFmpeg (export)", log, clips=len(timeline.clips)):
         proc = subprocess.run(cmd, capture_output=True, text=True)
