@@ -2,26 +2,21 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import Icon from '../../components/Icon'
 import { fmt } from '../../lib/utils'
 import { FAV_CAT } from '../../lib/favorites'
-import { analyze, listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryItem, unsaveLibraryItem, uploadImages, uploadVideo, uploadAudio, getSettings, putSettings, deleteMaterial } from '../../services/api'
+import { analyze, listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryItem, unsaveLibraryItem, uploadImages, uploadVideo, uploadAudio, getSettings, putSettings, deleteMaterial, updateMaterial, fetchRemoteImage } from '../../services/api'
 import MaterialClipGrid, { dragPayload, useToggle, useExclusiveMedia, Empty, ImageCard, MaterialMenuBtn } from './MaterialClipGrid'
 import SfxClassifyModal from './SfxClassifyModal'
+import ImageAddModal from './ImageAddModal'
 import ConfirmModal from '../../components/ConfirmModal'
 import AnchoredMenu from '../../components/AnchoredMenu'
 import { canDeleteMaterial, materialIdent, materialMenuItems, materialDeleteTitle, materialLabel } from './materialMenu'
 import JobStatusBar from '../../components/JobStatusBar'
 import FlipPopover from '../../components/FlipPopover'
+import { collectFromClipboardItems, collectPastePayload, hasImagePaste, imageUrlsFromText, isImageFile, resolvePasteImages } from './imagePaste'
 
 const YT_ANALYZE_OPTS = { min_score: 0.4, max_clips: 10, max_duration: 60, padding: 10 }
 
-const IMAGE_FILE_RE = /\.(png|jpe?g|webp|gif|bmp|tiff?|avif|heic|heif)$/i
 const VIDEO_FILE_RE = /\.(mp4|mov|mkv|webm|avi|m4v|mpe?g|wmv|flv)$/i
 const AUDIO_FILE_RE = /\.(mp3|wav|m4a|aac|ogg|flac|wma)$/i
-
-function isImageFile(file) {
-  if (!file) return false
-  if ((file.type || '').startsWith('image/')) return true
-  return IMAGE_FILE_RE.test(file.name || '')
-}
 
 function isVideoFile(file) {
   if (!file) return false
@@ -190,7 +185,10 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
   const [vidOver, setVidOver] = useState(false)
   const [matMenu, setMatMenu] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
-  const fileRef = useRef(null)
+  const [imgAddOpen, setImgAddOpen] = useState(false)
+  const [imgTick, setImgTick] = useState(0)
+  const [imgPaneMenu, setImgPaneMenu] = useState(null)
+  const imgPendingRef = useRef([])
   const ytInputRef = useRef(null)
   const histBtnRef = useRef(null)
   const mediaFileRef = useRef(null)
@@ -207,7 +205,74 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
     listLibrary().then(setLibrary).catch(() => {})
   }, [])
 
+  const offerImageFiles = useCallback((files) => {
+    if (!files?.length) return
+    imgPendingRef.current = [...imgPendingRef.current, ...files]
+    setTab('image')
+    setImgAddOpen(true)
+    setImgTick((n) => n + 1)
+  }, [])
+
+  async function ingestClipboard(payload) {
+    setErr('')
+    setUploading(true)
+    try {
+      const files = await resolvePasteImages(payload, fetchRemoteImage)
+      if (!files.length) {
+        setErr('El portapapeles no tiene una imagen.')
+        return
+      }
+      offerImageFiles(files)
+    } catch (e) {
+      setErr(e.message || 'No se pudo pegar la imagen.')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  async function pasteFromSystem() {
+    setImgPaneMenu(null)
+    if (!navigator.clipboard?.read) {
+      setErr('Usa Ctrl+V para pegar la imagen.')
+      return
+    }
+    try {
+      const items = await navigator.clipboard.read()
+      let payload = await collectFromClipboardItems(items)
+      if (!hasImagePaste(payload)) {
+        const text = await navigator.clipboard.readText().catch(() => '')
+        payload = { files: [], urls: imageUrlsFromText(text) }
+      }
+      if (!hasImagePaste(payload)) {
+        setErr('El portapapeles no tiene una imagen.')
+        return
+      }
+      await ingestClipboard(payload)
+    } catch (e) {
+      const msg = String(e.message || '')
+      if (/not focused|denied|permission|notallowed/i.test(msg)) {
+        setErr('Usa Ctrl+V para pegar la imagen.')
+      } else {
+        setErr(msg || 'No se pudo leer el portapapeles. Prueba Ctrl+V.')
+      }
+    }
+  }
+
   useEffect(() => { reloadLibrary() }, [reloadLibrary, project.id, clips.length, audios.length, images.length])
+
+  useEffect(() => {
+    if (tab !== 'image') return undefined
+    function onPaste(e) {
+      const payload = collectPastePayload(e.clipboardData)
+      if (!hasImagePaste(payload)) return
+      const tag = e.target?.tagName || ''
+      if ((tag === 'INPUT' || tag === 'TEXTAREA') && !payload.files.length) return
+      e.preventDefault()
+      ingestClipboard(payload)
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [tab])
 
   useEffect(() => {
     getSettings().then((s) => setYtHistory(normalizeHistory(s.yt_history))).catch(() => {})
@@ -223,6 +288,7 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
       item,
       saved: item.scope === 'library' || !!item.is_saved,
     })
+    setImgPaneMenu(null)
   }
 
   async function confirmDeleteMaterial() {
@@ -378,6 +444,7 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
         title,
         description,
         videoId: c.youtube_id,
+        existing: c.scope !== 'library',
       })
       return
     }
@@ -393,6 +460,7 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
       index: c.index,
       title,
       description,
+      existing: c.scope !== 'library',
     })
   }
 
@@ -414,6 +482,18 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
     })
     setYtHistory(next)
     try { await putSettings({ yt_history: next }) } catch { /* noop */ }
+  }
+
+  async function saveImageDescription(im, description) {
+    if (!im || im.scope === 'library') return
+    try {
+      await updateMaterial(project.id, 'images', materialIdent('images', im), {
+        description: (description || '').trim(),
+      })
+      await onRefresh?.()
+    } catch (e) {
+      setErr(e.message || 'No se pudo guardar la descripción.')
+    }
   }
 
   async function importMedia(fileList) {
@@ -501,22 +581,9 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
           <button className="ghost small" onClick={() => onOpenVideo?.()} type="button">
             <Icon name="add" size={15} /> Caja video
           </button>
-          <button className="ghost small" onClick={() => fileRef.current?.click()} type="button" disabled={uploading}>
+          <button className="ghost small" onClick={() => { setTab('image'); setImgAddOpen(true); setImgTick((n) => n + 1) }} type="button" disabled={uploading}>
             <Icon name="add" size={15} /> {uploading ? 'Subiendo…' : 'Imagen'}
           </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/avif,.png,.jpg,.jpeg,.webp,.gif,.bmp,.avif,.heic"
-            multiple
-            hidden
-            onChange={async (e) => {
-              const files = [...(e.target.files || [])]
-              e.target.value = ''
-              if (!files.length) return
-              await ingestFiles(files)
-            }}
-          />
           <button className="ghost small" onClick={onOpenAudio} type="button">
             <Icon name="add" size={15} /> Audio
           </button>
@@ -671,10 +738,28 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
       )}
 
       {tab === 'image' && (
-        <div className="ed-mat-list">
-          <ScopeFilter value={imageFilter} onChange={setImageFilter} />
+        <div
+          className="ed-mat-list"
+          onContextMenu={(e) => {
+            if (e.target.closest('.ed-card, button, input, textarea')) return
+            e.preventDefault()
+            setMatMenu(null)
+            setImgPaneMenu({ x: e.clientX, y: e.clientY })
+          }}
+        >
+          <div className="ed-img-toolbar">
+            <ScopeFilter value={imageFilter} onChange={setImageFilter} />
+            <button
+              type="button"
+              className="ed-sfx-add"
+              title="Agregar imagen"
+              onClick={() => { setImgAddOpen(true); setImgTick((n) => n + 1) }}
+            >
+              <Icon name="add" size={16} />
+            </button>
+          </div>
           {shownImages.length === 0
-            ? <Empty text={imageFilter === 'saved' ? 'No hay imágenes guardadas.' : 'Sin imágenes. Suelta un archivo aquí o pulsa Imagen.'} />
+            ? <Empty text={imageFilter === 'saved' ? 'No hay imágenes guardadas.' : 'Sin imágenes. Clic derecho para pegar, o pulsa +.'} />
             : (
               <div className="ed-mat-grid">
                 {shownImages.map((im) => (
@@ -684,6 +769,7 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
                     onAdd={() => onAdd('images', im)}
                     di={di}
                     onMenu={(e) => openMatMenu(e, 'images', im)}
+                    onSaveDescription={im.scope === 'library' ? undefined : (text) => saveImageDescription(im, text)}
                   />
                 ))}
               </div>
@@ -710,6 +796,31 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
       )}
 
       {tab === 'sfx' && <SfxTab onAdd={onAdd} onPlay={onPlayMedia} di={di} fav={fav} />}
+
+      {imgAddOpen && (
+        <ImageAddModal
+          projectId={project.id}
+          tick={imgTick}
+          pendingRef={imgPendingRef}
+          onClose={() => setImgAddOpen(false)}
+          onSaved={() => onRefresh?.()}
+        />
+      )}
+
+      {imgPaneMenu && (
+        <>
+          <div
+            className="ed-ctx-backdrop"
+            onPointerDown={() => setImgPaneMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setImgPaneMenu(null) }}
+          />
+          <AnchoredMenu className="ed-ctx-menu" x={imgPaneMenu.x} y={imgPaneMenu.y}>
+            <button type="button" onClick={pasteFromSystem}>
+              <Icon name="content_paste" size={15} /> Pegar
+            </button>
+          </AnchoredMenu>
+        </>
+      )}
 
       {matMenu && (
         <>

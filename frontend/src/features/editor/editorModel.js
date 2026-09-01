@@ -99,8 +99,9 @@ export function shouldConfirmTrackDelete(clips, trackId) {
 }
 
 export function removeTrack(tracks, clips, trackId) {
+  const remaining = (tracks || []).filter((t) => t.id !== trackId)
   return {
-    tracks: (tracks || []).filter((t) => t.id !== trackId),
+    tracks: remaining.map((t) => (t.linked_track_id === trackId ? { ...t, linked_track_id: null } : t)),
     clips: (clips || []).filter((c) => c.track_id !== trackId),
   }
 }
@@ -401,6 +402,7 @@ export function defaultTracks() {
 export const newReframe = () => ({
   zoom: 1, pan_mode: 'smooth', dual_crop: false,
   split_orientation: 'vertical', split_layout: 'auto', master: false,
+  face_track_mode: null,
   keyframes: [], keyframes2: [],
 })
 
@@ -448,6 +450,8 @@ export function makeClip(assetKind, item, trackId, start, dur) {
     appear: 'none',
     exit: 'none',
     look: 'none',
+    description: item.description || null,
+    dup_of: null,
   }
 }
 
@@ -462,5 +466,156 @@ export function makeTextClip(trackId, start, dur, text, style, opts = {}) {
     volume: 1, muted: false, speed: 1, keep_pitch: false, reverse: false, speed_curve: null,
     reframe: null, text: text || 'Texto', style: st,
     words: [], text_role: role,
+    description: null,
+    dup_of: null,
   }
+}
+
+export function isEditingExistingClip(meta) {
+  return meta?.existingIndex != null && meta.existingIndex !== ''
+}
+
+export function clipSaveIndex(meta, fallback) {
+  if (isEditingExistingClip(meta)) return Number(meta.existingIndex)
+  return fallback
+}
+
+export function lineageRoot(clip) {
+  return clip?.dup_of || clip?.id
+}
+
+export function dupCount(clips, clip) {
+  if (!clip) return 0
+  const root = lineageRoot(clip)
+  return Math.max(0, (clips || []).filter((c) => lineageRoot(c) === root).length - 1)
+}
+
+export function duplicateClipOntoTrack(clip, trackId, newId) {
+  const copy = JSON.parse(JSON.stringify(clip))
+  copy.id = newId
+  copy.track_id = trackId
+  copy.dup_of = lineageRoot(clip)
+  if (copy.reframe) {
+    const strip = (arr) => (arr || []).map(({ id: _id, ...k }) => k)
+    copy.reframe = withKfIds({
+      ...copy.reframe,
+      keyframes: strip(copy.reframe.keyframes),
+      keyframes2: strip(copy.reframe.keyframes2),
+    })
+  }
+  return copy
+}
+
+export function syncMaterialInstances(clips, patch) {
+  const { assetKind, assetId } = patch
+  const dur = Number(patch.duration)
+  const hasDur = Number.isFinite(dur) && dur > 0
+  return (clips || []).map((c) => {
+    if (c.asset_kind !== assetKind || String(c.asset_id) !== String(assetId)) return c
+    const next = { ...c }
+    if (patch.filename) next.filename = patch.filename
+    if (patch.name != null) next.name = patch.name
+    if (patch.description !== undefined) next.description = patch.description
+    if (patch.reframe) next.reframe = patch.reframe
+    if (hasDur) {
+      next.source_duration = dur
+      next.out_point = Math.min(next.out_point ?? dur, dur)
+      next.in_point = Math.min(next.in_point ?? 0, next.out_point)
+    }
+    return next
+  })
+}
+
+export function applyFaceTrack(reframe, keyframes, mode) {
+  const pan = mode === 'direct' ? 'direct' : 'smooth'
+  const base = reframe || newReframe()
+  const incoming = keyframes || []
+  const kfs = incoming.length
+    ? incoming.map((k) => ({ ...k, pan_mode: pan }))
+    : (base.keyframes || []).map((k) => ({ ...k, pan_mode: pan }))
+  return withKfIds({
+    ...base,
+    pan_mode: pan,
+    face_track_mode: pan,
+    keyframes: kfs,
+  })
+}
+
+export function trackContextItems(track, { linked = false, canLink = false } = {}) {
+  const items = []
+  if (track?.kind === 'audio') {
+    items.push({
+      id: linked ? 'unlink' : 'link',
+      label: linked ? 'Desrelacionar' : 'Relacionar',
+      disabled: !linked && !canLink,
+    })
+  }
+  items.push({ id: 'delete', label: 'Eliminar', danger: true })
+  return items
+}
+
+export function linkedPartnerName(track, tracks) {
+  if (!track?.linked_track_id) return null
+  return (tracks || []).find((t) => t.id === track.linked_track_id)?.name || null
+}
+
+export function linkTrackPair(tracks, audioId, textId) {
+  const audio = (tracks || []).find((t) => t.id === audioId)
+  const text = (tracks || []).find((t) => t.id === textId)
+  if (!audio || audio.kind !== 'audio' || !text || text.kind !== 'text') return tracks
+  return tracks.map((t) => {
+    if (t.id === audioId) return { ...t, linked_track_id: textId }
+    if (t.id === textId) return { ...t, linked_track_id: audioId }
+    if (t.linked_track_id === audioId || t.linked_track_id === textId) {
+      return { ...t, linked_track_id: null }
+    }
+    return t
+  })
+}
+
+export function unlinkTrackPair(tracks, trackId) {
+  const t = (tracks || []).find((x) => x.id === trackId)
+  const other = t?.linked_track_id
+  if (!other) return tracks
+  return tracks.map((x) => (
+    x.id === trackId || x.id === other ? { ...x, linked_track_id: null } : x
+  ))
+}
+
+export function scaleTextClipFromAnchor(clip, anchorStart, scale) {
+  const dur = clipSourceDur(clip)
+  const start = anchorStart + (clip.start - anchorStart) * scale
+  const nextDur = Math.max(0.05, dur * scale)
+  const words = (clip.words || []).map((w) => ({
+    ...w,
+    start: +((w.start || 0) * scale).toFixed(3),
+    end: +((w.end || 0) * scale).toFixed(3),
+  }))
+  return {
+    ...clip,
+    start: +Math.max(0, start).toFixed(3),
+    in_point: 0,
+    out_point: +nextDur.toFixed(3),
+    source_duration: +nextDur.toFixed(3),
+    words,
+  }
+}
+
+export function applyAudioSpeedToLinkedText(clips, tracks, audioClip, newSpeed) {
+  if (!audioClip || audioClip.kind !== 'audio') return clips
+  const audioTrack = (tracks || []).find((t) => t.id === audioClip.track_id)
+  const textTrackId = audioTrack?.linked_track_id
+  if (!textTrackId) return clips
+  const oldSp = clipSpeed(audioClip)
+  const nextSp = Math.min(SPEED_MAX, Math.max(SPEED_MIN, Number(newSpeed) || 1))
+  if (Math.abs(oldSp - nextSp) < 1e-6) return clips
+  const scale = oldSp / nextSp
+  const a0 = audioClip.start
+  const a1 = clipEnd(audioClip)
+  return (clips || []).map((c) => {
+    if (c.kind !== 'text' || c.track_id !== textTrackId) return c
+    const end = clipEnd(c)
+    if (end <= a0 + 1e-3 || c.start >= a1 - 1e-3) return c
+    return scaleTextClipFromAnchor(c, a0, scale)
+  })
 }

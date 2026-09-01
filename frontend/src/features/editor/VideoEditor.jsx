@@ -15,6 +15,10 @@ import {
   nextClipSelection, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
   previewElementVolume, parsePreviewVolume, PREVIEW_VOL_KEY,
   isVisualClip, trackKindForClip, IMAGE_DEFAULT_DUR,
+  duplicateClipOntoTrack, syncMaterialInstances, applyFaceTrack,
+  isEditingExistingClip, clipSaveIndex,
+  trackContextItems, linkedPartnerName, linkTrackPair, unlinkTrackPair,
+  applyAudioSpeedToLinkedText,
 } from './editorModel'
 import { textRole } from '../../lib/textRole'
 import { applyFrame, disableOverlay, enableOverlay, isOverlay, mediaSize, newTransform, videosAt } from '../../lib/clipLayout'
@@ -88,6 +92,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   const [rowH, setRowH] = useState(52)
 
   const [ctxMenu, setCtxMenu] = useState(null)      // { x, y, clip }
+  const [trackMenu, setTrackMenu] = useState(null)  // { x, y, track }
+  const [linkPick, setLinkPick] = useState(null)    // id de pista de audio al relacionar
   const [trackToDelete, setTrackToDelete] = useState(null)
   const [fragmentAsk, setFragmentAsk] = useState(null)
   const [dragInfo, setDragInfo] = useState(null)    // { kind, duration, name }
@@ -95,9 +101,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   const [mainColTab, setMainColTab] = useState('main')
   const [clipMeta, setClipMeta] = useState({
     title: '', description: '', url: '', segStart: 0, segEnd: 0, segIndex: null,
+    existingIndex: null,
     preparing: false, prepProgress: 0, prepMsg: '', err: '',
   })
   const [clipSaveJob, setClipSaveJob] = useState(null)
+  const [faceJob, setFaceJob] = useState(null)
   const [clipToast, setClipToast] = useState(null)
 
   const mainCanvasRef = useRef(null)
@@ -124,6 +132,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   const projectTlRef = useRef(null)
   const clipTlRef = useRef(null)
   const prepGen = useRef(0)
+  const faceGen = useRef(0)
+  const clipSaveCtxRef = useRef(null)
+  const clipSaveHandledRef = useRef(null)
 
   const duration = clips.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
   const selectedClip = clips.find((c) => c.id === selClipId) || null
@@ -335,6 +346,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     clipTlRef.current = snapshotTl()
     applyTl(projectTlRef.current)
     clipModeRef.current = false
+    setLinkPick(null)
     setMainColTab('main')
   }
   function goClipTab() {
@@ -342,6 +354,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     stopPlayback()
     projectTlRef.current = snapshotTl()
     clipModeRef.current = true
+    setLinkPick(null)
     setMainColTab('clip')
     if (clipTlRef.current) applyTl(clipTlRef.current)
     else applyEmptyClipTl()
@@ -351,7 +364,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     const gen = ++prepGen.current
     setClipMeta((m) => ({ ...m, preparing: true, prepProgress: 0.04, prepMsg: 'Preparando el tramo…', err: '' }))
     try {
-      let job = await prepareReframe({ url, start, end })
+      let job = await prepareReframe({ url, start, end, track_faces: false })
       while (job.status !== 'done' && job.status !== 'error') {
         if (prepGen.current !== gen) return
         await new Promise((r) => setTimeout(r, 400))
@@ -405,6 +418,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     clipModeRef.current = true
     clipTlRef.current = null
     setClipSaveJob(null)
+    setFaceJob(null)
+    faceGen.current += 1
     setMainColTab('clip')
     applyEmptyClipTl()
     const title = info.title || `Tramo #${info.index}`
@@ -415,6 +430,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
       segStart: info.start || 0,
       segEnd: info.end || 0,
       segIndex: info.index,
+      existingIndex: info.existing ? info.index : null,
       preparing: true,
       prepProgress: 0.04,
       prepMsg: 'Preparando el tramo…',
@@ -424,15 +440,23 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   }
 
   async function saveClip() {
-    if (clipSaveJob && clipSaveJob.status !== 'error') return
+    if (clipSaveJob && clipSaveJob.status !== 'error' && clipSaveJob.status !== 'done') return
     const url = clipMeta.url.trim()
     const video = clips.find((c) => c.kind === 'video') || clips[0]
     if (!url || !video) return
     const start = (clipMeta.segStart || 0) + (video.in_point || 0)
     const end = (clipMeta.segStart || 0) + (video.out_point || clipMeta.segEnd || start + 0.5)
     if (end - start < 0.5) return
-    const index = 100000 + (Date.now() % 900000)
+    const fallback = 100000 + (Date.now() % 900000)
+    const index = clipSaveIndex(clipMeta, fallback)
     const label = clipMeta.title.trim() || `Clip #${index}`
+    const cutRf = reframeForCut(video.reframe, video.in_point || 0, video.out_point || (end - start))
+    clipSaveCtxRef.current = {
+      existingIndex: clipMeta.existingIndex,
+      description: (clipMeta.description || '').trim() || null,
+      title: label,
+      reframe: cutRf,
+    }
     try {
       setClipSaveJob(await createClipJob({
         url,
@@ -447,10 +471,46 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
           description: clipMeta.description.trim() || null,
         }],
         crop_mode: 'smart_face',
-        reframe: reframeForCut(video.reframe, video.in_point || 0, video.out_point || (end - start)),
+        reframe: cutRf,
       }))
     } catch (e) {
       setClipSaveJob({ status: 'error', error: e.message })
+    }
+  }
+
+  function duplicateSelected(clipArg) {
+    const clip = clipArg?.id
+      ? clipArg
+      : (clips.find((c) => c.id === selClipId) || clips.find((c) => selClipIds.includes(c.id)))
+    if (!clip) return
+    const kind = trackKindForClip(clip.kind)
+    const trackId = addTrack(kind)
+    const copy = duplicateClipOntoTrack(clip, trackId, uid('c'))
+    setClips((prev) => [...prev, copy])
+    setSelClipId(copy.id)
+    setSelClipIds([copy.id])
+    setSelTrackId(trackId)
+    setSelKfId(null)
+  }
+
+  async function startFaceTrack(mode) {
+    if (faceJob && faceJob.status !== 'done' && faceJob.status !== 'error') return
+    const url = (clipMeta.url || '').trim()
+    if (!url || clipMeta.preparing) return
+    const gen = ++faceGen.current
+    setClipMeta((m) => ({ ...m, err: '' }))
+    try {
+      const job = await prepareReframe({
+        url,
+        start: clipMeta.segStart || 0,
+        end: clipMeta.segEnd || 0,
+        track_faces: true,
+      })
+      if (faceGen.current !== gen) return
+      setFaceJob({ ...job, mode: mode === 'direct' ? 'direct' : 'smooth', gen })
+    } catch (e) {
+      if (faceGen.current !== gen) return
+      setClipMeta((m) => ({ ...m, err: e.message || 'No se pudo generar el seguimiento.' }))
     }
   }
 
@@ -499,6 +559,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
       name: payload.name, label: payload.name, duration: payload.duration, end: payload.duration, start: 0,
       reframe: payload.reframe,
       scope: payload.scope,
+      description: payload.description,
     }, trackId, startTime, payload.duration)
     setClips((prev) => [...prev, clip])
     setSelClipId(clip.id)
@@ -572,7 +633,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     const nums = tracksRef.current.filter((t) => t.kind === kind).map((t) => parseInt(String(t.name).replace(/\D/g, ''), 10) || 0)
     const n = (nums.length ? Math.max(...nums) : 0) + 1
     const id = `${prefix}${n}-${uid('')}`
-    const nt = { id, kind, name: `${prefix}${n}`, hidden: false, muted: false, locked: false }
+    const nt = { id, kind, name: `${prefix}${n}`, hidden: false, muted: false, locked: false, linked_track_id: null }
     if (kind === 'text') nt.style = style || subtitleStyle()
     setTracks((prev) => {
       if (kind === 'video') {
@@ -605,8 +666,28 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   }
   function requestDeleteTrack(track) {
     if (!track) return
+    setTrackMenu(null)
     if (shouldConfirmTrackDelete(clipsRef.current, track.id)) setTrackToDelete(track)
     else applyRemoveTrack(track.id)
+  }
+  function startLinkPick(audioTrack) {
+    setTrackMenu(null)
+    if (!audioTrack || audioTrack.kind !== 'audio') return
+    if (!tracksRef.current.some((t) => t.kind === 'text')) return
+    setLinkPick(audioTrack.id)
+  }
+  function cancelLinkPick() {
+    setLinkPick(null)
+  }
+  function pickLinkTextTrack(textTrack) {
+    if (!linkPick || !textTrack || textTrack.kind !== 'text') return
+    setTracks((prev) => linkTrackPair(prev, linkPick, textTrack.id))
+    setLinkPick(null)
+  }
+  function unlinkTrack(track) {
+    setTrackMenu(null)
+    if (!track) return
+    setTracks((prev) => unlinkTrackPair(prev, track.id))
   }
   function selectTrack(id) {
     setSelTrackId(id)
@@ -917,6 +998,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   }
   const { exportJob, setExportJob, doExport, exporting } = useExportJob(project.id, { timelinePayload, exportPayload })
   const clipSaving = clipSaveJob && (clipSaveJob.status === 'pending' || clipSaveJob.status === 'running')
+  const faceBusy = faceJob && (faceJob.status === 'pending' || faceJob.status === 'running')
+  const editingExisting = isEditingExistingClip(clipMeta)
 
   useEffect(() => {
     if (!clipSaveJob || clipSaveJob.status === 'done' || clipSaveJob.status === 'error') return
@@ -928,9 +1011,67 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
 
   useEffect(() => {
     if (clipSaveJob?.status !== 'done') return
+    if (clipSaveHandledRef.current === clipSaveJob.id) return
+    clipSaveHandledRef.current = clipSaveJob.id
     onChange?.()
-    setClipToast({ type: 'success', message: 'Guardado exitosamente' })
-  }, [clipSaveJob?.id, clipSaveJob?.status, onChange])
+    const ctx = clipSaveCtxRef.current || {}
+    const saved = clipSaveJob.clips?.[0]
+    const existing = ctx.existingIndex != null && ctx.existingIndex !== ''
+    if (existing && projectTlRef.current) {
+      const dur = saved ? Math.max(0.3, (saved.end ?? 0) - (saved.start ?? 0)) : null
+      const snap = projectTlRef.current
+      const nextClips = syncMaterialInstances(snap.clips, {
+        assetKind: 'clips',
+        assetId: String(ctx.existingIndex),
+        duration: dur,
+        filename: saved?.filename,
+        name: saved?.label || ctx.title,
+        description: ctx.description !== undefined ? ctx.description : saved?.description,
+        reframe: saved?.reframe || ctx.reframe,
+      })
+      projectTlRef.current = { ...snap, clips: nextClips }
+      saveTimeline(project.id, {
+        version: 1, fps: 30, width: outW, height: outH, audio_target_db: audioDb,
+        tracks: snap.tracks, clips: nextClips,
+      }).catch(() => {})
+    }
+    setClipToast({ type: 'success', message: existing ? 'Clip actualizado' : 'Guardado exitosamente' })
+  }, [clipSaveJob?.id, clipSaveJob?.status, onChange, project.id, outW, outH, audioDb])
+
+  useEffect(() => {
+    if (!faceJob || faceJob.status === 'done' || faceJob.status === 'error') return
+    const id = setInterval(async () => {
+      try {
+        const next = await getJob(faceJob.id)
+        setFaceJob((prev) => ({ ...next, mode: prev?.mode || 'smooth', gen: prev?.gen }))
+      } catch { /* reintenta */ }
+    }, 400)
+    return () => clearInterval(id)
+  }, [faceJob?.id, faceJob?.status])
+
+  useEffect(() => {
+    if (faceJob?.status !== 'done') return
+    if (!clipModeRef.current) return
+    if (faceJob.gen != null && faceJob.gen !== faceGen.current) return
+    const kfs = faceJob.reframe_prep?.keyframes
+    const video = clipsRef.current.find((c) => c.kind === 'video') || clipsRef.current[0]
+    if (!video) return
+    const nextRf = applyFaceTrack(video.reframe, kfs || [], faceJob.mode)
+    setClips((prev) => prev.map((c) => (c.id === video.id ? { ...c, reframe: nextRf } : c)))
+  }, [faceJob?.id, faceJob?.status])
+
+  useEffect(() => {
+    if (faceJob?.status !== 'error') return
+    if (faceJob.gen != null && faceJob.gen !== faceGen.current) return
+    setClipMeta((m) => ({ ...m, err: faceJob.error || 'No se pudo generar el seguimiento.' }))
+  }, [faceJob?.id, faceJob?.status])
+
+  useEffect(() => {
+    if (!linkPick) return
+    const onKey = (e) => { if (e.key === 'Escape') setLinkPick(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [linkPick])
 
   // --- Subtítulos ---
   const { subJob, setSubJob, requestSubtitles } = useSubtitles(project.id, {
@@ -999,7 +1140,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   const isTextTrackSel = !selectedClip && selTrackObj?.kind === 'text'
 
   return (
-    <div className={`veditor${mainColTab === 'clip' ? ' clip-mode' : ''}`}>
+    <div className={`veditor${mainColTab === 'clip' ? ' clip-mode' : ''}${linkPick ? ' link-picking' : ''}`}>
       <div className="ed-hidden-media">{mediaPool}</div>
 
       {/* ===== PARTE SUPERIOR: 3 columnas ===== */}
@@ -1090,6 +1231,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
                     onChange={(e) => setClipMeta((m) => ({ ...m, description: e.target.value }))}
                   />
                   {clipMeta.err && <div className="ed-mat-err">{clipMeta.err}</div>}
+                  {faceBusy && (
+                    <div className="ed-clip-face-msg">
+                      Seguimiento de cara… {Math.round((faceJob.progress || 0.05) * 100)}%
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1110,21 +1256,18 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
               </button>
               {mainColTab === 'clip' ? (
                 clipSaving ? (
-                  <span className="ed-export-pct" title={clipSaveJob.message || 'Guardando…'}>
+                  <span className="ed-export-pct" title={clipSaveJob.message || (editingExisting ? 'Actualizando…' : 'Guardando…')}>
                     {Math.round((clipSaveJob.progress || 0.05) * 100)}%
-                  </span>
-                ) : clipSaveJob?.status === 'done' ? (
-                  <span className="reframe-status ok" title="Este clip ya está en el material">
-                    <Icon name="check_circle" size={16} /> Guardado
                   </span>
                 ) : (
                   <button
                     className="primary small"
                     onClick={saveClip}
                     disabled={!clipMeta.url || !clips.length || clipMeta.preparing}
-                    title="Guardar este clip en el material"
+                    title={editingExisting ? 'Sobrescribir este clip en el material' : 'Guardar este clip en el material'}
                   >
-                    <Icon name="save" size={15} /> Guardar clip
+                    <Icon name={editingExisting ? 'movie_edit' : 'save'} size={15} />
+                    {editingExisting ? 'Editar clip' : 'Guardar clip'}
                   </button>
                 )
               ) : exporting ? (
@@ -1219,6 +1362,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
           onMutateClip={mutateClip}
           onMoveGroup={moveGroup}
           onSplit={splitClip}
+          onDuplicate={duplicateSelected}
+          onFaceTrack={mainColTab === 'clip' ? startFaceTrack : undefined}
+          faceTrackBusy={!!faceBusy}
+          faceTrackDisabled={!clipMeta.url || clipMeta.preparing}
           onDeleteClip={deleteClip}
           previewVol={previewVol}
           onPreviewVol={setListenVolume}
@@ -1241,7 +1388,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             }
             setCtxMenu({ x: e.clientX, y: e.clientY, clip })
           }}
-          onContextTrack={(_e, track) => requestDeleteTrack(track)}
+          onContextTrack={(e, track) => {
+            e.preventDefault()
+            setLinkPick(null)
+            setCtxMenu(null)
+            setTrackMenu({ x: e.clientX, y: e.clientY, track })
+          }}
+          linkPick={linkPick}
+          onPickLinkTrack={pickLinkTextTrack}
+          onCancelLinkPick={cancelLinkPick}
         />
         {isTextSel ? (
           <EdText mode="segment" clip={selectedClip} style={selectedClip.style}
@@ -1291,9 +1446,16 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             onPanMode={(kf, mode) => patchKeyframePan(selectedClip, kf, mode)}
             onChangeFx={(patch) => {
               const ids = new Set(selIdsRef.current)
-              setClips((prev) => prev.map((c) => (
-                ids.has(c.id) && c.kind !== 'text' ? { ...c, ...patch } : c
-              )))
+              setClips((prev) => {
+                let next = prev
+                if (patch.speed != null) {
+                  for (const id of ids) {
+                    const audio = next.find((c) => c.id === id)
+                    next = applyAudioSpeedToLinkedText(next, tracksRef.current, audio, patch.speed)
+                  }
+                }
+                return next.map((c) => (ids.has(c.id) && c.kind !== 'text' ? { ...c, ...patch } : c))
+              })
             }}
             onChangeFrame={(slot) => applyClipFrame(selectedClip, slot)}
           />
@@ -1323,7 +1485,38 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
               </button>
             )}
             <button onClick={() => { splitClip(ctxMenu.clip.id, playhead); setCtxMenu(null) }}><Icon name="content_cut" size={15} /> Dividir aquí</button>
+            <button onClick={() => { duplicateSelected(ctxMenu.clip); setCtxMenu(null) }}><Icon name="content_copy" size={15} /> Duplicar</button>
             <button className="danger" onClick={() => { deleteClip(ctxMenu.clip.id); setCtxMenu(null) }}><Icon name="delete" size={15} /> Eliminar</button>
+          </AnchoredMenu>
+        </>
+      )}
+
+      {trackMenu && (
+        <>
+          <div
+            className="ed-ctx-backdrop"
+            onPointerDown={() => setTrackMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setTrackMenu(null) }}
+          />
+          <AnchoredMenu className="ed-ctx-menu" x={trackMenu.x} y={trackMenu.y}>
+            {trackContextItems(tracks.find((t) => t.id === trackMenu.track.id) || trackMenu.track, {
+              linked: !!(tracks.find((t) => t.id === trackMenu.track.id) || trackMenu.track).linked_track_id,
+              canLink: tracks.some((t) => t.kind === 'text'),
+            }).map((item) => (
+              <button
+                key={item.id}
+                className={item.danger ? 'danger' : undefined}
+                disabled={item.disabled}
+                onClick={() => {
+                  if (item.id === 'link') startLinkPick(trackMenu.track)
+                  else if (item.id === 'unlink') unlinkTrack(trackMenu.track)
+                  else if (item.id === 'delete') requestDeleteTrack(trackMenu.track)
+                }}
+              >
+                <Icon name={item.id === 'link' ? 'link' : item.id === 'unlink' ? 'link_off' : 'delete'} size={15} />
+                {item.label}
+              </button>
+            ))}
           </AnchoredMenu>
         </>
       )}

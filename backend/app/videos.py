@@ -44,6 +44,7 @@ def import_video(project, filename: str, data: bytes) -> ClipInfo:
 
     info = ClipInfo(
         index=_next_index(project),
+        id=ident,
         filename=dest_name,
         url=f"/api/media/{project.id}/video/{quote(dest_name)}",
         start=0.0,

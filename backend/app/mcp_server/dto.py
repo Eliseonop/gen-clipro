@@ -59,7 +59,7 @@ def _timeline_dto(tl: Timeline | None) -> dict:
         end = max(end, (c.start or 0.0) + _clip_timeline_duration(c))
     return {
         "present": True,
-        "tracks": [{"id": t.id, "kind": t.kind, "name": t.name} for t in tl.tracks],
+        "tracks": [{"id": t.id, "kind": t.kind, "name": t.name, "linked_track_id": t.linked_track_id} for t in tl.tracks],
         "clip_count": len(tl.clips),
         "duration": round(end, 3),
         "kinds": kinds,
@@ -69,19 +69,22 @@ def _timeline_dto(tl: Timeline | None) -> dict:
 def _media_dto(proj: Project) -> dict:
     clip_list = [
         {
+            "id": c.id or str(c.index),
             "index": c.index,
             "label": c.label or c.filename,
+            "description": c.description,
             "duration": round((c.end or 0.0) - (c.start or 0.0), 3),
             "has_transcript": c.transcript is not None,
         }
         for c in proj.clips
     ]
     audio_list = [
-        {"id": a.id, "label": a.label or a.filename, "duration": a.duration}
+        {"id": a.id, "label": a.label or a.filename, "description": a.description, "duration": a.duration}
         for a in proj.audios
     ]
     image_list = [
-        {"id": im.id, "label": im.label or im.filename, "width": im.width, "height": im.height}
+        {"id": im.id, "label": im.label or im.filename, "description": im.description,
+         "width": im.width, "height": im.height}
         for im in getattr(proj, "images", []) or []
     ]
     return {
@@ -102,11 +105,24 @@ def _format_dto(tl: Timeline | None) -> dict:
     return {"aspect": aspect_ratio(w, h), "width": w, "height": h, "fps": fps}
 
 
-def _clip_summary(c) -> dict:
+def _lineage_root(c) -> str:
+    return c.dup_of or c.id
+
+
+def _dup_counts(clips) -> dict[str, int]:
+    roots: dict[str, int] = {}
+    for c in clips or []:
+        root = _lineage_root(c)
+        roots[root] = roots.get(root, 0) + 1
+    return {c.id: max(0, roots.get(_lineage_root(c), 1) - 1) for c in (clips or [])}
+
+
+def _clip_summary(c, dup_count: int = 0, track_kind: str | None = None) -> dict:
     """Resumen escaneable de un clip (sin words/keyframes; eso va en clip_detail)."""
     d = {
         "id": c.id,
         "track_id": c.track_id,
+        "track_kind": track_kind or c.kind,
         "kind": c.kind,
         "name": c.name,
         "start": round(c.start or 0.0, 3),
@@ -119,6 +135,18 @@ def _clip_summary(c) -> dict:
         "speed": c.speed,
         "muted": c.muted,
         "has_reframe": c.reframe is not None,
+        "face_track_mode": getattr(c.reframe, "face_track_mode", None) if c.reframe else None,
+        "asset_id": c.asset_id,
+        "asset_kind": c.asset_kind,
+        "asset_scope": c.asset_scope,
+        "dup_of": c.dup_of,
+        "dup_count": dup_count,
+        "description": c.description,
+        "trim": {
+            "in_point": c.in_point,
+            "out_point": c.out_point,
+            "source_duration": c.source_duration,
+        },
     }
     if c.kind == "text":
         d["text"] = c.text
@@ -135,15 +163,18 @@ def timeline_detail(tl: Timeline | None) -> dict:
     end = 0.0
     for c in tl.clips:
         end = max(end, (c.start or 0.0) + _clip_timeline_duration(c))
+    counts = _dup_counts(tl.clips)
+    kinds_by_id = {t.id: t.kind for t in tl.tracks}
     return {
         "present": True,
         "format": _format_dto(tl),
         "tracks": [
             {"id": t.id, "kind": t.kind, "name": t.name,
-             "hidden": t.hidden, "muted": t.muted, "locked": t.locked}
+             "hidden": t.hidden, "muted": t.muted, "locked": t.locked,
+             "linked_track_id": t.linked_track_id}
             for t in tl.tracks
         ],
-        "clips": [_clip_summary(c) for c in tl.clips],
+        "clips": [_clip_summary(c, counts.get(c.id, 0), kinds_by_id.get(c.track_id)) for c in tl.clips],
         "duration": round(end, 3),
     }
 
@@ -160,6 +191,7 @@ def media_list(proj: Project) -> dict:
     return {
         "clips": [
             {
+                "id": c.id or str(c.index),
                 "index": c.index,
                 "filename": c.filename,
                 "label": c.label,
@@ -181,6 +213,7 @@ def media_list(proj: Project) -> dict:
                 "duration": a.duration,
                 "voice": a.voice,
                 "engine": a.engine,
+                "description": a.description,
                 "origin": a.origin,
                 "source": a.source,
             }
@@ -191,6 +224,7 @@ def media_list(proj: Project) -> dict:
                 "id": im.id,
                 "filename": im.filename,
                 "label": im.label,
+                "description": im.description,
                 "width": im.width,
                 "height": im.height,
                 "origin": im.origin,

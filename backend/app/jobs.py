@@ -383,7 +383,8 @@ def start_youtube_audio_job(job: Job, req: YouTubeAudioRequest) -> None:
     thread.start()
 
 
-def _run_reframe_prepare(job_id: str, url: str, start: float, end: float, samples: int) -> None:
+def _run_reframe_prepare(job_id: str, url: str, start: float, end: float, samples: int,
+                         track_faces: bool = True) -> None:
     job = _jobs[job_id]
     job.status = JobStatus.running
     job.progress = 0.01
@@ -399,15 +400,18 @@ def _run_reframe_prepare(job_id: str, url: str, start: float, end: float, sample
         on_progress(0.02, "Cargando FFmpeg y detector de caras…")
         from . import reframe   # import perezoso (yt-dlp + opencv)
 
-        prep = reframe.prepare(url, start, end, samples, on_progress)
+        prep = reframe.prepare(url, start, end, samples, on_progress, track_faces=track_faces)
         job.reframe_prep = prep
         job.progress = 1.0
         n = len(prep.track or [])
-        job.message = (
-            f"Listo · {n} detecciones de cara."
-            if n
-            else "Listo · no se detectaron caras (puedes encuadrar a mano)."
-        )
+        if track_faces:
+            job.message = (
+                f"Listo · {n} detecciones de cara."
+                if n
+                else "Listo · no se detectaron caras (puedes encuadrar a mano)."
+            )
+        else:
+            job.message = "Previsualización lista."
         job.status = JobStatus.done
     except Exception as exc:  # noqa: BLE001
         job.status = JobStatus.error
@@ -415,9 +419,10 @@ def _run_reframe_prepare(job_id: str, url: str, start: float, end: float, sample
         job.message = "Error preparando el editor de reencuadre."
 
 
-def start_reframe_prepare_job(job: Job, url: str, start: float, end: float, samples: int) -> None:
+def start_reframe_prepare_job(job: Job, url: str, start: float, end: float, samples: int,
+                              track_faces: bool = True) -> None:
     thread = threading.Thread(
-        target=_run_reframe_prepare, args=(job.id, url, start, end, samples), daemon=True
+        target=_run_reframe_prepare, args=(job.id, url, start, end, samples, track_faces), daemon=True
     )
     thread.start()
 

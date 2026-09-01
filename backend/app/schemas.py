@@ -87,6 +87,7 @@ class Reframe(BaseModel):
     crop_h: Optional[float] = Field(default=None, ge=0.05, le=1.0)
     master: bool = False  # True: archivo en aspecto original; receta al ver/exportar
     split_layout: str = "auto"  # "auto" | "vertical" | "horizontal"
+    face_track_mode: Optional[str] = None  # "smooth" | "direct"
 
 
 class ReframePrep(BaseModel):
@@ -105,6 +106,7 @@ class ReframePrepareRequest(BaseModel):
     start: float
     end: float
     samples: int = 0        # 0 = automático (~2/seg)
+    track_faces: bool = True
 
 
 class ClipRequest(BaseModel):
@@ -143,6 +145,7 @@ class ClipInfo(BaseModel):
     url: str            # ruta relativa para descargar/reproducir
     start: float
     end: float
+    id: Optional[str] = None
     source_url: Optional[str] = None
     created_at: Optional[str] = None
     label: Optional[str] = None
@@ -269,6 +272,10 @@ class UpdateMaterialRequest(BaseModel):
     description: Optional[str] = None
 
 
+class ImageFetchRequest(BaseModel):
+    url: str
+
+
 class ClipTranscribeRequest(BaseModel):
     model: str = "base"
     language: Optional[str] = None
@@ -285,6 +292,7 @@ class TimelineTrack(BaseModel):
     muted: bool = False
     locked: bool = False
     style: Optional[dict] = None  # plantilla de la pista de texto (tema, fuente, karaoke…)
+    linked_track_id: Optional[str] = None  # audio↔texto: al cambiar velocidad, la pista ligada se escala
 
 
 class TimelineClip(BaseModel):
@@ -326,6 +334,8 @@ class TimelineClip(BaseModel):
     origin: Optional[dict] = None         # (texto) procedencia: {transcript_id, segment_index, fragment_index, word_range, source_range}
     text_role: Optional[str] = None       # "caption" | "free"; None = inferir al usar
     asset_scope: str = "project"          # "project" | "library"
+    description: Optional[str] = None
+    dup_of: Optional[str] = None          # id del clip original si es una copia
 
 
 class Timeline(BaseModel):

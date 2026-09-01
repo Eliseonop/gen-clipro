@@ -344,6 +344,7 @@ def generate_clips(
             clips.append(
                 ClipInfo(
                     index=seg.index,
+                    id=str(seg.index),
                     filename=filename,
                     url=f"/api/media/{project_id}/video/{quote(filename)}",
                     start=seg.start,

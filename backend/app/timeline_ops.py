@@ -139,6 +139,9 @@ def remove_track(tl: Timeline, track_id: str) -> EditResult:
     _find_track(out, track_id)
     removed = [c.id for c in out.clips if c.track_id == track_id]
     out.tracks = [t for t in out.tracks if t.id != track_id]
+    for t in out.tracks:
+        if t.linked_track_id == track_id:
+            t.linked_track_id = None
     out.clips = [c for c in out.clips if c.track_id != track_id]
     return EditResult(out, changed=[track_id, *removed])
 

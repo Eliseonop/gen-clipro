@@ -123,6 +123,18 @@ class RemoveTest(unittest.TestCase):
         self.assertEqual([t.id for t in r.timeline.tracks], ["A1"])
         self.assertEqual(len(r.timeline.clips), 0)
 
+    def test_remove_track_limpia_relacion(self):
+        tl = Timeline(
+            width=720, height=1280, fps=30,
+            tracks=[
+                TimelineTrack(id="A1", kind="audio", name="A1", linked_track_id="T1"),
+                TimelineTrack(id="T1", kind="text", name="T1", linked_track_id="A1"),
+            ],
+        )
+        r = ops.remove_track(tl, "T1")
+        self.assertEqual([t.id for t in r.timeline.tracks], ["A1"])
+        self.assertIsNone(r.timeline.tracks[0].linked_track_id)
+
 
 class SplitClipTest(unittest.TestCase):
     def test_split_en_dos(self):

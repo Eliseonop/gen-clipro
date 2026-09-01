@@ -131,7 +131,7 @@ def _ffmpeg_proxy(src: Path, start: float, end: float, key: str, on_progress: Pr
         stop.set()
     if proc.returncode != 0 or not out.exists():
         raise RuntimeError(f"No se pudo preparar la previsualización:\n{(proc.stderr or '')[-600:]}")
-    on_progress(0.48, "Previsualización lista. Analizando caras…")
+    on_progress(0.48, "Previsualización lista.")
     return out
 
 
@@ -152,8 +152,9 @@ def _seed_keyframes(track: list[dict], duration: float) -> list[Keyframe]:
     return out
 
 
-def prepare(url: str, start: float, end: float, samples: int, on_progress: ProgressCb) -> ReframePrep:
-    """Descarga (o reusa) el proxy, corre el tracking y devuelve todo listo."""
+def prepare(url: str, start: float, end: float, samples: int, on_progress: ProgressCb,
+            track_faces: bool = True) -> ReframePrep:
+    """Descarga (o reusa) el proxy; el tracking de caras es opcional."""
     key = _key(url, start, end)
     proxy = proxy_path(key)
     if proxy is None:
@@ -166,10 +167,15 @@ def prepare(url: str, start: float, end: float, samples: int, on_progress: Progr
     else:
         on_progress(0.45, "Usando previsualización en caché…")
 
-    on_progress(0.5, "Analizando caras en el tramo…")
-    info = detect.face_track(proxy, samples=samples, on_progress=on_progress)
+    if track_faces:
+        on_progress(0.5, "Analizando caras en el tramo…")
+        info = detect.face_track(proxy, samples=samples, on_progress=on_progress)
+        keyframes = _seed_keyframes(info["track"], info["duration"])
+    else:
+        on_progress(0.85, "Previsualización lista.")
+        info = detect.video_info(proxy)
+        keyframes = []
 
-    keyframes = _seed_keyframes(info["track"], info["duration"])
     return ReframePrep(
         proxy_url=f"/api/reframe/proxy/{key}",
         duration=info["duration"],

@@ -132,6 +132,18 @@ class ImageImportTest(unittest.TestCase):
         self.assertEqual(len(again.images), 1)
         self.assertEqual(again.images[0].id, info.id)
 
+    def test_import_guarda_descripcion(self):
+        from app.images import import_image
+        proj = projects.get_project(self.pid)
+        info = import_image(proj, "meme.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 32, description="logo canal")
+        self.assertEqual(info.description, "logo canal")
+
+    def test_import_sin_extension_si_es_png(self):
+        from app.images import import_image
+        proj = projects.get_project(self.pid)
+        info = import_image(proj, "captura", b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+        self.assertTrue(info.filename.endswith(".png"))
+
     def test_ext_invalida(self):
         from app.images import import_image
         proj = projects.get_project(self.pid)
@@ -168,6 +180,59 @@ class ImageImportTest(unittest.TestCase):
         self.assertTrue(info.filename.endswith(".png"))
         path = storage.resolve_media(proj, "image", info.filename)
         self.assertEqual(path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+
+
+class ImageFetchTest(unittest.TestCase):
+    def test_rechaza_file_url(self):
+        from app.images import fetch_image
+        with self.assertRaises(ValueError):
+            fetch_image("file:///C:/Users/x/foto.png")
+
+    def test_descarga_png(self):
+        from unittest.mock import patch
+        from app.images import fetch_image
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+        class FakeResp:
+            def __init__(self, data):
+                self._buf = data
+                self.headers = {}
+            def read(self, n=-1):
+                if n < 0:
+                    n = len(self._buf)
+                chunk, self._buf = self._buf[:n], self._buf[n:]
+                return chunk
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        with patch("app.images.urlopen", return_value=FakeResp(png)):
+            name, data = fetch_image("https://cdn.example.com/path/meme.png")
+        self.assertEqual(name, "meme.png")
+        self.assertEqual(data, png)
+
+    def test_html_no_es_imagen(self):
+        from unittest.mock import patch
+        from app.images import fetch_image
+
+        class FakeResp:
+            def __init__(self, data):
+                self._buf = data
+                self.headers = {}
+            def read(self, n=-1):
+                if n < 0:
+                    n = len(self._buf)
+                chunk, self._buf = self._buf[:n], self._buf[n:]
+                return chunk
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        with patch("app.images.urlopen", return_value=FakeResp(b"<html>no</html>")):
+            with self.assertRaises(ValueError):
+                fetch_image("https://example.com/page")
 
 
 try:

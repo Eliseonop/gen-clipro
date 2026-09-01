@@ -357,11 +357,29 @@
   background: var(--card-2); border-right: 1px solid var(--line);
 }
 .ed-ruler-corner { height: var(--ed-ruler-h); display: flex; align-items: center; padding: 0 10px; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--card-2); z-index: 2; }
-.ed-track-head { height: var(--ed-row-h); min-height: var(--ed-row-h); max-height: var(--ed-row-h); overflow: hidden; display: flex; flex-direction: column; justify-content: center; gap: 4px; padding: 0 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.ed-track-head { position: relative; height: var(--ed-row-h); min-height: var(--ed-row-h); max-height: var(--ed-row-h); overflow: hidden; display: flex; flex-direction: column; justify-content: center; gap: 4px; padding: 0 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
 .ed-track-head.sel { background: rgba(255,59,92,0.12); }
 .ed-track-head.audio { background: rgba(99,102,241,0.06); }
 .ed-track-head.audio.sel { background: rgba(99,102,241,0.16); }
-.ed-th-name { font-size: 11.5px; font-weight: 700; color: var(--text); }
+.ed-th-name { font-size: 11.5px; font-weight: 700; color: var(--text); padding-right: 36px; }
+.ed-th-link {
+  position: absolute; top: 3px; right: 6px; z-index: 1;
+  display: inline-flex; align-items: center; gap: 2px;
+  font-size: 9px; font-weight: 700; line-height: 1;
+  color: var(--muted); pointer-events: none; opacity: 0.9;
+}
+.ed-track-head.audio .ed-th-link { color: #a5b4fc; }
+.ed-track-head.text .ed-th-link { color: #6ee7b7; }
+.ed-track-head.link-target,
+.ed-lane.link-target {
+  box-shadow: inset 0 0 0 1.5px #34d399;
+}
+.ed-track-head.link-source,
+.ed-lane.link-source {
+  box-shadow: inset 0 0 0 1.5px #818cf8;
+}
+.veditor.link-picking .ed-track-head.text,
+.veditor.link-picking .ed-lane.text { cursor: pointer; }
 .ed-th-btns { display: flex; gap: 2px; }
 .ed-th-btn { display: inline-flex; background: transparent; border: none; color: var(--muted); padding: 2px; border-radius: 4px; cursor: pointer; }
 .ed-th-btn:hover { color: #fff; background: var(--card-3); }
@@ -580,6 +598,13 @@
 .ed-scope-filter {
   display: flex; gap: 4px; padding: 0 0 8px;
 }
+.ed-img-toolbar {
+  display: flex; align-items: center; gap: 6px; padding: 0 0 8px;
+}
+.ed-img-toolbar .ed-scope-filter { flex: 1; padding: 0; }
+.ed-img-draft-thumb {
+  width: 36px; height: 36px; object-fit: cover; border-radius: 4px; display: block; background: #111;
+}
 .ed-yt-form {
   display: flex; flex-direction: column; gap: 6px;
   padding: 8px;
@@ -731,6 +756,72 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
   padding: 0 2px 4px;
+}
+.ed-card-desc-edit {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px 4px;
+}
+.ed-card-desc-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--card-2, var(--card));
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1.3;
+  padding: 3px 5px;
+}
+.ed-card-desc-input:focus { outline: none; border-color: var(--accent); }
+.ed-card-desc-btn {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+}
+.ed-card-desc-btn:hover { color: var(--text); background: var(--card-3); }
+.ed-card-desc-btn.ok { color: #4ade80; }
+.ed-card-desc-btn.ok:hover { background: rgba(74, 222, 128, 0.12); }
+.ed-face-track { position: relative; display: inline-flex; }
+.ed-face-track-pop {
+  z-index: 80;
+  min-width: 148px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--card-2, var(--card));
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+.ed-face-track-pop button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ed-face-track-pop button:hover { background: var(--card-3); }
+.ed-clip-face-msg {
+  flex: 1 0 100%;
+  font-size: 11px;
+  color: var(--muted);
+  padding: 0;
 }
 .ed-card.no-drag, .ed-card.no-drag:active { cursor: default; }
 .ed-card-poster {
