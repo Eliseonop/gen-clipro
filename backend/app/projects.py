@@ -41,9 +41,20 @@ def _save(data: dict) -> None:
 
 def _project_from_dict(p: dict) -> Project:
     """Construye un Project migrando su timeline al schema actual (lazy)."""
-    if p.get("timeline"):
-        p = {**p, "timeline": migrations.migrate_timeline(p["timeline"])}
-    return Project(**p)
+    raw = dict(p)
+    clips = []
+    for c in raw.get("clips") or []:
+        if isinstance(c, dict):
+            cc = dict(c)
+            if not cc.get("id") and cc.get("index") is not None:
+                cc["id"] = str(cc["index"])
+            clips.append(cc)
+        else:
+            clips.append(c)
+    raw["clips"] = clips
+    if raw.get("timeline"):
+        raw["timeline"] = migrations.migrate_timeline(raw["timeline"])
+    return Project(**raw)
 
 
 def list_projects() -> list[Project]:
@@ -105,8 +116,15 @@ def add_clips(pid: str, clips: list[ClipInfo]) -> None:
                     # vez de duplicarlo (mismo index → mismo archivo en disco).
                     existing = next((i for i, e in enumerate(p["clips"]) if e.get("index") == d["index"]), None)
                     if existing is not None:
+                        prev = p["clips"][existing]
+                        if prev.get("id") and not d.get("id"):
+                            d["id"] = prev["id"]
+                        elif not d.get("id"):
+                            d["id"] = str(d.get("index") or uuid.uuid4().hex[:12])
                         p["clips"][existing] = d
                     else:
+                        if not d.get("id"):
+                            d["id"] = uuid.uuid4().hex[:12]
                         p["clips"].append(d)
                 break
         _save(data)

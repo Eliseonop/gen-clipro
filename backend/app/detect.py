@@ -173,6 +173,20 @@ def face_center_x(source: Path, start: float, end: float, samples: int = 16) -> 
     return float(np.median(centers))
 
 
+def video_info(source: Path) -> dict:
+    """Metadatos del vídeo sin recorrer fotogramas ni detectar caras."""
+    cap = cv2.VideoCapture(str(source))
+    if not cap.isOpened():
+        return {"track": [], "duration": 0.0, "width": 0, "height": 0, "fps": 25.0}
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    count = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    dur = (count / fps) if fps else 0.0
+    cap.release()
+    return {"track": [], "duration": round(dur, 3), "width": w, "height": h, "fps": round(fps, 3)}
+
+
 def face_track(
     source: Path,
     samples: int = 0,

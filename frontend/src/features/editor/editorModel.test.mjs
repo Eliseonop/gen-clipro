@@ -9,6 +9,10 @@ import {
   splitClipByMaxWords, splitTrackTextByMaxWords, extraClipsAfterSplit,
   nextClipSelection, rangeSelectOnTrack, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
   previewElementVolume, parsePreviewVolume, laneKindForAsset, trackKindForClip,
+  duplicateClipOntoTrack, dupCount, lineageRoot, syncMaterialInstances,
+  applyFaceTrack, isEditingExistingClip, clipSaveIndex,
+  trackContextItems, linkedPartnerName, linkTrackPair, unlinkTrackPair,
+  applyAudioSpeedToLinkedText,
 } from './editorModel.js'
 
 const vFast = { kind: 'video', start: 10, in_point: 2, out_point: 6, speed: 2 }
@@ -302,10 +306,127 @@ assert.equal(trackKindForClip('image'), 'video')
 assert.equal(laneKindForAsset('images'), 'video')
 assert.equal(mediaUrl('p1', img), '/api/media/p1/image/meme.png')
 assert.equal(canCaptionClip(img), false)
+assert.notEqual(img.id, makeClip('images', { id: 'i2', filename: 'b.png' }, 'V2', 0).id)
 
 const imgGrown = resizeGeneratedClip(img, 'trim-right', 3)
 assert.equal(imgGrown.out_point, 8)
 assert.ok(imgGrown.source_duration >= 8)
 
 console.log('image clip ok')
+
+assert.equal(isEditingExistingClip({ existingIndex: 12 }), true)
+assert.equal(isEditingExistingClip({ existingIndex: 0 }), true)
+assert.equal(isEditingExistingClip({ existingIndex: null }), false)
+assert.equal(isEditingExistingClip({}), false)
+assert.equal(clipSaveIndex({ existingIndex: 7 }, 111), 7)
+assert.equal(clipSaveIndex({ existingIndex: null }, 111), 111)
+
+const src = makeClip('clips', { index: 3, filename: 'x.mp4', label: 'Orig', description: 'gancho', end: 8, start: 0 }, 'V1', 2, 8)
+assert.equal(src.description, 'gancho')
+assert.equal(src.dup_of, null)
+const copy = duplicateClipOntoTrack(src, 'V3', 'c-copy')
+assert.equal(copy.id, 'c-copy')
+assert.equal(copy.track_id, 'V3')
+assert.notEqual(copy.id, src.id)
+assert.notEqual(copy.reframe, src.reframe)
+assert.equal(copy.dup_of, src.id)
+assert.equal(copy.asset_id, src.asset_id)
+assert.equal(copy.filename, src.filename)
+assert.equal(copy.start, src.start)
+assert.equal(copy.description, 'gancho')
+assert.equal(src.dup_of, null)
+assert.equal(lineageRoot(src), src.id)
+assert.equal(lineageRoot(copy), src.id)
+assert.equal(dupCount([src, copy], src), 1)
+assert.equal(dupCount([src, copy], copy), 1)
+
+const other = { ...src, id: 'c-other', asset_id: '9' }
+const synced = syncMaterialInstances([src, copy, other], {
+  assetKind: 'clips',
+  assetId: '3',
+  duration: 5,
+  filename: 'x2.mp4',
+  name: 'Nuevo',
+  description: 'editado',
+  reframe: { zoom: 0.8, pan_mode: 'smooth', keyframes: [] },
+})
+assert.equal(synced[0].source_duration, 5)
+assert.equal(synced[0].out_point, 5)
+assert.equal(synced[0].filename, 'x2.mp4')
+assert.equal(synced[0].name, 'Nuevo')
+assert.equal(synced[0].description, 'editado')
+assert.equal(synced[1].source_duration, 5)
+assert.equal(synced[2].source_duration, 8)
+assert.equal(synced[2].filename, 'x.mp4')
+
+const faced = applyFaceTrack(null, [{ t: 0, cx: 0.2, cy: 0.4 }, { t: 1, cx: 0.8, cy: 0.6 }], 'direct')
+assert.equal(faced.pan_mode, 'direct')
+assert.equal(faced.face_track_mode, 'direct')
+assert.equal(faced.keyframes[0].pan_mode, 'direct')
+assert.equal(faced.keyframes[1].cx, 0.8)
+const smooth = applyFaceTrack(faced, [{ t: 0, cx: 0.5, cy: 0.5 }], 'smooth')
+assert.equal(smooth.face_track_mode, 'smooth')
+assert.equal(smooth.keyframes[0].pan_mode, 'smooth')
+const kept = applyFaceTrack(faced, [], 'smooth')
+assert.equal(kept.face_track_mode, 'smooth')
+assert.equal(kept.keyframes.length, 2)
+assert.equal(kept.keyframes[0].cx, 0.2)
+
+console.log('duplicate + sync + face-track ok')
+
+assert.deepEqual(
+  trackContextItems({ kind: 'text' }, { linked: false, canLink: true }).map((i) => i.id),
+  ['delete'],
+)
+assert.deepEqual(
+  trackContextItems({ kind: 'audio' }, { linked: false, canLink: true }).map((i) => i.label),
+  ['Relacionar', 'Eliminar'],
+)
+assert.equal(trackContextItems({ kind: 'audio' }, { linked: true }).find((i) => i.id === 'unlink').label, 'Desrelacionar')
+assert.equal(trackContextItems({ kind: 'audio' }, { linked: false, canLink: false })[0].disabled, true)
+
+const pairIn = [
+  { id: 'A1', kind: 'audio', name: 'A1', linked_track_id: null },
+  { id: 'A2', kind: 'audio', name: 'A2', linked_track_id: 'T1' },
+  { id: 'T1', kind: 'text', name: 'T1', linked_track_id: 'A2' },
+  { id: 'T2', kind: 'text', name: 'T2', linked_track_id: null },
+]
+const paired = linkTrackPair(pairIn, 'A1', 'T1')
+assert.equal(paired.find((t) => t.id === 'A1').linked_track_id, 'T1')
+assert.equal(paired.find((t) => t.id === 'T1').linked_track_id, 'A1')
+assert.equal(paired.find((t) => t.id === 'A2').linked_track_id, null)
+assert.equal(linkedPartnerName(paired.find((t) => t.id === 'A1'), paired), 'T1')
+assert.equal(linkedPartnerName(paired.find((t) => t.id === 'T1'), paired), 'A1')
+const unpaired = unlinkTrackPair(paired, 'A1')
+assert.equal(unpaired.find((t) => t.id === 'A1').linked_track_id, null)
+assert.equal(unpaired.find((t) => t.id === 'T1').linked_track_id, null)
+const afterDel = removeTrack(paired, [], 'T1')
+assert.equal(afterDel.tracks.find((t) => t.id === 'A1').linked_track_id, null)
+
+const audio = {
+  id: 'a', kind: 'audio', track_id: 'A1', start: 0,
+  in_point: 0, out_point: 10, source_duration: 10, speed: 1,
+}
+const capIn = {
+  id: 't1', kind: 'text', track_id: 'T1', start: 2,
+  in_point: 0, out_point: 2, source_duration: 2,
+  words: [{ text: 'hola', start: 0, end: 0.4 }],
+}
+const capOut = {
+  id: 't2', kind: 'text', track_id: 'T1', start: 12,
+  in_point: 0, out_point: 1, source_duration: 1, words: [],
+}
+const linkTracks = [
+  { id: 'A1', kind: 'audio', name: 'A1', linked_track_id: 'T1' },
+  { id: 'T1', kind: 'text', name: 'T1', linked_track_id: 'A1' },
+]
+const sped = applyAudioSpeedToLinkedText([audio, capIn, capOut], linkTracks, audio, 2)
+const nt1 = sped.find((c) => c.id === 't1')
+assert.equal(nt1.start, 1)
+assert.equal(nt1.out_point, 1)
+assert.equal(nt1.words[0].end, 0.2)
+assert.equal(sped.find((c) => c.id === 't2').start, 12)
+assert.equal(applyAudioSpeedToLinkedText([audio, capIn], [{ id: 'A1', kind: 'audio' }], audio, 2).find((c) => c.id === 't1').start, 2)
+
+console.log('track link + caption speed ok')
 

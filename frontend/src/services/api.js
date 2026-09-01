@@ -67,6 +67,23 @@ export const uploadImages = (pid, files) => {
   for (const f of files) body.append('files', f)
   return req(`/api/projects/${pid}/images`, { method: 'POST', body })
 }
+export async function fetchRemoteImage(url) {
+  const res = await fetch('/api/images/fetch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    const d = err.detail
+    throw new Error(typeof d === 'string' ? d : (d && d.message) || `Error ${res.status}`)
+  }
+  const blob = await res.blob()
+  const raw = res.headers.get('Content-Disposition') || ''
+  const m = raw.match(/filename\*?=(?:UTF-8''|"?)([^";]+)/i)
+  const name = decodeURIComponent((m?.[1] || 'imagen.png').replace(/"/g, '').trim())
+  return new File([blob], name, { type: blob.type || 'image/png' })
+}
 export const uploadVideo = (pid, file) => {
   const body = new FormData()
   body.append('file', file)

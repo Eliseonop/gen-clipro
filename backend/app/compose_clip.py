@@ -153,6 +153,7 @@ def generate_composition(
     on_progress(1.0, "Clip compuesto.")
     return ClipInfo(
         index=index,
+        id=str(index),
         filename=filename,
         url=f"/api/media/{project_id}/video/{quote(filename)}",
         start=0.0,

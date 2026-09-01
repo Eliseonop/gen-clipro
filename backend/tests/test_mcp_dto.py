@@ -26,7 +26,8 @@ def _make_project() -> Project:
             # speed 2x → dura 4s en la timeline (8s de fuente / 2)
             TimelineClip(id="c2", track_id="V1", kind="video", asset_kind="clips",
                          asset_id="1", filename="b.mp4", start=10.0,
-                         in_point=0.0, out_point=8.0, source_duration=8.0, speed=2.0),
+                         in_point=0.0, out_point=8.0, source_duration=8.0, speed=2.0,
+                         dup_of="c1", description="copia"),
             TimelineClip(id="t1", track_id="T1", kind="text", asset_kind="clips",
                          asset_id="x", filename="", start=0.0,
                          in_point=0.0, out_point=5.0, text="hola"),
@@ -34,7 +35,7 @@ def _make_project() -> Project:
     )
     return Project(
         id="p1", name="Demo", created_at="2026-08-30T00:00:00+00:00",
-        clips=[ClipInfo(index=0, filename="a.mp4", url="/x", start=0.0, end=10.0, label="Intro")],
+        clips=[ClipInfo(index=0, filename="a.mp4", url="/x", start=0.0, end=10.0, label="Intro", id="mat_intro")],
         audios=[AudioInfo(id="a1", filename="v.m4a", url="/y", duration=30.0, label="Voz")],
         timeline=tl,
     )
@@ -91,6 +92,37 @@ class ProjectContextTest(unittest.TestCase):
         self.assertTrue(ctx["history"]["can_undo"])
         self.assertFalse(ctx["history"]["can_redo"])
         self.assertEqual(ctx["history"]["checkpoints"], ["antes-subs"])
+
+
+class ClipIdentityDtoTest(unittest.TestCase):
+    def test_timeline_clip_summary_has_asset_and_trim(self):
+        detail = dto.timeline_detail(_make_project().timeline)
+        c1 = detail["clips"][0]
+        self.assertEqual(c1["id"], "c1")
+        self.assertEqual(c1["asset_id"], "0")
+        self.assertEqual(c1["asset_kind"], "clips")
+        self.assertEqual(c1["track_id"], "V1")
+        self.assertEqual(c1["track_kind"], "video")
+        self.assertEqual(c1["trim"]["in_point"], 0.0)
+        self.assertEqual(c1["trim"]["out_point"], 10.0)
+        self.assertEqual(c1["trim"]["source_duration"], 10.0)
+        self.assertIn("dup_count", c1)
+        self.assertIn("dup_of", c1)
+        self.assertIn("linked_track_id", detail["tracks"][0])
+
+    def test_dup_count_counts_lineage(self):
+        detail = dto.timeline_detail(_make_project().timeline)
+        by_id = {c["id"]: c for c in detail["clips"]}
+        self.assertEqual(by_id["c2"]["dup_of"], "c1")
+        self.assertEqual(by_id["c1"]["dup_count"], 1)
+        self.assertEqual(by_id["c2"]["dup_count"], 1)
+        self.assertEqual(by_id["c2"]["description"], "copia")
+
+    def test_media_list_exposes_stable_id(self):
+        media = dto.media_list(_make_project())
+        self.assertEqual(media["clips"][0]["id"], "mat_intro")
+        self.assertEqual(media["clips"][0]["index"], 0)
+        self.assertIn("description", media["clips"][0])
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import Icon from '../../components/Icon'
 import { fmt } from '../../lib/utils'
 import './editor.css'
@@ -21,6 +21,7 @@ export function dragPayload(assetKind, item) {
     kind: isImage ? 'image' : (assetKind === 'clips' ? 'video' : 'audio'),
     reframe: item.reframe || null,
     scope: fromLibrary ? 'library' : 'project',
+    description: item.description || null,
   })
 }
 
@@ -129,17 +130,45 @@ export function ImageCard({
   image, onAdd, di, draggable = true,
   addTitle = 'Agregar al proyecto',
   onMenu,
+  onSaveDescription,
 }) {
   const title = image.label || image.name || image.filename || 'Imagen'
   const desc = (image.description || '').trim()
   const dim = image.width && image.height ? `${image.width}×${image.height}` : ''
+  const savedDesc = image.description || ''
+  const [draft, setDraft] = useState(savedDesc)
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    setDraft(image.description || '')
+  }, [image.id, image.description])
+
+  const dirty = draft !== savedDesc
+  const showActions = Boolean(onSaveDescription) && (editing || dirty)
+
+  async function saveDesc() {
+    if (!onSaveDescription || saving) return
+    setSaving(true)
+    try {
+      await onSaveDescription(draft)
+      setEditing(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function cancelDesc() {
+    setDraft(savedDesc)
+    setEditing(false)
+  }
 
   return (
     <div
-      className={`ed-card grid image${draggable ? '' : ' no-drag'}`}
-      draggable={draggable}
+      className={`ed-card grid image${draggable && !editing ? '' : ' no-drag'}`}
+      draggable={draggable && !editing}
       onContextMenu={onMenu ? (e) => openCardMenu(e, onMenu) : undefined}
-      onDragStart={draggable ? (e) => {
+      onDragStart={draggable && !editing ? (e) => {
         e.dataTransfer.setData('application/x-material', dragPayload('images', image))
         di?.({ kind: 'image', duration: IMAGE_DEFAULT_DUR, name: title })
       } : undefined}
@@ -154,7 +183,39 @@ export function ImageCard({
         {dim ? <span className="ed-card-dur">{dim}</span> : null}
       </div>
       <div className="ed-card-name" title={title}>{title}</div>
-      {desc ? <div className="ed-card-desc" title={desc}>{desc}</div> : null}
+      {onSaveDescription ? (
+        <div
+          className="ed-card-desc-edit"
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <input
+            className="ed-card-desc-input"
+            value={draft}
+            placeholder="Descripción"
+            aria-label="Descripción de la imagen"
+            onFocus={() => setEditing(true)}
+            onClick={() => setEditing(true)}
+            onChange={(e) => { setEditing(true); setDraft(e.target.value) }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); saveDesc() }
+              if (e.key === 'Escape') { e.preventDefault(); cancelDesc() }
+            }}
+          />
+          {showActions && (
+            <>
+              <button type="button" className="ed-card-desc-btn" title="Cancelar" onClick={cancelDesc}>
+                <Icon name="close" size={14} />
+              </button>
+              <button type="button" className="ed-card-desc-btn ok" title="Guardar" onClick={saveDesc} disabled={saving}>
+                <Icon name="check" size={14} />
+              </button>
+            </>
+          )}
+        </div>
+      ) : (
+        desc ? <div className="ed-card-desc" title={desc}>{desc}</div> : null
+      )}
     </div>
   )
 }

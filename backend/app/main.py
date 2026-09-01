@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import config, diagnostics, heatmap, jobs, projects, settings, storage, timeline_store, tts
@@ -22,6 +22,7 @@ from .schemas import (
     Project,
     ClipTranscribeRequest,
     ExportRequest,
+    ImageFetchRequest,
     ReframePrepareRequest,
     SaveLibraryRequest,
     SetFolderRequest,
@@ -166,6 +167,25 @@ def delete_material(project_id: str, kind: str, ident: str) -> dict:
         except Exception:  # noqa: BLE001
             pass
     return {"deleted": ident}
+
+
+@app.post("/api/images/fetch")
+def fetch_remote_image(req: ImageFetchRequest):
+    """Descarga una imagen de internet para pegarla en el modal (sin guardarla aún)."""
+    from . import images as image_mod
+    try:
+        name, data = image_mod.fetch_image(req.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    ext = Path(name).suffix.lower()
+    media = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+             ".webp": "image/webp", ".gif": "image/gif"}.get(ext, "application/octet-stream")
+    safe = name.replace('"', "")
+    return Response(
+        content=data,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{safe}"'},
+    )
 
 
 @app.post("/api/projects/{project_id}/images")
@@ -563,7 +583,9 @@ def reframe_prepare(req: ReframePrepareRequest) -> Job:
     if req.end - req.start < 0.5:
         raise HTTPException(status_code=400, detail="El tramo es demasiado corto.")
     job = jobs.create_job()
-    jobs.start_reframe_prepare_job(job, req.url.strip(), req.start, req.end, req.samples)
+    jobs.start_reframe_prepare_job(
+        job, req.url.strip(), req.start, req.end, req.samples, req.track_faces,
+    )
     return job
 
 

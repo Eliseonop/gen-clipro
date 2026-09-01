@@ -3,7 +3,7 @@ import Icon from '../../components/Icon'
 import FlipPopover from '../../components/FlipPopover'
 import { fmt } from '../../lib/utils'
 import { pseudoWaveform, clamp, kfColor } from '../../lib/panning'
-import { clipDur, clipSourceDur, clipSpeed, displayTracks, isGeneratedDurationClip, isVisualClip, laneKindForAsset, resizeGeneratedClip, trackKindForClip } from './editorModel'
+import { clipDur, clipSourceDur, clipSpeed, displayTracks, isGeneratedDurationClip, isVisualClip, laneKindForAsset, linkedPartnerName, resizeGeneratedClip, trackKindForClip } from './editorModel'
 import { stackViewForTrack } from './clipStack.js'
 import { headerScrollPad, timelineWheelAction } from './timelineWheel'
 
@@ -48,14 +48,41 @@ function PreviewVolButton({ value = 1, onChange }) {
   )
 }
 
+function FaceTrackButton({ onPick, disabled, busy }) {
+  const [open, setOpen] = useState(false)
+  const btnRef = useRef(null)
+  return (
+    <div className="ed-face-track">
+      <button
+        ref={btnRef}
+        type="button"
+        className="ghost small icon-only"
+        disabled={disabled || busy}
+        title="Setear seguimiento de cara"
+        aria-label="Setear seguimiento de cara"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Icon name="auto_fix_high" size={15} />
+      </button>
+      <FlipPopover open={open} anchorRef={btnRef} onClose={() => setOpen(false)} className="ed-face-track-pop">
+        <button type="button" onClick={() => { onPick?.('smooth'); setOpen(false) }}>Suave</button>
+        <button type="button" onClick={() => { onPick?.('direct'); setOpen(false) }}>Salto directo</button>
+      </FlipPopover>
+    </div>
+  )
+}
+
 const laneKindFor = laneKindForAsset
 
 export default function EdTimeline({
   tracks, clips, pps, setPps, duration, playhead, rowH, setRowH,
   selectedClipId, selectedClipIds, selectedTrackId, selectedClip, selKfId, dragInfo,
-  onSeek, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onMoveGroup, onSplit, onDeleteClip,
+  onSeek, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onMoveGroup, onSplit, onDuplicate, onDeleteClip,
   previewVol, onPreviewVol,
   onDropAsset, onTrackToggle, onTrackCompact, onAddTrack, onAddTextTrack, onMoveKeyframe, onSelectKf, onAddKf, onDeleteKf, onContextClip, onContextTrack,
+  onFaceTrack, faceTrackBusy, faceTrackDisabled,
+  linkPick, onPickLinkTrack, onCancelLinkPick,
 }) {
   const lanesRef = useRef(null)
   const bodyRef = useRef(null)
@@ -259,9 +286,15 @@ export default function EdTimeline({
           <button className="ghost small" onClick={() => onSplit(selectedClipId, playhead)} disabled={!selectedIds.length} title="Dividir en el cursor (S)">
             <Icon name="content_cut" size={15} /> Dividir
           </button>
+          <button className="ghost small" onClick={() => onDuplicate?.()} disabled={!selectedIds.length} title="Duplicar en una pista nueva">
+            <Icon name="content_copy" size={15} /> Duplicar
+          </button>
           <button className="ghost small danger" onClick={() => onDeleteClip(selectedClipId)} disabled={!selectedIds.length} title="Eliminar clip (Supr)">
             <Icon name="delete" size={15} /> Eliminar
           </button>
+          {onFaceTrack && (
+            <FaceTrackButton onPick={onFaceTrack} disabled={faceTrackDisabled} busy={faceTrackBusy} />
+          )}
           <span className="ed-tl-sep" />
           <PreviewVolButton value={previewVol} onChange={onPreviewVol} />
           {isVideoSel && (
@@ -293,28 +326,45 @@ export default function EdTimeline({
           {rows.map((t) => {
             const view = viewsByTrack.get(t.id)
             const vh = view.height
+            const partner = linkedPartnerName(t, tracks)
+            const picking = !!linkPick
+            const isTarget = picking && t.kind === 'text'
+            const isSource = picking && t.id === linkPick
             return (
               <div key={t.id}
-                className={`ed-track-head ${t.kind} ${selectedTrackId === t.id ? 'sel' : ''} ${dragKind && laneKindFor(dragKind) === t.kind ? 'drop-ok' : ''} ${vh > rowH ? 'stack-open' : ''}`}
+                className={`ed-track-head ${t.kind} ${selectedTrackId === t.id ? 'sel' : ''} ${dragKind && laneKindFor(dragKind) === t.kind ? 'drop-ok' : ''} ${vh > rowH ? 'stack-open' : ''}${isTarget ? ' link-target' : ''}${isSource ? ' link-source' : ''}`}
                 style={{ height: vh, minHeight: vh, maxHeight: vh }}
-                onClick={() => onSelectTrack(t.id)}
+                onPointerDown={() => {
+                  if (!picking) return
+                  if (t.kind === 'text') onPickLinkTrack?.(t)
+                  else onCancelLinkPick?.()
+                }}
+                onClick={() => {
+                  if (picking) return
+                  onSelectTrack(t.id)
+                }}
                 onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextTrack?.(e, t) }}>
+                {partner && (
+                  <span className="ed-th-link" title={`Relacionada con ${partner}`}>
+                    <Icon name="link" size={11} /> {partner}
+                  </span>
+                )}
                 <span className="ed-th-name">{t.name}</span>
                 <span className="ed-th-btns">
                   <button className={`ed-th-btn ${t.hidden ? 'off' : ''}`} title="Visibilidad"
-                    onClick={(e) => { e.stopPropagation(); onTrackToggle(t.id, 'hidden') }} disabled={t.kind === 'audio'}>
+                    onClick={(e) => { e.stopPropagation(); if (picking) return; onTrackToggle(t.id, 'hidden') }} disabled={t.kind === 'audio'}>
                     <Icon name={t.hidden ? 'visibility_off' : 'visibility'} size={14} />
                   </button>
                   <button className={`ed-th-btn ${t.muted ? 'off' : ''}`} title="Silenciar"
-                    onClick={(e) => { e.stopPropagation(); onTrackToggle(t.id, 'muted') }} disabled={t.kind === 'text'}>
+                    onClick={(e) => { e.stopPropagation(); if (picking) return; onTrackToggle(t.id, 'muted') }} disabled={t.kind === 'text'}>
                     <Icon name={t.muted ? 'volume_off' : 'volume_up'} size={14} />
                   </button>
                   <button className="ed-th-btn" title="Juntar clips (sin huecos ni solapes)"
-                    onClick={(e) => { e.stopPropagation(); onTrackCompact(t.id) }} disabled={t.locked}>
+                    onClick={(e) => { e.stopPropagation(); if (picking) return; onTrackCompact(t.id) }} disabled={t.locked}>
                     <Icon name="compress" size={14} />
                   </button>
                   <button className={`ed-th-btn ${t.locked ? 'on' : ''}`} title="Bloquear"
-                    onClick={(e) => { e.stopPropagation(); onTrackToggle(t.id, 'locked') }}>
+                    onClick={(e) => { e.stopPropagation(); if (picking) return; onTrackToggle(t.id, 'locked') }}>
                     <Icon name={t.locked ? 'lock' : 'lock_open'} size={14} />
                   </button>
                 </span>
@@ -336,10 +386,15 @@ export default function EdTimeline({
               const vh = view.height
               return (
                 <div key={t.id}
-                  className={`ed-lane ${t.kind} ${t.locked ? 'locked' : ''} ${selectedTrackId === t.id ? 'sel' : ''} ${dragKind && laneKindFor(dragKind) === t.kind ? 'drop-ok' : ''} ${vh > rowH ? 'stack-open' : ''}`}
+                  className={`ed-lane ${t.kind} ${t.locked ? 'locked' : ''} ${selectedTrackId === t.id ? 'sel' : ''} ${dragKind && laneKindFor(dragKind) === t.kind ? 'drop-ok' : ''} ${vh > rowH ? 'stack-open' : ''}${linkPick && t.kind === 'text' ? ' link-target' : ''}${linkPick && t.id === linkPick ? ' link-source' : ''}`}
                   style={{ height: vh, minHeight: vh }}
                   data-track={t.id}
                   onPointerDown={(e) => {
+                    if (linkPick) {
+                      if (t.kind === 'text') onPickLinkTrack?.(t)
+                      else onCancelLinkPick?.()
+                      return
+                    }
                     onSelectTrack(t.id)
                     if (e.target === e.currentTarget) setExpandedClusterId(null)
                   }}
