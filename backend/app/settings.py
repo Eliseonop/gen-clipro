@@ -15,6 +15,7 @@ _FILE = config.DATA_DIR / "settings.json"
 DEFAULTS = {
     "tts": {"voice": "ef_dora", "speed": 1.0},
     "favorites": {"sfx": [], "audios": [], "textStyles": []},
+    "yt_history": [],
 }
 
 
@@ -31,7 +32,11 @@ def _merge_favorites(raw) -> dict:
 
 def load() -> dict:
     if not _FILE.exists():
-        return {"tts": dict(DEFAULTS["tts"]), "favorites": _merge_favorites(None)}
+        return {
+            "tts": dict(DEFAULTS["tts"]),
+            "favorites": _merge_favorites(None),
+            "yt_history": [],
+        }
     try:
         data = json.loads(_FILE.read_text(encoding="utf-8"))
         out = {**DEFAULTS, **data}
