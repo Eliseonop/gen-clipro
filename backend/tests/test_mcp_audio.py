@@ -80,6 +80,22 @@ class ProjectAudioTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 tools_audio.generate_voice(self.pid, text="hola")
 
+    def test_generate_voice_gemini_starts_job(self):
+        cap = {}
+        with patch("app.gemini_tts.unavailable_reason", return_value=None), \
+             patch("app.jobs.start_tts_job", side_effect=lambda j, r: cap.update(req=r)):
+            out = tools_audio.generate_voice(self.pid, text="hola", engine="gemini",
+                                             voice="Kore", style="documentary")
+        self.assertEqual(out["status"], "pending")
+        self.assertEqual(cap["req"].engine, "gemini")
+        self.assertEqual(cap["req"].voice, "Kore")
+        self.assertEqual(cap["req"].style, "documentary")
+
+    def test_generate_voice_gemini_unavailable_raises(self):
+        with patch("app.gemini_tts.unavailable_reason", return_value="Falta la API key"):
+            with self.assertRaises(ValueError):
+                tools_audio.generate_voice(self.pid, text="hola", engine="gemini")
+
 
 class SearchSfxTest(unittest.TestCase):
     def test_search_sfx_shapes_dto(self):

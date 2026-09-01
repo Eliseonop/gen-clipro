@@ -265,7 +265,7 @@ def _run_tts(job_id: str, req: TTSRequest) -> None:
     try:
         from urllib.parse import quote
 
-        from . import piper_tts, storage, tts
+        from . import gemini_tts, piper_tts, storage, tts
 
         project = projects.get_project(req.project_id)
         base = storage.ensure_dirs(storage.project_base(project))
@@ -275,10 +275,16 @@ def _run_tts(job_id: str, req: TTSRequest) -> None:
         filename = f"{stem}_{aid}.wav"
         out_path = base / "audio" / filename
 
-        engine = piper_tts if req.engine == "piper" else tts
+        if req.engine == "piper":
+            engine = piper_tts
+        elif req.engine == "gemini":
+            engine = gemini_tts
+        else:
+            engine = tts
         info = engine.run(
             req.text, req.voice, req.speed, out_path, on_progress,
             voice2=req.voice2, blend=req.blend, pause=req.pause,
+            style=req.style,
         )
 
         audio = AudioInfo(

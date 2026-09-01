@@ -67,21 +67,29 @@ def generate_subtitles(project_id: str, filename: str, asset_kind: str = "audios
 
 def generate_voice(project_id: str, text: str, engine: str = "kokoro", voice: str = "ef_dora",
                    voice2: str | None = None, blend: float = 0.5, speed: float = 1.0,
-                   pause: float = 0.4, name: str | None = None) -> dict:
+                   pause: float = 0.4, name: str | None = None, style: str | None = None) -> dict:
     """Genera un audio de narrador (TTS) y lo añade al proyecto. ``engine``:
-    kokoro|piper. Devuelve el job."""
+    kokoro|piper|gemini. Devuelve el job."""
     _project_or_raise(project_id)
     if not (text or "").strip():
         raise ValueError("El texto está vacío.")
-    from .. import piper_tts, tts
-    if engine == "piper":
+    from .. import gemini_tts, piper_tts, tts
+    if engine == "gemini":
+        reason = gemini_tts.unavailable_reason()
+        if reason:
+            raise ValueError(reason)
+    elif engine == "piper":
         if not piper_tts.available():
             raise ValueError("Piper no está instalado (ejecuta 'python get_piper.py' en backend/).")
-    elif not tts.available():
-        raise ValueError("Faltan los modelos de Kokoro (ver README).")
+    elif engine == "kokoro":
+        if not tts.available():
+            raise ValueError("Faltan los modelos de Kokoro (ver README).")
+    else:
+        raise ValueError("Motor TTS no válido.")
 
     req = TTSRequest(project_id=project_id, text=text, engine=engine, voice=voice,
-                     voice2=voice2, blend=blend, speed=speed, pause=pause, name=name)
+                     voice2=voice2, blend=blend, speed=speed, pause=pause, name=name,
+                     style=style)
     job = jobs.create_job()
     jobs.start_tts_job(job, req)
     return dto.job_dto(job)

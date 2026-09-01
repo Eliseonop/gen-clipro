@@ -611,8 +611,11 @@ def transcribe(req: TranscribeRequest) -> Job:
 
 @app.get("/api/voices")
 def voices() -> dict:
-    from . import piper_tts
+    from . import gemini_tts, piper_tts
     engines = [
+        {"id": "gemini", "label": "Gemini (cinematográfico)",
+         "available": gemini_tts.available(), "voices": gemini_tts.VOICES,
+         "reason": gemini_tts.unavailable_reason()},
         {"id": "kokoro", "label": "Kokoro (neutro)",
          "available": tts.available(), "voices": tts.VOICES},
         {"id": "piper", "label": "Piper (mexicano)",
@@ -625,16 +628,23 @@ def voices() -> dict:
 @app.post("/api/tts", response_model=Job)
 def create_tts(req: TTSRequest) -> Job:
     """Lanza un trabajo en segundo plano para generar el audio del narrador."""
-    from . import piper_tts
+    from . import gemini_tts, piper_tts
     if projects.get_project(req.project_id) is None:
         raise HTTPException(status_code=400, detail="Proyecto no válido.")
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="El texto está vacío.")
-    if req.engine == "piper":
+    if req.engine == "gemini":
+        reason = gemini_tts.unavailable_reason()
+        if reason:
+            raise HTTPException(status_code=400, detail=reason)
+    elif req.engine == "piper":
         if not piper_tts.available():
             raise HTTPException(status_code=400, detail="Piper no está instalado. Ejecuta 'python get_piper.py' en backend/.")
-    elif not tts.available():
-        raise HTTPException(status_code=400, detail="Faltan los modelos de Kokoro (ver README).")
+    elif req.engine == "kokoro":
+        if not tts.available():
+            raise HTTPException(status_code=400, detail="Faltan los modelos de Kokoro (ver README).")
+    else:
+        raise HTTPException(status_code=400, detail="Motor TTS no válido.")
     job = jobs.create_job()
     jobs.start_tts_job(job, req)
     return job
@@ -694,12 +704,13 @@ def library_media(kind: str, filename: str) -> FileResponse:
 
 @app.get("/api/settings")
 def get_settings() -> dict:
-    return settings.load()
+    return settings.public()
 
 
 @app.put("/api/settings")
 def put_settings(data: dict) -> dict:
-    return settings.save(data)
+    settings.save(data)
+    return settings.public()
 
 
 @app.get("/api/job/{job_id}", response_model=Job)

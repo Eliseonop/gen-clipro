@@ -472,109 +472,14 @@ button.select.flip-select::after {
 }
 
 /* ==========================================================================
-   VIDEO WORKSPACE & RIGHT CLIPS PANEL
+   CLIP CARDS (Cargar clips / tramos recomendados)
    ========================================================================== */
-
-.video-tab-layout {
-  display: flex;
-  gap: 20px;
-  align-items: flex-start;
-  width: 100%;
-}
-
-.video-main-workspace {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-.video-main-workspace .card { margin-bottom: 0; }
-
-.clips-right-panel {
-  width: 420px;
-  flex-shrink: 0;
-  position: sticky;
-  top: 20px;
-  height: calc(100vh - 40px);
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  box-shadow: -6px 0 30px rgba(0, 0, 0, 0.4);
-}
-
-.clips-panel-header {
-  padding: 16px 18px 12px;
-  background: rgba(20, 23, 36, 0.95);
-  backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.clips-panel-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text);
-}
-.clips-panel-title h2 {
-  margin: 0;
-  font-size: 17px;
-  font-weight: 800;
-  letter-spacing: -0.3px;
-}
-.clips-panel-title .material-icons {
-  color: var(--accent);
-}
-
-.clips-panel-tabs {
-  display: flex;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  padding: 3px;
-  gap: 3px;
-}
-
-.panel-tab {
-  flex: 1;
-  background: none;
-  border: none;
-  color: var(--muted);
-  font-size: 12.5px;
-  font-weight: 700;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: var(--transition);
-  text-align: center;
-}
-.panel-tab:hover {
-  color: var(--text);
-}
-.panel-tab.active {
-  background: var(--card-2);
-  color: #ffffff;
-  border: 1px solid var(--line-bright);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-}
 
 .clips-panel-body {
   flex: 1;
   overflow-y: auto;
   padding: 14px;
   scrollbar-gutter: stable;
-}
-
-.saved-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
 }
 
 .clip-card {
@@ -649,79 +554,6 @@ button.select.flip-select::after {
   background: var(--accent-gradient);
 }
 
-.inline-video-wrap {
-  position: relative;
-  width: 100%;
-  aspect-ratio: 9 / 16;
-  background: #000000;
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  border: 1px solid var(--line);
-}
-.inline-video-wrap video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-.thumb-dur {
-  position: absolute;
-  bottom: 6px;
-  right: 6px;
-  background: rgba(0, 0, 0, 0.8);
-  color: #ffffff;
-  font-size: 10.5px;
-  font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 4px;
-  pointer-events: none;
-  backdrop-filter: blur(4px);
-}
-
-.clip-card.saved-card-grid {
-  padding: 6px;
-  gap: 5px;
-}
-.clip-card.saved-card-grid:hover {
-  transform: translateY(-1px);
-}
-
-.saved-card-info {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-.saved-title-row strong {
-  font-size: 11px;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: block;
-}
-.saved-card-grid .clip-time {
-  font-size: 10.5px;
-}
-.saved-card-grid .clip-date {
-  font-size: 9.5px;
-  margin-top: 0;
-}
-.saved-card-grid .clip-card-actions {
-  gap: 4px;
-  margin-top: 0;
-}
-.saved-card-grid .clip-card-actions .edit-btn {
-  padding: 4px 6px;
-  font-size: 10.5px;
-}
-.saved-card-grid .thumb-dur {
-  bottom: 4px;
-  right: 4px;
-  font-size: 9px;
-  padding: 1px 4px;
-}
-
 .clip-card-actions {
   display: flex;
   align-items: center;
@@ -733,59 +565,6 @@ button.select.flip-select::after {
   justify-content: center;
   padding: 7px 10px;
   font-size: 12px;
-}
-
-/* Dropdown Menu (⋮) */
-.options-menu-wrap { position: relative; }
-.options-dropdown {
-  position: absolute;
-  right: 0;
-  bottom: 100%;
-  margin-bottom: 6px;
-  background: var(--card-3);
-  border: 1px solid var(--line-bright);
-  border-radius: var(--radius-md);
-  padding: 5px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 150px;
-  z-index: 40;
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(12px);
-  animation: fadeIn 0.15s ease-out;
-}
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.dropdown-item {
-  background: transparent;
-  border: none;
-  color: var(--text);
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  font-size: 12.5px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  text-decoration: none;
-  text-align: left;
-  width: 100%;
-  transition: var(--transition);
-}
-.dropdown-item:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
-}
-.dropdown-item.danger {
-  color: #f87171;
-}
-.dropdown-item.danger:hover {
-  background: rgba(239, 68, 68, 0.15);
-  color: #ffb3c0;
 }
 
 /* ==========================================================================
@@ -804,102 +583,7 @@ button.select.flip-select::after {
   padding: 20px;
 }
 
-.tool-overlay { z-index: 80; padding: 18px; }
-.tool-modal {
-  width: min(1480px, 96vw);
-  max-width: 96vw;
-  height: min(92vh, 980px);
-  max-height: 92vh;
-  padding: 16px 20px 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  overflow: hidden;
-}
-.tool-modal-wide { width: min(1480px, 96vw); }
-.tool-modal .modal-head { margin-bottom: 12px; flex-shrink: 0; }
-.tool-modal .modal-head h3 {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 16px;
-}
-.tool-modal-body {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-.tool-modal-body > .video-tab-layout,
-.tool-modal-body > .audio-grid {
-  flex: 1;
-  min-height: 0;
-}
-.tool-modal-body > .video-tab-layout {
-  gap: 16px;
-  align-items: stretch;
-}
-.tool-modal .video-main-workspace {
-  gap: 14px;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-.tool-modal .video-main-workspace .card {
-  padding: 16px 18px;
-  margin: 0;
-  box-shadow: none;
-}
-.tool-modal .video-main-workspace .empty.big { padding: 36px 20px; }
-.tool-modal .clips-right-panel {
-  width: min(400px, 38%);
-  min-width: 320px;
-  height: auto;
-  max-height: 100%;
-  position: static;
-  box-shadow: none;
-}
-.tool-modal .clips-panel-header { padding: 14px 16px 12px; gap: 10px; }
-.tool-modal .clips-panel-title h2 { font-size: 15px; }
-.tool-modal .panel-tab { font-size: 12.5px; padding: 8px 10px; }
-.tool-modal .clips-panel-body { padding: 14px; }
-.tool-modal .saved-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.tool-modal .clip-card.rec-card { padding: 10px; gap: 8px; }
-.tool-modal .clip-card.saved-card-grid { padding: 6px; gap: 5px; }
-.tool-modal .audio-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 380px);
-  gap: 16px;
-  align-items: stretch;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-}
-.tool-modal .audio-grid > .card {
-  overflow-y: auto;
-  margin: 0;
-  min-height: 0;
-  box-shadow: none;
-  padding: 18px 20px;
-}
-.tool-modal .audio-grid .tts-text { min-height: 180px; }
-.tool-modal .tts-controls {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 16px;
-  margin-top: 8px;
-}
-.tool-modal .tts-controls .field { margin: 0; }
-.tool-modal .prompt-box {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 10px;
-}
-.tool-modal .prompt-box .field { flex: 1; min-width: 220px; }
 .audio-subtabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
-.audio-item-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.tool-modal .primary.big { margin-top: 14px; }
 
 .modal-editor.ultra-workspace {
   max-width: 1360px;
@@ -1371,32 +1055,8 @@ button.select.flip-select::after {
 
 @media (max-width: 1023px) {
   .project-view { min-height: auto; }
-  .video-tab-layout { flex-direction: column; }
-  .clips-right-panel { width: 100%; position: static; height: auto; max-height: 600px; }
-  .saved-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .modal-editor.ultra-workspace { height: auto; max-height: 94vh; overflow-y: auto; }
   .ed-grid-workspace { grid-template-columns: 1fr; }
-  .tool-modal .video-tab-layout { flex-direction: row; align-items: stretch; }
-  .tool-modal .clips-right-panel {
-    width: min(380px, 40%);
-    min-width: 280px;
-    height: auto;
-    max-height: 100%;
-  }
-}
-
-@media (max-width: 900px) {
-  .tool-modal, .tool-modal-wide {
-    width: 96vw;
-    max-width: 96vw;
-    height: auto;
-    max-height: 94vh;
-  }
-  .tool-modal-body { overflow-y: auto; }
-  .tool-modal-body > .video-tab-layout { flex-direction: column; }
-  .tool-modal .clips-right-panel { width: 100%; min-width: 0; max-height: 420px; }
-  .tool-modal .audio-grid { grid-template-columns: 1fr; overflow: auto; }
-  .tool-modal .tts-controls { grid-template-columns: 1fr; }
 }
 
 /* ==========================================================================
@@ -1712,21 +1372,6 @@ button.select.flip-select::after {
 }
 .link:hover { color: var(--text); }
 
-/* ==========================================================================
-   OPCIONES AVANZADAS (HEATMAP)
-   ========================================================================== */
-
-.advanced {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px;
-  margin-top: 14px;
-  padding: 14px;
-  background: var(--card-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-}
-
 .field {
   display: flex;
   flex-direction: column;
@@ -1768,33 +1413,6 @@ button.select.flip-select::after {
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
-/* ==========================================================================
-   VIDEO INFO (Thumbnail + Título)
-   ========================================================================== */
-
-.video-info {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  margin-bottom: 16px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--line);
-}
-.video-info img {
-  width: 130px;
-  border-radius: var(--radius-md);
-  object-fit: cover;
-  border: 1px solid var(--line);
-  flex-shrink: 0;
-}
-.video-info h2 {
-  margin: 0 0 5px;
-  font-size: 17px;
-  font-weight: 700;
-  line-height: 1.3;
-}
-.video-info p { margin: 0; font-size: 13px; }
-
 h3 {
   margin: 18px 0 10px;
   font-size: 11.5px;
@@ -1808,41 +1426,7 @@ h3 {
 }
 
 /* ==========================================================================
-   CUTTER FIELDS (marcas de tiempo)
-   ========================================================================== */
-
-.cutter-fields {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  margin: 14px 0 6px;
-  flex-wrap: wrap;
-}
-.cutter-fields .field { flex: 1; min-width: 90px; }
-
-/* ==========================================================================
-   SEGMENT PLAYER (YouTube iframe)
-   ========================================================================== */
-
-.seg-player {
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  aspect-ratio: 16 / 9;
-  background: #000;
-  margin-top: 14px;
-  box-shadow: 0 0 20px var(--accent-glow);
-}
-.seg-player iframe {
-  width: 100%;
-  height: 100%;
-  border: 0;
-  display: block;
-}
-.seg-player.narrow { max-width: 480px; }
-
-/* ==========================================================================
-   MODAL (genérico no-editor — MaterialEditor, JsonEditor, ConfirmModal)
+   MODAL (JsonEditor, ConfirmModal, ImageAddModal)
    ========================================================================== */
 
 .modal {
@@ -1855,13 +1439,6 @@ h3 {
   max-height: 90vh;
   overflow-y: auto;
   box-shadow: 0 16px 50px rgba(0, 0, 0, 0.65);
-}
-.modal.tool-modal {
-  max-width: 96vw;
-  width: min(1480px, 96vw);
-  max-height: 92vh;
-  overflow: hidden;
-  padding: 16px 20px 18px;
 }
 .modal-head {
   display: flex;
@@ -1904,55 +1481,6 @@ h3 {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
-
-/* ==========================================================================
-   TIMELINE (Timeline.jsx — heatmap rango)
-   ========================================================================== */
-
-.tl { margin: 8px 0 4px; }
-.tl-bar {
-  position: relative;
-  height: 48px;
-  background: var(--card-2);
-  border: 1px solid var(--line-bright);
-  border-radius: var(--radius-sm);
-  touch-action: none;
-  overflow: hidden;
-}
-.tl-seg {
-  position: absolute;
-  top: 0; bottom: 0;
-  background: rgba(255, 107, 61, 0.28);
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.tl-seg:hover { background: rgba(255, 107, 61, 0.5); }
-.tl-sel {
-  position: absolute;
-  top: 0; bottom: 0;
-  pointer-events: none;
-  background: rgba(255, 59, 92, 0.22);
-  border-left: 2px solid var(--accent);
-  border-right: 2px solid var(--accent);
-}
-.tl-handle {
-  position: absolute;
-  top: -5px; bottom: -5px;
-  width: 12px;
-  transform: translateX(-50%);
-  background: var(--accent);
-  border-radius: 6px;
-  cursor: ew-resize;
-  z-index: 2;
-}
-.tl-times {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 8px;
-  font-size: 12.5px;
-}
-.tl-t { color: var(--accent); font-variant-numeric: tabular-nums; font-weight: 700; }
 
 /* ==========================================================================
    RF FACEBOX (tracking automático)

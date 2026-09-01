@@ -68,7 +68,7 @@ function reframeForCut(reframe, t0, t1) {
   }
 }
 
-export default function VideoEditor({ project, onChange, onBack, onOpenJson, onOpenVideo, onOpenAudio }) {
+export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [tracks, setTracks] = useState(defaultTracks())
   const [clips, setClips] = useState([])
   const [loaded, setLoaded] = useState(false)
@@ -1150,8 +1150,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
           onAdd={addAsset}
           onDragInfo={setDragInfo}
           onBack={onBack}
-          onOpenVideo={onOpenVideo}
-          onOpenAudio={onOpenAudio}
           onRefresh={onChange}
           fav={fav}
           onEditYtClip={openClipEditor}

@@ -49,7 +49,22 @@ def load() -> dict:
 def save(data: dict) -> dict:
     with _lock:
         current = load()
-        current.update(data or {})
+        incoming = dict(data or {})
+        key = incoming.get("gemini_api_key")
+        if "gemini_api_key" in incoming:
+            text = str(key or "").strip()
+            if not text or text in ("true", "********"):
+                incoming.pop("gemini_api_key", None)
+        current.update(incoming)
         _FILE.parent.mkdir(exist_ok=True)
         _FILE.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
         return current
+
+
+def public() -> dict:
+    """Ajustes para el frontend: no expone la API key de Gemini."""
+    data = dict(load())
+    has = bool(str(data.get("gemini_api_key") or "").strip())
+    data.pop("gemini_api_key", None)
+    data["gemini_api_key_set"] = has
+    return data
