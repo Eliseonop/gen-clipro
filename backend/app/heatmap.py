@@ -96,6 +96,11 @@ def analyze(
     )
 
     heatmap = info.get("heatmap") or []
+    try:
+        from . import yt_history
+        yt_history.record(url, video)
+    except Exception:
+        pass
     if not heatmap:
         return AnalyzeResponse(video=video, segments=[], has_heatmap=False)
 

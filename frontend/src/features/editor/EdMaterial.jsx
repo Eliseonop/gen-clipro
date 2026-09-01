@@ -2,10 +2,14 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import Icon from '../../components/Icon'
 import { fmt } from '../../lib/utils'
 import { FAV_CAT } from '../../lib/favorites'
-import { analyze, listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryItem, unsaveLibraryItem, uploadImages, uploadVideo, uploadAudio } from '../../services/api'
-import MaterialClipGrid, { dragPayload, useToggle, useExclusiveMedia, Empty, ImageCard } from './MaterialClipGrid'
+import { analyze, listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryItem, unsaveLibraryItem, uploadImages, uploadVideo, uploadAudio, getSettings, putSettings, deleteMaterial } from '../../services/api'
+import MaterialClipGrid, { dragPayload, useToggle, useExclusiveMedia, Empty, ImageCard, MaterialMenuBtn } from './MaterialClipGrid'
 import SfxClassifyModal from './SfxClassifyModal'
+import ConfirmModal from '../../components/ConfirmModal'
+import AnchoredMenu from '../../components/AnchoredMenu'
+import { canDeleteMaterial, materialIdent, materialMenuItems, materialDeleteTitle, materialLabel } from './materialMenu'
 import JobStatusBar from '../../components/JobStatusBar'
+import FlipPopover from '../../components/FlipPopover'
 
 const YT_ANALYZE_OPTS = { min_score: 0.4, max_clips: 10, max_duration: 60, padding: 10 }
 
@@ -37,6 +41,22 @@ function droppedUrl(dt) {
   return m ? m[0] : ''
 }
 
+function isYtUrl(u) {
+  const s = (u || '').trim()
+  if (!s) return false
+  try {
+    const host = new URL(/^[a-z]+:\/\//i.test(s) ? s : `https://${s}`).hostname.replace(/^www\./i, '').toLowerCase()
+    return host === 'youtube.com' || host === 'youtu.be' || host === 'm.youtube.com' || host.endsWith('.youtube.com')
+  } catch {
+    return /youtu\.be|youtube\.com/i.test(s)
+  }
+}
+
+function normalizeHistory(raw) {
+  if (!Array.isArray(raw)) return []
+  return raw.filter((x) => x && typeof x === 'object' && String(x.url || '').trim())
+}
+
 function hasOsImageDrag(e) {
   const types = [...(e.dataTransfer?.types || [])]
   return types.includes('Files') && !types.includes('application/x-material')
@@ -66,6 +86,14 @@ function CargarRecList({ segments, videoId, preview, setPreview, configs, onEdit
         const isPreviewing = preview === s.index
         return (
           <div className="clip-card rec-card" key={s.index}>
+            <button
+              type="button"
+              className="ed-edit-corner"
+              title="Editar en Clip Editor"
+              onClick={() => onEdit(s)}
+            >
+              <Icon name="movie_edit" size={15} />
+            </button>
             <div className="clip-card-header">
               <span className="clip-num">Tramo #{s.index}</span>
               <span className="score-badge" title="Potencial de reproducciones (Heatmap)">
@@ -129,20 +157,6 @@ function ScopeFilter({ value, onChange, includeLoad = false }) {
   )
 }
 
-function SaveMark({ on, onToggle, title }) {
-  return (
-    <button
-      type="button"
-      className={`ed-fav-btn ${on ? 'on' : ''}`}
-      title={title || (on ? 'Quitar de guardados' : 'Guardar')}
-      onPointerDown={(e) => e.stopPropagation()}
-      onClick={(e) => { e.stopPropagation(); onToggle?.() }}
-    >
-      <Icon name={on ? 'bookmark' : 'bookmark_border'} size={15} />
-    </button>
-  )
-}
-
 function withProjectScope(items, kind) {
   return (items || []).map((it) => ({
     ...it,
@@ -169,11 +183,16 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
   const [ytResult, setYtResult] = useState(null)
   const [ytPreview, setYtPreview] = useState(null)
   const [ytConfigs, setYtConfigs] = useState({})
+  const [ytHistory, setYtHistory] = useState([])
+  const [histOpen, setHistOpen] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState('')
   const [vidOver, setVidOver] = useState(false)
+  const [matMenu, setMatMenu] = useState(null)
+  const [deleteTarget, setDeleteTarget] = useState(null)
   const fileRef = useRef(null)
   const ytInputRef = useRef(null)
+  const histBtnRef = useRef(null)
   const mediaFileRef = useRef(null)
   const dropDepth = useRef(0)
   const vidDropDepth = useRef(0)
@@ -189,6 +208,35 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
   }, [])
 
   useEffect(() => { reloadLibrary() }, [reloadLibrary, project.id, clips.length, audios.length, images.length])
+
+  useEffect(() => {
+    getSettings().then((s) => setYtHistory(normalizeHistory(s.yt_history))).catch(() => {})
+  }, [])
+
+  function openMatMenu(e, kind, item) {
+    e.preventDefault()
+    e.stopPropagation()
+    setMatMenu({
+      x: e.clientX,
+      y: e.clientY,
+      kind,
+      item,
+      saved: item.scope === 'library' || !!item.is_saved,
+    })
+  }
+
+  async function confirmDeleteMaterial() {
+    if (!deleteTarget) return
+    const { kind, item } = deleteTarget
+    setErr('')
+    try {
+      await deleteMaterial(project.id, kind, materialIdent(kind, item))
+      onRefresh?.()
+    } catch (e) {
+      setErr(e.message)
+    }
+    setDeleteTarget(null)
+  }
 
   async function toggleSave(resourceType, item) {
     setErr('')
@@ -276,8 +324,9 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
     ingestFiles(e.dataTransfer.files)
   }
 
-  async function loadYt() {
-    const url = ytUrl.trim()
+  async function loadYt(fromUrl) {
+    const url = (fromUrl ?? ytUrl).trim()
+    if (fromUrl != null) setYtUrl(url)
     if (!url) { setYtErr('Pega el link de un vídeo de YouTube.'); return }
     setYtErr('')
     setYtResult(null)
@@ -286,6 +335,10 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
     try {
       const res = await analyze({ url, ...YT_ANALYZE_OPTS })
       setYtResult(res)
+      try {
+        const s = await getSettings()
+        setYtHistory(normalizeHistory(s.yt_history))
+      } catch { /* el análisis ya quedó */ }
     } catch (e) {
       setYtErr(e.message || 'No se pudo cargar el vídeo.')
     } finally {
@@ -306,6 +359,61 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
       description: s.description || s.label || '',
       videoId: ytResult?.video?.id,
     })
+  }
+
+  function openProjectClip(c) {
+    const src = (c.source_url || c.youtube_url || '').trim()
+    const media = (c.url || '').trim()
+    const title = c.label || c.filename || `Clip #${c.index}`
+    const description = c.description || ''
+    if (isYtUrl(src)) {
+      setYtUrl(src)
+      const start = Number(c.start) || 0
+      const end = Number(c.end)
+      onEditYtClip?.({
+        url: src,
+        start,
+        end: Number.isFinite(end) && end > start ? end : start + Math.max(Number(c.duration) || 0, 0.5),
+        index: c.index,
+        title,
+        description,
+        videoId: c.youtube_id,
+      })
+      return
+    }
+    const url = media || src
+    if (!url) { setErr('Este clip no tiene fuente para editar.'); return }
+    const dur = (c.end != null && c.start != null)
+      ? Math.max(0, Number(c.end) - Number(c.start))
+      : Number(c.duration) || 0
+    onEditYtClip?.({
+      url,
+      start: 0,
+      end: Math.max(dur, 0.5),
+      index: c.index,
+      title,
+      description,
+    })
+  }
+
+  async function toggleHistory() {
+    const next = !histOpen
+    setHistOpen(next)
+    if (!next) return
+    try {
+      const s = await getSettings()
+      setYtHistory(normalizeHistory(s.yt_history))
+    } catch { /* lista local */ }
+  }
+
+  async function removeHistory(item) {
+    const needle = (item.video_id || item.url || '').trim()
+    const next = ytHistory.filter((x) => {
+      const key = (x.video_id || x.url || '').trim()
+      return key !== needle && (x.url || '').trim() !== (item.url || '').trim()
+    })
+    setYtHistory(next)
+    try { await putSettings({ yt_history: next }) } catch { /* noop */ }
   }
 
   async function importMedia(fileList) {
@@ -445,9 +553,50 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
                 disabled={ytAnalyzing || importing}
               />
               <div className="ed-yt-actions">
-                <button className="primary small" type="button" onClick={loadYt} disabled={ytAnalyzing || importing}>
+                <button className="primary small" type="button" onClick={() => loadYt()} disabled={ytAnalyzing || importing}>
                   {ytAnalyzing ? 'Cargando…' : 'Cargar'}
                 </button>
+                <button
+                  ref={histBtnRef}
+                  className="ghost small icon-only"
+                  type="button"
+                  title="Historial de enlaces"
+                  aria-expanded={histOpen}
+                  aria-label="Historial de enlaces"
+                  onClick={toggleHistory}
+                  disabled={ytAnalyzing || importing}
+                >
+                  <Icon name="history" size={16} />
+                </button>
+                <FlipPopover open={histOpen} anchorRef={histBtnRef} onClose={() => setHistOpen(false)} className="ed-yt-hist-pop">
+                  <div className="ed-yt-hist-head">Historial</div>
+                  {ytHistory.length === 0 ? (
+                    <div className="ed-yt-hist-empty">Aún no hay enlaces consultados.</div>
+                  ) : ytHistory.map((item) => (
+                    <div className="ed-yt-hist-row" key={`${item.video_id || ''}-${item.url}`}>
+                      <button
+                        type="button"
+                        className="ed-yt-hist-pick"
+                        title={item.url}
+                        onClick={() => {
+                          setHistOpen(false)
+                          loadYt(item.url)
+                        }}
+                      >
+                        <span className="ed-yt-hist-title">{item.title || item.url}</span>
+                        <span className="ed-yt-hist-url">{item.url}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-btn ed-yt-hist-del"
+                        title="Quitar del historial"
+                        onClick={() => removeHistory(item)}
+                      >
+                        <Icon name="delete" size={15} />
+                      </button>
+                    </div>
+                  ))}
+                </FlipPopover>
               </div>
               {ytAnalyzing && (
                 <JobStatusBar
@@ -513,7 +662,8 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
               onAdd={(c) => onAdd('clips', c)}
               onPlay={onPlayMedia}
               di={di}
-              onToggleSave={(c) => toggleSave('clip', c)}
+              onEdit={openProjectClip}
+              onMenu={(e, c) => openMatMenu(e, 'clips', c)}
               emptyText={videoFilter === 'saved' ? 'No hay clips guardados.' : 'Sin clips. Pulsa Cargar clips o Caja video.'}
             />
           )}
@@ -533,8 +683,7 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
                     image={im}
                     onAdd={() => onAdd('images', im)}
                     di={di}
-                    saved={im.scope === 'library' || !!im.is_saved}
-                    onToggleSave={() => toggleSave('image', im)}
+                    onMenu={(e) => openMatMenu(e, 'images', im)}
                   />
                 ))}
               </div>
@@ -554,14 +703,64 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
                 onAdd={() => onAdd('audios', a)}
                 onPlay={onPlayMedia}
                 di={di}
-                saved={a.scope === 'library' || !!a.is_saved}
-                onToggleSave={() => toggleSave('audio', a)}
+                onMenu={(e) => openMatMenu(e, 'audios', a)}
               />
             ))}
         </div>
       )}
 
       {tab === 'sfx' && <SfxTab onAdd={onAdd} onPlay={onPlayMedia} di={di} fav={fav} />}
+
+      {matMenu && (
+        <>
+          <div
+            className="ed-ctx-backdrop"
+            onPointerDown={() => setMatMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setMatMenu(null) }}
+          />
+          <AnchoredMenu className="ed-ctx-menu" x={matMenu.x} y={matMenu.y}>
+            {materialMenuItems({
+              saved: matMenu.saved,
+              canDelete: canDeleteMaterial(matMenu.item),
+            }).map((it) => (
+              <button
+                key={it.id}
+                type="button"
+                className={it.danger ? 'danger' : undefined}
+                onClick={() => {
+                  const { kind, item } = matMenu
+                  setMatMenu(null)
+                  if (it.id === 'save') {
+                    const resource = kind === 'clips' ? 'clip' : kind === 'images' ? 'image' : 'audio'
+                    toggleSave(resource, item)
+                    return
+                  }
+                  if (it.id === 'delete') setDeleteTarget({ kind, item })
+                }}
+              >
+                <Icon
+                  name={it.id === 'save' ? (matMenu.saved ? 'bookmark' : 'bookmark_border') : 'delete'}
+                  size={15}
+                />
+                {it.label}
+              </button>
+            ))}
+          </AnchoredMenu>
+        </>
+      )}
+
+      <ConfirmModal
+        open={!!deleteTarget}
+        title={materialDeleteTitle(deleteTarget?.kind)}
+        message={deleteTarget
+          ? `¿Estás seguro de que quieres eliminar "${materialLabel(deleteTarget.item)}"? Se borrará también el archivo del disco.`
+          : ''}
+        confirmText="Eliminar"
+        cancelText="Cancelar"
+        danger
+        onConfirm={confirmDeleteMaterial}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   )
 }
@@ -609,11 +808,12 @@ function SfxCard({ sfx, onAdd, onPlay, di, favOn, onToggleFav, onEdit }) {
   )
 }
 
-function AudioCard({ audio, onAdd, onPlay, di, saved, onToggleSave }) {
+function AudioCard({ audio, onAdd, onPlay, di, onMenu }) {
   const { ref, playing, toggle, setPlaying } = useToggle(onPlay)
   return (
     <div className="ed-card audio row"
       draggable
+      onContextMenu={onMenu ? (e) => { e.preventDefault(); e.stopPropagation(); onMenu(e) } : undefined}
       onDragStart={(e) => { e.dataTransfer.setData('application/x-material', dragPayload('audios', audio)); di?.({ kind: 'audio', duration: audio.duration || 1, name: audio.label || audio.filename }) }}
       onDragEnd={() => di?.(null)}>
       <audio ref={ref} src={audio.url} preload="none"
@@ -623,7 +823,7 @@ function AudioCard({ audio, onAdd, onPlay, di, saved, onToggleSave }) {
       </button>
       <span className="ed-card-name" title={audio.filename}>{audio.label || audio.filename}</span>
       <span className="ed-card-dur">{fmt(audio.duration || 0)}</span>
-      <SaveMark on={saved} onToggle={onToggleSave} />
+      {onMenu && <MaterialMenuBtn className="ed-add-btn" onOpen={onMenu} />}
       <button className="ed-add-btn" onClick={onAdd} title="Agregar al proyecto"><Icon name="add" size={15} /></button>
     </div>
   )

@@ -50,10 +50,30 @@ export function Empty({ text }) {
   return <div className="ed-mat-empty grid-full">{text}</div>
 }
 
+export function MaterialMenuBtn({ onOpen, className = 'ed-menu-corner' }) {
+  return (
+    <button
+      type="button"
+      className={className}
+      title="Opciones"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => { e.preventDefault(); e.stopPropagation(); onOpen(e) }}
+    >
+      <Icon name="more_vert" size={15} />
+    </button>
+  )
+}
+
+function openCardMenu(e, onMenu) {
+  e.preventDefault()
+  e.stopPropagation()
+  onMenu?.(e)
+}
+
 export function VideoCard({
   clip, onAdd, onPlay, di, draggable = true,
   addTitle = 'Agregar al proyecto',
-  saved = false, onToggleSave,
+  onEdit, onMenu,
 }) {
   const { ref, playing, setPlaying, toggle } = useToggle(onPlay)
   const title = clip.label || (clip.scope === 'library' ? (clip.filename || 'Guardado') : `Clip #${clip.index}`)
@@ -69,6 +89,7 @@ export function VideoCard({
     <div
       className={`ed-card grid video${draggable ? '' : ' no-drag'}`}
       draggable={draggable}
+      onContextMenu={onMenu ? (e) => openCardMenu(e, onMenu) : undefined}
       onDragStart={draggable ? (e) => {
         e.dataTransfer.setData('application/x-material', dragPayload('clips', clip))
         di?.({ kind: 'video', duration: dur || 1, name: title })
@@ -81,20 +102,21 @@ export function VideoCard({
         <button className="ed-play-ov" onClick={onPlayClick} title={playing ? 'Pausa' : 'Reproducir'}>
           <Icon name={playing ? 'pause' : 'play_arrow'} size={20} />
         </button>
+        {onEdit && (
+          <button
+            type="button"
+            className="ed-edit-corner"
+            title="Editar en Clip Editor"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onEdit() }}
+          >
+            <Icon name="movie_edit" size={15} />
+          </button>
+        )}
         <button className="ed-add-corner" onClick={(e) => { e.stopPropagation(); onAdd() }} title={addTitle}>
           <Icon name="add" size={16} />
         </button>
-        {onToggleSave && (
-          <button
-            type="button"
-            className={`ed-save-corner ${saved ? 'on' : ''}`}
-            title={saved ? 'Quitar de guardados' : 'Guardar'}
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); onToggleSave() }}
-          >
-            <Icon name={saved ? 'bookmark' : 'bookmark_border'} size={15} />
-          </button>
-        )}
+        {onMenu && <MaterialMenuBtn onOpen={(e) => openCardMenu(e, onMenu)} />}
         <span className="ed-card-dur">{fmt(dur)}</span>
       </div>
       <div className="ed-card-name" title={title}>{title}</div>
@@ -106,7 +128,7 @@ export function VideoCard({
 export function ImageCard({
   image, onAdd, di, draggable = true,
   addTitle = 'Agregar al proyecto',
-  saved = false, onToggleSave,
+  onMenu,
 }) {
   const title = image.label || image.name || image.filename || 'Imagen'
   const desc = (image.description || '').trim()
@@ -116,6 +138,7 @@ export function ImageCard({
     <div
       className={`ed-card grid image${draggable ? '' : ' no-drag'}`}
       draggable={draggable}
+      onContextMenu={onMenu ? (e) => openCardMenu(e, onMenu) : undefined}
       onDragStart={draggable ? (e) => {
         e.dataTransfer.setData('application/x-material', dragPayload('images', image))
         di?.({ kind: 'image', duration: IMAGE_DEFAULT_DUR, name: title })
@@ -127,17 +150,7 @@ export function ImageCard({
         <button className="ed-add-corner" onClick={(e) => { e.stopPropagation(); onAdd() }} title={addTitle}>
           <Icon name="add" size={16} />
         </button>
-        {onToggleSave && (
-          <button
-            type="button"
-            className={`ed-save-corner ${saved ? 'on' : ''}`}
-            title={saved ? 'Quitar de guardados' : 'Guardar'}
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); onToggleSave() }}
-          >
-            <Icon name={saved ? 'bookmark' : 'bookmark_border'} size={15} />
-          </button>
-        )}
+        {onMenu && <MaterialMenuBtn onOpen={(e) => openCardMenu(e, onMenu)} />}
         {dim ? <span className="ed-card-dur">{dim}</span> : null}
       </div>
       <div className="ed-card-name" title={title}>{title}</div>
@@ -155,7 +168,8 @@ export default function MaterialClipGrid({
   draggable = true,
   addTitle = 'Agregar al proyecto',
   emptyText = 'Sin clips. Pulsa Cargar clips o Caja video.',
-  onToggleSave,
+  onEdit,
+  onMenu,
 }) {
   const internalPlay = useExclusiveMedia()
   const play = onPlay || internalPlay
@@ -172,8 +186,8 @@ export default function MaterialClipGrid({
             di={di}
             draggable={draggable}
             addTitle={addTitle}
-            saved={c.scope === 'library' || !!c.is_saved}
-            onToggleSave={onToggleSave ? () => onToggleSave(c) : undefined}
+            onEdit={onEdit ? () => onEdit(c) : undefined}
+            onMenu={onMenu ? (e) => onMenu(e, c) : undefined}
           />
         ))}
     </div>
