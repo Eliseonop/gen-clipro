@@ -2,16 +2,40 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import Icon from '../../components/Icon'
 import { fmt } from '../../lib/utils'
 import { FAV_CAT } from '../../lib/favorites'
-import { listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryItem, unsaveLibraryItem, uploadImages } from '../../services/api'
+import { analyze, listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryItem, unsaveLibraryItem, uploadImages, uploadVideo, uploadAudio } from '../../services/api'
 import MaterialClipGrid, { dragPayload, useToggle, useExclusiveMedia, Empty, ImageCard } from './MaterialClipGrid'
 import SfxClassifyModal from './SfxClassifyModal'
+import ClipEditor from '../video/ClipEditor'
+import JobStatusBar from '../../components/JobStatusBar'
+
+const YT_ANALYZE_OPTS = { min_score: 0.4, max_clips: 10, max_duration: 60, padding: 10 }
 
 const IMAGE_FILE_RE = /\.(png|jpe?g|webp|gif|bmp|tiff?|avif|heic|heif)$/i
+const VIDEO_FILE_RE = /\.(mp4|mov|mkv|webm|avi|m4v|mpe?g|wmv|flv)$/i
+const AUDIO_FILE_RE = /\.(mp3|wav|m4a|aac|ogg|flac|wma)$/i
 
 function isImageFile(file) {
   if (!file) return false
   if ((file.type || '').startsWith('image/')) return true
   return IMAGE_FILE_RE.test(file.name || '')
+}
+
+function isVideoFile(file) {
+  if (!file) return false
+  if ((file.type || '').startsWith('video/')) return true
+  return VIDEO_FILE_RE.test(file.name || '')
+}
+
+function isAudioFile(file) {
+  if (!file) return false
+  if ((file.type || '').startsWith('audio/')) return true
+  return AUDIO_FILE_RE.test(file.name || '')
+}
+
+function droppedUrl(dt) {
+  const text = dt.getData('text/uri-list') || dt.getData('text/plain') || ''
+  const m = text.trim().match(/https?:\/\/\S+/)
+  return m ? m[0] : ''
 }
 
 function hasOsImageDrag(e) {
@@ -26,11 +50,82 @@ function pickDefaultSfxCat(categories, current) {
   return (other || cats[0] || {}).id || ''
 }
 
-function ScopeFilter({ value, onChange }) {
+function CargarRecList({ segments, videoId, preview, setPreview, configs, onEdit }) {
+  if (!segments.length) {
+    return (
+      <div className="ed-cargar-empty">
+        <Icon name="auto_awesome" size={22} />
+        <p>Este vídeo no tiene tramos recomendados.</p>
+      </div>
+    )
+  }
+  return (
+    <div className="ed-cargar-recs clips-panel-body">
+      {segments.map((s) => {
+        const scorePct = Math.round((s.score || 0) * 100)
+        const isEdited = !!configs[`seg-${s.index}`]
+        const isPreviewing = preview === s.index
+        return (
+          <div className="clip-card rec-card" key={s.index}>
+            <div className="clip-card-header">
+              <span className="clip-num">Tramo #{s.index}</span>
+              <span className="score-badge" title="Potencial de reproducciones (Heatmap)">
+                🔥 {scorePct}%
+              </span>
+            </div>
+            <div className="clip-card-meta">
+              <span className="clip-time">{fmt(s.start)} → {fmt(s.end)}</span>
+              <span className="clip-dur">({fmt(s.end - s.start)})</span>
+              {isEdited && (
+                <span className="edited-badge" title="Editado en esta sesión">
+                  <Icon name="check_circle" size={13} /> Editado
+                </span>
+              )}
+            </div>
+            <div className="score-bar-track">
+              <div className="score-bar-fill" style={{ width: `${scorePct}%` }} />
+            </div>
+            {isPreviewing && videoId && (
+              <div className="seg-player-mini">
+                <iframe
+                  src={`https://www.youtube.com/embed/${videoId}?start=${Math.floor(s.start)}&end=${Math.ceil(s.end)}&autoplay=1&rel=0`}
+                  title={`Tramo ${s.index}`}
+                  allow="autoplay; encrypted-media"
+                  allowFullScreen
+                />
+              </div>
+            )}
+            <div className="clip-card-actions">
+              <button className="primary small edit-btn" type="button" onClick={() => onEdit(s)}>
+                <Icon name="movie_edit" size={16} /> Editar
+              </button>
+              <button
+                className="ghost small"
+                type="button"
+                onClick={() => setPreview(isPreviewing ? null : s.index)}
+                title="Previsualizar tramo"
+              >
+                <Icon name={isPreviewing ? 'close' : 'play_arrow'} size={16} />
+                {isPreviewing ? 'Cerrar' : 'Ver'}
+              </button>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function ScopeFilter({ value, onChange, includeLoad = false }) {
   return (
     <div className="ed-scope-filter">
       <button type="button" className={`ed-tab ${value === 'all' ? 'on' : ''}`} onClick={() => onChange('all')}>Todos</button>
       <button type="button" className={`ed-tab ${value === 'saved' ? 'on' : ''}`} onClick={() => onChange('saved')}>Guardados</button>
+      {includeLoad && (
+        <button type="button" className={`ed-tab ${value === 'cargar' ? 'on' : ''}`} onClick={() => onChange('cargar')}>
+          <Icon name="add" size={14} /> Cargar
+        </button>
+      )}
     </div>
   )
 }
@@ -68,8 +163,23 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
   const [err, setErr] = useState('')
   const [uploading, setUploading] = useState(false)
   const [fileDrop, setFileDrop] = useState(false)
+  const [ytUrl, setYtUrl] = useState('')
+  const [ytErr, setYtErr] = useState('')
+  const [ytAnalyzing, setYtAnalyzing] = useState(false)
+  const [ytElapsed, setYtElapsed] = useState(0)
+  const [ytResult, setYtResult] = useState(null)
+  const [ytPreview, setYtPreview] = useState(null)
+  const [ytEditor, setYtEditor] = useState(null)
+  const [ytConfigs, setYtConfigs] = useState({})
+  const [importing, setImporting] = useState(false)
+  const [importMsg, setImportMsg] = useState('')
+  const [vidOver, setVidOver] = useState(false)
   const fileRef = useRef(null)
+  const ytInputRef = useRef(null)
+  const mediaFileRef = useRef(null)
   const dropDepth = useRef(0)
+  const vidDropDepth = useRef(0)
+  const ytT0 = useRef(0)
   const clips = project.clips || []
   const audios = project.audios || []
   const images = project.images || []
@@ -107,6 +217,19 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
   const shownClips = videoFilter === 'saved' ? (library.clips || []) : [...projectClips, ...(library.clips || [])]
   const shownAudios = audioFilter === 'saved' ? (library.audios || []) : [...projectAudios, ...(library.audios || [])]
   const shownImages = imageFilter === 'saved' ? (library.images || []) : [...projectImages, ...(library.images || [])]
+  const onCargarPane = tab === 'video' && videoFilter === 'cargar'
+
+  useEffect(() => {
+    if (onCargarPane) requestAnimationFrame(() => ytInputRef.current?.focus())
+  }, [onCargarPane])
+
+  useEffect(() => {
+    if (!ytAnalyzing) { setYtElapsed(0); return }
+    ytT0.current = Date.now()
+    setYtElapsed(0)
+    const id = setInterval(() => setYtElapsed(Math.floor((Date.now() - ytT0.current) / 1000)), 500)
+    return () => clearInterval(id)
+  }, [ytAnalyzing])
 
   async function ingestFiles(fileList) {
     const files = [...(fileList || [])].filter(isImageFile)
@@ -128,27 +251,133 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
   }
 
   function onFileDragEnter(e) {
+    if (onCargarPane) return
     if (!hasOsImageDrag(e)) return
     e.preventDefault()
     dropDepth.current += 1
     setFileDrop(true)
   }
   function onFileDragOver(e) {
+    if (onCargarPane) return
     if (!hasOsImageDrag(e)) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
   }
   function onFileDragLeave(e) {
+    if (onCargarPane) return
     if (!hasOsImageDrag(e)) return
     dropDepth.current = Math.max(0, dropDepth.current - 1)
     if (dropDepth.current === 0) setFileDrop(false)
   }
   function onFileDrop(e) {
+    if (onCargarPane) return
     if (!hasOsImageDrag(e)) return
     e.preventDefault()
     dropDepth.current = 0
     setFileDrop(false)
     ingestFiles(e.dataTransfer.files)
+  }
+
+  async function loadYt() {
+    const url = ytUrl.trim()
+    if (!url) { setYtErr('Pega el link de un vídeo de YouTube.'); return }
+    setYtErr('')
+    setYtResult(null)
+    setYtPreview(null)
+    setYtAnalyzing(true)
+    try {
+      const res = await analyze({ url, ...YT_ANALYZE_OPTS })
+      setYtResult(res)
+    } catch (e) {
+      setYtErr(e.message || 'No se pudo cargar el vídeo.')
+    } finally {
+      setYtAnalyzing(false)
+    }
+  }
+
+  function openYtEditor(s) {
+    const url = ytUrl.trim()
+    if (!url) { setYtErr('Falta la URL del vídeo original para editar este clip.'); return }
+    const key = `seg-${s.index}`
+    setYtEditor({
+      segStart: s.start,
+      segEnd: s.end,
+      key,
+      segIndex: s.index,
+      url,
+      initial: ytConfigs[key],
+    })
+  }
+
+  function closeYtEditor(config) {
+    if (ytEditor && config) setYtConfigs((c) => ({ ...c, [ytEditor.key]: config }))
+    setYtEditor(null)
+  }
+
+  async function importMedia(fileList) {
+    const files = [...(fileList || [])]
+    const videos = files.filter(isVideoFile)
+    const images = files.filter(isImageFile)
+    const audios = files.filter(isAudioFile)
+    if (!videos.length && !images.length && !audios.length) {
+      setImportMsg('')
+      setYtErr('Suelta un vídeo, una imagen o un audio.')
+      return
+    }
+    setYtErr('')
+    setImportMsg('')
+    setImporting(true)
+    const done = []
+    try {
+      for (const f of videos) {
+        await uploadVideo(project.id, f)
+        done.push(f.name)
+      }
+      if (images.length) {
+        await uploadImages(project.id, images)
+        done.push(...images.map((f) => f.name))
+      }
+      for (const f of audios) {
+        await uploadAudio(project.id, f)
+        done.push(f.name)
+      }
+      await onRefresh?.()
+      setImportMsg(done.length === 1
+        ? `«${done[0]}» está en el material.`
+        : `${done.length} archivos añadidos al material.`)
+    } catch (e) {
+      setYtErr(e.message || 'No se pudo importar el archivo.')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  function onVidDragEnter(e) {
+    e.preventDefault()
+    e.stopPropagation()
+    vidDropDepth.current += 1
+    setVidOver(true)
+  }
+  function onVidDragOver(e) {
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+  function onVidDragLeave(e) {
+    e.preventDefault()
+    e.stopPropagation()
+    vidDropDepth.current = Math.max(0, vidDropDepth.current - 1)
+    if (!vidDropDepth.current) setVidOver(false)
+  }
+  function onVidDrop(e) {
+    e.preventDefault()
+    e.stopPropagation()
+    vidDropDepth.current = 0
+    setVidOver(false)
+    const dt = e.dataTransfer
+    if (dt.files && dt.files.length) { importMedia(dt.files); return }
+    const link = droppedUrl(dt)
+    if (link) { setYtUrl(link); setYtErr(''); setImportMsg('') }
   }
 
   return (
@@ -209,15 +438,91 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
 
       {tab === 'video' && (
         <div className="ed-mat-list">
-          <ScopeFilter value={videoFilter} onChange={setVideoFilter} />
-          <MaterialClipGrid
-            clips={shownClips}
-            onAdd={(c) => onAdd('clips', c)}
-            onPlay={onPlayMedia}
-            di={di}
-            onToggleSave={(c) => toggleSave('clip', c)}
-            emptyText={videoFilter === 'saved' ? 'No hay clips guardados.' : 'Sin clips. Pulsa Cargar video para añadir material.'}
-          />
+          <ScopeFilter value={videoFilter} onChange={setVideoFilter} includeLoad />
+          {videoFilter === 'cargar' ? (
+            <div className="ed-yt-form">
+              <input
+                ref={ytInputRef}
+                className="ed-yt-url"
+                placeholder="https://www.youtube.com/watch?v=…"
+                value={ytUrl}
+                onChange={(e) => { setYtUrl(e.target.value); setYtErr('') }}
+                onKeyDown={(e) => e.key === 'Enter' && !ytAnalyzing && !importing && loadYt()}
+                disabled={ytAnalyzing || importing}
+              />
+              <div className="ed-yt-actions">
+                <button className="primary small" type="button" onClick={loadYt} disabled={ytAnalyzing || importing}>
+                  {ytAnalyzing ? 'Cargando…' : 'Cargar'}
+                </button>
+              </div>
+              {ytAnalyzing && (
+                <JobStatusBar
+                  indeterminate
+                  progress={0.35}
+                  message={ytElapsed < 8
+                    ? 'Consultando YouTube y descargando metadatos…'
+                    : ytElapsed < 25
+                      ? 'Sigue cargando (heatmap / descarga). No está colgado.'
+                      : `Lleva ${ytElapsed}s. YouTube a veces tarda; espera o revisa la URL.`}
+                  elapsed={ytElapsed}
+                />
+              )}
+              {!ytResult && !ytAnalyzing && (
+                <button
+                  type="button"
+                  className={`ed-vid-drop${vidOver ? ' over' : ''}${importing ? ' busy' : ''}`}
+                  onClick={() => { if (!importing) mediaFileRef.current?.click() }}
+                  onDragEnter={onVidDragEnter}
+                  onDragOver={onVidDragOver}
+                  onDragLeave={onVidDragLeave}
+                  onDrop={onVidDrop}
+                  title="Elegir un archivo del equipo"
+                >
+                  <Icon name={importing ? 'hourglass_top' : 'upload'} size={20} />
+                  <span>{importing ? 'Importando…' : 'Arrastra vídeo, imagen o audio, o elige un archivo'}</span>
+                </button>
+              )}
+              <input
+                ref={mediaFileRef}
+                type="file"
+                hidden
+                multiple
+                accept="video/*,audio/*,image/*,.mp4,.mov,.mkv,.webm,.mp3,.wav,.m4a,.png,.jpg,.jpeg,.webp,.gif"
+                onChange={(e) => {
+                  const files = [...(e.target.files || [])]
+                  e.target.value = ''
+                  if (files.length) importMedia(files)
+                }}
+              />
+              {ytErr && <div className="ed-mat-err">{ytErr}</div>}
+              {importMsg && <div className="ed-yt-ok">{importMsg}</div>}
+              {ytResult && (
+                <>
+                  <div className="ed-yt-meta">
+                    <strong title={ytResult.video?.title}>{ytResult.video?.title || 'Vídeo cargado'}</strong>
+                    <span>Recomendados ({(ytResult.has_heatmap ? ytResult.segments : []).length})</span>
+                  </div>
+                  <CargarRecList
+                    segments={ytResult.has_heatmap ? (ytResult.segments || []) : []}
+                    videoId={ytResult.video?.id}
+                    preview={ytPreview}
+                    setPreview={setYtPreview}
+                    configs={ytConfigs}
+                    onEdit={openYtEditor}
+                  />
+                </>
+              )}
+            </div>
+          ) : (
+            <MaterialClipGrid
+              clips={shownClips}
+              onAdd={(c) => onAdd('clips', c)}
+              onPlay={onPlayMedia}
+              di={di}
+              onToggleSave={(c) => toggleSave('clip', c)}
+              emptyText={videoFilter === 'saved' ? 'No hay clips guardados.' : 'Sin clips. Pulsa Cargar video para añadir material.'}
+            />
+          )}
         </div>
       )}
 
@@ -263,6 +568,20 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
       )}
 
       {tab === 'sfx' && <SfxTab onAdd={onAdd} onPlay={onPlayMedia} di={di} fav={fav} />}
+
+      {ytEditor && (
+        <ClipEditor
+          key={ytEditor.key}
+          project={project}
+          url={ytEditor.url}
+          segStart={ytEditor.segStart}
+          segEnd={ytEditor.segEnd}
+          segIndex={ytEditor.segIndex}
+          initial={ytEditor.initial}
+          onClose={closeYtEditor}
+          onChange={onRefresh}
+        />
+      )}
     </div>
   )
 }
