@@ -6,11 +6,13 @@ import { analyze, listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryIte
 import MaterialClipGrid, { dragPayload, useToggle, useExclusiveMedia, Empty, ImageCard, MaterialMenuBtn } from './MaterialClipGrid'
 import SfxClassifyModal from './SfxClassifyModal'
 import ImageAddModal from './ImageAddModal'
+import AudioTab from '../audio/AudioTab'
 import ConfirmModal from '../../components/ConfirmModal'
 import AnchoredMenu from '../../components/AnchoredMenu'
 import { canDeleteMaterial, materialIdent, materialMenuItems, materialDeleteTitle, materialLabel } from './materialMenu'
 import JobStatusBar from '../../components/JobStatusBar'
 import FlipPopover from '../../components/FlipPopover'
+import Toast from '../../components/Toast'
 import { collectFromClipboardItems, collectPastePayload, hasImagePaste, imageUrlsFromText, isImageFile, resolvePasteImages } from './imagePaste'
 
 const YT_ANALYZE_OPTS = { min_score: 0.4, max_clips: 10, max_duration: 60, padding: 10 }
@@ -138,14 +140,14 @@ function CargarRecList({ segments, videoId, preview, setPreview, configs, onEdit
   )
 }
 
-function ScopeFilter({ value, onChange, includeLoad = false }) {
+function ScopeFilter({ value, onChange, includeLoad = false, loadId = 'cargar', loadLabel = 'Cargar clips' }) {
   return (
     <div className="ed-scope-filter">
       <button type="button" className={`ed-tab ${value === 'all' ? 'on' : ''}`} onClick={() => onChange('all')}>Todos</button>
       <button type="button" className={`ed-tab ${value === 'saved' ? 'on' : ''}`} onClick={() => onChange('saved')}>Guardados</button>
       {includeLoad && (
-        <button type="button" className={`ed-tab ${value === 'cargar' ? 'on' : ''}`} onClick={() => onChange('cargar')}>
-          <Icon name="add" size={14} /> Cargar clips
+        <button type="button" className={`ed-tab ${value === loadId ? 'on' : ''}`} onClick={() => onChange(loadId)}>
+          <Icon name="add" size={14} /> {loadLabel}
         </button>
       )}
     </div>
@@ -162,14 +164,14 @@ function withProjectScope(items, kind) {
   }))
 }
 
-export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenVideo, onOpenAudio, onRefresh, fav, onEditYtClip }) {
+export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onRefresh, fav, onEditYtClip }) {
   const [tab, setTab] = useState('video')
   const [videoFilter, setVideoFilter] = useState('all')
   const [audioFilter, setAudioFilter] = useState('all')
   const [imageFilter, setImageFilter] = useState('all')
   const [library, setLibrary] = useState({ clips: [], audios: [], images: [] })
   const [err, setErr] = useState('')
-  const [uploading, setUploading] = useState(false)
+  const [matToast, setMatToast] = useState(null)
   const [fileDrop, setFileDrop] = useState(false)
   const [ytUrl, setYtUrl] = useState('')
   const [ytErr, setYtErr] = useState('')
@@ -215,7 +217,6 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
 
   async function ingestClipboard(payload) {
     setErr('')
-    setUploading(true)
     try {
       const files = await resolvePasteImages(payload, fetchRemoteImage)
       if (!files.length) {
@@ -225,8 +226,6 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
       offerImageFiles(files)
     } catch (e) {
       setErr(e.message || 'No se pudo pegar la imagen.')
-    } finally {
-      setUploading(false)
     }
   }
 
@@ -307,7 +306,8 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
   async function toggleSave(resourceType, item) {
     setErr('')
     try {
-      if (item.scope === 'library' || item.is_saved) {
+      const wasSaved = item.scope === 'library' || item.is_saved
+      if (wasSaved) {
         await unsaveLibraryItem(item.id)
       } else {
         await saveLibraryItem({
@@ -318,8 +318,17 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
       }
       reloadLibrary()
       onRefresh?.()
+      if (resourceType === 'audio') {
+        setMatToast({
+          type: 'success',
+          message: wasSaved ? 'Audio quitado de guardados.' : 'Audio guardado en la biblioteca.',
+        })
+      }
     } catch (e) {
       setErr(e.message)
+      if (resourceType === 'audio') {
+        setMatToast({ type: 'error', message: e.message || 'No se pudo guardar el audio.' })
+      }
     }
   }
 
@@ -350,15 +359,12 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
       return
     }
     setTab('image')
-    setUploading(true)
     setErr('')
     try {
       await uploadImages(project.id, files)
       onRefresh?.()
     } catch (e) {
       setErr(e.message)
-    } finally {
-      setUploading(false)
     }
   }
 
@@ -577,17 +583,6 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
           </button>
           <span className="ed-mat-label" title={project.name}></span>
         </div>
-        <div className="ed-mat-actions">
-          <button className="ghost small" onClick={() => onOpenVideo?.()} type="button">
-            <Icon name="add" size={15} /> Caja video
-          </button>
-          <button className="ghost small" onClick={() => { setTab('image'); setImgAddOpen(true); setImgTick((n) => n + 1) }} type="button" disabled={uploading}>
-            <Icon name="add" size={15} /> {uploading ? 'Subiendo…' : 'Imagen'}
-          </button>
-          <button className="ghost small" onClick={onOpenAudio} type="button">
-            <Icon name="add" size={15} /> Audio
-          </button>
-        </div>
       </div>
       <div className="ed-mat-tabs">
         <button className={`ed-tab ${tab === 'video' ? 'on' : ''}`} onClick={() => setTab('video')}>
@@ -731,7 +726,7 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
               di={di}
               onEdit={openProjectClip}
               onMenu={(e, c) => openMatMenu(e, 'clips', c)}
-              emptyText={videoFilter === 'saved' ? 'No hay clips guardados.' : 'Sin clips. Pulsa Cargar clips o Caja video.'}
+              emptyText={videoFilter === 'saved' ? 'No hay clips guardados.' : 'Sin clips. Pulsa Cargar clips.'}
             />
           )}
         </div>
@@ -779,9 +774,22 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
 
       {tab === 'audio' && (
         <div className="ed-mat-list">
-          <ScopeFilter value={audioFilter} onChange={setAudioFilter} />
-          {shownAudios.length === 0
-            ? <Empty text={audioFilter === 'saved' ? 'No hay audios guardados.' : 'Sin audios. Pulsa Audio para generar narración.'} />
+          <ScopeFilter
+            value={audioFilter}
+            onChange={setAudioFilter}
+            includeLoad
+            loadLabel="Cargar audio"
+          />
+          <div className={audioFilter === 'cargar' ? '' : 'ed-hidden-panel'}>
+            <AudioTab
+              project={project}
+              onChange={onRefresh}
+              initialYtUrl={ytUrl}
+              sourceTitle={ytResult?.video?.title || ''}
+            />
+          </div>
+          {audioFilter !== 'cargar' && (shownAudios.length === 0
+            ? <Empty text={audioFilter === 'saved' ? 'No hay audios guardados.' : 'Sin audios. Pulsa Cargar audio para narrar o extraer de un vídeo.'} />
             : shownAudios.map((a) => (
               <AudioCard
                 key={`${a.scope}-${a.id}`}
@@ -791,7 +799,7 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
                 di={di}
                 onMenu={(e) => openMatMenu(e, 'audios', a)}
               />
-            ))}
+            )))}
         </div>
       )}
 
@@ -860,6 +868,7 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
         </>
       )}
 
+      <Toast toast={matToast} onClose={() => setMatToast(null)} />
       <ConfirmModal
         open={!!deleteTarget}
         title={materialDeleteTitle(deleteTarget?.kind)}

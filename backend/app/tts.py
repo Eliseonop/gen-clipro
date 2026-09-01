@@ -60,6 +60,7 @@ def run(
     voice2: str | None = None,
     blend: float = 0.5,
     pause: float = 0.4,
+    **_ignored,
 ) -> dict:
     """Genera el WAV en ``out_path``. Devuelve {duration, sample_rate}.
 

@@ -220,7 +220,7 @@ class AudioInfo(BaseModel):
     text: Optional[str] = None
     duration: Optional[float] = None
     created_at: Optional[str] = None
-    engine: Optional[str] = None       # "kokoro" | "piper"
+    engine: Optional[str] = None       # "kokoro" | "piper" | "gemini"
     label: Optional[str] = None
     description: Optional[str] = None
     origin: Optional[str] = None              # "tts" | "youtube"
@@ -232,13 +232,14 @@ class AudioInfo(BaseModel):
 class TTSRequest(BaseModel):
     project_id: str
     text: str
-    engine: str = "kokoro"             # "kokoro" | "piper"
+    engine: str = "kokoro"             # "kokoro" | "piper" | "gemini"
     voice: str = "ef_dora"
     voice2: Optional[str] = None       # voz secundaria para mezclar (más natural/variado)
     blend: float = 0.5                 # peso de la voz principal (0-1)
     speed: float = 1.0
     pause: float = 0.4                 # pausa (s) entre frases/párrafos
     name: Optional[str] = None
+    style: Optional[str] = None        # gemini: "documentary" | "close"
 
 
 class YouTubeAudioRequest(BaseModel):

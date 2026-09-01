@@ -6,4 +6,5 @@ numpy
 faster-whisper
 kokoro-onnx
 soundfile
+google-genai
 mcp>=2,<3
