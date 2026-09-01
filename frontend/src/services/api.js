@@ -67,6 +67,16 @@ export const uploadImages = (pid, files) => {
   for (const f of files) body.append('files', f)
   return req(`/api/projects/${pid}/images`, { method: 'POST', body })
 }
+export const uploadVideo = (pid, file) => {
+  const body = new FormData()
+  body.append('file', file)
+  return req(`/api/projects/${pid}/videos`, { method: 'POST', body })
+}
+export const uploadAudio = (pid, file) => {
+  const body = new FormData()
+  body.append('file', file)
+  return req(`/api/projects/${pid}/audios`, { method: 'POST', body })
+}
 export const updateMaterial = (pid, kind, id, data) => patch(`/api/projects/${pid}/materials/${kind}/${id}`, data)
 export const deleteMaterial = (pid, kind, id) => del(`/api/projects/${pid}/materials/${kind}/${id}`)
 export const autoDescribeClip = (pid, index) => post(`/api/projects/${pid}/materials/clips/${index}/auto-describe`, {})

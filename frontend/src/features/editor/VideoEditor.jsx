@@ -27,7 +27,6 @@ import EdMaterial from './EdMaterial'
 import EdTimeline from './EdTimeline'
 import EdCrops from './EdCrops'
 import EdText from './EdText'
-import ClipEditor from '../video/ClipEditor'
 import AnchoredMenu from '../../components/AnchoredMenu'
 import './editor.css'
 
@@ -61,7 +60,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   const [fragmentAsk, setFragmentAsk] = useState(null)
   const [dragInfo, setDragInfo] = useState(null)    // { kind, duration, name }
   const [framingMode, setFramingMode] = useState(null) // { trackId, x, y, w } o null
-  const [builder, setBuilder] = useState(null)
+  const [mainColTab, setMainColTab] = useState('main')
 
   const mainCanvasRef = useRef(null)
   const resultCanvasRef = useRef(null)
@@ -805,49 +804,56 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
           fav={fav}
         />
 
-        {/* MAIN: vídeo original + encuadre */}
+        {/* MAIN / CLIP EDITOR */}
         <div className="ed-col ed-col-main">
-          <div className="ed-col-head"><Icon name="edit" size={15} /> Main · edición</div>
-          <div className="ed-main-stage" ref={mainStageRef}
-            onPointerDown={onMainDown}
-            style={{ cursor: (canEditFrame || isTextSel || framingMode) ? 'crosshair' : 'default' }}>
-            <canvas ref={mainCanvasRef} width={520} height={292} className="ed-main-canvas" />
-            {clips.length === 0 && !framingMode && <div className="ed-stage-empty">Agrega clips o texto al timeline</div>}
-            {canEditFrame && !overlayOn && <div className="ed-stage-hint">Arrastra el recuadro · esquinas para zoom</div>}
-            {canEditFrame && overlayOn && <div className="ed-stage-hint">Esquinas: encuadre de la fuente · el tamaño en Resultado no cambia</div>}
-            {isTextSel && (
-              <div className="ed-stage-hint">
-                {selClipIds.length > 1
-                  ? `${selClipIds.length} textos · arrastra en el timeline para mover el grupo`
-                  : 'Arrastra el texto para moverlo · botón Global para aplicar a todos'}
-              </div>
-            )}
-            {framingMode && <div className="ed-stage-hint">Ajusta el recuadro amarillo y pulsa Guardar</div>}
-          </div>
-          <div className="ed-main-tools">
-            <button className="primary alt small" onClick={addText} title="Añadir un texto a la composición">
-              <Icon name="title" size={15} /> Agregar texto
+          <div className="ed-col-tabs">
+            <button
+              type="button"
+              className={`ed-tab ${mainColTab === 'main' ? 'on' : ''}`}
+              onClick={() => setMainColTab('main')}
+            >
+              Main Editor
             </button>
             <button
-              className="primary alt small"
-              title="Combinar materiales en un clip 9:16"
-              onClick={() => {
-                let seed = null
-                if (selectedClip?.kind === 'video' && selectedClip.asset_kind === 'clips') {
-                  seed = (project.clips || []).find((c) => String(c.index) === String(selectedClip.asset_id)) || null
-                }
-                setBuilder({ seed })
-              }}
+              type="button"
+              className={`ed-tab ${mainColTab === 'clip' ? 'on' : ''}`}
+              onClick={() => setMainColTab('clip')}
             >
-              <Icon name="construction" size={15} /> Construir
+              Clip Editor
             </button>
-            {canEditFrame && (
-              <label className="ed-chip" title="Colocar este clip encima del canvas sin rellenar el formato de salida">
-                <input type="checkbox" checked={overlayOn}
-                  onChange={(e) => toggleOverlay(selectedClip, e.target.checked)} /> Superponer
-              </label>
-            )}
           </div>
+          <div className={`ed-main-body${mainColTab !== 'main' ? ' off' : ''}`}>
+            <div className="ed-main-stage" ref={mainStageRef}
+              onPointerDown={onMainDown}
+              style={{ cursor: (canEditFrame || isTextSel || framingMode) ? 'crosshair' : 'default' }}>
+              <canvas ref={mainCanvasRef} width={520} height={292} className="ed-main-canvas" />
+              {clips.length === 0 && !framingMode && <div className="ed-stage-empty">Agrega clips o texto al timeline</div>}
+              {canEditFrame && !overlayOn && <div className="ed-stage-hint">Arrastra el recuadro · esquinas para zoom</div>}
+              {canEditFrame && overlayOn && <div className="ed-stage-hint">Esquinas: encuadre de la fuente · el tamaño en Resultado no cambia</div>}
+              {isTextSel && (
+                <div className="ed-stage-hint">
+                  {selClipIds.length > 1
+                    ? `${selClipIds.length} textos · arrastra en el timeline para mover el grupo`
+                    : 'Arrastra el texto para moverlo · botón Global para aplicar a todos'}
+                </div>
+              )}
+              {framingMode && <div className="ed-stage-hint">Ajusta el recuadro amarillo y pulsa Guardar</div>}
+            </div>
+            <div className="ed-main-tools">
+              <button className="primary alt small" onClick={addText} title="Añadir un texto a la composición">
+                <Icon name="title" size={15} /> Agregar texto
+              </button>
+              {canEditFrame && (
+                <label className="ed-chip" title="Colocar este clip encima del canvas sin rellenar el formato de salida">
+                  <input type="checkbox" checked={overlayOn}
+                    onChange={(e) => toggleOverlay(selectedClip, e.target.checked)} /> Superponer
+                </label>
+              )}
+            </div>
+          </div>
+          {mainColTab === 'clip' && (
+            <div className="ed-clip-pane" />
+          )}
         </div>
 
         {/* RESULTADO FINAL */}
@@ -1068,21 +1074,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
       )}
       {subJob?.status === 'error' && (
         <div className="ed-sub-toast error" onClick={() => setSubJob(null)}>⚠️ {subJob.error}</div>
-      )}
-
-      {builder && (
-        <ClipEditor
-          mode="compose"
-          project={project}
-          seedClip={builder.seed}
-          url={builder.seed?.source_url || builder.seed?.url}
-          segStart={builder.seed ? (builder.seed.source_url ? builder.seed.start : 0) : undefined}
-          segEnd={builder.seed ? (builder.seed.source_url ? builder.seed.end : Math.max(0.5, (builder.seed.end || 0) - (builder.seed.start || 0))) : undefined}
-          segIndex={builder.seed?.index || (100000 + (Date.now() % 900000))}
-          initial={builder.seed?.reframe || null}
-          onClose={() => setBuilder(null)}
-          onChange={onChange}
-        />
       )}
 
       <ConfirmModal

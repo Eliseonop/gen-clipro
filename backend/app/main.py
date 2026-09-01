@@ -193,6 +193,44 @@ async def upload_images(project_id: str, files: list[UploadFile] = File(...)) ->
     return {"images": saved, "errors": errors}
 
 
+@app.post("/api/projects/{project_id}/videos")
+async def upload_video(project_id: str, file: UploadFile = File(...)) -> dict:
+    """Importa un vídeo local al proyecto como material de vídeo."""
+    from . import videos as video_mod
+    proj = projects.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    if file is None:
+        raise HTTPException(status_code=400, detail="No hay archivo.")
+    try:
+        data = await file.read()
+        info = video_mod.import_video(proj, file.filename or "video.mp4", data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"No se pudo importar el vídeo: {exc}")
+    return {"clip": info.model_dump()}
+
+
+@app.post("/api/projects/{project_id}/audios")
+async def upload_audio(project_id: str, file: UploadFile = File(...)) -> dict:
+    """Importa un audio local al proyecto como material de audio."""
+    from . import videos as video_mod
+    proj = projects.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    if file is None:
+        raise HTTPException(status_code=400, detail="No hay archivo.")
+    try:
+        data = await file.read()
+        info = video_mod.import_audio(proj, file.filename or "audio.mp3", data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"No se pudo importar el audio: {exc}")
+    return {"audio": info.model_dump()}
+
+
 @app.post("/api/projects/{project_id}/materials/clips/{index}/auto-describe")
 def auto_describe_clip(project_id: str, index: str) -> dict:
     """Rellena la descripción de un clip con lo que se dice en él (del guion)."""
