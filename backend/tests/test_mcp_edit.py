@@ -6,7 +6,7 @@ from pathlib import Path
 
 from app import config, projects, timeline_store
 from app.mcp_server import registry, server, tools_edit  # noqa: F401 (server puebla el registro)
-from app.schemas import AudioInfo, ClipInfo
+from app.schemas import AudioInfo, ClipInfo, ImageInfo
 
 
 class EditToolsTest(unittest.TestCase):
@@ -55,6 +55,18 @@ class EditToolsTest(unittest.TestCase):
         res = tools_edit.add_to_timeline(self.pid, "audios", "a1")
         kinds = {t["kind"] for t in res["timeline"]["tracks"]}
         self.assertEqual(kinds, {"video", "audio"})
+
+    def test_add_image_reuses_video_track(self):
+        projects.add_image(self.pid, ImageInfo(
+            id="im1", filename="logo.png", url="/i", width=100, height=80, label="Logo"))
+        self._add_clip0()
+        res = tools_edit.add_to_timeline(self.pid, "images", "im1", start=2.0)
+        kinds = {t["kind"] for t in res["timeline"]["tracks"]}
+        self.assertEqual(kinds, {"video"})
+        img = next(c for c in res["timeline"]["clips"] if c["kind"] == "image")
+        self.assertEqual(img["duration"], 5.0)
+        self.assertEqual(img["layout"], "fill")
+        self.assertEqual(img["track_id"], res["timeline"]["tracks"][0]["id"])
 
     def test_add_unknown_asset_raises(self):
         with self.assertRaises(ValueError):

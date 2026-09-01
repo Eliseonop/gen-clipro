@@ -2,7 +2,7 @@
 // de salida: dos niveles independientes. El editor de clips (compose/slots)
 // no usa este módulo.
 import { clamp, clampCenter, frameAt, geomFor } from './panning.js'
-import { clipEnd } from '../features/editor/editorModel.js'
+import { clipEnd, isVisualClip } from '../features/editor/editorModel.js'
 
 export const newTransform = () => ({ x: 0.5, y: 0.5, scale: 1, rotation: 0 })
 
@@ -25,6 +25,13 @@ export function frameOf(clip) {
 
 export function isOverlay(clip) {
   return clip?.layout === 'overlay'
+}
+
+export function mediaSize(el) {
+  if (!el) return { w: 0, h: 0 }
+  const w = Number(el.videoWidth || el.naturalWidth || 0) || 0
+  const h = Number(el.videoHeight || el.naturalHeight || 0) || 0
+  return { w, h }
 }
 
 export function clampCrop(cx, cy, wf, hf) {
@@ -160,7 +167,7 @@ export function videosAt(head, clips, tracks) {
   const layer = (id) => vids.findIndex((t) => t.id === id)
   return (clips || [])
     .filter((c) => {
-      if (c.kind !== 'video') return false
+      if (!isVisualClip(c)) return false
       const track = (tracks || []).find((t) => t.id === c.track_id)
       if (!track || track.hidden) return false
       return head >= c.start - 0.02 && head < clipEnd(c)

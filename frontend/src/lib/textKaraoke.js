@@ -88,5 +88,6 @@ export function applyThemeToStyle(current, theme) {
     y: cur.y ?? pack.y,
     w: cur.w ?? pack.w,
     max_words: cur.max_words ?? pack.max_words,
+    opacity: cur.opacity ?? pack.opacity ?? 1,
   }
 }

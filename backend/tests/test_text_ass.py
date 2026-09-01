@@ -1,7 +1,7 @@
 import unittest
 
 from app.schemas import TimelineClip
-from app.text_ass import active_word_index, ass_bgr, ass_time, build_ass, caption_dialogues
+from app.text_ass import active_word_index, ass_bgr, ass_time, build_ass, caption_dialogues, word_opacity
 
 
 class TextAssTest(unittest.TestCase):
@@ -99,16 +99,37 @@ class TextAssTest(unittest.TestCase):
         self.assertIn("Style: sc1,Anton,", doc)
 
 
-    def test_texto_free_no_hace_karaoke(self):
+    def test_texto_free_sin_tema_es_estatico(self):
         clip = TimelineClip(
             id="c1", track_id="T1", kind="text", asset_kind="text", asset_id="t1",
             filename="", start=0.0, in_point=0.0, out_point=20.0, source_duration=20.0,
             text="marca de agua", text_role="free",
-            style={"word_fx": "glow", "color": "#ffffff", "highlight_color": "#ff3b5c"},
+            style={"word_fx": "none", "color": "#ffffff"},
         )
         lines = caption_dialogues(clip, 720, 1280)
         self.assertEqual(len(lines), 1)
         self.assertIn("marca de agua", lines[0])
+
+    def test_texto_free_con_tema_hace_karaoke(self):
+        clip = TimelineClip(
+            id="c1", track_id="T1", kind="text", asset_kind="text", asset_id="t1",
+            filename="", start=0.0, in_point=0.0, out_point=4.0, source_duration=4.0,
+            text="hola mundo", text_role="free",
+            style={"theme": "neon", "word_fx": "glow", "color": "#ffffff", "highlight_color": "#00f0ff"},
+        )
+        lines = caption_dialogues(clip, 720, 1280)
+        self.assertEqual(len(lines), 2)
+
+    def test_opacidad_global_en_export(self):
+        self.assertAlmostEqual(word_opacity({"opacity": 0.5, "word_fx": "none"}, False), 0.5)
+        clip = TimelineClip(
+            id="c1", track_id="T1", kind="text", asset_kind="text", asset_id="t1",
+            filename="", start=0.0, in_point=0.0, out_point=1.0, source_duration=1.0,
+            text="hola", text_role="free",
+            style={"font": "Arial", "size": 0.05, "color": "#ffffff", "word_fx": "none", "opacity": 0.5},
+        )
+        doc = build_ass([clip], 720, 1280)
+        self.assertIn("\\1a&H80&", doc)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,7 +32,7 @@ from .schemas import (
     YouTubeAudioRequest,
 )
 
-_MEDIA_KIND = {"clips": "video", "audios": "audio"}
+_MEDIA_KIND = {"clips": "video", "audios": "audio", "images": "image"}
 
 
 def _video_title(url: str) -> str:
@@ -168,6 +168,31 @@ def delete_material(project_id: str, kind: str, ident: str) -> dict:
     return {"deleted": ident}
 
 
+@app.post("/api/projects/{project_id}/images")
+async def upload_images(project_id: str, files: list[UploadFile] = File(...)) -> dict:
+    """Importa imágenes al proyecto y las deja como PNG de trabajo."""
+    from . import images as image_mod
+    proj = projects.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    if not files:
+        raise HTTPException(status_code=400, detail="No hay archivos.")
+    saved = []
+    errors = []
+    for f in files:
+        try:
+            data = await f.read()
+            info = image_mod.import_image(proj, f.filename or "imagen.png", data)
+            saved.append(info.model_dump())
+        except ValueError as exc:
+            errors.append({"file": f.filename, "error": str(exc)})
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"file": f.filename, "error": str(exc)})
+    if not saved and errors:
+        raise HTTPException(status_code=400, detail=errors[0]["error"])
+    return {"images": saved, "errors": errors}
+
+
 @app.post("/api/projects/{project_id}/materials/clips/{index}/auto-describe")
 def auto_describe_clip(project_id: str, index: str) -> dict:
     """Rellena la descripción de un clip con lo que se dice en él (del guion)."""
@@ -220,6 +245,11 @@ def manifest(project_id: str) -> dict:
         materials.append({
             "kind": "audio", "file": a.filename, "label": a.label,
             "description": a.description or a.text, "voice": a.voice, "duration": a.duration,
+        })
+    for im in proj.images:
+        materials.append({
+            "kind": "image", "file": im.filename, "label": im.label,
+            "description": im.description, "width": im.width, "height": im.height,
         })
     return {"project": {"id": proj.id, "name": proj.name}, "materials": materials}
 
@@ -362,6 +392,59 @@ def get_export(project_id: str, filename: str) -> FileResponse:
 def list_sfx(q: str = "", category: str = "") -> dict:
     from . import sfx
     return sfx.search(q=q, category=category)
+
+
+@app.post("/api/sfx")
+async def add_sfx(
+    file: UploadFile = File(...),
+    name: str = Form(""),
+    category_id: str = Form(""),
+    new_category: str = Form(""),
+    uso: str = Form(""),
+) -> dict:
+    from . import sfx
+    payload = await file.read()
+    try:
+        item = sfx.add_sound(
+            file.filename or "sound.mp3",
+            payload,
+            name=name,
+            category_id=category_id,
+            new_category=new_category,
+            uso=uso,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    out = sfx.search()
+    out["added"] = item
+    return out
+
+
+@app.patch("/api/sfx")
+def update_sfx(body: dict = Body(...)) -> dict:
+    from . import sfx
+    try:
+        item = sfx.update_sound(
+            (body or {}).get("id") or "",
+            name=(body or {}).get("name"),
+            category_id=(body or {}).get("category_id") or "",
+            new_category=(body or {}).get("new_category") or "",
+            uso=(body or {}).get("uso"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    out = sfx.search()
+    out["added"] = item
+    return out
+
+
+@app.post("/api/sfx/category")
+def create_sfx_category(body: dict = Body(...)) -> dict:
+    from . import sfx
+    try:
+        return sfx.create_category((body or {}).get("label") or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/sfx/folder")

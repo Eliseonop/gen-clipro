@@ -62,6 +62,11 @@ export const getSettings = () => get('/api/settings')
 export const putSettings = (data) => put('/api/settings', data)
 
 // --- Materiales (etiquetar / eliminar / manifest) ---
+export const uploadImages = (pid, files) => {
+  const body = new FormData()
+  for (const f of files) body.append('files', f)
+  return req(`/api/projects/${pid}/images`, { method: 'POST', body })
+}
 export const updateMaterial = (pid, kind, id, data) => patch(`/api/projects/${pid}/materials/${kind}/${id}`, data)
 export const deleteMaterial = (pid, kind, id) => del(`/api/projects/${pid}/materials/${kind}/${id}`)
 export const autoDescribeClip = (pid, index) => post(`/api/projects/${pid}/materials/clips/${index}/auto-describe`, {})
@@ -78,6 +83,18 @@ export const exportTimeline = (pid, timeline) => post(`/api/projects/${pid}/expo
 export const listSfx = (q = '', category = '') =>
   get(`/api/sfx?q=${encodeURIComponent(q)}&category=${encodeURIComponent(category)}`)
 export const setSfxFolder = (path) => post('/api/sfx/folder', { path })
+export const uploadSfx = (file, { name = '', categoryId = '', newCategory = '', uso = '' } = {}) => {
+  const body = new FormData()
+  body.append('file', file)
+  body.append('name', name)
+  body.append('category_id', categoryId)
+  body.append('new_category', newCategory)
+  body.append('uso', uso)
+  return req('/api/sfx', { method: 'POST', body })
+}
+export const updateSfx = (id, { name = '', categoryId = '', newCategory = '', uso = '' } = {}) =>
+  patch('/api/sfx', { id, name, category_id: categoryId, new_category: newCategory, uso })
+export const createSfxCategory = (label) => post('/api/sfx/category', { label })
 
 // --- Subtítulos ---
 export const generateSubtitles = (pid, params) => post(`/api/projects/${pid}/subtitles`, params)

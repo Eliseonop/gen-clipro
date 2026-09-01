@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Iterable
 
 from .schemas import TimelineClip
-from .text_role import resolve_text_role
 
 _FX_NONE = "none"
 _KNOWN_FX = ("highlight", "glow", "pop")
@@ -44,11 +43,18 @@ def _clamp01(n, fallback: float = 1.0) -> float:
     return max(0.0, min(1.0, op))
 
 
+def style_opacity(st: dict) -> float:
+    return _clamp01((st or {}).get("opacity", 1), 1.0)
+
+
 def word_opacity(st: dict, active: bool) -> float:
     st = st or {}
+    base = style_opacity(st)
     if active or not word_fx_set(st):
-        return _clamp01(st.get("active_opacity", 1), 1.0)
-    return _clamp01(st.get("inactive_opacity", 1), 1.0)
+        word = _clamp01(st.get("active_opacity", 1), 1.0)
+    else:
+        word = _clamp01(st.get("inactive_opacity", 1), 1.0)
+    return _clamp01(base * word, 0.0)
 
 
 def opacity_tag(st: dict, active: bool = True) -> str:
@@ -216,8 +222,6 @@ def caption_dialogues(clip: TimelineClip, W: int, H: int, style: dict | None = N
     dur = _clip_dur(clip)
     start = max(0.0, float(clip.start or 0))
     fx = word_fx_set(st)
-    if resolve_text_role(clip) == "free":
-        fx = set()
     appear = st.get("block_appear") or _FX_NONE
     fad = "{\\fad(180,0)}" if appear in ("fade", "pop", "slide_up") else ""
     style = f"s{clip.id}"

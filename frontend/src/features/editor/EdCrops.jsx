@@ -6,7 +6,7 @@ import { fmt } from '../../lib/utils'
 import { kfColor } from '../../lib/panning'
 import { APPEAR_OPTIONS, EXIT_OPTIONS, LOOK_OPTIONS } from '../../lib/clipFx'
 import { FRAME_OPTIONS, frameOf } from '../../lib/clipLayout'
-import { SPEED_MAX, SPEED_MIN, SPEED_PRESETS, clipSpeed, sourceToTimeline } from './editorModel'
+import { SPEED_MAX, SPEED_MIN, SPEED_PRESETS, clipSpeed, isVisualClip, sourceToTimeline } from './editorModel'
 
 function speedLabel(n) {
   return n % 1 === 0 ? `${n}x` : `${n.toFixed(1)}x`
@@ -17,7 +17,8 @@ export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHid
   const [tab, setTab] = useState('crop')
   const [track, setTrack] = useState(1)
   const dual = !!(clip?.kind === 'video' && clip.reframe?.dual_crop)
-  const isVideo = clip?.kind === 'video'
+  const isVideo = isVisualClip(clip)
+  const isImage = clip?.kind === 'image'
   const isAudio = clip?.kind === 'audio'
   const hasClip = isVideo || isAudio
   useEffect(() => { setTrack(1) }, [clip?.id])
@@ -56,6 +57,10 @@ export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHid
           <div className="ed-crops-empty">Selecciona un clip para ver sus propiedades.</div>
         ) : (
           <div className="ed-props">
+            {isImage && (
+              <div className="ed-prop" style={{ fontSize: 12, color: 'var(--muted)' }}>Tipo: Imagen</div>
+            )}
+            {!isImage && (
             <button
               type="button"
               className={`ed-mute ${clip.muted ? 'on' : ''}`}
@@ -64,6 +69,8 @@ export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHid
               <Icon name={clip.muted ? 'volume_off' : 'volume_up'} size={15} />
               Mute
             </button>
+            )}
+            {!isImage && (
             <div className="ed-speed">
               <div className="ed-speed-head">
                 <span>Velocidad</span>
@@ -106,6 +113,7 @@ export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHid
                 </button>
               </div>
             </div>
+            )}
             {isVideo && (
               <>
                 <label className="ed-prop">

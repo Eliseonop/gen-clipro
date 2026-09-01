@@ -24,6 +24,11 @@ class ClipSpeedTest(unittest.TestCase):
         self.assertEqual(clip_speed(clip), 1)
         self.assertEqual(clip_timeline_duration(clip), 4)
 
+    def test_image_ignores_speed(self):
+        clip = {"kind": "image", "in_point": 0, "out_point": 5, "speed": 2}
+        self.assertEqual(clip_speed(clip), 1)
+        self.assertEqual(clip_timeline_duration(clip), 5)
+
     def test_missing_or_invalid_speed_is_one(self):
         self.assertEqual(clip_speed({"kind": "video"}), 1)
         self.assertEqual(clip_speed({"kind": "audio", "speed": 0}), 1)

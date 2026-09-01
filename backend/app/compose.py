@@ -28,6 +28,7 @@ from .diagnostics import timed
 from .recipe_layout import contain_scale_filter, dual_slot_wh, join_dual_filters, split_orientation_for
 from .reframe_math import frame_at
 from .clip_audio import clip_mixes_audio
+from .clip_kind import ASSET_DISK_KIND, clip_fits_track, ffmpeg_input_args, ffmpeg_trim_window, is_still_clip
 from .clip_speed import audio_speed_filters, clip_source_duration, clip_timeline_duration, video_speed_filters
 from .text_ass import ass_filter_path, build_ass
 
@@ -35,18 +36,23 @@ ProgressCb = Callable[[float, str], None]
 
 log = logging.getLogger("videoyt.compose")
 
-_MEDIA_KIND = {"clips": "video", "audios": "audio"}
+_MEDIA_KIND = {k: v for k, v in ASSET_DISK_KIND.items() if v != "sfx"}
 
 
 def _clip_path(project: Project, clip: TimelineClip) -> Optional[Path]:
     if clip.asset_kind == "sfx":
         return sfx.resolve(clip.filename)
     kind = _MEDIA_KIND.get(clip.asset_kind)
+    if kind is None and is_still_clip(clip):
+        kind = "image"
     if kind is None:
         return None
     if (getattr(clip, "asset_scope", None) or "project") == "library":
         return storage.resolve_library_media(kind, clip.filename)
     return storage.resolve_media(project, kind, clip.filename)
+
+
+_ffmpeg_input_args = ffmpeg_input_args
 
 
 def _even(n: float) -> int:
@@ -332,11 +338,11 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         path = _clip_path(project, c)
         if path is None or not path.exists():
             continue
-        if track.kind == "video" and c.kind == "video":
+        if track.kind == "video" and clip_fits_track(c.kind, "video"):
             if not track.hidden:
                 vclips.append((c, path, track))
             # el audio de un clip de vídeo suena si ni la pista ni el clip están muteados
-            if clip_mixes_audio(c, track) and _has_audio(path):
+            if (not is_still_clip(c)) and clip_mixes_audio(c, track) and _has_audio(path):
                 aclips.append((c, path, track))
         elif track.kind == "audio":
             if clip_mixes_audio(c, track) and _has_audio(path):
@@ -355,13 +361,13 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
     # --- Inputs ---
     inputs: list[str] = []
     idx_of: dict[str, int] = {}
-    all_files: list[Path] = []
+    all_files: list[tuple[object, Path]] = []
     for (c, path, _t) in vclips + aclips:
         if c.id not in idx_of:
             idx_of[c.id] = len(all_files)
-            all_files.append(path)
-    for path in all_files:
-        inputs += ["-i", str(path)]
+            all_files.append((c, path))
+    for c, path in all_files:
+        inputs += _ffmpeg_input_args(c, path, fps)
 
     filt: list[str] = []
 
@@ -385,18 +391,21 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
             cropscale = _reframe_cropscale(path, c.reframe, c.in_point, src_dur, W, H)
         else:
             cropscale = _plain_scale(W, H)
+        if is_still_clip(c):
+            cropscale = f"{cropscale},format=gbrap"
         fx = video_fx_chain(c, dur, W, H)
         fx_part = f",{fx}" if fx else ""
-        spd = video_speed_filters(c)
+        spd = "" if is_still_clip(c) else video_speed_filters(c)
         spd_part = f",{spd}" if spd else ""
         overlay_xy = overlay_xy_for_fx(overlay_xy, c, start, dur, W, H)
         vlabel = f"v{n}"
+        tin, tout = ffmpeg_trim_window(c)
         filt.append(
-            f"[{k}:v]trim={c.in_point:.3f}:{c.out_point:.3f},setpts=PTS-STARTPTS,"
+            f"[{k}:v]trim={tin:.3f}:{tout:.3f},setpts=PTS-STARTPTS,"
             f"{cropscale},fps={fps}{spd_part}{fx_part},setpts=PTS-STARTPTS+{start:.3f}/TB[{vlabel}]"
         )
         out_label = f"ov{n}"
-        ov_fmt = ":format=auto" if fx else ""
+        ov_fmt = ":format=auto" if (fx or is_still_clip(c)) else ""
         filt.append(
             f"[{last_label}][{vlabel}]overlay={overlay_xy}:eof_action=pass"
             f"{ov_fmt}:enable='between(t,{start:.3f},{end:.3f})'[{out_label}]"

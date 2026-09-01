@@ -7,10 +7,10 @@
 import { drawReframe, kfColor, cropCornerNorms, clamp } from '../../../lib/panning'
 import { drawTextClip } from '../../../lib/textstyles'
 import { drawAlignGuides } from '../../../lib/alignGuides'
-import { clipDur, clipEnd, newReframe, timelineToSource } from '../editorModel'
+import { clipDur, clipEnd, isVisualClip, newReframe, timelineToSource } from '../editorModel'
 import { applyCanvasFx, clipFxAt } from '../../../lib/clipFx'
 import {
-  cropWindow, destRectOnCanvas, isOverlay, sourceCropPx, videosAt,
+  cropWindow, destRectOnCanvas, isOverlay, mediaSize, sourceCropPx, videosAt,
 } from '../../../lib/clipLayout'
 
 // Geometría (en px del canvas) del encuadre de texto a partir de fm normalizado.
@@ -47,22 +47,22 @@ export function drawFramingOverlay(ctx, cw, ch, fm) {
   ctx.restore()
 }
 
-function overlayDest(ctx, video, clip, srcTime, outW, outH) {
-  const vw = video.videoWidth, vh = video.videoHeight
+function overlayDest(ctx, media, clip, srcTime, outW, outH) {
+  const { w: vw, h: vh } = mediaSize(media)
   const crop = cropWindow(clip, vw / vh, outW / outH, srcTime)
   const px = sourceCropPx(crop, vw, vh)
   return { px, dest: destRectOnCanvas(clip.transform, px, outW, outH, ctx.canvas.width, ctx.canvas.height) }
 }
 
-function drawOverlayLayer(ctx, video, clip, srcTime, outW, outH, fx) {
-  const { px, dest } = overlayDest(ctx, video, clip, srcTime, outW, outH)
+function drawOverlayLayer(ctx, media, clip, srcTime, outW, outH, fx) {
+  const { px, dest } = overlayDest(ctx, media, clip, srcTime, outW, outH)
   ctx.save()
   if (fx.cssFilter && fx.cssFilter !== 'none') ctx.filter = fx.cssFilter
   ctx.globalAlpha = fx.opacity
   ctx.translate(dest.dx + dest.dw / 2 + fx.tx * dest.dw, dest.dy + dest.dh / 2 + fx.ty * dest.dh)
   ctx.rotate((dest.rotation || 0) * Math.PI / 180)
   ctx.scale(fx.scale, fx.scale)
-  try { ctx.drawImage(video, px.sx, px.sy, px.sw, px.sh, -dest.dw / 2, -dest.dh / 2, dest.dw, dest.dh) } catch { /* noop */ }
+  try { ctx.drawImage(media, px.sx, px.sy, px.sw, px.sh, -dest.dw / 2, -dest.dh / 2, dest.dw, dest.dh) } catch { /* noop */ }
   ctx.restore()
   return dest
 }
@@ -108,8 +108,11 @@ export function drawComposite(ctx, head, selClipIds, env) {
   let overlayDestSel = null
   for (const clip of videosAt(head, clipsRef.current, tracksRef.current)) {
     const el = mediaEls.current.get(clip.id)
-    if (!el || !el.videoWidth) continue
-    const srcTime = el.currentTime
+    const { w: mw } = mediaSize(el)
+    if (!el || !mw) continue
+    const srcTime = clip.kind === 'image'
+      ? clamp(timelineToSource(clip, head), clip.in_point, clip.out_point)
+      : el.currentTime
     const fx = fxForClip(clip, head)
     if (isOverlay(clip)) {
       const dest = drawOverlayLayer(ctx, el, clip, srcTime, outW, outH, fx)
@@ -153,32 +156,32 @@ export function drawMainView(head, env) {
   if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch }
 
   const clip = clipsRef.current.find((c) => c.id === selRef.current)
-  const clipActive = clip && clip.kind === 'video' && head >= clip.start - 0.02 && head < clipEnd(clip)
-  const playingThis = playingRef.current && clipActive
+  const clipActive = clip && isVisualClip(clip) && head >= clip.start - 0.02 && head < clipEnd(clip)
+  const playingThis = playingRef.current && clipActive && clip.kind !== 'image'
 
   // Recorte (fuente + recuadro) solo en pausa. Al reproducir ese clip, el Main
   // muestra el compuesto con aparición / salida / filtro.
-  if (clip && clip.kind === 'video' && !playingThis) {
+  if (clip && isVisualClip(clip) && !playingThis) {
     const el = mediaEls.current.get(clip.id)
-    if (!el || !el.videoWidth) {
+    const { w: vw, h: vh } = mediaSize(el)
+    if (!el || !vw) {
       ctx.fillStyle = '#05060a'; ctx.fillRect(0, 0, cw, ch)
       return
     }
-    const vw = el.videoWidth, vh = el.videoHeight
     const srcAspect = vw / vh
     const cw2 = 520, ch2 = Math.round(cw2 / srcAspect)
     if (canvas.width !== cw2 || canvas.height !== ch2) { canvas.width = cw2; canvas.height = ch2 }
     const active = head >= clip.start - 0.02 && head < clipEnd(clip)
     const clampedHead = clamp(head, clip.start, clipEnd(clip))
     const srcTime = clamp(timelineToSource(clip, clampedHead), clip.in_point, clip.out_point)
-    if (!(playingRef.current && active)) {
+    if (!(playingRef.current && active) && clip.kind !== 'image') {
       if (Math.abs(el.currentTime - srcTime) > 0.06) { try { el.currentTime = srcTime } catch { /* noop */ } }
     }
     ctx.clearRect(0, 0, cw2, ch2)
     try { ctx.drawImage(el, 0, 0, cw2, ch2) } catch { /* noop */ }
     const rf = clip.reframe || newReframe()
     const outA = outRef.current.w / outRef.current.h
-    const srcT = playingRef.current && active ? el.currentTime : srcTime
+    const srcT = (playingRef.current && active && clip.kind !== 'image') ? el.currentTime : srcTime
     const crop = cropWindow(clip, srcAspect, outA, srcT)
     const { cx: pcx, cy: pcy, wf, hf } = crop
     const bx = (pcx - wf / 2) * cw2, by = (pcy - hf / 2) * ch2, bw = wf * cw2, bh = hf * ch2

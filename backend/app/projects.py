@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config, migrations
-from .schemas import AudioInfo, ClipInfo, Project, Transcript
+from .schemas import AudioInfo, ClipInfo, ImageInfo, Project, Transcript
 
 _lock = threading.Lock()
 _FILE: Path = config.PROJECTS_FILE
@@ -178,6 +178,12 @@ def apply_manifest(pid: str, manifest: dict) -> Project | None:
                     for k in audio_fields:
                         if k in m:
                             a[k] = m[k]
+            for im in p.get("images", []):
+                m = by_file.get(im.get("filename"))
+                if m:
+                    for k in ("label", "description"):
+                        if k in m:
+                            im[k] = m[k]
             _save(data)
             return Project(**p)
     return None
@@ -240,5 +246,16 @@ def add_audio(pid: str, audio: AudioInfo) -> None:
             if p["id"] == pid:
                 p.setdefault("audios", [])
                 p["audios"].append(audio.model_dump())
+                break
+        _save(data)
+
+
+def add_image(pid: str, image: ImageInfo) -> None:
+    with _lock:
+        data = _load()
+        for p in data["projects"]:
+            if p["id"] == pid:
+                p.setdefault("images", [])
+                p["images"].append(image.model_dump())
                 break
         _save(data)

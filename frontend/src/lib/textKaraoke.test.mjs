@@ -21,11 +21,12 @@ assert.ok(karaoke)
 assert.equal(karaoke.style.word_fx, 'glow')
 assert.ok(karaoke.style.highlight_color)
 
-const themed = applyThemeToStyle({ x: 0.4, y: 0.9, w: 0.7, color: '#111111' }, karaoke)
+const themed = applyThemeToStyle({ x: 0.4, y: 0.9, w: 0.7, color: '#111111', opacity: 0.55 }, karaoke)
 assert.equal(themed.theme, 'karaoke')
 assert.equal(themed.x, 0.4)
 assert.equal(themed.y, 0.9)
 assert.equal(themed.w, 0.7)
+assert.equal(themed.opacity, 0.55)
 assert.notEqual(themed.color, '#111111')
 
 const fresh = applyThemeToStyle({}, themeById('classic'))

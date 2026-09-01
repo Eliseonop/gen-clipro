@@ -3,9 +3,8 @@
 // x/y son el centro del texto en coordenadas normalizadas (0-1) de la salida.
 
 import { clipFxAt } from './clipFx.js'
-import { activeWordIndex, activeWordIndexFromWords, applyThemeToStyle, hasWordFx, karaokeOn, wordOpacity } from './textKaraoke.js'
+import { activeWordIndex, activeWordIndexFromWords, applyThemeToStyle, hasWordFx, karaokeOn, styleOpacity, wordOpacity } from './textKaraoke.js'
 import { themeById } from './subtitleThemes.js'
-import { isCaptionText } from './textRole.js'
 
 export const FONTS = [
   'Arial', 'Arial Black', 'Anton', 'Segoe UI', 'Segoe UI Black', 'Calibri', 'Bahnschrift',
@@ -33,6 +32,39 @@ export const TEXT_PRESETS = [
 
 export const defaultTextStyle = () => ({ ...base, preset: 'outline', border_width: 6 })
 export const subtitleStyle = () => applyThemeToStyle({}, themeById('classic'))
+
+/** Id de tema de subtítulo activo, o null si es texto común.
+ *  Si el id está puesto pero el karaoke del tema fue anulado (word_fx none),
+ *  no cuenta como seleccionado: un clic debe aplicar el tema, no quitarlo. */
+export function selectedSubtitleThemeId(st) {
+  const id = st?.theme || st?.preset
+  const theme = themeById(id)
+  if (!theme) return null
+  if (karaokeOn(theme.style) && !karaokeOn(st)) return null
+  return id
+}
+
+/** Quita el tema y deja el look de texto común, conservando posición y opacidad. */
+export function clearTextTheme(current) {
+  const cur = current || {}
+  const plain = defaultTextStyle()
+  return {
+    ...plain,
+    x: cur.x ?? plain.x,
+    y: cur.y ?? plain.y,
+    w: cur.w ?? plain.w,
+    size: cur.size ?? plain.size,
+    opacity: cur.opacity ?? 1,
+    max_words: cur.max_words ?? plain.max_words,
+  }
+}
+
+/** Clic en un tema: aplica; clic otra vez en el mismo: lo quita. */
+export function applyOrClearTheme(current, theme) {
+  if (theme && selectedSubtitleThemeId(current) === theme.id) return clearTextTheme(current)
+  if (!theme) return clearTextTheme(current)
+  return applyThemeToStyle(current, theme)
+}
 
 const FONT_CSS = {
   'Arial': 'Arial, sans-serif',
@@ -154,9 +186,10 @@ export function drawTextClip(ctx, clip, cw, ch, opts = {}) {
   const localT = opts.time == null ? 0 : opts.time - (clip.start || 0)
   const motionOff = opts.reduceMotion ?? reduceMotionOn()
   const skipBlock = motionOff || opts.selected
-  const karaoke = isCaptionText(clip) && karaokeOn(st)
+  const karaoke = karaokeOn(st)
 
   ctx.save()
+  ctx.globalAlpha *= styleOpacity(st)
   ctx.font = `${st.bold ? 'bold ' : ''}${size}px ${cssFont(st.font)}`
   ctx.textBaseline = 'middle'
 

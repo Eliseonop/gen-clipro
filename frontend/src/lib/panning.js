@@ -166,7 +166,7 @@ function blit(ctx, video, r) {
 // `outAspect` = ancho/alto del formato de salida (9/16, 16/9, 1, …).
 export function drawReframe(ctx, video, reframe, srcTime, outAspect = OUT_RATIO, opts) {
   const c = ctx.canvas
-  const vw = video.videoWidth, vh = video.videoHeight
+  const vw = video.videoWidth || video.naturalWidth, vh = video.videoHeight || video.naturalHeight
   if (!vw || !vh) return
   const mode = reframe?.pan_mode || 'smooth'
   if (opts?.clear !== false) ctx.clearRect(0, 0, c.width, c.height)

@@ -61,6 +61,24 @@ class AddClipTest(unittest.TestCase):
             ops.add_clip(base_tl(), {"track_id": "A1", "kind": "video", "asset_kind": "clips",
                                      "asset_id": "1", "filename": "b.mp4", "out_point": 2.0, "source_duration": 2.0})
 
+    def test_imagen_entra_en_pista_de_video(self):
+        r = ops.add_clip(base_tl(), {
+            "track_id": "V1", "kind": "image", "asset_kind": "images", "asset_id": "img1",
+            "filename": "meme.png", "start": 5.0, "in_point": 0.0, "out_point": 5.0,
+            "source_duration": 5.0, "layout": "fill", "frame": "full",
+        })
+        added = r.timeline.clips[-1]
+        self.assertEqual(added.kind, "image")
+        self.assertEqual(added.track_id, "V1")
+        self.assertEqual(ops.validate_timeline(r.timeline), [])
+
+    def test_imagen_no_entra_en_pista_de_audio(self):
+        with self.assertRaises(ValueError):
+            ops.add_clip(base_tl(), {
+                "track_id": "A1", "kind": "image", "asset_kind": "images", "asset_id": "img1",
+                "filename": "meme.png", "out_point": 5.0, "source_duration": 5.0,
+            })
+
 
 class MoveClipTest(unittest.TestCase):
     def test_mueve_start(self):
@@ -77,6 +95,17 @@ class MoveClipTest(unittest.TestCase):
     def test_mover_a_pista_incompatible_falla(self):
         with self.assertRaises(ValueError):
             ops.move_clip(base_tl(), "c1", track_id="A1")
+
+    def test_mueve_imagen_entre_pistas_de_video(self):
+        tl = base_tl()
+        tl.tracks.append(TimelineTrack(id="V2", kind="video", name="V2"))
+        added = ops.add_clip(tl, {
+            "id": "img1", "track_id": "V1", "kind": "image", "asset_kind": "images",
+            "asset_id": "i", "filename": "logo.png", "out_point": 5.0, "source_duration": 5.0,
+        })
+        r = ops.move_clip(added.timeline, "img1", track_id="V2")
+        self.assertEqual(r.timeline.clips[-1].track_id, "V2")
+        self.assertEqual(ops.validate_timeline(r.timeline), [])
 
     def test_clip_inexistente_falla(self):
         with self.assertRaises(ValueError):
@@ -138,6 +167,19 @@ class SetClipLayoutTest(unittest.TestCase):
         c = r.timeline.clips[0]
         self.assertEqual(c.frame, "top")
         self.assertAlmostEqual(c.out_point - c.in_point, 3.0)
+
+    def test_imagen_puede_crecer_mas_alla_de_source_duration(self):
+        tl = base_tl()
+        added = ops.add_clip(tl, {
+            "id": "img1", "track_id": "V1", "kind": "image", "asset_kind": "images",
+            "asset_id": "i", "filename": "logo.png", "in_point": 0.0,
+            "out_point": 5.0, "source_duration": 5.0,
+        })
+        r = ops.set_clip_layout(added.timeline, "img1", duration=12.0)
+        c = next(x for x in r.timeline.clips if x.id == "img1")
+        self.assertAlmostEqual(c.out_point, 12.0)
+        self.assertAlmostEqual(c.source_duration, 12.0)
+        self.assertEqual(ops.validate_timeline(r.timeline), [])
 
     def test_texto_puede_crecer_mas_alla_de_source_duration(self):
         tl = Timeline(
@@ -266,6 +308,18 @@ class ReframeClipTest(unittest.TestCase):
                                      out_point=3.0, source_duration=3.0))
         with self.assertRaises(ValueError):
             ops.reframe_clip(tl, "a1", mode="center")
+
+    def test_reframe_en_imagen(self):
+        tl = base_tl()
+        added = ops.add_clip(tl, {
+            "id": "img1", "track_id": "V1", "kind": "image", "asset_kind": "images",
+            "asset_id": "i", "filename": "logo.png", "in_point": 0.0,
+            "out_point": 5.0, "source_duration": 5.0,
+        })
+        r = ops.reframe_clip(added.timeline, "img1", mode="center", zoom=0.8)
+        c = next(x for x in r.timeline.clips if x.id == "img1")
+        self.assertAlmostEqual(c.reframe.zoom, 0.8)
+        self.assertEqual(c.reframe.keyframes[0].cx, 0.5)
 
     def test_mode_invalido(self):
         with self.assertRaises(ValueError):

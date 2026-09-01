@@ -1,0 +1,10 @@
+---
+description: No docs extra, no commits, solo lo pedido
+alwaysApply: true
+---
+
+# Cómo trabajar en este repo
+
+- No crear archivos `.md` ni docs/specs/planes salvo que lo pida explícitamente.
+- No hacer `git commit` ni `git push` salvo que lo pida explícitamente. El commit lo hace el usuario.
+- Implementar solo lo pedido. Sin extras, refactors ajenos ni “por si acaso”.

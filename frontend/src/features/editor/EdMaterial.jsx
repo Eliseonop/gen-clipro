@@ -1,9 +1,30 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import Icon from '../../components/Icon'
 import { fmt } from '../../lib/utils'
 import { FAV_CAT } from '../../lib/favorites'
-import { listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryItem, unsaveLibraryItem } from '../../services/api'
-import MaterialClipGrid, { dragPayload, useToggle, useExclusiveMedia, Empty } from './MaterialClipGrid'
+import { listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryItem, unsaveLibraryItem, uploadImages } from '../../services/api'
+import MaterialClipGrid, { dragPayload, useToggle, useExclusiveMedia, Empty, ImageCard } from './MaterialClipGrid'
+import SfxClassifyModal from './SfxClassifyModal'
+
+const IMAGE_FILE_RE = /\.(png|jpe?g|webp|gif|bmp|tiff?|avif|heic|heif)$/i
+
+function isImageFile(file) {
+  if (!file) return false
+  if ((file.type || '').startsWith('image/')) return true
+  return IMAGE_FILE_RE.test(file.name || '')
+}
+
+function hasOsImageDrag(e) {
+  const types = [...(e.dataTransfer?.types || [])]
+  return types.includes('Files') && !types.includes('application/x-material')
+}
+
+function pickDefaultSfxCat(categories, current) {
+  const cats = (categories || []).filter((c) => c.id && c.id !== FAV_CAT)
+  if (current && cats.some((c) => c.id === current)) return current
+  const other = cats.find((c) => c.id === '13_OTHER')
+  return (other || cats[0] || {}).id || ''
+}
 
 function ScopeFilter({ value, onChange }) {
   return (
@@ -42,10 +63,16 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
   const [tab, setTab] = useState('video')
   const [videoFilter, setVideoFilter] = useState('all')
   const [audioFilter, setAudioFilter] = useState('all')
-  const [library, setLibrary] = useState({ clips: [], audios: [] })
+  const [imageFilter, setImageFilter] = useState('all')
+  const [library, setLibrary] = useState({ clips: [], audios: [], images: [] })
   const [err, setErr] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const [fileDrop, setFileDrop] = useState(false)
+  const fileRef = useRef(null)
+  const dropDepth = useRef(0)
   const clips = project.clips || []
   const audios = project.audios || []
+  const images = project.images || []
   const onPlayMedia = useExclusiveMedia()
   const di = onDragInfo || (() => {})
 
@@ -53,7 +80,7 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
     listLibrary().then(setLibrary).catch(() => {})
   }, [])
 
-  useEffect(() => { reloadLibrary() }, [reloadLibrary, project.id, clips.length, audios.length])
+  useEffect(() => { reloadLibrary() }, [reloadLibrary, project.id, clips.length, audios.length, images.length])
 
   async function toggleSave(resourceType, item) {
     setErr('')
@@ -76,11 +103,62 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
 
   const projectClips = withProjectScope(clips, 'clip')
   const projectAudios = withProjectScope(audios, 'audio')
+  const projectImages = withProjectScope(images, 'image')
   const shownClips = videoFilter === 'saved' ? (library.clips || []) : [...projectClips, ...(library.clips || [])]
   const shownAudios = audioFilter === 'saved' ? (library.audios || []) : [...projectAudios, ...(library.audios || [])]
+  const shownImages = imageFilter === 'saved' ? (library.images || []) : [...projectImages, ...(library.images || [])]
+
+  async function ingestFiles(fileList) {
+    const files = [...(fileList || [])].filter(isImageFile)
+    if (!files.length) {
+      setErr('Suelta un PNG, JPG, WebP o GIF.')
+      return
+    }
+    setTab('image')
+    setUploading(true)
+    setErr('')
+    try {
+      await uploadImages(project.id, files)
+      onRefresh?.()
+    } catch (e) {
+      setErr(e.message)
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  function onFileDragEnter(e) {
+    if (!hasOsImageDrag(e)) return
+    e.preventDefault()
+    dropDepth.current += 1
+    setFileDrop(true)
+  }
+  function onFileDragOver(e) {
+    if (!hasOsImageDrag(e)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+  function onFileDragLeave(e) {
+    if (!hasOsImageDrag(e)) return
+    dropDepth.current = Math.max(0, dropDepth.current - 1)
+    if (dropDepth.current === 0) setFileDrop(false)
+  }
+  function onFileDrop(e) {
+    if (!hasOsImageDrag(e)) return
+    e.preventDefault()
+    dropDepth.current = 0
+    setFileDrop(false)
+    ingestFiles(e.dataTransfer.files)
+  }
 
   return (
-    <div className="ed-material">
+    <div
+      className={`ed-material${fileDrop ? ' file-drop' : ''}`}
+      onDragEnter={onFileDragEnter}
+      onDragOver={onFileDragOver}
+      onDragLeave={onFileDragLeave}
+      onDrop={onFileDrop}
+    >
       <div className="ed-mat-head">
         <div className="ed-mat-title">
           <button className="ed-back" onClick={onBack} type="button" title="Volver a proyectos">
@@ -92,6 +170,22 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
           <button className="ghost small" onClick={onOpenVideo} type="button">
             <Icon name="add" size={15} /> Cargar video
           </button>
+          <button className="ghost small" onClick={() => fileRef.current?.click()} type="button" disabled={uploading}>
+            <Icon name="add" size={15} /> {uploading ? 'Subiendo…' : 'Imagen'}
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/avif,.png,.jpg,.jpeg,.webp,.gif,.bmp,.avif,.heic"
+            multiple
+            hidden
+            onChange={async (e) => {
+              const files = [...(e.target.files || [])]
+              e.target.value = ''
+              if (!files.length) return
+              await ingestFiles(files)
+            }}
+          />
           <button className="ghost small" onClick={onOpenAudio} type="button">
             <Icon name="add" size={15} /> Audio
           </button>
@@ -100,6 +194,9 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
       <div className="ed-mat-tabs">
         <button className={`ed-tab ${tab === 'video' ? 'on' : ''}`} onClick={() => setTab('video')}>
           <Icon name="movie" size={15} /> Video <span className="ed-count">{clips.length + (library.clips || []).length}</span>
+        </button>
+        <button className={`ed-tab ${tab === 'image' ? 'on' : ''}`} onClick={() => setTab('image')}>
+          <Icon name="image" size={15} /> Imagen <span className="ed-count">{images.length + (library.images || []).length}</span>
         </button>
         <button className={`ed-tab ${tab === 'audio' ? 'on' : ''}`} onClick={() => setTab('audio')}>
           <Icon name="mic" size={15} /> Audio <span className="ed-count">{audios.length + (library.audios || []).length}</span>
@@ -121,6 +218,28 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
             onToggleSave={(c) => toggleSave('clip', c)}
             emptyText={videoFilter === 'saved' ? 'No hay clips guardados.' : 'Sin clips. Pulsa Cargar video para añadir material.'}
           />
+        </div>
+      )}
+
+      {tab === 'image' && (
+        <div className="ed-mat-list">
+          <ScopeFilter value={imageFilter} onChange={setImageFilter} />
+          {shownImages.length === 0
+            ? <Empty text={imageFilter === 'saved' ? 'No hay imágenes guardadas.' : 'Sin imágenes. Suelta un archivo aquí o pulsa Imagen.'} />
+            : (
+              <div className="ed-mat-grid">
+                {shownImages.map((im) => (
+                  <ImageCard
+                    key={`${im.scope}-${im.id}`}
+                    image={im}
+                    onAdd={() => onAdd('images', im)}
+                    di={di}
+                    saved={im.scope === 'library' || !!im.is_saved}
+                    onToggleSave={() => toggleSave('image', im)}
+                  />
+                ))}
+              </div>
+            )}
         </div>
       )}
 
@@ -162,7 +281,7 @@ function FavStar({ on, onToggle, title }) {
   )
 }
 
-function SfxCard({ sfx, onAdd, onPlay, di, favOn, onToggleFav }) {
+function SfxCard({ sfx, onAdd, onPlay, di, favOn, onToggleFav, onEdit }) {
   const { ref, playing, setPlaying, toggle } = useToggle(onPlay)
   const [dur, setDur] = useState(null)
   return (
@@ -180,6 +299,9 @@ function SfxCard({ sfx, onAdd, onPlay, di, favOn, onToggleFav }) {
         </button>
         <span className="ed-sfx-sub">{sfx.category}{dur != null ? ` · ${fmt(dur)}` : ''}</span>
         <FavStar on={favOn} onToggle={onToggleFav} />
+        <button type="button" className="ed-add-btn" title="Editar" onClick={(e) => { e.stopPropagation(); onEdit?.() }}>
+          <Icon name="edit" size={14} />
+        </button>
         <button className="ed-add-btn" onClick={(e) => { e.stopPropagation(); onAdd() }} title="Agregar al proyecto">
           <Icon name="add" size={15} />
         </button>
@@ -214,10 +336,12 @@ function SfxTab({ onAdd, onPlay, di, fav }) {
   const [category, setCategory] = useState('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)
+  const [editSfx, setEditSfx] = useState(null)
 
-  const refresh = useCallback(async (query, cat) => {
-    setLoading(true)
-    try { setData(await listSfx(query, cat)) } catch { /* backend */ } finally { setLoading(false) }
+  const refresh = useCallback(async (query, cat, quiet = false) => {
+    if (!quiet) setLoading(true)
+    try { setData(await listSfx(query, cat)) } catch { /* backend */ } finally { if (!quiet) setLoading(false) }
   }, [])
 
   useEffect(() => { refresh('', '') }, [refresh])
@@ -277,6 +401,14 @@ function SfxTab({ onAdd, onPlay, di, fav }) {
         >
           <Icon name={category === FAV_CAT ? 'star' : 'star_border'} size={16} />
         </button>
+        <button
+          type="button"
+          className="ed-sfx-add"
+          title="Agregar sonido"
+          onClick={() => { setEditSfx(null); setAddOpen(true) }}
+        >
+          <Icon name="add" size={16} />
+        </button>
       </div>
 
       <div className="ed-mat-grid ed-sfx-grid">
@@ -291,10 +423,20 @@ function SfxTab({ onAdd, onPlay, di, fav }) {
                 di={di}
                 favOn={!!fav?.isSfxFav(s.id)}
                 onToggleFav={() => toggleSfxFav(s.id)}
+                onEdit={() => { setAddOpen(true); setEditSfx(s) }}
               />
             ))}
       </div>
       {!loading && <div className="ed-sfx-count">{data.total} sonidos</div>}
+      {(addOpen || editSfx) && (
+        <SfxClassifyModal
+          categories={cats}
+          defaultCategory={pickDefaultSfxCat(cats, category)}
+          editSfx={editSfx}
+          onClose={() => { setAddOpen(false); setEditSfx(null) }}
+          onChanged={() => refresh(q, category, true)}
+        />
+      )}
     </div>
   )
 }

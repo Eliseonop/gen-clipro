@@ -64,10 +64,15 @@ def _save(data: dict) -> None:
 
 def _resource_type(item: dict) -> str:
     rt = item.get("resource_type")
-    if rt in ("audio", "clip"):
+    if rt in ("audio", "clip", "image"):
         return rt
     if "index" in item:
         return "clip"
+    if item.get("width") is not None or str(item.get("filename") or "").lower().endswith(
+        (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+    ):
+        if "voice" not in item and "end" not in item:
+            return "image"
     return "audio"
 
 
@@ -88,13 +93,15 @@ def infer_origin_source(item: dict, resource_type: str) -> tuple[str, str]:
     url = str(item.get("source_url") or item.get("youtube_url") or "")
     if any(h in url.lower() for h in _YT_HINTS):
         return "youtube", "external"
+    if resource_type == "image":
+        return "upload", "external"
     return "compose", "generated"
 
 
 def material_dto(item: dict, scope: str) -> dict:
     rt = _resource_type(item)
     origin, source = infer_origin_source(item, rt)
-    kind = "video" if rt == "clip" else "audio"
+    kind = {"clip": "video", "audio": "audio", "image": "image"}.get(rt, "audio")
     filename = item.get("filename") or ""
     out = dict(item)
     out["resource_type"] = rt
@@ -109,16 +116,19 @@ def material_dto(item: dict, scope: str) -> dict:
 
 def list_library() -> dict:
     items = _load()["items"]
-    clips, audios = [], []
+    clips, audios, images = [], [], []
     for it in items:
         dto = material_dto(it, "library")
         if dto["resource_type"] == "clip":
             clips.append(dto)
+        elif dto["resource_type"] == "image":
+            images.append(dto)
         else:
             audios.append(dto)
     clips.sort(key=lambda x: x.get("saved_at") or "", reverse=True)
     audios.sort(key=lambda x: x.get("saved_at") or "", reverse=True)
-    return {"clips": clips, "audios": audios}
+    images.sort(key=lambda x: x.get("saved_at") or "", reverse=True)
+    return {"clips": clips, "audios": audios, "images": images}
 
 
 def _find_item(data: dict, item_id: str) -> dict | None:
@@ -126,18 +136,23 @@ def _find_item(data: dict, item_id: str) -> dict | None:
 
 
 def save_from_project(project_id: str, resource_type: str, ident: str) -> dict:
-    if resource_type not in ("audio", "clip"):
+    if resource_type not in ("audio", "clip", "image"):
         raise LookupError("Tipo no válido.")
     proj = projects.get_project(project_id)
     if proj is None:
         raise LookupError("Proyecto no encontrado.")
-    disk_kind = "audio" if resource_type == "audio" else "video"
-    asset_kind = "audios" if resource_type == "audio" else "clips"
+    disk_kind = {"audio": "audio", "clip": "video", "image": "image"}[resource_type]
+    asset_kind = {"audio": "audios", "clip": "clips", "image": "images"}[resource_type]
     raw = None
     if resource_type == "audio":
         for a in proj.audios:
             if str(a.id) == str(ident):
                 raw = a.model_dump()
+                break
+    elif resource_type == "image":
+        for im in proj.images:
+            if str(im.id) == str(ident):
+                raw = im.model_dump()
                 break
     else:
         for c in proj.clips:
@@ -151,7 +166,9 @@ def save_from_project(project_id: str, resource_type: str, ident: str) -> dict:
         raise LookupError("Archivo no encontrado.")
 
     lib_id = _new_id()
-    ext = Path(raw["filename"]).suffix or (".m4a" if resource_type == "audio" else ".mp4")
+    ext = Path(raw["filename"]).suffix or (
+        ".m4a" if resource_type == "audio" else ".png" if resource_type == "image" else ".mp4"
+    )
     stem = storage.safe_name(raw.get("label") or Path(raw["filename"]).stem)
     dest_name = f"{stem}_{lib_id[4:]}{ext}"
     dest = library_root() / disk_kind / dest_name
@@ -188,6 +205,8 @@ def save_from_project(project_id: str, resource_type: str, ident: str) -> dict:
         "end": raw.get("end"),
         "source_url": raw.get("source_url"),
         "reframe": raw.get("reframe"),
+        "width": raw.get("width"),
+        "height": raw.get("height"),
     }
 
     try:
@@ -241,7 +260,7 @@ def unsave(item_id: str) -> dict:
             raise LookupError("Recurso no encontrado.")
         data["items"] = [x for x in data["items"] if x.get("id") != item_id]
         _save(data)
-    kind = "video" if item.get("resource_type") == "clip" else "audio"
+    kind = {"clip": "video", "audio": "audio", "image": "image"}.get(item.get("resource_type"), "audio")
     path = storage.resolve_library_media(kind, item.get("filename") or "")
     if path and path.exists():
         try:
