@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from app import config, projects, storage
-from app.schemas import AudioInfo, Timeline, TimelineClip, TimelineTrack
+from app.schemas import AudioInfo, ImageInfo, Timeline, TimelineClip, TimelineTrack
 
 
 class InferOriginTest(unittest.TestCase):
@@ -32,6 +32,11 @@ class InferOriginTest(unittest.TestCase):
             "clip",
         )
         self.assertEqual((o, s), ("youtube", "external"))
+
+    def test_image_upload_origin(self):
+        from app.library import infer_origin_source
+        o, s = infer_origin_source({"filename": "m.png"}, "image")
+        self.assertEqual((o, s), ("upload", "external"))
 
     def test_clip_compuesto_sin_youtube(self):
         from app.library import infer_origin_source
@@ -62,6 +67,17 @@ class MaterialDtoTest(unittest.TestCase):
         self.assertTrue(dto["is_saved"])
         self.assertEqual(dto["resource_type"], "audio")
         self.assertEqual(dto["url"], "/api/library/media/audio/n.m4a")
+
+    def test_library_image_url(self):
+        from app.library import material_dto
+
+        dto = material_dto(
+            {"id": "lib_img", "resource_type": "image", "filename": "logo.png",
+             "origin": "upload", "source": "external"},
+            "library",
+        )
+        self.assertEqual(dto["url"], "/api/library/media/image/logo.png")
+        self.assertEqual(dto["resource_type"], "image")
 
     def test_project_no_esta_saved(self):
         from app.library import material_dto
@@ -123,8 +139,30 @@ class LibrarySaveTest(unittest.TestCase):
         lib = list_library()
         self.assertEqual(len(lib["audios"]), 1)
         self.assertEqual(len(lib["clips"]), 0)
+        self.assertEqual(len(lib["images"]), 0)
         dest = storage.resolve_library_media("audio", saved["filename"])
         self.assertIsNotNone(dest)
+        self.assertTrue(dest.exists())
+
+    def test_save_image_mueve_a_biblioteca(self):
+        from app.library import list_library, save_from_project
+
+        (self.proj_dir / "image").mkdir(parents=True, exist_ok=True)
+        src = self.proj_dir / "image" / "logo.png"
+        src.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+        projects.add_image(self.pid, ImageInfo(
+            id="im1", filename="logo.png", url=f"/api/media/{self.pid}/image/logo.png",
+            width=8, height=8, label="Logo",
+        ))
+        saved = save_from_project(self.pid, "image", "im1")
+        self.assertEqual(saved["resource_type"], "image")
+        self.assertEqual(saved["origin"], "upload")
+        self.assertTrue(saved["url"].startswith("/api/library/media/image/"))
+        self.assertEqual(projects.get_project(self.pid).images, [])
+        self.assertFalse(src.exists())
+        lib = list_library()
+        self.assertEqual(len(lib["images"]), 1)
+        dest = storage.resolve_library_media("image", saved["filename"])
         self.assertTrue(dest.exists())
 
     def test_save_reescribe_timeline_de_ese_proyecto(self):

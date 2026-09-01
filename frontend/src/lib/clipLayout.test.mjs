@@ -8,8 +8,10 @@ import {
   destRectOnCanvas,
   enableOverlay,
   isOverlay,
+  mediaSize,
   newTransform,
   sourceCropPx,
+  videosAt,
 } from './clipLayout.js'
 
 const fillClip = {
@@ -159,5 +161,20 @@ assert.equal(containWin.wf, 1)
 assert.equal(containWin.hf, 1)
 assert.equal(containWin.cx, 0.5)
 assert.equal(containWin.cy, 0.5)
+
+const tracks = [
+  { id: 'V1', kind: 'video' },
+  { id: 'V2', kind: 'video' },
+  { id: 'A1', kind: 'audio' },
+]
+const layered = videosAt(2, [
+  { id: 'v', kind: 'video', track_id: 'V1', start: 0, in_point: 0, out_point: 10 },
+  { id: 'm', kind: 'image', track_id: 'V2', start: 1, in_point: 0, out_point: 5 },
+  { id: 'a', kind: 'audio', track_id: 'A1', start: 0, in_point: 0, out_point: 10 },
+], tracks)
+assert.deepEqual(layered.map((c) => c.id), ['v', 'm'])
+assert.equal(mediaSize({ videoWidth: 1920, videoHeight: 1080 }).w, 1920)
+assert.equal(mediaSize({ naturalWidth: 800, naturalHeight: 600 }).w, 800)
+assert.equal(mediaSize({ videoWidth: 0, naturalWidth: 400, naturalHeight: 300 }).h, 300)
 
 console.log('clipLayout overlay crop/transform ok')

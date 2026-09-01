@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from app import config, projects
 from app.mcp_server import registry, server, tools_media  # noqa: F401 (server puebla el registro)
-from app.schemas import AnalyzeResponse, ClipInfo, Segment, VideoInfo
+from app.schemas import AnalyzeResponse, ClipInfo, ImageInfo, Segment, VideoInfo
 
 
 def _fake_analyze(**kwargs):
@@ -105,6 +105,18 @@ class DeleteMediaTest(unittest.TestCase):
     def test_delete_unknown_raises(self):
         with self.assertRaises(ValueError):
             tools_media.delete_media(self.pid, "clips", "99")
+
+    def test_delete_image(self):
+        (self.proj_dir / "image").mkdir(parents=True, exist_ok=True)
+        img_file = self.proj_dir / "image" / "logo.png"
+        img_file.write_bytes(b"png")
+        projects.add_image(self.pid, ImageInfo(
+            id="im1", filename="logo.png", url="/i", width=10, height=10))
+        out = tools_media.delete_media(self.pid, "images", "im1")
+        self.assertTrue(out["ok"])
+        self.assertTrue(out["file_deleted"])
+        self.assertFalse(img_file.exists())
+        self.assertEqual(projects.get_project(self.pid).images, [])
 
     def test_bad_kind_raises(self):
         with self.assertRaises(ValueError):

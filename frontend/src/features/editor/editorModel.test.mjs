@@ -8,7 +8,7 @@ import {
   canCaptionClip, textClipsFromTranscript, makeTextClip, resizeGeneratedClip,
   splitClipByMaxWords, splitTrackTextByMaxWords, extraClipsAfterSplit,
   nextClipSelection, rangeSelectOnTrack, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
-  previewElementVolume, parsePreviewVolume,
+  previewElementVolume, parsePreviewVolume, laneKindForAsset, trackKindForClip,
 } from './editorModel.js'
 
 const vFast = { kind: 'video', start: 10, in_point: 2, out_point: 6, speed: 2 }
@@ -251,6 +251,11 @@ assert.equal(madeFree.text_role, 'free')
 assert.equal(madeFree.out_point, 3)
 assert.deepEqual(madeFree.words, [])
 
+const themedFree = makeTextClip('T2', 0, 4, 'Hola mundo', { theme: 'neon', word_fx: 'glow', font: 'Impact' })
+assert.equal(themedFree.text_role, 'free')
+assert.equal(themedFree.style.word_fx, 'glow')
+assert.equal(themedFree.style.theme, 'neon')
+
 const madeCap = makeTextClip('T1', 0, 2, 'Hola', {}, { text_role: 'caption' })
 assert.equal(madeCap.text_role, 'caption')
 
@@ -279,4 +284,28 @@ assert.equal(extraClipsAfterSplit([freeLong], 'T1', 2), 0)
 assert.equal(splitTrackTextByMaxWords([freeLong], 'T1', 2).length, 1)
 
 console.log('text role + generated resize ok')
+
+const img = makeClip('images', { id: 'i1', filename: 'meme.png', label: 'Meme' }, 'V2', 10)
+assert.equal(img.kind, 'image')
+assert.equal(img.asset_kind, 'images')
+assert.equal(img.track_id, 'V2')
+assert.equal(img.start, 10)
+assert.equal(img.in_point, 0)
+assert.equal(img.out_point, 5)
+assert.equal(img.source_duration, 5)
+assert.equal(img.layout, 'fill')
+assert.equal(img.frame, 'full')
+assert.equal(img.reframe.zoom, 1)
+assert.equal(clipSpeed(img), 1)
+assert.equal(clipDur(img), 5)
+assert.equal(trackKindForClip('image'), 'video')
+assert.equal(laneKindForAsset('images'), 'video')
+assert.equal(mediaUrl('p1', img), '/api/media/p1/image/meme.png')
+assert.equal(canCaptionClip(img), false)
+
+const imgGrown = resizeGeneratedClip(img, 'trim-right', 3)
+assert.equal(imgGrown.out_point, 8)
+assert.ok(imgGrown.source_duration >= 8)
+
+console.log('image clip ok')
 

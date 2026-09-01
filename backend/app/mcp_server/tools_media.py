@@ -11,7 +11,7 @@ from ..schemas import ClipRequest, CropMode, Segment
 from . import dto
 from .registry import tool
 
-_MEDIA_KIND = {"clips": "video", "audios": "audio"}
+_MEDIA_KIND = {"clips": "video", "audios": "audio", "images": "image"}
 
 
 def _project_or_raise(project_id: str):
@@ -75,12 +75,12 @@ def create_clips_from_segments(project_id: str, url: str, segments: list,
 
 
 def delete_media(project_id: str, kind: str, ident: str) -> dict:
-    """Elimina un material del proyecto (clip o audio) y borra su archivo.
+    """Elimina un material del proyecto (clip, audio o imagen) y borra su archivo.
 
-    ``kind`` = clips|audios; ``ident`` = index del clip o id del audio.
+    ``kind`` = clips|audios|images; ``ident`` = index del clip o id del audio/imagen.
     """
     if kind not in _MEDIA_KIND:
-        raise ValueError(f"kind inválido: {kind} (usa clips|audios)")
+        raise ValueError(f"kind inválido: {kind} (usa clips|audios|images)")
     proj = _project_or_raise(project_id)
     removed = projects.remove_material(project_id, kind, ident)
     if removed is None:

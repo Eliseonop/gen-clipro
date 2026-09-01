@@ -15,8 +15,31 @@ export const SPEED_MIN = 0.1
 export const SPEED_MAX = 10
 export const SPEED_PRESETS = [0.3, 0.5, 1, 1.5, 2, 3, 5, 10]
 
+export const IMAGE_DEFAULT_DUR = 5
+export const VISUAL_CLIP_KINDS = ['video', 'image']
+
+export function isVisualClip(c) {
+  return VISUAL_CLIP_KINDS.includes(c?.kind)
+}
+
+export function isGeneratedDurationClip(c) {
+  return c?.kind === 'text' || c?.kind === 'image'
+}
+
+export function trackKindForClip(kind) {
+  if (kind === 'image' || kind === 'video') return 'video'
+  if (kind === 'audio') return 'audio'
+  if (kind === 'text') return 'text'
+  return kind
+}
+
+export function laneKindForAsset(assetKind) {
+  if (assetKind === 'clips' || assetKind === 'video' || assetKind === 'images' || assetKind === 'image') return 'video'
+  return 'audio'
+}
+
 export function clipSpeed(c) {
-  if (!c || c.kind === 'text') return 1
+  if (!c || c.kind === 'text' || c.kind === 'image') return 1
   const s = Number(c.speed)
   if (!Number.isFinite(s) || s <= 0) return 1
   return Math.min(SPEED_MAX, Math.max(SPEED_MIN, s))
@@ -355,7 +378,9 @@ export const FORMATS = [
 // URL del medio de un clip (vídeo/audio/sfx) para el elemento <video>/<audio>.
 export function mediaUrl(pid, clip) {
   if (clip.asset_kind === 'sfx') return `/api/sfx/file/${clip.filename.split('/').map(encodeURIComponent).join('/')}`
-  const kind = clip.asset_kind === 'audios' ? 'audio' : 'video'
+  const kind = clip.asset_kind === 'audios' ? 'audio'
+    : (clip.asset_kind === 'images' || clip.kind === 'image') ? 'image'
+      : 'video'
   if ((clip.asset_scope || 'project') === 'library') {
     return `/api/library/media/${kind}/${encodeURIComponent(clip.filename)}`
   }
@@ -387,9 +412,12 @@ export function withKfIds(reframe) {
 
 // Crea un clip de vídeo/audio a partir de un asset de la biblioteca.
 export function makeClip(assetKind, item, trackId, start, dur) {
-  const kind = assetKind === 'clips' ? 'video' : 'audio'
+  const kind = assetKind === 'clips' ? 'video' : assetKind === 'images' ? 'image' : 'audio'
   const fromLibrary = item?.scope === 'library' || String(item?.id || '').startsWith('lib_')
+  const visual = kind === 'video' || kind === 'image'
   const fromLib = kind === 'video' && isMasterReframe(item.reframe)
+  const defaultDur = kind === 'image' ? IMAGE_DEFAULT_DUR : 1
+  const span = +Math.max(0.3, dur || defaultDur).toFixed(3)
   return {
     id: uid('c'),
     track_id: trackId,
@@ -403,19 +431,19 @@ export function makeClip(assetKind, item, trackId, start, dur) {
     name: item.label || item.name || item.filename,
     start: +Math.max(0, start).toFixed(3),
     in_point: 0,
-    out_point: +Math.max(0.3, dur || 1).toFixed(3),
-    source_duration: +Math.max(0.3, dur || 1).toFixed(3),
+    out_point: span,
+    source_duration: span,
     volume: 1,
     muted: false,
     speed: 1,
     keep_pitch: false,
     reverse: false,
     speed_curve: null,
-    reframe: kind === 'video'
+    reframe: visual
       ? (fromLib ? withKfIds({ ...newReframe(), ...item.reframe }) : newReframe())
       : null,
-    layout: kind === 'video' ? 'fill' : undefined,
-    frame: kind === 'video' ? 'full' : undefined,
+    layout: visual ? 'fill' : undefined,
+    frame: visual ? 'full' : undefined,
     appear: 'none',
     exit: 'none',
     look: 'none',
@@ -426,7 +454,6 @@ export function makeClip(assetKind, item, trackId, start, dur) {
 export function makeTextClip(trackId, start, dur, text, style, opts = {}) {
   const role = opts.text_role === 'caption' ? 'caption' : 'free'
   const st = { ...(style || defaultTextStyle()) }
-  if (role === 'free') st.word_fx = 'none'
   return {
     id: uid('c'), track_id: trackId, kind: 'text', asset_kind: 'text', asset_id: uid('t'),
     filename: '', name: (text || 'Texto').slice(0, 22), start: +Math.max(0, start).toFixed(3),

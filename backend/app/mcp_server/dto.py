@@ -23,6 +23,7 @@ CAPABILITIES = [
     "text.role:caption|free",
     "format:9:16|1:1|16:9|custom",
     "media.library",
+    "media.image",
     "history.undo_redo|checkpoints",
 ]
 
@@ -41,7 +42,7 @@ def aspect_ratio(width: int, height: int) -> str:
 
 def _clip_timeline_duration(clip) -> float:
     span = max(0.0, (clip.out_point or 0.0) - (clip.in_point or 0.0))
-    if clip.kind == "text":
+    if clip.kind in ("text", "image"):
         return span
     speed = clip.speed or 1.0
     return span / speed if speed > 0 else span
@@ -79,12 +80,18 @@ def _media_dto(proj: Project) -> dict:
         {"id": a.id, "label": a.label or a.filename, "duration": a.duration}
         for a in proj.audios
     ]
+    image_list = [
+        {"id": im.id, "label": im.label or im.filename, "width": im.width, "height": im.height}
+        for im in getattr(proj, "images", []) or []
+    ]
     return {
         "clips": len(proj.clips),
         "audios": len(proj.audios),
+        "images": len(getattr(proj, "images", []) or []),
         "transcripts": len(proj.transcripts),
         "clip_list": clip_list,
         "audio_list": audio_list,
+        "image_list": image_list,
     }
 
 
@@ -178,6 +185,18 @@ def media_list(proj: Project) -> dict:
                 "source": a.source,
             }
             for a in proj.audios
+        ],
+        "images": [
+            {
+                "id": im.id,
+                "filename": im.filename,
+                "label": im.label,
+                "width": im.width,
+                "height": im.height,
+                "origin": im.origin,
+                "source": im.source,
+            }
+            for im in getattr(proj, "images", []) or []
         ],
         "transcripts": [
             {

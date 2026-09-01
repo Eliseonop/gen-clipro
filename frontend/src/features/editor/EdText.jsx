@@ -2,9 +2,9 @@ import { useState } from 'react'
 import Icon from '../../components/Icon'
 import FlipSelect from '../../components/FlipSelect'
 import { fmt } from '../../lib/utils'
-import { FONTS, FONT_SIZES, FONT_SIZE_REF, cssFont } from '../../lib/textstyles'
+import { FONTS, FONT_SIZES, FONT_SIZE_REF, cssFont, selectedSubtitleThemeId } from '../../lib/textstyles'
 import { SUBTITLE_THEMES, WORD_FX_OPTIONS, BLOCK_APPEAR_OPTIONS, WORDS_PER_BOX } from '../../lib/subtitleThemes'
-import { hasWordFx, toggleWordFx } from '../../lib/textKaraoke'
+import { hasWordFx, toggleWordFx, styleOpacity } from '../../lib/textKaraoke'
 import { isFreeText } from '../../lib/textRole'
 
 function sizeToNearestPx(size) {
@@ -36,11 +36,13 @@ export default function EdText({
   const st = style || {}
   const isTrack = mode === 'track'
   const isFree = !isTrack && isFreeText(clip)
+  const themed = !!selectedSubtitleThemeId(st)
+  const showKaraoke = isTrack || themed
   const multi = !isTrack && selectionCount > 1
   const set = (patch) => onChangeStyle(patch)
   const dur = clip ? clip.out_point - clip.in_point : 0
   const currentPx = sizeToNearestPx(st.size)
-  const themeId = st.theme || st.preset
+  const themeId = selectedSubtitleThemeId(st)
   const [tab, setTab] = useState('props')
   const saved = textFavorites || []
 
@@ -167,7 +169,7 @@ export default function EdText({
             </label>
           </div>
 
-          {!isFree && (
+          {showKaraoke && (
           <>
           <div className="ed-theme-label">Palabra activa</div>
           <div className="ed-text-dense four">
@@ -190,7 +192,7 @@ export default function EdText({
               <span>Texto</span>
               <input type="color" value={st.color || '#ffffff'} onChange={(e) => set({ color: e.target.value })} />
             </label>
-            {!isFree && (
+            {showKaraoke && (
             <label className="ed-mini ed-swatch" title="Color de la palabra activa">
               <span>Resalte</span>
               <input type="color" value={st.highlight_color || '#ffe566'} onChange={(e) => set({ highlight_color: e.target.value })} />
@@ -220,13 +222,18 @@ export default function EdText({
               <input type="checkbox" checked={st.bg && st.bg !== 'none'} onChange={(e) => set({ bg: e.target.checked ? (st.bg && st.bg !== 'none' ? st.bg : '#111318') : 'none' })} /> Caja
             </label>
           </div>
+          <label className="ed-mini" title="Opacidad del texto">
+            <span>Opacidad {Math.round(styleOpacity(st) * 100)}%</span>
+            <input type="range" min="0" max="100" step="1" value={Math.round(styleOpacity(st) * 100)}
+              onChange={(e) => set({ opacity: Number(e.target.value) / 100 })} />
+          </label>
           {st.bg && st.bg !== 'none' && (
             <label className="ed-mini"><span>Opacidad fondo</span>
               <input type="range" min="0.1" max="1" step="0.05" value={st.bg_opacity ?? 0.55}
                 onChange={(e) => set({ bg_opacity: Number(e.target.value) })} />
             </label>
           )}
-          {!isFree && (
+          {showKaraoke && (
           <div className="ed-text-dense two">
             <label className="ed-mini" title="Opacidad de la palabra que se está diciendo">
               <span>Activa {Math.round((st.active_opacity ?? 1) * 100)}%</span>

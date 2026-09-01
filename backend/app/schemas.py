@@ -244,9 +244,23 @@ class YouTubeAudioRequest(BaseModel):
     name: Optional[str] = None
 
 
+class ImageInfo(BaseModel):
+    """Un archivo de imagen del proyecto (PNG/JPG/WebP…), sin convertir a vídeo."""
+    id: str
+    filename: str
+    url: str
+    width: Optional[int] = None
+    height: Optional[int] = None
+    created_at: Optional[str] = None
+    label: Optional[str] = None
+    description: Optional[str] = None
+    origin: Optional[str] = "upload"
+    source: Optional[str] = "external"
+
+
 class SaveLibraryRequest(BaseModel):
     project_id: str
-    resource_type: str                    # "audio" | "clip"
+    resource_type: str                    # "audio" | "clip" | "image"
     ident: str
 
 
@@ -284,8 +298,8 @@ class TimelineClip(BaseModel):
     """
     id: str
     track_id: str
-    kind: str                     # "video" | "audio"
-    asset_kind: str               # "clips" | "audios"
+    kind: str                     # "video" | "audio" | "text" | "image"
+    asset_kind: str               # "clips" | "audios" | "images" | "sfx" | "text"
     asset_id: str                 # index del clip o id del audio (como texto)
     filename: str
     name: Optional[str] = None
@@ -337,6 +351,7 @@ class Project(BaseModel):
     clips: list[ClipInfo] = []
     transcripts: list[Transcript] = []
     audios: list[AudioInfo] = []
+    images: list[ImageInfo] = []
     timeline: Optional[Timeline] = None   # composición del editor de vídeo
 
 

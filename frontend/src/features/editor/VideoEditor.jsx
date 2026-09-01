@@ -4,7 +4,7 @@ import ConfirmModal from '../../components/ConfirmModal'
 import { fmt } from '../../lib/utils'
 import { getTimeline, saveTimeline } from '../../services/api'
 import { clamp, clampCenter, frameAt } from '../../lib/panning'
-import { defaultTextStyle, subtitleStyle, wrappedText, ensureEditorFonts } from '../../lib/textstyles'
+import { defaultTextStyle, subtitleStyle, wrappedText, ensureEditorFonts, selectedSubtitleThemeId, clearTextTheme } from '../../lib/textstyles'
 import { applyThemeToStyle } from '../../lib/textKaraoke'
 import {
   uid, FORMATS, mediaUrl, defaultTracks, newReframe, withKfIds,
@@ -13,9 +13,10 @@ import {
   extraClipsAfterSplit, splitTrackTextByMaxWords,
   nextClipSelection, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
   previewElementVolume, parsePreviewVolume, PREVIEW_VOL_KEY,
+  isVisualClip, trackKindForClip, IMAGE_DEFAULT_DUR,
 } from './editorModel'
-import { textRole, isFreeText } from '../../lib/textRole'
-import { applyFrame, disableOverlay, enableOverlay, isOverlay, newTransform, videosAt } from '../../lib/clipLayout'
+import { textRole } from '../../lib/textRole'
+import { applyFrame, disableOverlay, enableOverlay, isOverlay, mediaSize, newTransform, videosAt } from '../../lib/clipLayout'
 import { drawComposite, drawMainView } from './render/canvas'
 import { useExportJob } from './hooks/useExportJob'
 import { useSubtitles } from './hooks/useSubtitles'
@@ -109,7 +110,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
           setTracks(tl.tracks)
           setClips((tl.clips || []).map((c) => ({
             ...c,
-            reframe: c.kind === 'video' ? withKfIds(c.reframe) : null,
+            reframe: isVisualClip(c) ? withKfIds(c.reframe || newReframe()) : null,
             appear: c.appear || 'none',
             exit: c.exit || 'none',
             look: c.look || 'none',
@@ -159,7 +160,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   const topVideoAt = useCallback((head) => {
     let best = null, bestLayer = -1
     for (const c of clipsRef.current) {
-      if (c.kind !== 'video') continue
+      if (!isVisualClip(c)) continue
       const track = tracksRef.current.find((t) => t.id === c.track_id)
       if (!track || track.hidden) continue
       if (head >= c.start - 0.02 && head < clipEnd(c)) {
@@ -189,7 +190,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
 
       for (const c of clipsRef.current) {
         const el = mediaEls.current.get(c.id)
-        if (!el) continue
+        if (!el || c.kind === 'image' || typeof el.play !== 'function') continue
         const track = tracksRef.current.find((t) => t.id === c.track_id)
         const cd = clipDur(c)
         const active = head >= c.start - 0.02 && head < c.start + cd
@@ -213,6 +214,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
       // Sincronizar fotogramas de todos los vídeos activos (fill + overlays)
       if (!playingRef.current) {
         for (const c of videosAt(head, clipsRef.current, tracksRef.current)) {
+          if (c.kind === 'image') continue
           const el = mediaEls.current.get(c.id)
           if (el && el.videoWidth) {
             const expected = clamp(timelineToSource(c, head), c.in_point, c.out_point)
@@ -245,7 +247,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   }
   function stopPlayback() {
     setPlaying(false)
-    for (const el of mediaEls.current.values()) { if (!el.paused) el.pause() }
+    for (const el of mediaEls.current.values()) {
+      if (typeof el.pause === 'function' && !el.paused) el.pause()
+    }
   }
   function togglePlay() { if (playing) stopPlayback(); else playPlayback() }
   function seek(t) {
@@ -261,6 +265,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   }, [])
 
   function registerMediaMeta(clip, el) {
+    if (clip.kind === 'image') return
     const real = el.duration
     if (!real || !isFinite(real)) return
     setClips((prev) => prev.map((c) => {
@@ -278,12 +283,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   }
 
   function addAsset(assetKind, item) {
-    const kind = assetKind === 'clips' ? 'video' : 'audio'
-    const track = targetTrackFor(kind)
+    const clipKind = assetKind === 'clips' ? 'video' : assetKind === 'images' ? 'image' : 'audio'
+    const track = targetTrackFor(trackKindForClip(clipKind))
     if (!track) return
-    const dur = assetKind === 'clips'
-      ? ((item.end ?? item.duration ?? 0) - (item.start ?? 0))
-      : (item.duration || 0)
+    const dur = assetKind === 'images'
+      ? IMAGE_DEFAULT_DUR
+      : assetKind === 'clips'
+        ? ((item.end ?? item.duration ?? 0) - (item.start ?? 0))
+        : (item.duration || 0)
     const trackEnd = clips.filter((c) => c.track_id === track.id).reduce((m, c) => Math.max(m, clipEnd(c)), 0)
     const clip = makeClip(assetKind, item, track.id, trackEnd, dur)
     setClips((prev) => [...prev, clip])
@@ -444,14 +451,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     )))
   }
   function applyClipFrame(clip, slot) {
-    if (!clip || clip.kind !== 'video') return
-    const group = clipsRef.current.filter((c) => selIdsRef.current.includes(c.id) && c.kind === 'video')
+    if (!clip || !isVisualClip(clip)) return
+    const group = clipsRef.current.filter((c) => selIdsRef.current.includes(c.id) && isVisualClip(c))
     const targets = group.length ? group : [clip]
     setClips((prev) => prev.map((c) => {
       if (!targets.some((t) => t.id === c.id)) return c
       const el = mediaEls.current.get(c.id)
-      const srcW = el?.videoWidth || 1920
-      const srcH = el?.videoHeight || 1080
+      const srcW = mediaSize(el).w || 1920
+      const srcH = mediaSize(el).h || 1080
       const localT = clamp(timelineToSource(c, playhead), c.in_point, c.out_point)
       const patch = applyFrame(c, slot, srcW / srcH, outAspect, localT, srcW, srcH, outW, outH)
       return {
@@ -464,14 +471,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     }))
   }
   function toggleOverlay(clip, on) {
-    if (!clip || clip.kind !== 'video') return
+    if (!clip || !isVisualClip(clip)) return
     if (!on) {
       setClips((prev) => prev.map((c) => (c.id === clip.id ? { ...c, ...disableOverlay(c) } : c)))
       return
     }
     const el = mediaEls.current.get(clip.id)
-    const srcW = el?.videoWidth || 1920
-    const srcH = el?.videoHeight || 1080
+    const srcW = mediaSize(el).w || 1920
+    const srcH = mediaSize(el).h || 1080
     const localT = clamp(timelineToSource(clip, playhead), clip.in_point, clip.out_point)
     const patch = enableOverlay(clip, srcW / srcH, outAspect, localT, srcW, srcH, outW, outH)
     setClips((prev) => prev.map((c) => (c.id === clip.id ? {
@@ -516,11 +523,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   }
   function addKeyframeAtPlayhead() {
     const clip = selectedClip
-    if (!clip || clip.kind !== 'video') return
+    if (!clip || !isVisualClip(clip)) return
     const localT = clamp(timelineToSource(clip, playhead), clip.in_point, clip.out_point)
     const fr = frameAt(clip.reframe?.keyframes, localT, clip.reframe?.zoom ?? 1, clip.reframe?.pan_mode || 'smooth')
     const el = mediaEls.current.get(clip.id)
-    const srcAspect = el?.videoWidth ? el.videoWidth / el.videoHeight : 16 / 9
+    const sz = mediaSize(el)
+    const srcAspect = sz.w ? sz.w / sz.h : 16 / 9
     const c = clampCenter(fr.cx, fr.cy, fr.zoom, srcAspect, outAspect)
     upsertKeyframe(clip, localT, c.cx, c.cy, { zoom: fr.zoom })
   }
@@ -576,12 +584,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   }
 
   // --- Texto ---
-  function baseTextStyle() {
-    const sel = tracksRef.current.find((t) => t.id === selTrackId)
-    if (sel && sel.kind === 'text' && sel.style) return sel.style
-    const first = tracksRef.current.find((t) => t.kind === 'text')
-    return first?.style || defaultTextStyle()
-  }
   function ensureTextTrack(style) {
     const sel = tracksRef.current.find((t) => t.id === selTrackId)
     if (sel && sel.kind === 'text') return sel.id
@@ -592,7 +594,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   function addText() {
     const tid = ensureTextTrack()
     const track = tracksRef.current.find((t) => t.id === tid)
-    const style = { ...(track?.style || baseTextStyle()), word_fx: 'none' }
+    const fromTrack = track?.style || {}
+    const style = {
+      ...defaultTextStyle(),
+      x: fromTrack.x ?? 0.5,
+      y: fromTrack.y ?? 0.5,
+      w: fromTrack.w ?? 0.8,
+      size: fromTrack.size ?? defaultTextStyle().size,
+      opacity: fromTrack.opacity ?? 1,
+    }
     const end = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
     const dur = Math.max(3, +(end - playhead).toFixed(3))
     const clip = makeTextClip(tid, playhead, dur, 'Texto', style)
@@ -610,32 +620,29 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   }
   function applyPreset(id, preset) {
     const ids = new Set(selIdsRef.current.includes(id) ? selIdsRef.current : [id])
+    const source = clipsRef.current.find((c) => c.id === id)
+    const clearing = selectedSubtitleThemeId(source?.style) === preset?.id
     setClips((prev) => prev.map((c) => {
       if (!ids.has(c.id) || c.kind !== 'text') return c
-      const st = applyThemeToStyle(c.style, preset)
-      if (isFreeText(c)) st.word_fx = 'none'
-      return { ...c, style: st }
+      return { ...c, style: clearing ? clearTextTheme(c.style) : applyThemeToStyle(c.style, preset) }
     }))
   }
   // Estilo general de la pista: se aplica a la pista y a todos sus segmentos.
   function changeTrackStyle(trackId, patch) {
-    const captionKeys = new Set(['word_fx', 'highlight_color', 'active_opacity', 'inactive_opacity', 'max_words'])
     setTracks((prev) => prev.map((t) => (t.id === trackId ? { ...t, style: { ...(t.style || defaultTextStyle()), ...patch } } : t)))
-    setClips((prev) => prev.map((c) => {
-      if (!(c.kind === 'text' && c.track_id === trackId)) return c
-      const applied = isFreeText(c)
-        ? Object.fromEntries(Object.entries(patch).filter(([k]) => !captionKeys.has(k)))
-        : patch
-      return { ...c, style: { ...(c.style || {}), ...applied } }
-    }))
+    setClips((prev) => prev.map((c) => (
+      c.kind === 'text' && c.track_id === trackId ? { ...c, style: { ...(c.style || {}), ...patch } } : c
+    )))
   }
   function applyTrackPreset(trackId, preset) {
-    setTracks((prev) => prev.map((t) => (t.id === trackId ? { ...t, style: applyThemeToStyle(t.style, preset) } : t)))
+    const track = tracksRef.current.find((t) => t.id === trackId)
+    const clearing = selectedSubtitleThemeId(track?.style) === preset?.id
+    setTracks((prev) => prev.map((t) => (t.id === trackId
+      ? { ...t, style: clearing ? clearTextTheme(t.style) : applyThemeToStyle(t.style, preset) }
+      : t)))
     setClips((prev) => prev.map((c) => {
       if (!(c.kind === 'text' && c.track_id === trackId)) return c
-      const st = applyThemeToStyle(c.style, preset)
-      if (isFreeText(c)) st.word_fx = 'none'
-      return { ...c, style: st }
+      return { ...c, style: clearing ? clearTextTheme(c.style) : applyThemeToStyle(c.style, preset) }
     }))
   }
 
@@ -760,16 +767,22 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   const mediaPool = clips.filter((c) => c.kind !== 'text').map((c) => {
     const common = {
       src: mediaUrl(project.id, c),
-      preload: 'auto',
       ref: (el) => { if (el) mediaEls.current.set(c.id, el); else mediaEls.current.delete(c.id) },
+    }
+    if (c.kind === 'image') {
+      return <img key={c.id} alt="" loading="eager" decoding="async" {...common} />
+    }
+    const mediaProps = {
+      ...common,
+      preload: 'auto',
       onLoadedMetadata: (e) => registerMediaMeta(c, e.target),
     }
     return c.kind === 'video'
-      ? <video key={c.id} {...common} muted playsInline />
-      : <audio key={c.id} {...common} />
+      ? <video key={c.id} {...mediaProps} muted playsInline />
+      : <audio key={c.id} {...mediaProps} />
   })
 
-  const canEditFrame = selectedClip?.kind === 'video'
+  const canEditFrame = isVisualClip(selectedClip)
   const overlayOn = isOverlay(selectedClip)
   const isTextSel = selectedClip?.kind === 'text'
   const selTrackObj = tracks.find((t) => t.id === selTrackId)

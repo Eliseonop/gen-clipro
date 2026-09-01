@@ -58,6 +58,7 @@ class ProjectContextTest(unittest.TestCase):
         self.assertEqual(ctx["format"]["fps"], 30)
         self.assertEqual(ctx["media"]["clips"], 1)
         self.assertEqual(ctx["media"]["audios"], 1)
+        self.assertEqual(ctx["media"]["images"], 0)
         self.assertEqual(ctx["media"]["clip_list"][0]["label"], "Intro")
         self.assertEqual(ctx["timeline"]["clip_count"], 3)
         self.assertEqual(ctx["timeline"]["kinds"], {"video": 2, "audio": 0, "text": 1})
@@ -73,6 +74,7 @@ class ProjectContextTest(unittest.TestCase):
         self.assertIn("clip.speed:0.1-10|keep_pitch|reverse", caps)
         self.assertIn("clip.position:top|bottom|full", caps)
         self.assertIn("media.library", caps)
+        self.assertIn("media.image", caps)
 
     def test_no_timeline_uses_defaults(self):
         p = Project(id="p2", name="x", created_at="t")

@@ -3,7 +3,7 @@ import Icon from '../../components/Icon'
 import FlipPopover from '../../components/FlipPopover'
 import { fmt } from '../../lib/utils'
 import { pseudoWaveform, clamp, kfColor } from '../../lib/panning'
-import { clipDur, clipSourceDur, clipSpeed, displayTracks, resizeGeneratedClip } from './editorModel'
+import { clipDur, clipSourceDur, clipSpeed, displayTracks, isGeneratedDurationClip, isVisualClip, laneKindForAsset, resizeGeneratedClip, trackKindForClip } from './editorModel'
 import { stackViewForTrack } from './clipStack.js'
 import { headerScrollPad, timelineWheelAction } from './timelineWheel'
 
@@ -48,7 +48,7 @@ function PreviewVolButton({ value = 1, onChange }) {
   )
 }
 
-const laneKindFor = (assetKind) => (assetKind === 'clips' || assetKind === 'video' ? 'video' : 'audio')
+const laneKindFor = laneKindForAsset
 
 export default function EdTimeline({
   tracks, clips, pps, setPps, duration, playhead, rowH, setRowH,
@@ -66,7 +66,7 @@ export default function EdTimeline({
 
   const rows = displayTracks(tracks)
   const totalW = Math.max(duration + 4, 12) * pps
-  const isVideoSel = selectedClip?.kind === 'video'
+  const isVideoSel = isVisualClip(selectedClip)
   const dragKind = dragInfo?.kind || null
   const selectedIds = selectedClipIds?.length ? selectedClipIds : (selectedClipId ? [selectedClipId] : [])
   const viewsByTrack = new Map()
@@ -191,10 +191,10 @@ export default function EdTimeline({
         const tid = trackUnderPointer(ev.clientX, ev.clientY)
         if (tid && tid !== o.track_id) {
           const tt = tracks.find((t) => t.id === tid)
-          if (tt && tt.kind === o.kind && !tt.locked) patch.track_id = tid
+          if (tt && trackKindForClip(o.kind) === tt.kind && !tt.locked) patch.track_id = tid
         }
         onMutateClip(o.id, patch)
-      } else if (o.kind === 'text' && (d.mode === 'trim-left' || d.mode === 'trim-right')) {
+      } else if (isGeneratedDurationClip(o) && (d.mode === 'trim-left' || d.mode === 'trim-right')) {
         onMutateClip(o.id, resizeGeneratedClip(o, d.mode, deltaT))
       } else if (d.mode === 'trim-left') {
         const sp = clipSpeed(o)
@@ -384,7 +384,7 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
   const sp = clipSpeed(clip)
   const w = Math.max(6, dur * pps)
   const left = clip.start * pps
-  const isVideo = clip.kind === 'video'
+  const isVideo = isVisualClip(clip)
   const isText = clip.kind === 'text'
   const kfs = isVideo ? [...(clip.reframe?.keyframes || [])].sort((a, b) => a.t - b.t) : []
   const bars = clip.kind === 'audio' ? pseudoWaveform(clip.asset_id, Math.max(16, Math.round(w / 5))) : null
@@ -402,7 +402,7 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
       <div className="ed-clip-handle left" onPointerDown={(e) => onDown(e, 'trim-left')} />
       <div className="ed-clip-handle right" onPointerDown={(e) => onDown(e, 'trim-right')} />
 
-      {isVideo && <div className="ed-clip-label"><Icon name={clip.muted ? 'volume_off' : 'movie'} size={12} /> {clip.name}{speedBadge}</div>}
+      {isVideo && <div className="ed-clip-label"><Icon name={clip.kind === 'image' ? 'image' : (clip.muted ? 'volume_off' : 'movie')} size={12} /> {clip.name}{speedBadge}</div>}
       {isText && <div className="ed-clip-label"><Icon name="title" size={12} /> {clip.text || clip.name}</div>}
       {clip.kind === 'audio' && (
         <div className="ed-clip-wave">

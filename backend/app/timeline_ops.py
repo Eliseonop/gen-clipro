@@ -19,6 +19,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from . import fragment
+from .clip_kind import clip_fits_track, has_generated_duration, is_visual_clip
 from .schemas import Keyframe, Reframe, Timeline, TimelineClip, TimelineTrack, Word
 
 TRACK_KINDS = ("video", "audio", "text")
@@ -102,7 +103,7 @@ def validate_timeline(tl: Timeline) -> list[str]:
     for c in tl.clips:
         if c.track_id not in kind_of:
             issues.append(f"clip {c.id}: pista inexistente {c.track_id}")
-        elif kind_of[c.track_id] != c.kind:
+        elif not clip_fits_track(c.kind, kind_of[c.track_id]):
             issues.append(f"clip {c.id}: kind '{c.kind}' no cuadra con la pista '{kind_of[c.track_id]}'")
         if c.start < 0:
             issues.append(f"clip {c.id}: start negativo ({c.start})")
@@ -156,7 +157,7 @@ def add_clip(tl: Timeline, clip: dict | TimelineClip) -> EditResult:
         if not c.id:
             c.id = _uid("c")
     track = _find_track(out, c.track_id)   # pista debe existir
-    if track.kind != c.kind:
+    if not clip_fits_track(c.kind, track.kind):
         raise ValueError(f"kind '{c.kind}' no cuadra con la pista '{track.kind}'")
     if any(x.id == c.id for x in out.clips):
         raise ValueError(f"Ya existe un clip con id {c.id}")
@@ -169,7 +170,7 @@ def move_clip(tl: Timeline, clip_id: str, start: float | None = None, track_id: 
     c = _find_clip(out, clip_id)
     if track_id is not None:
         track = _find_track(out, track_id)
-        if track.kind != c.kind:
+        if not clip_fits_track(c.kind, track.kind):
             raise ValueError(f"no se puede mover un clip '{c.kind}' a una pista '{track.kind}'")
         c.track_id = track_id
     if start is not None:
@@ -294,7 +295,7 @@ REFRAME_MODES = ("center", "manual", "keyframes")
 def reframe_clip(tl: Timeline, clip_id: str, mode: str = "center", zoom: float | None = None,
                  pan_from: dict | None = None, pan_to: dict | None = None,
                  keyframes: list | None = None) -> EditResult:
-    """Encuadra un clip de vídeo (reframe/paneo/zoom) como verbo semántico.
+    """Encuadra un clip visual (vídeo o imagen: reframe/paneo/zoom).
 
     * ``center``   → recorte centrado (con ``zoom``).
     * ``manual``   → ``zoom`` + paneo: estático en ``pan_from``, o animado
@@ -309,8 +310,8 @@ def reframe_clip(tl: Timeline, clip_id: str, mode: str = "center", zoom: float |
         raise ValueError(f"mode inválido: {mode} (usa {REFRAME_MODES})")
     out = _copy(tl)
     c = _find_clip(out, clip_id)
-    if c.kind != "video":
-        raise ValueError("reframe solo aplica a clips de vídeo")
+    if not is_visual_clip(c):
+        raise ValueError("reframe solo aplica a clips de vídeo o imagen")
     z = 1.0 if zoom is None else float(zoom)
     if not (0.1 <= z <= 1.0):
         raise ValueError("zoom debe estar en [0.1, 1.0]")
@@ -358,7 +359,7 @@ def set_clip_layout(tl: Timeline, clip_id: str, position: str | None = None,
         if duration <= 0:
             raise ValueError("duration debe ser > 0")
         end = c.in_point + duration
-        if c.kind == "text":
+        if has_generated_duration(c):
             c.out_point = _round(end)
             c.source_duration = _round(max(c.source_duration or 0.0, end))
         else:

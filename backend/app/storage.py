@@ -29,9 +29,10 @@ def project_base(project) -> Path:
 
 
 def ensure_dirs(base: Path) -> Path:
-    """Crea la carpeta base y sus subcarpetas video/ y audio/."""
+    """Crea la carpeta base y sus subcarpetas video/, audio/ e image/."""
     (base / "video").mkdir(parents=True, exist_ok=True)
     (base / "audio").mkdir(parents=True, exist_ok=True)
+    (base / "image").mkdir(parents=True, exist_ok=True)
     return base
 
 
@@ -44,11 +45,11 @@ def safe_name(title: str, maxlen: int = 60) -> str:
 
 
 def resolve_media(project, kind: str, filename: str) -> Path | None:
-    """Ruta segura de un archivo dentro de video/ o audio/ del proyecto.
+    """Ruta segura de un archivo dentro de video/, audio/ o image/ del proyecto.
 
     Devuelve None si el tipo no es válido o si se intenta salir de la carpeta.
     """
-    if kind not in ("video", "audio"):
+    if kind not in ("video", "audio", "image"):
         return None
     base = project_base(project).resolve()
     target = (base / kind / filename).resolve()
@@ -61,12 +62,13 @@ def library_root() -> Path:
     root = config.DATA_DIR / "library"
     (root / "audio").mkdir(parents=True, exist_ok=True)
     (root / "video").mkdir(parents=True, exist_ok=True)
+    (root / "image").mkdir(parents=True, exist_ok=True)
     return root
 
 
 def resolve_library_media(kind: str, filename: str) -> Path | None:
-    """Ruta segura bajo data/library/audio|video. None si el tipo es inválido o hay traversal."""
-    if kind not in ("video", "audio") or not filename:
+    """Ruta segura bajo data/library/audio|video|image. None si el tipo es inválido o hay traversal."""
+    if kind not in ("video", "audio", "image") or not filename:
         return None
     folder = (config.DATA_DIR / "library" / kind).resolve()
     target = (folder / filename).resolve()

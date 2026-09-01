@@ -12,6 +12,7 @@ Resultado uniforme (sin volcar el timeline crudo)::
 from __future__ import annotations
 
 from .. import projects, timeline_store
+from ..clip_kind import IMAGE_DEFAULT_DUR, track_kind_for_clip
 from ..schemas import Timeline
 from . import dto
 from .registry import tool
@@ -58,16 +59,23 @@ def _resolve_asset(proj, asset_kind: str, asset_id: str) -> dict:
                 return {"kind": "audio", "filename": a.filename,
                         "source_duration": a.duration or 0.0, "name": a.label or a.filename}
         raise ValueError(f"Audio no encontrado en el proyecto: {asset_id}")
-    raise ValueError(f"asset_kind inválido: {asset_kind} (usa clips|audios)")
+    if asset_kind == "images":
+        for im in getattr(proj, "images", []) or []:
+            if str(im.id) == str(asset_id):
+                return {"kind": "image", "filename": im.filename,
+                        "source_duration": IMAGE_DEFAULT_DUR,
+                        "name": im.label or im.filename}
+        raise ValueError(f"Imagen no encontrada en el proyecto: {asset_id}")
+    raise ValueError(f"asset_kind inválido: {asset_kind} (usa clips|audios|images)")
 
 
 def add_to_timeline(project_id: str, asset_kind: str, asset_id: str,
                     track_id: str | None = None, start: float = 0.0,
                     in_point: float | None = None, out_point: float | None = None) -> dict:
-    """Coloca un material del proyecto (un clip o un audio) en la timeline.
+    """Coloca un material del proyecto (clip, audio o imagen) en la timeline.
 
-    Resuelve el asset por ``asset_kind`` (``clips``/``audios``) + ``asset_id``
-    (index del clip o id del audio) para rellenar filename/duración. Si no hay
+    Resuelve el asset por ``asset_kind`` (``clips``/``audios``/``images``) + ``asset_id``
+    (index del clip o id del audio/imagen) para rellenar filename/duración. Si no hay
     pista del tipo adecuado, crea una. Por defecto usa el material completo
     (``in_point=0``, ``out_point=duración``).
     """
@@ -80,11 +88,12 @@ def add_to_timeline(project_id: str, asset_kind: str, asset_id: str,
         raise ValueError("out_point debe ser > in_point; pasa out_point si el asset no tiene duración conocida")
 
     created_track: str | None = None
+    track_kind = track_kind_for_clip(info["kind"])
     if track_id is None:
         tl = proj.timeline
-        existing = next((t for t in (tl.tracks if tl else []) if t.kind == info["kind"]), None)
+        existing = next((t for t in (tl.tracks if tl else []) if t.kind == track_kind), None)
         if existing is None:
-            tr = timeline_store.apply_op(project_id, "add_track", {"kind": info["kind"]})
+            tr = timeline_store.apply_op(project_id, "add_track", {"kind": track_kind})
             track_id = tr["changed"][0]
             created_track = track_id
         else:
@@ -96,6 +105,9 @@ def add_to_timeline(project_id: str, asset_kind: str, asset_id: str,
         "start": float(start), "in_point": round(ip, 3), "out_point": round(op_end, 3),
         "source_duration": round(src_dur, 3),
     }
+    if info["kind"] in ("video", "image"):
+        clip["layout"] = "fill"
+        clip["frame"] = "full"
     out = _apply(project_id, "add_clip", {"clip": clip})
     if created_track:
         out["changed"] = [created_track, *out["changed"]]

@@ -7,11 +7,11 @@
 import { clamp, clampCenter, frameAt, zoomFromCorner, isNearCropCorner } from '../../lib/panning'
 import {
   canvasPointer, clampCrop, cropSizeFromCorner, cropWindow, destRectOnCanvas,
-  hitTransformHandle, isOverlay, newTransform, sourceCropPx,
+  hitTransformHandle, isOverlay, mediaSize, newTransform, sourceCropPx,
 } from '../../lib/clipLayout'
 import { framingRect } from './render/canvas'
 import { snapAlign, textAlignTargets } from '../../lib/alignGuides'
-import { clipEnd, timelineToSource } from './editorModel'
+import { clipEnd, isVisualClip, timelineToSource } from './editorModel'
 
 export function createMainDownHandler(ctx) {
   const {
@@ -106,12 +106,13 @@ export function createMainDownHandler(ctx) {
       return
     }
 
-    if (clip.kind !== 'video') return
+    if (!isVisualClip(clip)) return
     const el = mediaEls.current.get(clip.id)
-    if (!el || !el.videoWidth) return
+    const sz = mediaSize(el)
+    if (!el || !sz.w) return
     // Al reproducir, Main enseña el compuesto: el clic solo pausa, no recorta.
     if (playingRef.current) { stopPlayback(); return }
-    const srcAspect = el.videoWidth / el.videoHeight
+    const srcAspect = sz.w / sz.h
     const localT = clamp(timelineToSource(clip, playhead), clip.in_point, clip.out_point)
     const crop = cropWindow(clip, srcAspect, outAspect, localT)
     const toNorm = (ev) => [clamp((ev.clientX - rect.left) / rect.width, 0, 1), clamp((ev.clientY - rect.top) / rect.height, 0, 1)]
@@ -172,17 +173,18 @@ export function createResultDownHandler(ctx) {
 
   return function onResultDown(e) {
     const clip = selectedClip
-    if (!isOverlay(clip) || clip.kind !== 'video') return
+    if (!isOverlay(clip) || !isVisualClip(clip)) return
     const end = clipEnd(clip)
     if (playhead < clip.start - 0.02 || playhead >= end) return
     const canvas = resultCanvasRef.current
     const el = mediaEls.current.get(clip.id)
-    if (!canvas || !el?.videoWidth) return
+    const sz = mediaSize(el)
+    if (!canvas || !sz.w) return
     if (playingRef.current) stopPlayback()
 
     const localT = clamp(timelineToSource(clip, playhead), clip.in_point, clip.out_point)
-    const crop = cropWindow(clip, el.videoWidth / el.videoHeight, outW / outH, localT)
-    const pxCrop = sourceCropPx(crop, el.videoWidth, el.videoHeight)
+    const crop = cropWindow(clip, sz.w / sz.h, outW / outH, localT)
+    const pxCrop = sourceCropPx(crop, sz.w, sz.h)
     const dest = destRectOnCanvas(clip.transform, pxCrop, outW, outH, canvas.width, canvas.height)
     const p0 = canvasPointer(e, canvas)
     const mode = hitTransformHandle(p0.x, p0.y, dest)

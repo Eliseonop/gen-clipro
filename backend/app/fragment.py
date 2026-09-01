@@ -59,8 +59,6 @@ def make_text_clip(track_id: str, start: float, dur: float, text: str, style: di
                    text_role: str = "free") -> dict:
     role = "caption" if text_role == "caption" else "free"
     st = dict(style or {})
-    if role == "free":
-        st["word_fx"] = "none"
     return {
         "id": _uid("c"), "track_id": track_id, "kind": "text", "asset_kind": "text",
         "asset_id": _uid("t"), "filename": "", "name": (text or "Texto")[:22],
