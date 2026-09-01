@@ -145,27 +145,25 @@ export function drawComposite(ctx, head, selClipIds, env) {
 export function drawMainView(head, env) {
   const {
     mainCanvasRef, clipsRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
-    playingRef, framingModeRef, mainTextBox, alignGuidesRef,
+    playingRef, framingModeRef, mainTextBox, alignGuidesRef, clipModeRef,
   } = env
   const canvas = mainCanvasRef.current
   if (!canvas) return
   const ctx = canvas.getContext('2d')
-  const a = outRef.current.w / outRef.current.h
-  const cw = a >= 1 ? 520 : Math.round(520 * a)
-  const ch = a >= 1 ? Math.round(520 / a) : 520
-  if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch }
 
   const clip = clipsRef.current.find((c) => c.id === selRef.current)
   const clipActive = clip && isVisualClip(clip) && head >= clip.start - 0.02 && head < clipEnd(clip)
-  const playingThis = playingRef.current && clipActive && clip.kind !== 'image'
+  // Clip Editor: siempre fuente + recuadro (el 9:16 vive en Resultado).
+  // Main Editor: en play de ese clip pasa al compuesto para ver fx.
+  const playingThis = playingRef.current && clipActive && clip.kind !== 'image' && !clipModeRef?.current
 
-  // Recorte (fuente + recuadro) solo en pausa. Al reproducir ese clip, el Main
-  // muestra el compuesto con aparición / salida / filtro.
+  // Recorte (fuente + recuadro) en pausa, y siempre en Clip Editor.
   if (clip && isVisualClip(clip) && !playingThis) {
     const el = mediaEls.current.get(clip.id)
     const { w: vw, h: vh } = mediaSize(el)
     if (!el || !vw) {
-      ctx.fillStyle = '#05060a'; ctx.fillRect(0, 0, cw, ch)
+      ctx.fillStyle = '#05060a'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
       return
     }
     const srcAspect = vw / vh
@@ -215,6 +213,10 @@ export function drawMainView(head, env) {
 
   // Para texto, vacío, o sin selección: mostrar siempre el compuesto según el cabezal.
   // drawComposite ya respeta la visibilidad temporal de cada texto.
+  const a = outRef.current.w / outRef.current.h
+  const cw = a >= 1 ? 520 : Math.round(520 * a)
+  const ch = a >= 1 ? Math.round(520 / a) : 520
+  if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch }
   mainTextBox.current = drawComposite(ctx, head, selIdsRef?.current?.length ? selIdsRef.current : (clip?.id ? [clip.id] : []), env)
   if (framingModeRef.current) drawFramingOverlay(ctx, canvas.width, canvas.height, framingModeRef.current)
   drawAlignGuides(ctx, canvas.width, canvas.height, alignGuidesRef?.current)

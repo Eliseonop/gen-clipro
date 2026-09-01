@@ -23,7 +23,7 @@ export default function ProjectView({ project, onBack, onRefresh }) {
       {tool === 'video' && (
         <ToolModal
           wide
-          title="Cargar video"
+          title="Caja video"
           icon="movie"
           onClose={() => setTool(null)}
         >

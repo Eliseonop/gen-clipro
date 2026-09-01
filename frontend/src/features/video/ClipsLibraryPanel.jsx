@@ -23,7 +23,7 @@ export default function ClipsLibraryPanel({
       <div className="clips-panel-header">
         <div className="clips-panel-title">
           <Icon name="video_library" size={20} />
-          <h2>Biblioteca de Clips</h2>
+          <h2>Caja biblioteca</h2>
         </div>
 
         <div className="clips-panel-tabs">
@@ -49,7 +49,7 @@ export default function ClipsLibraryPanel({
             {heatmapSegments.length === 0 ? (
               <div className="empty-panel">
                 <Icon name="auto_awesome" size={36} />
-                <p>Carga un vídeo de YouTube para ver los tramos más reproducidos recomendados automáticamente.</p>
+                <p>Pulsa Caja · Cargar para ver los tramos más reproducidos.</p>
               </div>
             ) : (
               <div className="recommended-list">

@@ -148,7 +148,13 @@ def _single_reframe_filter(source: Path, zoom: float, keyframes: list, pan_mode:
     z_fallback = _clamp(zoom or 1.0, 0.1, 1.0)
     mode_fallback = pan_mode or "smooth"
     kfs = keyframes or []
-    variable = any(getattr(k, "zoom", None) is not None or getattr(k, "pan_mode", None) for k in kfs)
+    # Solo si el zoom cambia de tamaño hay que animar w/h. pan_mode en cada
+    # keyframe (el editor lo manda siempre) NO debe muestrear 20 fps: eso
+    # infla el -vf hasta WinError 206 en Windows.
+    zooms = [float(z) for k in kfs if (z := getattr(k, "zoom", None)) is not None]
+    variable = bool(zooms) and (
+        any(abs(z - z_fallback) > 1e-3 for z in zooms) or (max(zooms) - min(zooms) > 1e-3)
+    )
 
     def crop_at(t: float) -> tuple[float, float, float, float]:
         fr = frame_at(kfs, t, z_fallback, mode_fallback)
@@ -181,22 +187,13 @@ def _single_reframe_filter(source: Path, zoom: float, keyframes: list, pan_mode:
             y_expr = _pw_expr(ys)
         return f"crop=w={cw}:h={ch}:x='{x_expr}':y='{y_expr}',scale={target_w}:{target_h}"
 
-    tmax = max(float(k.t) for k in kfs)
-    step = 1.0 / 20.0
-    times = {round(float(k.t), 4) for k in kfs}
-    t = 0.0
-    while t <= tmax + 1e-6:
-        times.add(round(t, 4))
-        t += step
-    for k in kfs:
-        times.add(round(max(0.0, float(k.t) - step), 4))
     xs, ys, ws, hs = [], [], [], []
-    for t in sorted(times):
-        x, y, cw, ch = crop_at(t)
-        xs.append((t, x))
-        ys.append((t, y))
-        ws.append((t, cw))
-        hs.append((t, ch))
+    for kf in kfs:
+        x, y, cw, ch = crop_at(kf.t)
+        xs.append((kf.t, x))
+        ys.append((kf.t, y))
+        ws.append((kf.t, cw))
+        hs.append((kf.t, ch))
     return (
         f"crop=w='{_pw_expr(ws)}':h='{_pw_expr(hs)}':x='{_pw_expr(xs)}':y='{_pw_expr(ys)}'"
         f",scale={target_w}:{target_h}"
@@ -228,8 +225,53 @@ def _reframe_filter(source: Path, reframe: Reframe) -> tuple[str, bool]:
         return f"[0:v]{f1}[v1];[0:v]{f2}[v2];[v1][v2]hstack=inputs=2[v]", True
 
 
+# Límite seguro: cmd.exe ~8191; CreateProcess ~32767. Dejamos margen.
+_CMD_FILTER_LIMIT = 6000
+
+
+def _vf_args(filt_str: str, tmp_dir: Path, complex_graph: bool) -> list[str]:
+    """-vf / -filter_complex, o un archivo de script si el filtro no cabe en argv."""
+    if complex_graph:
+        flag, script_flag = "-filter_complex", "-filter_complex_script"
+    else:
+        flag, script_flag = "-vf", "-filter_script:v"
+    if len(filt_str) < _CMD_FILTER_LIMIT:
+        return [flag, filt_str]
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    path = tmp_dir / ("filter_complex.txt" if complex_graph else "filter_v.txt")
+    path.write_text(filt_str, encoding="utf-8")
+    return [script_flag, str(path)]
+
+
+def _run_ffmpeg_cut(base: list[str], filt: list[str], maps_a: list[str], maps_an: list[str],
+                    out_path: Path, seg_index: int) -> None:
+    encode_a = [
+        *gpu.video_encoder_args(),
+        "-c:a", "aac",
+        "-b:a", config.AUDIO_BITRATE,
+        str(out_path),
+    ]
+    encode_an = [*gpu.video_encoder_args(), "-an", str(out_path)]
+    try:
+        proc = subprocess.run(base + filt + maps_a + encode_a, capture_output=True, text=True)
+    except OSError as exc:
+        code = getattr(exc, "winerror", None) or getattr(exc, "errno", None)
+        if code == 206:
+            raise RuntimeError(
+                "El recorte es demasiado largo para Windows (comando FFmpeg). "
+                "Guarda un tramo más corto o con menos encuadres."
+            ) from exc
+        raise
+    if proc.returncode == 0:
+        return
+    proc2 = subprocess.run(base + filt + maps_an + encode_an, capture_output=True, text=True)
+    if proc2.returncode != 0:
+        err = (proc2.stderr or proc.stderr or "")[-800:]
+        raise RuntimeError(f"FFmpeg falló en el clip {seg_index}:\n{err}")
+
+
 def _cut_clip(source: Path, seg: Segment, mode: CropMode, out_path: Path,
-              reframe: Reframe | None = None) -> None:
+              reframe: Reframe | None = None, tmp_dir: Path | None = None) -> None:
     """Corta un tramo del vídeo fuente aplicando el filtro del modo elegido."""
     base = [
         "ffmpeg", "-y",
@@ -237,39 +279,30 @@ def _cut_clip(source: Path, seg: Segment, mode: CropMode, out_path: Path,
         "-to", str(seg.end),
         "-i", str(source),
     ]
+    script_dir = tmp_dir or out_path.parent
+    maps_a: list[str] = []
+    maps_an: list[str] = []
 
     if uses_source_trim(reframe):
-        filt = []
+        filt: list[str] = []
     elif mode == CropMode.smart_face and reframe and reframe.keyframes:
         filt_str, is_complex = _reframe_filter(source, reframe)
+        filt = _vf_args(filt_str, script_dir, is_complex)
         if is_complex:
-            filt = ["-filter_complex", filt_str, "-map", "[v]", "-map", "0:a?"]
-        else:
-            filt = ["-vf", filt_str]
+            maps_a = ["-map", "[v]", "-map", "0:a?"]
+            maps_an = ["-map", "[v]"]
     elif mode == CropMode.center:
-        # Sin -map: FFmpeg selecciona por defecto el vídeo (ya filtrado) + audio.
-        filt = ["-vf", _crop_filter(mode)]
+        filt = _vf_args(_crop_filter(mode), script_dir, False)
     elif mode == CropMode.smart_face:
-        filt = ["-vf", _smart_face_filter(source, seg)]
+        filt = _vf_args(_smart_face_filter(source, seg), script_dir, False)
     else:
-        filt = ["-filter_complex", _crop_filter(mode), "-map", "[v]", "-map", "0:a?"]
-
-    encode = [
-        *gpu.video_encoder_args(),
-        "-c:a", "aac",
-        "-b:a", config.AUDIO_BITRATE,
-        str(out_path),
-    ]
+        filt = _vf_args(_crop_filter(mode), script_dir, True)
+        maps_a = ["-map", "[v]", "-map", "0:a?"]
+        maps_an = ["-map", "[v]"]
 
     dur = max(0.0, float(seg.end) - float(seg.start))
     with timed("corte de clip (FFmpeg)", log, idx=seg.index, mode=mode.value, dur=f"{dur:.1f}s"):
-        proc = subprocess.run(
-            base + filt + encode,
-            capture_output=True,
-            text=True,
-        )
-    if proc.returncode != 0:
-        raise RuntimeError(f"FFmpeg falló en el clip {seg.index}:\n{proc.stderr[-800:]}")
+        _run_ffmpeg_cut(base, filt, maps_a, maps_an, out_path, seg.index)
 
 
 def generate_clips(
@@ -306,7 +339,7 @@ def generate_clips(
         for i, seg in enumerate(segments):
             filename = f"{prefix}_{seg.index}.mp4"
             out_path = video_dir / filename
-            _cut_clip(source, seg, mode, out_path, reframe=clip_reframe)
+            _cut_clip(source, seg, mode, out_path, reframe=clip_reframe, tmp_dir=tmp_dir)
 
             clips.append(
                 ClipInfo(

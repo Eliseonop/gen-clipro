@@ -701,7 +701,7 @@ export default function ClipEditor({
         <div className="ed-top-toolbar">
           <div className="ed-top-title">
             <Icon name="movie_edit" size={18} />
-            <strong>{mode === 'compose' ? 'Construir clip' : 'Editor de Clip'}</strong>
+            <strong>{mode === 'compose' ? 'Caja construir' : 'Caja editor'}</strong>
             {active && prep && (
               <span className="muted small">({fmt((active.segStart || 0) + trimIn)} → {fmt((active.segStart || 0) + trimOut)})</span>
             )}
