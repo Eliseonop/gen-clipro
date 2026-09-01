@@ -249,6 +249,13 @@ export default function EdTimeline({
     <div className="ed-timeline-wrap" style={{ '--ed-row-h': `${rowH}px` }}>
       <div className="ed-tl-toolbar">
         <div className="ed-tl-tools-left">
+          <button className="ghost small icon-only" type="button" onClick={() => onSeek(playhead - 0.5)} title="Atrás 0,5s">
+            <Icon name="fast_rewind" size={15} />
+          </button>
+          <button className="ghost small icon-only" type="button" onClick={() => onSeek(playhead + 0.5)} title="Adelante 0,5s">
+            <Icon name="fast_forward" size={15} />
+          </button>
+          <span className="ed-tl-sep" />
           <button className="ghost small" onClick={() => onSplit(selectedClipId, playhead)} disabled={!selectedIds.length} title="Dividir en el cursor (S)">
             <Icon name="content_cut" size={15} /> Dividir
           </button>

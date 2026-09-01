@@ -45,7 +45,7 @@ export default function VideoAnalyzeForm({ url, setUrl, analyzing, onAnalyze, sh
   return (
     <section className="card">
       <div className="card-header">
-        <h3><Icon name="movie" size={18} /> Vídeo de YouTube</h3>
+        <h3><Icon name="movie" size={18} /> Caja YouTube</h3>
       </div>
       <div className="row">
         <input
@@ -58,7 +58,7 @@ export default function VideoAnalyzeForm({ url, setUrl, analyzing, onAnalyze, sh
       </div>
       <div className="actions">
         <button className="primary" onClick={onAnalyze} disabled={analyzing}>
-          {analyzing ? 'Cargando…' : '▶ Cargar vídeo'}
+          {analyzing ? 'Cargando…' : '▶ Caja · Cargar'}
         </button>
       </div>
       {analyzing && (

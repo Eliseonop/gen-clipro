@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Icon from '../../components/Icon'
 import ConfirmModal from '../../components/ConfirmModal'
+import Toast from '../../components/Toast'
 import { fmt } from '../../lib/utils'
-import { getTimeline, saveTimeline } from '../../services/api'
+import { getTimeline, saveTimeline, prepareReframe, getJob, createClipJob } from '../../services/api'
 import { clamp, clampCenter, frameAt } from '../../lib/panning'
 import { defaultTextStyle, subtitleStyle, wrappedText, ensureEditorFonts, selectedSubtitleThemeId, clearTextTheme } from '../../lib/textstyles'
 import { applyThemeToStyle } from '../../lib/textKaraoke'
@@ -28,9 +29,40 @@ import EdTimeline from './EdTimeline'
 import EdCrops from './EdCrops'
 import EdText from './EdText'
 import AnchoredMenu from '../../components/AnchoredMenu'
+import JobStatusBar from '../../components/JobStatusBar'
 import './editor.css'
 
 const AUDIO_DB_PRESETS = [-24, -18, -16, -14, -12, -10, -8]
+
+function clipWorkspaceTracks() {
+  return [{ id: 'V1', kind: 'video', name: 'V1', hidden: false, muted: false, locked: false }]
+}
+
+function shiftKfs(kfs, t0, t1) {
+  const sorted = [...(kfs || [])].sort((a, b) => a.t - b.t)
+  if (!sorted.length) return []
+  const before = [...sorted].reverse().find((k) => k.t <= t0) || sorted[0]
+  const after = sorted.find((k) => k.t >= t1) || sorted[sorted.length - 1]
+  const mid = sorted.filter((k) => k.t > t0 && k.t < t1)
+  const out = []
+  const seen = new Set()
+  for (const k of [before, ...mid, after]) {
+    const t = Math.max(0, +(k.t - t0).toFixed(4))
+    if (seen.has(t)) continue
+    seen.add(t)
+    out.push({ ...k, t })
+  }
+  return out
+}
+
+function reframeForCut(reframe, t0, t1) {
+  if (!reframe) return null
+  return {
+    ...reframe,
+    keyframes: shiftKfs(reframe.keyframes, t0, t1),
+    ...(reframe.keyframes2?.length ? { keyframes2: shiftKfs(reframe.keyframes2, t0, t1) } : {}),
+  }
+}
 
 export default function VideoEditor({ project, onChange, onBack, onOpenJson, onOpenVideo, onOpenAudio }) {
   const [tracks, setTracks] = useState(defaultTracks())
@@ -61,6 +93,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   const [dragInfo, setDragInfo] = useState(null)    // { kind, duration, name }
   const [framingMode, setFramingMode] = useState(null) // { trackId, x, y, w } o null
   const [mainColTab, setMainColTab] = useState('main')
+  const [clipMeta, setClipMeta] = useState({
+    title: '', description: '', url: '', segStart: 0, segEnd: 0, segIndex: null,
+    preparing: false, prepProgress: 0, prepMsg: '', err: '',
+  })
+  const [clipSaveJob, setClipSaveJob] = useState(null)
+  const [clipToast, setClipToast] = useState(null)
 
   const mainCanvasRef = useRef(null)
   const resultCanvasRef = useRef(null)
@@ -82,6 +120,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   const framingModeRef = useRef(null); framingModeRef.current = framingMode
   const previewVolRef = useRef(previewVol); previewVolRef.current = previewVol
   const alignGuidesRef = useRef(null)
+  const clipModeRef = useRef(false)
+  const projectTlRef = useRef(null)
+  const clipTlRef = useRef(null)
+  const prepGen = useRef(0)
 
   const duration = clips.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
   const selectedClip = clips.find((c) => c.id === selClipId) || null
@@ -146,7 +188,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   }
 
   useEffect(() => {
-    if (!loaded) return
+    if (!loaded || clipModeRef.current) return
     const id = setTimeout(() => { saveTimeline(project.id, timelinePayload()).catch(() => {}) }, 800)
     return () => clearTimeout(id)
   }, [timelinePayload, loaded, project.id])
@@ -176,6 +218,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     const env = {
       clipsRef, tracksRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
       playingRef, framingModeRef, mainCanvasRef, mainTextBox, topVideoAt, alignGuidesRef,
+      clipModeRef,
     }
     const tick = () => {
       const total = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
@@ -256,6 +299,159 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     playheadRef.current = nt
     setPlayhead(nt)
     if (playingRef.current) playRef.current = { perf: performance.now(), head: nt }
+  }
+
+  function snapshotTl() {
+    return {
+      tracks, clips, playhead, selClipId, selClipIds, selTrackId, selKfId, pps,
+    }
+  }
+  function applyTl(s) {
+    if (!s) return
+    setTracks(s.tracks)
+    setClips(s.clips)
+    setPlayhead(s.playhead)
+    playheadRef.current = s.playhead
+    setSelClipId(s.selClipId)
+    setSelClipIds(s.selClipIds || [])
+    setSelTrackId(s.selTrackId)
+    setSelKfId(s.selKfId)
+    setPps(s.pps)
+  }
+  function applyEmptyClipTl() {
+    setTracks(clipWorkspaceTracks())
+    setClips([])
+    setPlayhead(0)
+    playheadRef.current = 0
+    setSelTrackId('V1')
+    setSelClipId(null)
+    setSelClipIds([])
+    setSelKfId(null)
+  }
+  function goMainTab() {
+    if (mainColTab === 'main') return
+    if (!projectTlRef.current) return
+    stopPlayback()
+    clipTlRef.current = snapshotTl()
+    applyTl(projectTlRef.current)
+    clipModeRef.current = false
+    setMainColTab('main')
+  }
+  function goClipTab() {
+    if (mainColTab === 'clip') return
+    stopPlayback()
+    projectTlRef.current = snapshotTl()
+    clipModeRef.current = true
+    setMainColTab('clip')
+    if (clipTlRef.current) applyTl(clipTlRef.current)
+    else applyEmptyClipTl()
+  }
+
+  async function startClipPrepare(url, start, end, title) {
+    const gen = ++prepGen.current
+    setClipMeta((m) => ({ ...m, preparing: true, prepProgress: 0.04, prepMsg: 'Preparando el tramo…', err: '' }))
+    try {
+      let job = await prepareReframe({ url, start, end })
+      while (job.status !== 'done' && job.status !== 'error') {
+        if (prepGen.current !== gen) return
+        await new Promise((r) => setTimeout(r, 400))
+        job = await getJob(job.id)
+        if (prepGen.current !== gen) return
+        setClipMeta((m) => ({
+          ...m,
+          prepProgress: job.progress || 0.04,
+          prepMsg: job.message || 'Preparando el tramo…',
+        }))
+      }
+      if (prepGen.current !== gen) return
+      if (job.status === 'error' || !job.reframe_prep) {
+        setClipMeta((m) => ({ ...m, preparing: false, err: job.error || 'No se pudo preparar el tramo.' }))
+        return
+      }
+      const prep = job.reframe_prep
+      const dur = Math.max(0.3, prep.duration || (end - start))
+      const clip = {
+        ...makeClip('clips', {
+          index: `yt-${Date.now()}`,
+          filename: 'proxy.mp4',
+          label: title || `Tramo`,
+          start: 0,
+          end: dur,
+        }, 'V1', 0, dur),
+        media_url: prep.proxy_url,
+        source_url: url,
+      }
+      if (prep.keyframes?.length) {
+        clip.reframe = withKfIds({ ...newReframe(), keyframes: prep.keyframes })
+      }
+      setClips([clip])
+      setSelClipId(clip.id)
+      setSelClipIds([clip.id])
+      setSelTrackId('V1')
+      setPlayhead(0)
+      playheadRef.current = 0
+      setClipMeta((m) => ({ ...m, preparing: false, prepMsg: '', err: '' }))
+    } catch (e) {
+      if (prepGen.current !== gen) return
+      setClipMeta((m) => ({ ...m, preparing: false, err: e.message || 'No se pudo preparar el tramo.' }))
+    }
+  }
+
+  function openClipEditor(info) {
+    const url = (info?.url || '').trim()
+    if (!url) return
+    stopPlayback()
+    if (mainColTab === 'main') projectTlRef.current = snapshotTl()
+    clipModeRef.current = true
+    clipTlRef.current = null
+    setClipSaveJob(null)
+    setMainColTab('clip')
+    applyEmptyClipTl()
+    const title = info.title || `Tramo #${info.index}`
+    setClipMeta({
+      title,
+      description: info.description || '',
+      url,
+      segStart: info.start || 0,
+      segEnd: info.end || 0,
+      segIndex: info.index,
+      preparing: true,
+      prepProgress: 0.04,
+      prepMsg: 'Preparando el tramo…',
+      err: '',
+    })
+    startClipPrepare(url, info.start, info.end, title)
+  }
+
+  async function saveClip() {
+    if (clipSaveJob && clipSaveJob.status !== 'error') return
+    const url = clipMeta.url.trim()
+    const video = clips.find((c) => c.kind === 'video') || clips[0]
+    if (!url || !video) return
+    const start = (clipMeta.segStart || 0) + (video.in_point || 0)
+    const end = (clipMeta.segStart || 0) + (video.out_point || clipMeta.segEnd || start + 0.5)
+    if (end - start < 0.5) return
+    const index = 100000 + (Date.now() % 900000)
+    const label = clipMeta.title.trim() || `Clip #${index}`
+    try {
+      setClipSaveJob(await createClipJob({
+        url,
+        project_id: project.id,
+        segments: [{
+          index,
+          start,
+          end,
+          score: 1,
+          duration: +(end - start).toFixed(3),
+          label,
+          description: clipMeta.description.trim() || null,
+        }],
+        crop_mode: 'smart_face',
+        reframe: reframeForCut(video.reframe, video.in_point || 0, video.out_point || (end - start)),
+      }))
+    } catch (e) {
+      setClipSaveJob({ status: 'error', error: e.message })
+    }
   }
 
   // --- Mutaciones de clips ---
@@ -720,6 +916,21 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
     return { version: 1, fps: 30, width: outW, height: outH, audio_target_db: audioDb, tracks, clips: outClips }
   }
   const { exportJob, setExportJob, doExport, exporting } = useExportJob(project.id, { timelinePayload, exportPayload })
+  const clipSaving = clipSaveJob && (clipSaveJob.status === 'pending' || clipSaveJob.status === 'running')
+
+  useEffect(() => {
+    if (!clipSaveJob || clipSaveJob.status === 'done' || clipSaveJob.status === 'error') return
+    const id = setInterval(async () => {
+      try { setClipSaveJob(await getJob(clipSaveJob.id)) } catch { /* reintenta */ }
+    }, 400)
+    return () => clearInterval(id)
+  }, [clipSaveJob?.id, clipSaveJob?.status])
+
+  useEffect(() => {
+    if (clipSaveJob?.status !== 'done') return
+    onChange?.()
+    setClipToast({ type: 'success', message: 'Guardado exitosamente' })
+  }, [clipSaveJob?.id, clipSaveJob?.status, onChange])
 
   // --- Subtítulos ---
   const { subJob, setSubJob, requestSubtitles } = useSubtitles(project.id, {
@@ -788,7 +999,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
   const isTextTrackSel = !selectedClip && selTrackObj?.kind === 'text'
 
   return (
-    <div className="veditor">
+    <div className={`veditor${mainColTab === 'clip' ? ' clip-mode' : ''}`}>
       <div className="ed-hidden-media">{mediaPool}</div>
 
       {/* ===== PARTE SUPERIOR: 3 columnas ===== */}
@@ -802,6 +1013,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
           onOpenAudio={onOpenAudio}
           onRefresh={onChange}
           fav={fav}
+          onEditYtClip={openClipEditor}
         />
 
         {/* MAIN / CLIP EDITOR */}
@@ -810,24 +1022,35 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             <button
               type="button"
               className={`ed-tab ${mainColTab === 'main' ? 'on' : ''}`}
-              onClick={() => setMainColTab('main')}
+              onClick={goMainTab}
             >
               Main Editor
             </button>
             <button
               type="button"
               className={`ed-tab ${mainColTab === 'clip' ? 'on' : ''}`}
-              onClick={() => setMainColTab('clip')}
+              onClick={goClipTab}
             >
               Clip Editor
             </button>
           </div>
-          <div className={`ed-main-body${mainColTab !== 'main' ? ' off' : ''}`}>
+          <div className="ed-main-body">
             <div className="ed-main-stage" ref={mainStageRef}
               onPointerDown={onMainDown}
               style={{ cursor: (canEditFrame || isTextSel || framingMode) ? 'crosshair' : 'default' }}>
               <canvas ref={mainCanvasRef} width={520} height={292} className="ed-main-canvas" />
-              {clips.length === 0 && !framingMode && <div className="ed-stage-empty">Agrega clips o texto al timeline</div>}
+              {mainColTab === 'clip' && clipMeta.preparing && (
+                <div className="ed-stage-prep">
+                  <JobStatusBar
+                    progress={clipMeta.prepProgress}
+                    message={clipMeta.prepMsg}
+                  />
+                </div>
+              )}
+              {mainColTab === 'clip' && !clipMeta.preparing && !clips.length && (
+                <div className="ed-stage-empty">Pulsa Editar en un tramo recomendado</div>
+              )}
+              {mainColTab === 'main' && clips.length === 0 && !framingMode && <div className="ed-stage-empty">Agrega clips o texto al timeline</div>}
               {canEditFrame && !overlayOn && <div className="ed-stage-hint">Arrastra el recuadro · esquinas para zoom</div>}
               {canEditFrame && overlayOn && <div className="ed-stage-hint">Esquinas: encuadre de la fuente · el tamaño en Resultado no cambia</div>}
               {isTextSel && (
@@ -840,26 +1063,43 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
               {framingMode && <div className="ed-stage-hint">Ajusta el recuadro amarillo y pulsa Guardar</div>}
             </div>
             <div className="ed-main-tools">
-              <button className="primary alt small" onClick={addText} title="Añadir un texto a la composición">
-                <Icon name="title" size={15} /> Agregar texto
-              </button>
-              {canEditFrame && (
-                <label className="ed-chip" title="Colocar este clip encima del canvas sin rellenar el formato de salida">
-                  <input type="checkbox" checked={overlayOn}
-                    onChange={(e) => toggleOverlay(selectedClip, e.target.checked)} /> Superponer
-                </label>
+              {mainColTab === 'main' ? (
+                <>
+                  <button className="primary alt small" onClick={addText} title="Añadir un texto a la composición">
+                    <Icon name="title" size={15} /> Agregar texto
+                  </button>
+                  {canEditFrame && (
+                    <label className="ed-chip" title="Colocar este clip encima del canvas sin rellenar el formato de salida">
+                      <input type="checkbox" checked={overlayOn}
+                        onChange={(e) => toggleOverlay(selectedClip, e.target.checked)} /> Superponer
+                    </label>
+                  )}
+                </>
+              ) : (
+                <div className="ed-clip-fields">
+                  <input
+                    className="ed-clip-title"
+                    placeholder="Título"
+                    value={clipMeta.title}
+                    onChange={(e) => setClipMeta((m) => ({ ...m, title: e.target.value }))}
+                  />
+                  <input
+                    className="ed-clip-desc"
+                    placeholder="Descripción"
+                    value={clipMeta.description}
+                    onChange={(e) => setClipMeta((m) => ({ ...m, description: e.target.value }))}
+                  />
+                  {clipMeta.err && <div className="ed-mat-err">{clipMeta.err}</div>}
+                </div>
               )}
             </div>
           </div>
-          {mainColTab === 'clip' && (
-            <div className="ed-clip-pane" />
-          )}
         </div>
 
         {/* RESULTADO FINAL */}
         <div className="ed-col ed-col-result">
           <div className="ed-col-head">
-            <span><Icon name="smart_display" size={15} /> Resultado</span>
+            <span> Resultado</span>
             <div className="ed-col-head-tools">
               <select className="select mini" value={curFormat} onChange={(e) => setFormat(e.target.value)} title="Dimensiones de salida">
                 {FORMATS.map((f) => <option key={f.id} value={f.id}>{f.id}</option>)}
@@ -868,7 +1108,26 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
               <button className="ghost small" onClick={onOpenJson} title="Ver / editar el JSON del proyecto">
                 <Icon name="data_object" size={15} /> JSON
               </button>
-              {exporting ? (
+              {mainColTab === 'clip' ? (
+                clipSaving ? (
+                  <span className="ed-export-pct" title={clipSaveJob.message || 'Guardando…'}>
+                    {Math.round((clipSaveJob.progress || 0.05) * 100)}%
+                  </span>
+                ) : clipSaveJob?.status === 'done' ? (
+                  <span className="reframe-status ok" title="Este clip ya está en el material">
+                    <Icon name="check_circle" size={16} /> Guardado
+                  </span>
+                ) : (
+                  <button
+                    className="primary small"
+                    onClick={saveClip}
+                    disabled={!clipMeta.url || !clips.length || clipMeta.preparing}
+                    title="Guardar este clip en el material"
+                  >
+                    <Icon name="save" size={15} /> Guardar clip
+                  </button>
+                )
+              ) : exporting ? (
                 <span className="ed-export-pct" title={exportJob.message || 'Exportando…'}>
                   {Math.round((exportJob.progress || 0.05) * 100)}%
                 </span>
@@ -896,10 +1155,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
               style={{ cursor: overlayOn ? 'move' : 'default' }}
             />
             {overlayOn && <div className="ed-stage-hint">Arrastra el recuadro para colocar · esquinas escala · punto rota</div>}
-            {exporting && (
+            {(exporting || clipSaving) && (
               <div className="ed-result-exporting">
-                <div className="progress"><span style={{ width: `${(exportJob.progress || 0.05) * 100}%` }} /></div>
-                <span>{exportJob.message || 'Exportando…'}</span>
+                <div className="progress"><span style={{ width: `${((clipSaving ? clipSaveJob.progress : exportJob.progress) || 0.05) * 100}%` }} /></div>
+                <span>{(clipSaving ? clipSaveJob.message : exportJob.message) || (clipSaving ? 'Guardando…' : 'Exportando…')}</span>
               </div>
             )}
           </div>
@@ -937,11 +1196,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
             </label>
           </div>
           {exportJob?.status === 'error' && <div className="error small">⚠️ {exportJob.error}</div>}
+          {clipSaveJob?.status === 'error' && <div className="error small">⚠️ {clipSaveJob.error}</div>}
         </div>
       </div>
 
       {/* ===== PARTE INFERIOR: Timeline + Encuadres/Texto ===== */}
-      <div className="veditor-bottom">
+      <div className={`veditor-bottom${mainColTab === 'clip' ? ' clip-mode' : ''}`}>
         <EdTimeline
           tracks={tracks} clips={clips} pps={pps} setPps={setPps}
           duration={duration} playhead={playhead} rowH={rowH} setRowH={setRowH}
@@ -1097,6 +1357,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson, onO
         onConfirm={applyFragmentTrack}
         onCancel={() => setFragmentAsk(null)}
       />
+      <Toast toast={clipToast} onClose={() => setClipToast(null)} />
     </div>
   )
 }

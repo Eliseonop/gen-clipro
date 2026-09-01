@@ -66,7 +66,7 @@ export default function ManualTrimPanel({ result, dur, heatmapSegments, inT, out
       )}
 
       <button className="primary big" onClick={onEditManual}>
-        <Icon name="movie_edit" size={18} /> Editar y crear clip ({fmt(Math.max(0, outT - inT))})
+        <Icon name="movie_edit" size={18} /> Caja · Editar ({fmt(Math.max(0, outT - inT))})
       </button>
 
       {!result.has_heatmap && (

@@ -52,11 +52,22 @@
 .ed-main-body {
   flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px;
 }
-.ed-main-body.off { display: none; }
-.ed-clip-pane {
-  flex: 1; min-height: 0;
-  background: #05060a; border-radius: var(--radius-md);
+.ed-clip-fields {
+  display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
 }
+.ed-clip-fields input {
+  flex: 1; min-width: 0; box-sizing: border-box;
+  padding: 4px 8px; border: 1px solid var(--line-bright); border-radius: var(--radius-sm);
+  background: var(--card); color: var(--text); font-size: 12px;
+}
+.ed-clip-fields .ed-clip-title { flex: 0.7; }
+.ed-clip-fields .ed-clip-desc { flex: 1.3; }
+.ed-clip-fields input:focus { outline: none; border-color: var(--accent); }
+.ed-clip-fields .ed-mat-err { flex: 1 0 100%; padding: 0; }
+.ed-stage-prep {
+  position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 3;
+}
+.ed-stage-prep .job-status-bar { padding: 6px 8px; background: rgba(5,6,10,0.78); border-radius: 8px; }
 .ed-col-result { flex: 0.72; min-width: 0; padding: 8px; gap: 5px; }
 .ed-col-head {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
@@ -281,6 +292,17 @@
 
 /* ===== INFERIOR: Timeline + Encuadres ===== */
 .veditor-bottom { height: 30vh; min-height: 210px; display: flex; gap: 10px; }
+.veditor.clip-mode .ed-clip.video {
+  background: linear-gradient(135deg, #c45a12, #7a3208);
+  border-color: rgba(251, 146, 60, 0.45);
+}
+.veditor.clip-mode .ed-clip.video.sel {
+  border-color: #fb923c;
+  box-shadow: 0 0 0 1px #fb923c, 0 6px 16px rgba(0,0,0,0.4);
+}
+.veditor.clip-mode .ed-lane.sel { background: rgba(234, 88, 12, 0.10); }
+.veditor.clip-mode .ed-track-head.sel { background: rgba(234, 88, 12, 0.18); }
+.veditor.clip-mode .ed-th-name { color: #fb923c; }
 
 .ed-timeline-wrap {
   flex: 1; min-width: 0; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-lg);

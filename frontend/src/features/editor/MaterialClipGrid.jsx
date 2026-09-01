@@ -154,7 +154,7 @@ export default function MaterialClipGrid({
   di,
   draggable = true,
   addTitle = 'Agregar al proyecto',
-  emptyText = 'Sin clips. Pulsa Cargar video para añadir material.',
+  emptyText = 'Sin clips. Pulsa Cargar clips o Caja video.',
   onToggleSave,
 }) {
   const internalPlay = useExclusiveMedia()

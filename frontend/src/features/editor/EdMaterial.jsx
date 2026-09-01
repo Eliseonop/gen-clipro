@@ -5,7 +5,6 @@ import { FAV_CAT } from '../../lib/favorites'
 import { analyze, listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryItem, unsaveLibraryItem, uploadImages, uploadVideo, uploadAudio } from '../../services/api'
 import MaterialClipGrid, { dragPayload, useToggle, useExclusiveMedia, Empty, ImageCard } from './MaterialClipGrid'
 import SfxClassifyModal from './SfxClassifyModal'
-import ClipEditor from '../video/ClipEditor'
 import JobStatusBar from '../../components/JobStatusBar'
 
 const YT_ANALYZE_OPTS = { min_score: 0.4, max_clips: 10, max_duration: 60, padding: 10 }
@@ -123,7 +122,7 @@ function ScopeFilter({ value, onChange, includeLoad = false }) {
       <button type="button" className={`ed-tab ${value === 'saved' ? 'on' : ''}`} onClick={() => onChange('saved')}>Guardados</button>
       {includeLoad && (
         <button type="button" className={`ed-tab ${value === 'cargar' ? 'on' : ''}`} onClick={() => onChange('cargar')}>
-          <Icon name="add" size={14} /> Cargar
+          <Icon name="add" size={14} /> Cargar clips
         </button>
       )}
     </div>
@@ -154,7 +153,7 @@ function withProjectScope(items, kind) {
   }))
 }
 
-export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenVideo, onOpenAudio, onRefresh, fav }) {
+export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenVideo, onOpenAudio, onRefresh, fav, onEditYtClip }) {
   const [tab, setTab] = useState('video')
   const [videoFilter, setVideoFilter] = useState('all')
   const [audioFilter, setAudioFilter] = useState('all')
@@ -169,7 +168,6 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
   const [ytElapsed, setYtElapsed] = useState(0)
   const [ytResult, setYtResult] = useState(null)
   const [ytPreview, setYtPreview] = useState(null)
-  const [ytEditor, setYtEditor] = useState(null)
   const [ytConfigs, setYtConfigs] = useState({})
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState('')
@@ -298,20 +296,16 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
   function openYtEditor(s) {
     const url = ytUrl.trim()
     if (!url) { setYtErr('Falta la URL del vídeo original para editar este clip.'); return }
-    const key = `seg-${s.index}`
-    setYtEditor({
-      segStart: s.start,
-      segEnd: s.end,
-      key,
-      segIndex: s.index,
+    setYtConfigs((c) => ({ ...c, [`seg-${s.index}`]: true }))
+    onEditYtClip?.({
       url,
-      initial: ytConfigs[key],
+      start: s.start,
+      end: s.end,
+      index: s.index,
+      title: ytResult?.video?.title || `Tramo #${s.index}`,
+      description: s.description || s.label || '',
+      videoId: ytResult?.video?.id,
     })
-  }
-
-  function closeYtEditor(config) {
-    if (ytEditor && config) setYtConfigs((c) => ({ ...c, [ytEditor.key]: config }))
-    setYtEditor(null)
   }
 
   async function importMedia(fileList) {
@@ -396,8 +390,8 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
           <span className="ed-mat-label" title={project.name}></span>
         </div>
         <div className="ed-mat-actions">
-          <button className="ghost small" onClick={onOpenVideo} type="button">
-            <Icon name="add" size={15} /> Cargar video
+          <button className="ghost small" onClick={() => onOpenVideo?.()} type="button">
+            <Icon name="add" size={15} /> Caja video
           </button>
           <button className="ghost small" onClick={() => fileRef.current?.click()} type="button" disabled={uploading}>
             <Icon name="add" size={15} /> {uploading ? 'Subiendo…' : 'Imagen'}
@@ -520,7 +514,7 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
               onPlay={onPlayMedia}
               di={di}
               onToggleSave={(c) => toggleSave('clip', c)}
-              emptyText={videoFilter === 'saved' ? 'No hay clips guardados.' : 'Sin clips. Pulsa Cargar video para añadir material.'}
+              emptyText={videoFilter === 'saved' ? 'No hay clips guardados.' : 'Sin clips. Pulsa Cargar clips o Caja video.'}
             />
           )}
         </div>
@@ -568,20 +562,6 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onOpenV
       )}
 
       {tab === 'sfx' && <SfxTab onAdd={onAdd} onPlay={onPlayMedia} di={di} fav={fav} />}
-
-      {ytEditor && (
-        <ClipEditor
-          key={ytEditor.key}
-          project={project}
-          url={ytEditor.url}
-          segStart={ytEditor.segStart}
-          segEnd={ytEditor.segEnd}
-          segIndex={ytEditor.segIndex}
-          initial={ytEditor.initial}
-          onClose={closeYtEditor}
-          onChange={onRefresh}
-        />
-      )}
     </div>
   )
 }

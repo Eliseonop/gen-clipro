@@ -146,7 +146,7 @@ export default function VideoTab({ project, onChange }) {
         ) : (
           <div className="empty big">
             <Icon name="movie" size={48} />
-            <p>Pega una URL de YouTube arriba y pulsa <strong>Cargar vídeo</strong> para ver la línea de tiempo y generar clips.</p>
+            <p>Pega una URL de YouTube arriba y pulsa <strong>Caja · Cargar</strong> para ver la línea de tiempo y generar clips.</p>
           </div>
         )}
       </div>
