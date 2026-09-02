@@ -3,6 +3,8 @@
 // no usa este módulo.
 import { clamp, clampCenter, frameAt, geomFor } from './panning.js'
 import { clipEnd, isVisualClip } from '../features/editor/editorModel.js'
+import { clipPose } from './clipAnim.js'
+import { keyframesOn } from './clipKeyframes.js'
 
 export const newTransform = () => ({ x: 0.5, y: 0.5, scale: 1, rotation: 0 })
 
@@ -57,9 +59,14 @@ export function cropSizeFromCorner(nx, ny, cx, cy) {
  * Ventana de recorte sobre la fuente (fracciones 0-1).
  * Overlay: crop_w/crop_h propios. Fill: zoom + aspecto de salida (comportamiento actual).
  */
-export function cropWindow(clip, srcAspect, outAspect, srcTime) {
+export function cropWindow(clip, srcAspect, outAspect, srcTime, localT) {
   const rf = clip?.reframe
-  const fr = frameAt(rf?.keyframes, srcTime, rf?.zoom ?? 1, rf?.pan_mode || 'smooth')
+  const posed = keyframesOn(clip)
+    ? clipPose(clip, localT ?? 0, srcTime)
+    : null
+  const fr = posed
+    ? { cx: posed.cx, cy: posed.cy, zoom: posed.zoom, fit: 'cover' }
+    : frameAt(rf?.keyframes, srcTime, rf?.zoom ?? 1, rf?.pan_mode || 'smooth')
   if (isOverlay(clip) && rf?.crop_w != null && rf?.crop_h != null) {
     const sized = clampCrop(fr.cx, fr.cy, rf.crop_w, rf.crop_h)
     return { cx: sized.cx, cy: sized.cy, wf: sized.wf, hf: sized.hf }
@@ -110,8 +117,8 @@ export function destRectOnCanvas(transform, cropPx, outW, outH, canvasW, canvasH
 }
 
 /** Pasa un clip fill a overlay capturando el encuadre actual (sin deformarlo). */
-export function enableOverlay(clip, srcAspect, outAspect, srcTime, srcW, srcH, outW, outH) {
-  const crop = cropWindow({ ...clip, layout: 'fill' }, srcAspect, outAspect, srcTime)
+export function enableOverlay(clip, srcAspect, outAspect, srcTime, srcW, srcH, outW, outH, localT) {
+  const crop = cropWindow({ ...clip, layout: 'fill' }, srcAspect, outAspect, srcTime, localT)
   const px = sourceCropPx(crop, srcW, srcH)
   const pipW = 0.44 * outW
   const pipH = 0.38 * outH
@@ -137,13 +144,13 @@ export function disableOverlay(clip) {
  * Encuadre asistido: Completo (fill) o mitad superior/inferior (overlay que llena el hueco).
  * El recorte de fuente usa el aspecto del hueco; Main sigue editando qué zona se ve.
  */
-export function applyFrame(clip, slot, srcAspect, outAspect, srcTime, srcW, srcH, outW, outH) {
+export function applyFrame(clip, slot, srcAspect, outAspect, srcTime, srcW, srcH, outW, outH, localT) {
   if (slot === 'full' || !FRAME_SLOTS[slot]) {
     return { ...disableOverlay(clip), reframe: { ...(clip.reframe || {}), dual_crop: clip.reframe?.dual_crop } }
   }
   const spec = FRAME_SLOTS[slot]
   const slotAspect = (spec.w * outAspect) / spec.h
-  const crop = cropWindow({ ...clip, layout: 'fill' }, srcAspect, slotAspect, srcTime)
+  const crop = cropWindow({ ...clip, layout: 'fill' }, srcAspect, slotAspect, srcTime, localT)
   const px = sourceCropPx(crop, srcW, srcH)
   const slotW = spec.w * outW
   const slotH = spec.h * outH

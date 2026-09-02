@@ -183,8 +183,12 @@ const MAT_NAV = [
 export default function EdMaterial({
   project, onAdd, onDragInfo, onBack, onRefresh, fav, onEditYtClip, selectedClip, onChangeFx,
   textStyle, textMode, onChangeTextStyle, onApplyTextPreset,
+  matTab, onMatTab,
+  playhead, onPose, onChangeFrame, selKfId, onInterpKf,
 }) {
-  const [tab, setTab] = useState('video')
+  const [tabState, setTabState] = useState('video')
+  const tab = matTab ?? tabState
+  const setTab = (id) => { if (onMatTab) onMatTab(id); else setTabState(id) }
   const [videoFilter, setVideoFilter] = useState('all')
   const [audioFilter, setAudioFilter] = useState('all')
   const [imageFilter, setImageFilter] = useState('all')
@@ -880,6 +884,11 @@ export default function EdMaterial({
           textMode={textMode}
           onChangeTextStyle={onChangeTextStyle}
           onApplyTextPreset={onApplyTextPreset}
+          playhead={playhead}
+          onPose={onPose}
+          onChangeFrame={onChangeFrame}
+          selKfId={selKfId}
+          onInterpKf={onInterpKf}
         />
       )}
       {tab === 'settings' && <EdSettings />}

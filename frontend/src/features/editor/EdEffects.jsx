@@ -7,6 +7,8 @@ import {
 } from '../../lib/clipFx'
 import { isVisualClip } from './editorModel'
 import { TextFxPanel } from './EdText'
+import EdTransform from './EdTransform'
+import { canKeyframe, KF_INTERPS, normalizeInterp, targetInterpItem } from '../../lib/clipKeyframes'
 
 function fxTabs(clip, textMode) {
   if (textMode === 'clip' || textMode === 'track' || clip?.kind === 'text') return ['text', 'transitions']
@@ -23,13 +25,34 @@ function tabLabel(id) {
   return 'Audio'
 }
 
+function KfTransitionSelect({ clip, selKfId, playhead, onInterp }) {
+  const localT = Math.max(0, (playhead ?? 0) - (clip?.start || 0))
+  const target = targetInterpItem(clip, selKfId, localT)
+  if (!target) return null
+  return (
+    <>
+      <label className="ed-prop">
+        Tipo de transición
+        <FlipSelect
+          value={normalizeInterp(target.interpolation)}
+          options={KF_INTERPS.map((o) => ({ value: o.id, label: o.label }))}
+          onChange={(v) => onInterp?.(target, v)}
+        />
+      </label>
+      <p className="ed-key-hint">Cómo llega el encuadre a este punto de la timeline.</p>
+    </>
+  )
+}
+
 export default function EdEffects({
   clip, onChangeFx, textStyle, textMode, onChangeTextStyle, onApplyTextPreset,
+  playhead, onPose, onChangeFrame, selKfId, onInterpKf,
 }) {
   const tabs = fxTabs(clip, textMode)
   const isTextFx = tabs[0] === 'text'
   const [tab, setTab] = useState(tabs[0] || 'video')
   const activeTab = tabs.includes(tab) ? tab : (tabs[0] || 'video')
+  const showKf = canKeyframe(clip)
 
   useEffect(() => {
     setTab((t) => {
@@ -38,11 +61,29 @@ export default function EdEffects({
     })
   }, [clip?.id, clip?.kind, textMode])
 
-  if (!tabs.length) {
+  const kfBlock = showKf ? (
+    <EdTransform
+      clip={clip}
+      playhead={playhead}
+      onPose={onPose}
+      onChangeFrame={onChangeFrame}
+    />
+  ) : null
+
+  if (!tabs.length && !showKf) {
     return (
       <div className="ed-mat-list">
-        <div className="ed-mat-empty">
-          {clip?.kind === 'shape' ? 'Las figuras se editan en Propiedades.' : 'Selecciona un clip en la timeline.'}
+        <div className="ed-mat-empty">Selecciona un clip en la timeline.</div>
+      </div>
+    )
+  }
+
+  if (!tabs.length && showKf) {
+    return (
+      <div className="ed-fx">
+        <div className="ed-fx-body">
+          {kfBlock}
+          <KfTransitionSelect clip={clip} selKfId={selKfId} playhead={playhead} onInterp={onInterpKf} />
         </div>
       </div>
     )
@@ -76,12 +117,16 @@ export default function EdEffects({
             />
           )}
           {activeTab === 'transitions' && (
-            <TextFxPanel
-              section="appear"
-              style={st}
-              mode={mode}
-              onChangeStyle={onChangeTextStyle}
-            />
+            <>
+              {kfBlock}
+              <KfTransitionSelect clip={clip} selKfId={selKfId} playhead={playhead} onInterp={onInterpKf} />
+              <TextFxPanel
+                section="appear"
+                style={st}
+                mode={mode}
+                onChangeStyle={onChangeTextStyle}
+              />
+            </>
           )}
         </div>
       </div>
@@ -182,6 +227,8 @@ export default function EdEffects({
 
         {activeTab === 'transitions' && (
           <>
+            {kfBlock}
+            <KfTransitionSelect clip={clip} selKfId={selKfId} playhead={playhead} onInterp={onInterpKf} />
             <label className="ed-prop">
               Aparición
               <FlipSelect

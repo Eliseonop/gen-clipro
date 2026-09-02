@@ -333,10 +333,13 @@ class TimelineClip(BaseModel):
     keep_pitch: bool = False            # audio: mantener tono (atempo) en vez de asetrate
     reverse: bool = False
     speed_curve: Optional[dict] = None  # reserva; sin motor en esta entrega
+    opacity: Optional[float] = None     # opacidad estática del clip (1 = opaco); los keyframes la animan
     words: list[Word] = []                # (texto) timing real por palabra, RELATIVO al inicio del clip
     origin: Optional[dict] = None         # (texto) procedencia: {transcript_id, segment_index, fragment_index, word_range, source_range}
     text_role: Optional[str] = None       # "caption" | "free"; None = inferir al usar
     shape: Optional[dict] = None          # figura vectorial: type, fill, stroke, x/y/w/h…
+    anim: Optional[dict] = None           # (legado) pistas {x,y,scale,rotation,opacity: [{t,v,ease}]}
+    keyframes: Optional[dict] = None      # snapshots: {enabled, items: [{id,t,interpolation,props}]}
     asset_scope: str = "project"          # "project" | "library"
     description: Optional[str] = None
     dup_of: Optional[str] = None          # id del clip original si es una copia

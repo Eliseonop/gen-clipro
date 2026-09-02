@@ -3,11 +3,11 @@ import Icon from '../../components/Icon'
 import FlipPopover from '../../components/FlipPopover'
 import { fmt } from '../../lib/utils'
 import { pseudoWaveform, clamp, kfColor } from '../../lib/panning'
-import { clipDur, clipSourceDur, clipSpeed, displayTracks, isGeneratedDurationClip, isVisualClip, laneKindForAsset, linkedPartnerName, resizeGeneratedClip, trackKindForClip } from './editorModel'
+import { clipDur, clipSourceDur, clipSpeed, displayTracks, isVisualClip, laneKindForAsset, linkedPartnerName, trackKindForClip, trimClipPatch, trimPreviewHead } from './editorModel'
+import { alignOthers, alignThresholdSec, asAlignClip, snapClipGroup, snapClipMove, snapClipTrim, timelineAlignHits } from './timelineAlign'
+import { keyframesEnabled, normalizeItems } from '../../lib/clipKeyframes'
 import { stackViewForTrack } from './clipStack.js'
 import { headerScrollPad, timelineWheelAction } from './timelineWheel'
-
-const MIN_DUR = 0.15
 
 function PreviewVolButton({ value = 1, onChange }) {
   const [open, setOpen] = useState(false)
@@ -78,7 +78,7 @@ const laneKindFor = laneKindForAsset
 export default function EdTimeline({
   tracks, clips, pps, setPps, duration, playhead, rowH, setRowH,
   selectedClipId, selectedClipIds, selectedTrackId, selectedClip, selKfId, dragInfo,
-  onSeek, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onMoveGroup, onMatchDuration, onSplit, onDuplicate, onDeleteClip,
+  onSeek, onScrub, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onMoveGroup, onMatchDuration, onSplit, onDuplicate, onDeleteClip,
   previewVol, onPreviewVol,
   onDropAsset, onTrackToggle, onTrackCompact, onAddTrack, onAddTextTrack, onMoveKeyframe, onSelectKf, onAddKf, onDeleteKf, onContextClip, onContextTrack,
   onFaceTrack, faceTrackBusy, faceTrackDisabled,
@@ -90,6 +90,8 @@ export default function EdTimeline({
   const drag = useRef(null)
   const [dropHint, setDropHint] = useState(null)   // { trackId, time }
   const [expandedClusterId, setExpandedClusterId] = useState(null)
+  const [trimGuide, setTrimGuide] = useState(null) // { t, dur }
+  const [alignTimes, setAlignTimes] = useState(null) // number[] mientras se mueve/recorta
 
   const rows = displayTracks(tracks)
   const totalW = Math.max(duration + 4, 12) * pps
@@ -200,7 +202,23 @@ export default function EdTimeline({
     const origs = clips.filter((c) => idSet.has(c.id)).map((c) => ({ ...c }))
     const startX = e.clientX
     const waitDrag = !!(e.ctrlKey || e.metaKey || e.shiftKey)
-    drag.current = { mode, startX, orig: { ...clip }, origs, waitDrag }
+    const movingIds = mode === 'move' && origs.length > 1 ? new Set(origs.map((c) => c.id)) : new Set([clip.id])
+    const others = alignOthers(clips, movingIds)
+    drag.current = { mode, startX, orig: { ...clip }, origs, waitDrag, others }
+    const thresh = () => alignThresholdSec(pps)
+    const previewTrim = (deltaT, doSnap) => {
+      const which = mode === 'trim-left' ? 'start' : 'end'
+      const snapped = doSnap ? snapClipTrim(clip, mode, deltaT, others, thresh()) : null
+      const patch = snapped?.patch || trimClipPatch(clip, mode, deltaT)
+      if (!patch) return
+      const usedDelta = snapped ? snapped.deltaT : deltaT
+      onMutateClip(clip.id, patch)
+      const t = trimPreviewHead(clip, mode, usedDelta)
+      if (t != null) (onScrub || onSeek)?.(t)
+      setTrimGuide({ t: t ?? clip.start, dur: clipDur({ ...clip, ...patch }) })
+      setAlignTimes(snapped?.times ?? timelineAlignHits([asAlignClip({ ...clip, ...patch })], others, thresh(), which))
+    }
+    if (mode === 'trim-left' || mode === 'trim-right') previewTrim(0, false)
     const move = (ev) => {
       const d = drag.current
       if (!d) return
@@ -210,34 +228,32 @@ export default function EdTimeline({
       const o = d.orig
       if (d.mode === 'move') {
         if (d.origs.length > 1 && onMoveGroup) {
-          onMoveGroup(d.origs, deltaT)
+          const snapped = snapClipGroup(d.origs, deltaT, d.others, thresh())
+          onMoveGroup(d.origs, snapped.deltaT)
+          setAlignTimes(snapped.times)
           return
         }
-        const ns = Math.max(0, o.start + deltaT)
-        const patch = { start: +ns.toFixed(3) }
         const tid = trackUnderPointer(ev.clientX, ev.clientY)
+        let trackId = o.track_id
         if (tid && tid !== o.track_id) {
           const tt = tracks.find((t) => t.id === tid)
-          if (tt && trackKindForClip(o.kind) === tt.kind && !tt.locked) patch.track_id = tid
+          if (tt && trackKindForClip(o.kind) === tt.kind && !tt.locked) trackId = tid
         }
+        const snapped = snapClipMove(o, deltaT, d.others, thresh(), trackId)
+        const patch = { start: snapped.start }
+        if (trackId !== o.track_id) patch.track_id = trackId
         onMutateClip(o.id, patch)
-      } else if (isGeneratedDurationClip(o) && (d.mode === 'trim-left' || d.mode === 'trim-right')) {
-        onMutateClip(o.id, resizeGeneratedClip(o, d.mode, deltaT))
-      } else if (d.mode === 'trim-left') {
-        const sp = clipSpeed(o)
-        const minSrc = MIN_DUR * sp
-        const ni = clamp(o.in_point + deltaT * sp, 0, o.out_point - minSrc)
-        const ns = Math.max(0, o.start + (ni - o.in_point) / sp)
-        onMutateClip(o.id, { in_point: +ni.toFixed(3), start: +ns.toFixed(3) })
-      } else if (d.mode === 'trim-right') {
-        const sp = clipSpeed(o)
-        const minSrc = MIN_DUR * sp
-        const maxOut = o.source_duration > 0 ? o.source_duration : o.out_point + 3600
-        const no = clamp(o.out_point + deltaT * sp, o.in_point + minSrc, maxOut)
-        onMutateClip(o.id, { out_point: +no.toFixed(3) })
+        setAlignTimes(snapped.times)
+      } else if (d.mode === 'trim-left' || d.mode === 'trim-right') {
+        previewTrim(deltaT, true)
       }
     }
-    const up = () => { drag.current = null; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    const up = () => {
+      drag.current = null
+      setTrimGuide(null)
+      setAlignTimes(null)
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up)
+    }
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
   }
 
@@ -248,8 +264,11 @@ export default function EdTimeline({
     const orig = kf.t
     const move = (ev) => {
       const deltaT = (ev.clientX - startX) / pps
-      const nt = clamp(orig + deltaT, clip.in_point, clip.out_point)
-      onMoveKeyframe(clip.id, idx, +nt.toFixed(3))
+      const dur = clipDur(clip)
+      const nt = clip.keyframes?.enabled
+        ? clamp(orig + deltaT, 0, dur)
+        : clamp(orig + deltaT, clip.in_point, clip.out_point)
+      onMoveKeyframe(clip.id, kf.id, +nt.toFixed(3))
     }
     const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
@@ -276,13 +295,6 @@ export default function EdTimeline({
     <div className="ed-timeline-wrap" style={{ '--ed-row-h': `${rowH}px` }}>
       <div className="ed-tl-toolbar">
         <div className="ed-tl-tools-left">
-          <button className="ghost small icon-only" type="button" onClick={() => onSeek(playhead - 0.5)} title="Atrás 0,5s">
-            <Icon name="fast_rewind" size={15} />
-          </button>
-          <button className="ghost small icon-only" type="button" onClick={() => onSeek(playhead + 0.5)} title="Adelante 0,5s">
-            <Icon name="fast_forward" size={15} />
-          </button>
-          <span className="ed-tl-sep" />
           <button className="ghost small" onClick={() => onSplit(selectedClipId, playhead)} disabled={!selectedIds.length} title="Dividir en el cursor (S)">
             <Icon name="content_cut" size={15} /> Dividir
           </button>
@@ -297,13 +309,10 @@ export default function EdTimeline({
           )}
           <span className="ed-tl-sep" />
           <PreviewVolButton value={previewVol} onChange={onPreviewVol} />
-          {isVideoSel && (
+          {selKfId != null && (
             <>
               <span className="ed-tl-sep" />
-              <button className="ghost small" onClick={onAddKf} title="Añadir encuadre en el cursor">
-                <Icon name="add_location_alt" size={15} /> Encuadre
-              </button>
-              <button className="ghost small" onClick={onDeleteKf} disabled={selKfId == null} title="Eliminar encuadre seleccionado">
+              <button className="ghost small" onClick={onDeleteKf} title="Eliminar keyframe seleccionado">
                 <Icon name="wrong_location" size={15} /> Quitar
               </button>
             </>
@@ -379,10 +388,16 @@ export default function EdTimeline({
 
         <div className="ed-tl-scroll" ref={lanesRef}>
           <div className="ed-tl-inner" style={{ width: totalW }}>
-            <div className="ed-ruler" title="Rueda: zoom de tiempo" onPointerDown={onRulerDown}>
-              {buildTicks(duration + 4, pps).map((tk) => (
-                <span key={tk.t} className="ed-tick" style={{ left: tk.t * pps }}><i />{tk.major ? <em>{fmt(tk.t)}</em> : null}</span>
+            <div className={`ed-ruler${trimGuide ? ' live' : ''}`} title="Rueda: zoom de tiempo" onPointerDown={onRulerDown}>
+              {buildTicks(duration + 4, pps, !!trimGuide).map((tk) => (
+                <span key={tk.t} className={`ed-tick${tk.minor ? ' minor' : ''}`} style={{ left: tk.t * pps }}><i />{tk.major ? <em>{fmt(tk.t)}</em> : null}</span>
               ))}
+              {trimGuide && (
+                <span className="ed-trim-chip" style={{ left: trimGuide.t * pps }}>
+                  {fmt(trimGuide.t)}
+                  <em>{fmt(trimGuide.dur)}</em>
+                </span>
+              )}
             </div>
 
             {rows.map((t) => {
@@ -436,6 +451,9 @@ export default function EdTimeline({
               )
             })}
 
+            {(alignTimes || []).map((t) => (
+              <div key={t} className="ed-align-guide" style={{ left: t * pps }} aria-hidden="true" />
+            ))}
             <div className="ed-playhead" style={{ left: playhead * pps }}><span className="ed-playhead-knob" /></div>
           </div>
         </div>
@@ -452,7 +470,8 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
   const left = clip.start * pps
   const isVideo = isVisualClip(clip)
   const isText = clip.kind === 'text'
-  const kfs = isVideo ? [...(clip.reframe?.keyframes || [])].sort((a, b) => a.t - b.t) : []
+  const animKfs = keyframesEnabled(clip) ? normalizeItems(clip.keyframes.items) : null
+  const kfs = animKfs || (isVideo ? [...(clip.reframe?.keyframes || [])].sort((a, b) => a.t - b.t) : [])
   const bars = clip.kind === 'audio' ? pseudoWaveform(clip.asset_id, Math.max(16, Math.round(w / 5))) : null
   const speedBadge = !isText && sp !== 1 ? (
     <em className="ed-clip-speed">{sp % 1 === 0 ? `${sp}x` : `${sp.toFixed(1)}x`}</em>
@@ -478,25 +497,39 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
         </div>
       )}
 
-      {selected && isVideo && kfs.map((k, i) => {
-        const kl = ((k.t - clip.in_point) / (srcDur || 1)) * w
+      {selected && kfs.map((k, i) => {
+        const kl = animKfs
+          ? (k.t / (dur || 1)) * w
+          : ((k.t - clip.in_point) / (srcDur || 1)) * w
         if (kl < -3 || kl > w + 3) return null
+        const hold = (k.interpolation === 'hold' || k.pan_mode === 'direct')
         return (
-          <span key={k.id || i} className={`ed-kf-dot ${k.pan_mode === 'direct' ? 'direct' : ''} ${k.id === selKfId ? 'sel' : ''}`}
-            style={{ left: kl, background: kfColor(i) }} title={`${k.pan_mode === 'direct' ? 'Directo' : 'Suave'} · ${fmt(k.t - clip.in_point)}`}
-            onPointerDown={(e) => { e.stopPropagation(); onKfDown(e, k, i) }} />
+          <span key={k.id || i} className={`ed-kf-dot ${hold ? 'direct' : ''} ${k.id === selKfId ? 'sel' : ''}`}
+            style={{ left: kl, background: kfColor(i) }}
+            title={`Keyframe ${i + 1} · ${fmt(animKfs ? k.t : k.t - clip.in_point)}`}
+            onPointerDown={(e) => { e.stopPropagation(); onKfDown(e, k, i) }}>{i + 1}</span>
         )
       })}
     </div>
   )
 }
 
-function buildTicks(maxT, pps) {
-  const targetPx = 90
+function buildTicks(maxT, pps, dense = false) {
+  const targetPx = dense ? 48 : 90
   const rawStep = targetPx / pps
-  const steps = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300]
+  const steps = dense
+    ? [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300]
+    : [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300]
   const step = steps.find((s) => s >= rawStep) || 600
   const ticks = []
   for (let t = 0; t <= maxT; t += step) ticks.push({ t: +t.toFixed(2), major: true })
+  if (dense && step >= 0.5) {
+    const minor = step / 5
+    for (let t = 0; t <= maxT; t += minor) {
+      const n = +t.toFixed(2)
+      if (ticks.some((tk) => Math.abs(tk.t - n) < 1e-6)) continue
+      ticks.push({ t: n, major: false, minor: true })
+    }
+  }
   return ticks
 }

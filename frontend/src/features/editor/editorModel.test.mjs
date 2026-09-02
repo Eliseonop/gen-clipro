@@ -5,7 +5,7 @@ import {
   timelineToSource, sourceToTimeline, splitClipAt,
   clipPlaybackMuted, makeClip, mediaUrl, newReframe,
   shouldConfirmTrackDelete, removeTrack,
-  canCaptionClip, textClipsFromTranscript, makeTextClip, resizeGeneratedClip,
+  canCaptionClip, textClipsFromTranscript, makeTextClip, resizeGeneratedClip, trimClipPatch, trimPreviewHead,
   splitClipByMaxWords, splitTrackTextByMaxWords, extraClipsAfterSplit,
   nextClipSelection, rangeSelectOnTrack, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
   previewElementVolume, parsePreviewVolume, laneKindForAsset, trackKindForClip,
@@ -360,6 +360,14 @@ assert.equal(pinned.out_point, 3)
 
 const shrunk = resizeGeneratedClip(watermark, 'trim-right', -10)
 assert.equal(shrunk.out_point, 0.15)
+
+assert.equal(trimPreviewHead(watermark, 'trim-left', 0), 2)
+assert.ok(Math.abs(trimPreviewHead(watermark, 'trim-right', 0) - (clipEnd(watermark) - 0.04)) < 1e-9)
+const videoTrim = { kind: 'video', start: 5, in_point: 1, out_point: 5, source_duration: 20, speed: 1 }
+assert.deepEqual(trimClipPatch(videoTrim, 'trim-left', 1), { in_point: 2, start: 6 })
+assert.equal(trimPreviewHead(videoTrim, 'trim-left', 1), 6)
+assert.equal(trimClipPatch(videoTrim, 'trim-right', 2).out_point, 7)
+assert.ok(Math.abs(trimPreviewHead(videoTrim, 'trim-right', 2) - (5 + 6 - 0.04)) < 1e-9)
 
 const freeLong = {
   id: 'w1', track_id: 'T1', kind: 'text', text_role: 'free',
