@@ -1,6 +1,6 @@
 // Estado y sondeo del job de exportación del timeline.
 import { useState, useEffect } from 'react'
-import { getJob, saveTimeline, exportTimeline } from '../../../services/api'
+import { getJob, getSettings, saveTimeline, exportTimeline } from '../../../services/api'
 
 export function useExportJob(projectId, { timelinePayload, exportPayload }) {
   const [exportJob, setExportJob] = useState(null)
@@ -16,8 +16,16 @@ export function useExportJob(projectId, { timelinePayload, exportPayload }) {
 
   async function doExport() {
     try {
-      await saveTimeline(projectId, timelinePayload())
-      setExportJob(await exportTimeline(projectId, exportPayload()))
+      let fps = 30
+      try {
+        const s = await getSettings()
+        const n = Number(s?.export?.fps)
+        if (n === 24 || n === 25 || n === 30 || n === 50 || n === 60) fps = n
+      } catch { /* usa 30 */ }
+      const tl = { ...timelinePayload(), fps }
+      const ex = { ...exportPayload(), fps }
+      await saveTimeline(projectId, tl)
+      setExportJob(await exportTimeline(projectId, ex))
     } catch (e) { setExportJob({ status: 'error', error: e.message }) }
   }
 

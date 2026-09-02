@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from .text_role import resolve_text_role
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 def _v1_to_v2(tl: dict) -> dict:
@@ -43,8 +43,27 @@ def _v2_to_v3(tl: dict) -> dict:
     return out
 
 
+def _v3_to_v4(tl: dict) -> dict:
+    """v3 → v4: el preview conserva el tono al acelerar (preservesPitch).
+    ``keep_pitch: false`` en clips viejos no se aplicaba al editor y el export
+    sonaba a ardilla. Se alinea a True (atempo), igual que el Resultado.
+    """
+    out = dict(tl)
+    clips = []
+    for c in tl.get("clips") or []:
+        if not isinstance(c, dict):
+            clips.append(c)
+            continue
+        cc = dict(c)
+        if cc.get("keep_pitch") is False:
+            cc["keep_pitch"] = True
+        clips.append(cc)
+    out["clips"] = clips
+    return out
+
+
 # from_version -> paso que lleva a from_version + 1
-MIGRATIONS = {1: _v1_to_v2, 2: _v2_to_v3}
+MIGRATIONS = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4}
 
 
 def timeline_version(tl: dict | None) -> int:

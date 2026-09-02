@@ -35,7 +35,11 @@ def clip_timeline_duration(clip) -> float:
 
 
 def keep_pitch(clip) -> bool:
-    return bool(_field(clip, "keep_pitch", False))
+    """True = mismo tono al cambiar velocidad (HTML ``preservesPitch`` / atempo)."""
+    raw = _field(clip, "keep_pitch", True)
+    if raw is None:
+        return True
+    return bool(raw)
 
 
 def clip_reverse(clip) -> bool:
@@ -74,5 +78,6 @@ def audio_speed_filters(clip) -> str:
         if keep_pitch(clip):
             bits.append(atempo_chain(sp))
         else:
-            bits.append(f"asetrate=48000*{sp:.6f},aresample=48000")
+            # Preview: playbackRate + preservesPitch. asetrate cambia el tono (ardilla).
+            bits.append(f"asetrate=48000*{sp:.6f}")
     return ",".join(bits)

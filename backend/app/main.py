@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import config, diagnostics, heatmap, jobs, projects, settings, storage, timeline_store, tts
+from . import config, diagnostics, heatmap, jobs, migrations, projects, settings, storage, timeline_store, tts
 from .mcp_server import server as mcp_server
 from .schemas import (
     AnalyzeRequest,
@@ -404,7 +404,11 @@ def export_timeline(project_id: str, req: ExportRequest) -> Job:
     proj = projects.get_project(project_id)
     if proj is None:
         raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
-    timeline = req.timeline or proj.timeline
+    timeline = (
+        Timeline(**migrations.migrate_timeline(req.timeline))
+        if req.timeline
+        else proj.timeline
+    )
     if timeline is None or not timeline.clips:
         raise HTTPException(status_code=400, detail="La timeline está vacía.")
     job = jobs.create_job()

@@ -49,6 +49,23 @@ export function toggleWordFx(current, name) {
   return next.length ? next : 'none'
 }
 
+export const MAX_WORDS_PER_BOX = 10
+
+/** Pista: 1–10 fijos. Un cuadro: 1 hasta sus palabras (tope 10). */
+export function wordsPerBoxOptions(wordCount, forTrack = false) {
+  if (forTrack) return Array.from({ length: MAX_WORDS_PER_BOX }, (_, i) => i + 1)
+  const n = Math.min(MAX_WORDS_PER_BOX, Math.max(0, Math.floor(Number(wordCount) || 0)))
+  if (n < 1) return []
+  return Array.from({ length: n }, (_, i) => i + 1)
+}
+
+export function activeWordsPerBox(options, stored) {
+  const list = options || []
+  const n = Math.max(1, Math.floor(Number(stored) || 8))
+  if (list.includes(n)) return n
+  return list[list.length - 1] || n
+}
+
 export function chunkCaptionText(text, maxWords) {
   const words = splitCaptionWords(text)
   if (!words.length) return []

@@ -1,10 +1,9 @@
-import { useState } from 'react'
 import Icon from '../../components/Icon'
 import FlipSelect from '../../components/FlipSelect'
 import { fmt } from '../../lib/utils'
 import { FONTS, FONT_SIZES, FONT_SIZE_REF, cssFont, selectedSubtitleThemeId } from '../../lib/textstyles'
 import { SUBTITLE_THEMES, WORD_FX_OPTIONS, BLOCK_APPEAR_OPTIONS, WORDS_PER_BOX } from '../../lib/subtitleThemes'
-import { hasWordFx, toggleWordFx, styleOpacity } from '../../lib/textKaraoke'
+import { hasWordFx, toggleWordFx, styleOpacity, splitCaptionWords, wordsPerBoxOptions, activeWordsPerBox } from '../../lib/textKaraoke'
 import { isFreeText } from '../../lib/textRole'
 
 function sizeToNearestPx(size) {
@@ -152,6 +151,41 @@ export function TextFxPanel({ section = 'look', style, mode = 'clip', onChangeSt
   )
 }
 
+function WordsPerBox({ options, value, onChange, onFragment, disableFragment, hint }) {
+  if (!options?.length) return null
+  const active = activeWordsPerBox(options, value)
+  return (
+    <>
+      <div className="ed-theme-label">Por cuadro</div>
+      <div className="ed-words-row">
+        {options.map((n) => (
+          <button
+            key={n}
+            type="button"
+            className={`ed-words-n ${active === n ? 'on' : ''}`}
+            title={`${n} palabra${n === 1 ? '' : 's'} por cuadro`}
+            onClick={() => onChange?.(n)}
+          >
+            {n}
+          </button>
+        ))}
+        {onFragment && (
+          <button
+            type="button"
+            className="ghost small"
+            disabled={disableFragment}
+            title={disableFragment ? 'Este cuadro ya tiene ese máximo de palabras' : 'Partir el texto según el máximo'}
+            onClick={() => onFragment?.()}
+          >
+            Fragmentar
+          </button>
+        )}
+      </div>
+      {hint ? <p className="muted small">{hint}</p> : null}
+    </>
+  )
+}
+
 export default function EdText({
   mode = 'segment', clip, style, onChangeText, onChangeStyle, onApplyPreset, onChangeDur,
   onApplyAsGlobalTemplate, framing, onStartFraming, onSaveFraming, onCancelFraming,
@@ -162,48 +196,18 @@ export default function EdText({
   const isTrack = mode === 'track'
   const isFree = !isTrack && isFreeText(clip)
   const multi = !isTrack && selectionCount > 1
-  const set = (patch) => onChangeStyle(patch)
+  const set = (patch) => onChangeStyle?.(patch)
   const dur = clip ? clip.out_point - clip.in_point : 0
   const currentPx = sizeToNearestPx(st.size)
-  const [tab, setTab] = useState('props')
   const saved = textFavorites || []
+  const clipWords = splitCaptionWords(clip?.text || '').length
+  const clipBoxOpts = wordsPerBoxOptions(clipWords)
+  const clipActive = activeWordsPerBox(clipBoxOpts, st.max_words)
+  const trackBoxOpts = wordsPerBoxOptions(WORDS_PER_BOX.at(-1) || 10, true)
 
   return (
-    <div className="ed-text-panel">
-      <div className="ed-crops-tabs">
-        <button type="button" className={`ed-tab ${tab === 'props' ? 'on' : ''}`} onClick={() => setTab('props')}>
-          Propiedades
-        </button>
-        <button type="button" className={`ed-tab ${tab === 'fav' ? 'on' : ''}`} onClick={() => setTab('fav')}>
-          Favoritos
-        </button>
-      </div>
-      {tab === 'fav' ? (
-        <div className="ed-text-body">
-          {saved.length === 0 ? (
-            <p className="muted small">Aún no hay estilos guardados. En Propiedades pulsa Favorito para guardar encuadre, tema y tamaño.</p>
-          ) : (
-            <div className="ed-theme-grid">
-              {saved.map((f) => (
-                <div key={f.id} className="ed-theme-card ed-fav-style">
-                  <button type="button" className="ed-fav-apply" onClick={() => onApplyFavorite?.(f)} title={f.name}>
-                    <span className="ed-theme-chip" style={themePreviewStyle(f)}>
-                      <span className="idle">Aa</span>
-                      <span className="hot" style={{ color: f.style?.highlight_color }}>Aa</span>
-                    </span>
-                    <span className="ed-theme-name">{f.name}</span>
-                  </button>
-                  <button type="button" className="ed-fav-del" title="Quitar de favoritos" onClick={() => onDeleteFavorite?.(f.id)}>
-                    <Icon name="close" size={12} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="ed-text-body">
-          {isTrack && <p className="muted small">Se aplica a todos los textos de la pista y a los nuevos. Temas y colores están en Efectos.</p>}
+    <div className="ed-text-fx">
+          {isTrack && <p className="muted small">Se aplica a todos los textos de la pista y a los nuevos.</p>}
           {multi && (
             <p className="muted small">{selectionCount} textos seleccionados. Estilo y posición se aplican a todos; el contenido, solo al último clic.</p>
           )}
@@ -222,13 +226,13 @@ export default function EdText({
                   <button className="ghost small" onClick={onCancelFraming}>Cancelar</button>
                 </>
               )}
-              <button type="button" className="ghost small" title="Guardar encuadre, tema y tamaño en Favoritos" onClick={() => { onSaveFavorite?.(st); setTab('fav') }}>
+              <button type="button" className="ghost small" title="Guardar encuadre, tema y tamaño en Favoritos" onClick={() => onSaveFavorite?.(st)}>
                 <Icon name="star" size={15} /> Favorito
               </button>
             </div>
           )}
           {isTrack && !onStartFraming && (
-            <button type="button" className="ghost small" title="Guardar estilo en Favoritos" onClick={() => { onSaveFavorite?.(st); setTab('fav') }}>
+            <button type="button" className="ghost small" title="Guardar estilo en Favoritos" onClick={() => onSaveFavorite?.(st)}>
               <Icon name="star" size={15} /> Favorito
             </button>
           )}
@@ -237,8 +241,8 @@ export default function EdText({
           )}
 
           {!isTrack && (
-            <textarea className="ed-text-content" rows={6} value={clip.text || ''}
-              placeholder="Escribe el texto…" onChange={(e) => onChangeText(e.target.value)} />
+            <textarea className="ed-text-content" rows={6} value={clip?.text || ''}
+              placeholder="Escribe el texto…" onChange={(e) => onChangeText?.(e.target.value)} />
           )}
 
           <div className="ed-text-dense three">
@@ -262,31 +266,13 @@ export default function EdText({
           </div>
 
           {isTrack && (
-            <>
-              <div className="ed-theme-label">Por cuadro</div>
-              <div className="ed-words-row">
-                {WORDS_PER_BOX.map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    className={`ed-words-n ${(st.max_words ?? 8) === n ? 'on' : ''}`}
-                    title={`${n} palabras por cuadro`}
-                    onClick={() => set({ max_words: n })}
-                  >
-                    {n}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  className="ghost small"
-                  title="Partir los textos de la pista que superen el máximo"
-                  onClick={() => onFragment?.()}
-                >
-                  Fragmentar
-                </button>
-              </div>
-              <p className="muted small">Máximo de palabras por cuadro. Los subtítulos nuevos también se parten así.</p>
-            </>
+            <WordsPerBox
+              options={trackBoxOpts}
+              value={st.max_words}
+              onChange={(n) => set({ max_words: n })}
+              onFragment={onFragment}
+              hint="Máximo de palabras por cuadro en toda la pista (1–10). Los subtítulos nuevos también se parten así."
+            />
           )}
 
           {!isTrack && (
@@ -308,10 +294,10 @@ export default function EdText({
                   <span>Dur {fmt(dur)}</span>
                   {isFree ? (
                     <input type="number" min="0.15" step="0.1" value={+dur.toFixed(1)}
-                      onChange={(e) => onChangeDur(Number(e.target.value))} />
+                      onChange={(e) => onChangeDur?.(Number(e.target.value))} />
                   ) : (
                     <input type="range" min="0.5" max={Math.max(15, dur)} step="0.1" value={dur}
-                      onChange={(e) => onChangeDur(Number(e.target.value))} />
+                      onChange={(e) => onChangeDur?.(Number(e.target.value))} />
                   )}
                 </label>
               </div>
@@ -319,11 +305,19 @@ export default function EdText({
                 {isFree ? 'Arrastra los extremos del clip en la timeline para cambiar la duración. ' : ''}
                 <Icon name="drag_pan" size={13} /> Arrastra el texto en el Main. Global copia estilo y posición a todos los textos.
               </p>
+              <WordsPerBox
+                options={clipBoxOpts}
+                value={st.max_words}
+                onChange={(n) => set({ max_words: n })}
+                onFragment={onFragment}
+                disableFragment={clipWords <= 1 || clipActive >= clipWords}
+                hint="Máximo de palabras de este cuadro. Fragmentar lo parte en varios clips, conservando los tiempos."
+              />
             </>
           )}
           <div className="ed-text-actions">
             {!isTrack && (
-              <button type="button" className="ghost small" title="Guardar encuadre, tema y tamaño en Favoritos" onClick={() => { onSaveFavorite?.(st); setTab('fav') }}>
+              <button type="button" className="ghost small" title="Guardar encuadre, tema y tamaño en Favoritos" onClick={() => onSaveFavorite?.(st)}>
                 <Icon name="star" size={15} /> Favorito
               </button>
             )}
@@ -338,8 +332,28 @@ export default function EdText({
               </button>
             )}
           </div>
-        </div>
-      )}
+
+          <div className="ed-fx-label">Favoritos</div>
+          {saved.length === 0 ? (
+            <p className="muted small">Aún no hay estilos guardados. Pulsa Favorito para guardar encuadre, tema y tamaño.</p>
+          ) : (
+            <div className="ed-theme-grid">
+              {saved.map((f) => (
+                <div key={f.id} className="ed-theme-card ed-fav-style">
+                  <button type="button" className="ed-fav-apply" onClick={() => onApplyFavorite?.(f)} title={f.name}>
+                    <span className="ed-theme-chip" style={themePreviewStyle(f)}>
+                      <span className="idle">Aa</span>
+                      <span className="hot" style={{ color: f.style?.highlight_color }}>Aa</span>
+                    </span>
+                    <span className="ed-theme-name">{f.name}</span>
+                  </button>
+                  <button type="button" className="ed-fav-del" title="Quitar de favoritos" onClick={() => onDeleteFavorite?.(f.id)}>
+                    <Icon name="close" size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
     </div>
   )
 }

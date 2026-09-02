@@ -98,9 +98,10 @@ def cuda_available() -> bool:
     return _cuda_libs_ok()
 
 
-def _encoder_args_for(name: str) -> list[str]:
+def _encoder_args_for(name: str, crf: int | None = None, preset: str | None = None) -> list[str]:
     """Args de FFmpeg para un codificador concreto (calidad ~ CRF configurado)."""
-    q = str(config.VIDEO_CRF)
+    q = str(config.VIDEO_CRF if crf is None else crf)
+    p = preset or config.VIDEO_PRESET
     if name.endswith("nvenc"):
         # Calidad constante (-cq). OJO: '-rc vbr -b:v 0' rompe en algunos builds.
         return ["-c:v", name, "-preset", "p5", "-cq", q]
@@ -108,7 +109,7 @@ def _encoder_args_for(name: str) -> list[str]:
         return ["-c:v", name, "-global_quality", q, "-preset", "medium"]
     if name == "h264_amf":
         return ["-c:v", name, "-rc", "cqp", "-qp_i", q, "-qp_p", q, "-qp_b", q]
-    return ["-c:v", "libx264", "-crf", q, "-preset", config.VIDEO_PRESET]
+    return ["-c:v", "libx264", "-crf", q, "-preset", p]
 
 
 def _encoder_works(name: str) -> bool:
@@ -165,7 +166,13 @@ def whisper_device() -> tuple[str, str]:
 
 def video_encoder_args() -> list[str]:
     """Args de FFmpeg para el vídeo — *drop-in* de ``-c:v libx264 -crf .. -preset ..``."""
-    return _encoder_args_for(selected_encoder())
+    crf, preset = None, None
+    try:
+        from .export_settings import encoder_quality
+        crf, preset = encoder_quality()
+    except Exception:  # noqa: BLE001
+        pass
+    return _encoder_args_for(selected_encoder(), crf, preset)
 
 
 def selected_encoder() -> str:

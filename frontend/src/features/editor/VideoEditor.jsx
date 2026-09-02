@@ -5,13 +5,13 @@ import Toast from '../../components/Toast'
 import { fmt } from '../../lib/utils'
 import { getTimeline, saveTimeline, prepareReframe, getJob, createClipJob } from '../../services/api'
 import { clamp } from '../../lib/panning'
-import { defaultTextStyle, subtitleStyle, wrappedText, ensureEditorFonts, selectedSubtitleThemeId, clearTextTheme } from '../../lib/textstyles'
-import { applyThemeToStyle } from '../../lib/textKaraoke'
+import { defaultTextStyle, subtitleStyle, wrappedText, ensureEditorFonts, selectedSubtitleThemeId, clearTextTheme, effectiveTextStyle } from '../../lib/textstyles'
+import { applyThemeToStyle, wordsPerBoxOptions, activeWordsPerBox, splitCaptionWords } from '../../lib/textKaraoke'
 import {
   uid, FORMATS, mediaUrl, defaultTracks, newReframe, withKfIds,
-  makeClip, makeTextClip, makeShapeClip, clipDur, clipEnd, clipPlaybackMuted, clipSpeed, timelineToSource, sourceToTimeline, splitClipAt,
+  makeClip, makeTextClip, makeShapeClip, clipDur, clipEnd, clipPlaybackMuted, clipSpeed, clipKeepPitch, timelineToSource, sourceToTimeline, splitClipAt,
   canCaptionClip, removeTrack, shouldConfirmTrackDelete,
-  extraClipsAfterSplit, splitTrackTextByMaxWords,
+  extraClipsAfterSplit, extraClipsAfterOneSplit, splitTrackTextByMaxWords, splitOneTextClip,
   nextClipSelection, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
   previewElementVolume, parsePreviewVolume, PREVIEW_VOL_KEY,
   isVisualClip, trackKindForClip, IMAGE_DEFAULT_DUR,
@@ -37,7 +37,6 @@ import { createMainDownHandler, createResultDownHandler } from './interactions'
 import EdMaterial from './EdMaterial'
 import EdTimeline from './EdTimeline'
 import EdCrops from './EdCrops'
-import EdText from './EdText'
 import EdShape from './EdShape'
 import AnchoredMenu from '../../components/AnchoredMenu'
 import JobStatusBar from '../../components/JobStatusBar'
@@ -182,7 +181,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             audio_fx: c.audio_fx && typeof c.audio_fx === 'object' ? c.audio_fx : {},
             muted: !!c.muted,
             speed: c.speed,
-            keep_pitch: !!c.keep_pitch,
+            keep_pitch: true,
             reverse: !!c.reverse,
             speed_curve: c.speed_curve || null,
             frame: c.frame || (c.layout === 'overlay' ? 'free' : 'full'),
@@ -199,6 +198,16 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     })()
     return () => { alive = false }
   }, [project.id])
+
+  // Clips viejos traían keep_pitch:false (el preview nunca lo aplicaba).
+  // Una vez: alinear al Resultado (preservesPitch / atempo).
+  useEffect(() => {
+    if (!loaded) return
+    setClips((cs) => {
+      if (!cs.some((c) => c.keep_pitch === false)) return cs
+      return cs.map((c) => (c.keep_pitch === false ? { ...c, keep_pitch: true } : c))
+    })
+  }, [loaded, project.id])
 
   // --- Autoguardado ---
   const timelinePayload = useCallback(() => ({
@@ -270,6 +279,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             if (Math.abs(el.currentTime - expected) > 0.04) { try { el.currentTime = expected } catch { /* noop */ } }
           } else {
             try { el.playbackRate = clipSpeed(c) } catch { /* noop */ }
+            try {
+              const keep = clipKeepPitch(c)
+              if ('preservesPitch' in el) el.preservesPitch = keep
+              else if ('mozPreservesPitch' in el) el.mozPreservesPitch = keep
+              else if ('webkitPreservesPitch' in el) el.webkitPreservesPitch = keep
+            } catch { /* noop */ }
             if (el.paused) { try { el.currentTime = expected } catch { /* noop */ }; el.play().catch(() => {}) }
             else if (Math.abs(el.currentTime - expected) > 0.35) { try { el.currentTime = expected } catch { /* noop */ } }
           }
@@ -736,6 +751,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setSelClipIds([])
     setSelKfId(null)
     setFramingMode(null)
+    const t = tracksRef.current.find((x) => x.id === id)
+    if (t?.kind === 'text') setMatTab('effects')
   }
   function handleSelectClip(clip, e) {
     if (!clip) return { ids: [], anchorId: null }
@@ -1104,15 +1121,38 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   function cancelFraming() { setFramingMode(null) }
 
   function requestFragmentTrack(trackId) {
-    const maxWords = Math.max(1, Math.floor(Number(tracksRef.current.find((t) => t.id === trackId)?.style?.max_words) || 8))
+    const maxWords = Math.min(10, Math.max(1, Math.floor(Number(tracksRef.current.find((t) => t.id === trackId)?.style?.max_words) || 8)))
     const extra = extraClipsAfterSplit(clipsRef.current, trackId, maxWords)
     if (extra <= 0) return
     setFragmentAsk({ trackId, maxWords, extra })
   }
-  function applyFragmentTrack() {
+  function requestFragmentClip(clipId) {
+    const clip = clipsRef.current.find((c) => c.id === clipId)
+    if (!clip || clip.kind !== 'text') return
+    const maxWords = activeWordsPerBox(wordsPerBoxOptions(splitCaptionWords(clip.text || '').length), clip.style?.max_words)
+    const extra = extraClipsAfterOneSplit(clip, maxWords)
+    if (extra <= 0) return
+    setFragmentAsk({ clipId, maxWords, extra })
+  }
+  function applyFragment() {
     if (!fragmentAsk) return
-    setClips((prev) => splitTrackTextByMaxWords(prev, fragmentAsk.trackId, fragmentAsk.maxWords))
+    if (fragmentAsk.clipId) {
+      const prev = clipsRef.current
+      const idx = prev.findIndex((c) => c.id === fragmentAsk.clipId)
+      const next = splitOneTextClip(prev, fragmentAsk.clipId, fragmentAsk.maxWords)
+      setClips(next)
+      const first = idx >= 0 ? next[idx] : null
+      if (first) {
+        setSelClipId(first.id)
+        setSelClipIds([first.id])
+      }
+    } else if (fragmentAsk.trackId) {
+      setClips((prev) => splitTrackTextByMaxWords(prev, fragmentAsk.trackId, fragmentAsk.maxWords))
+    }
     setFragmentAsk(null)
+  }
+  function applyFragmentTrack() {
+    applyFragment()
   }
 
   // Aplica el estilo de un clip de texto a TODOS los clips de texto del Timeline.
@@ -1146,7 +1186,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   // Para el export, el texto se ajusta a su caja (wrap) antes de renderizar.
   function exportPayload() {
     const octx = document.createElement('canvas').getContext('2d')
-    const outClips = clips.map((c) => (c.kind === 'text' ? { ...c, text: wrappedText(octx, c, outW, outH) } : c))
+    const outClips = clips.map((c) => {
+      if (c.kind !== 'text') return c
+      const track = tracks.find((t) => t.id === c.track_id)
+      const style = effectiveTextStyle(track?.style, c.style)
+      return { ...c, style, text: wrappedText(octx, { ...c, style }, outW, outH) }
+    })
     return { version: 1, fps: 30, width: outW, height: outH, audio_target_db: audioDb, tracks, clips: outClips }
   }
   const { exportJob, setExportJob, doExport, exporting } = useExportJob(project.id, { timelinePayload, exportPayload })
@@ -1337,7 +1382,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onEditYtClip={openClipEditor}
           selectedClip={selectedClip}
           onChangeFx={patchClipFx}
-          textStyle={isTextSel ? selectedClip.style : (isTextTrackSel ? selTrackObj.style : null)}
+          textStyle={isTextSel ? effectiveTextStyle(selTrackObj?.style, selectedClip.style) : (isTextTrackSel ? selTrackObj.style : null)}
           textMode={isTextSel ? 'clip' : (isTextTrackSel ? 'track' : null)}
           onChangeTextStyle={(patch) => {
             if (isTextSel) changeStyle(selectedClip.id, patch)
@@ -1354,6 +1399,31 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onChangeFrame={(slot) => applyClipFrame(selectedClip, slot)}
           selKfId={selKfId}
           onInterpKf={interpAnimKf}
+          textEditor={{
+            clip: isTextSel ? selectedClip : null,
+            selectionCount: selClipIds.length,
+            onChangeText: (v) => { if (isTextSel) changeText(selectedClip.id, v) },
+            onChangeDur: (d) => {
+              if (!isTextSel || !Number.isFinite(d) || d <= 0) return
+              const next = Math.max(0.15, d)
+              mutateClip(selectedClip.id, {
+                out_point: +(selectedClip.in_point + next).toFixed(3),
+                source_duration: +(selectedClip.in_point + next).toFixed(3),
+              })
+            },
+            onApplyAsGlobalTemplate: isTextSel ? () => applyGlobalTemplate(selectedClip) : undefined,
+            framing: !!(framingMode && selTrackObj && framingMode.trackId === selTrackObj.id),
+            onStartFraming: isTextTrackSel ? () => startFraming(selTrackObj) : undefined,
+            onSaveFraming: isTextTrackSel ? saveFraming : undefined,
+            onCancelFraming: isTextTrackSel ? cancelFraming : undefined,
+            textFavorites: fav.favs.textStyles,
+            onSaveFavorite: (st) => fav.saveTextStyle(st),
+            onApplyFavorite: applyTextFavorite,
+            onDeleteFavorite: (id) => fav.removeTextStyle(id),
+            onFragment: isTextTrackSel
+              ? () => requestFragmentTrack(selTrackObj.id)
+              : (isTextSel ? () => requestFragmentClip(selectedClip.id) : undefined),
+          }}
         />
 
         {/* MAIN / CLIP EDITOR */}
@@ -1608,41 +1678,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onPickLinkTrack={pickLinkTextTrack}
           onCancelLinkPick={cancelLinkPick}
         />
-        {isTextSel ? (
-          <EdText mode="segment" clip={selectedClip} style={selectedClip.style}
-            selectionCount={selClipIds.length}
-            onChangeText={(v) => changeText(selectedClip.id, v)}
-            onChangeStyle={(patch) => changeStyle(selectedClip.id, patch)}
-            onApplyPreset={(p) => applyPreset(selectedClip.id, p)}
-            onChangeDur={(d) => {
-              if (!Number.isFinite(d) || d <= 0) return
-              const next = Math.max(0.15, d)
-              mutateClip(selectedClip.id, {
-                out_point: +(selectedClip.in_point + next).toFixed(3),
-                source_duration: +(selectedClip.in_point + next).toFixed(3),
-              })
-            }}
-            onApplyAsGlobalTemplate={() => applyGlobalTemplate(selectedClip)}
-            textFavorites={fav.favs.textStyles}
-            onSaveFavorite={(st) => fav.saveTextStyle(st)}
-            onApplyFavorite={applyTextFavorite}
-            onDeleteFavorite={(id) => fav.removeTextStyle(id)}
-          />
-        ) : isTextTrackSel ? (
-          <EdText mode="track" style={selTrackObj.style}
-            onChangeStyle={(patch) => changeTrackStyle(selTrackObj.id, patch)}
-            onApplyPreset={(p) => applyTrackPreset(selTrackObj.id, p)}
-            framing={!!framingMode && framingMode.trackId === selTrackObj.id}
-            onStartFraming={() => startFraming(selTrackObj)}
-            onSaveFraming={saveFraming}
-            onCancelFraming={cancelFraming}
-            textFavorites={fav.favs.textStyles}
-            onSaveFavorite={(st) => fav.saveTextStyle(st)}
-            onApplyFavorite={applyTextFavorite}
-            onDeleteFavorite={(id) => fav.removeTextStyle(id)}
-            onFragment={() => requestFragmentTrack(selTrackObj.id)}
-          />
-        ) : isShapeSel ? (
+        {isShapeSel ? (
           <EdShape
             clip={selectedClip}
             layer={layerInfo}
@@ -1768,13 +1804,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       />
       <ConfirmModal
         open={!!fragmentAsk}
-        title="¿Fragmentar los textos?"
+        title={fragmentAsk?.clipId ? '¿Fragmentar este cuadro?' : '¿Fragmentar los textos?'}
         message={fragmentAsk
-          ? `Los cuadros con más de ${fragmentAsk.maxWords} palabras se partirán en ${fragmentAsk.extra} clip${fragmentAsk.extra === 1 ? '' : 's'} extra, conservando los tiempos.`
+          ? (fragmentAsk.clipId
+            ? `Este cuadro se partirá en ${fragmentAsk.extra + 1} clips de hasta ${fragmentAsk.maxWords} palabra${fragmentAsk.maxWords === 1 ? '' : 's'}, conservando los tiempos.`
+            : `Los cuadros con más de ${fragmentAsk.maxWords} palabras se partirán en ${fragmentAsk.extra} clip${fragmentAsk.extra === 1 ? '' : 's'} extra, conservando los tiempos.`)
           : ''}
         confirmText="Fragmentar"
         danger={false}
-        onConfirm={applyFragmentTrack}
+        onConfirm={applyFragment}
         onCancel={() => setFragmentAsk(null)}
       />
       <Toast toast={clipToast} onClose={() => setClipToast(null)} />

@@ -18,6 +18,7 @@ assert.equal(typeof st.color, 'string')
 assert.equal(typeof st.border_color, 'string')
 assert.equal(typeof st.border_width, 'number')
 assert.equal(typeof st.align, 'string')
+assert.equal(st.opacity, 1)
 
 for (const p of TEXT_PRESETS) {
   assert.ok(FONTS.includes(p.style.font), p.id)

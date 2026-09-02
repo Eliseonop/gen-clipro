@@ -2,11 +2,12 @@ import assert from 'node:assert/strict'
 import {
   SPEED_MIN, SPEED_MAX, SPEED_PRESETS,
   clipSpeed, clipSourceDur, clipDur, clipEnd,
+  clipKeepPitch,
   timelineToSource, sourceToTimeline, splitClipAt,
   clipPlaybackMuted, makeClip, mediaUrl, newReframe,
   shouldConfirmTrackDelete, removeTrack,
   canCaptionClip, textClipsFromTranscript, makeTextClip, resizeGeneratedClip, trimClipPatch, trimPreviewHead,
-  splitClipByMaxWords, splitTrackTextByMaxWords, extraClipsAfterSplit,
+  splitClipByMaxWords, splitTrackTextByMaxWords, extraClipsAfterSplit, extraClipsAfterOneSplit, splitOneTextClip,
   nextClipSelection, rangeSelectOnTrack, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
   previewElementVolume, parsePreviewVolume, laneKindForAsset, trackKindForClip,
   duplicateClipOntoTrack, dupCount, lineageRoot, syncMaterialInstances,
@@ -27,6 +28,9 @@ assert.equal(clipSpeed({ kind: 'shape', speed: 4 }), 1)
 assert.equal(clipSpeed({ kind: 'video' }), 1)
 assert.equal(clipSpeed({ kind: 'audio', speed: 99 }), SPEED_MAX)
 assert.equal(clipSpeed({ kind: 'video', speed: 0 }), 1)
+assert.equal(clipKeepPitch({}), true)
+assert.equal(clipKeepPitch({ keep_pitch: true }), true)
+assert.equal(clipKeepPitch({ keep_pitch: false }), false)
 assert.equal(timelineToSource(vFast, 10), 2)
 assert.equal(timelineToSource(vFast, 12), 6)
 assert.equal(sourceToTimeline(vFast, 4), 11)
@@ -64,7 +68,7 @@ assert.ok(master.reframe.keyframes[0].id)
 assert.equal(newReframe().split_layout, 'auto')
 assert.equal(legacy.muted, false)
 assert.equal(legacy.speed, 1)
-assert.equal(legacy.keep_pitch, false)
+assert.equal(legacy.keep_pitch, true)
 assert.equal(legacy.reverse, false)
 assert.equal(clipPlaybackMuted(legacy, { muted: false }), false)
 assert.equal(clipPlaybackMuted({ muted: true }, { muted: false }), true)
@@ -339,6 +343,7 @@ assert.equal(shapeClip.kind, 'shape')
 assert.equal(shapeClip.asset_kind, 'shape')
 assert.equal(shapeClip.shape.type, 'arrow')
 assert.equal(shapeClip.out_point, 5)
+assert.equal(shapeClip.keep_pitch, true)
 assert.equal(trackKindForClip('shape'), 'video')
 assert.equal(laneKindForAsset('shape'), 'video')
 assert.equal(isGeneratedDurationClip(shapeClip), true)
@@ -375,6 +380,9 @@ const freeLong = {
 }
 assert.equal(extraClipsAfterSplit([freeLong], 'T1', 2), 0)
 assert.equal(splitTrackTextByMaxWords([freeLong], 'T1', 2).length, 1)
+assert.equal(extraClipsAfterOneSplit(freeLong, 2), 2)
+assert.equal(splitOneTextClip([freeLong, { id: 'v' }], 'w1', 2).length, 4)
+assert.equal(splitOneTextClip([freeLong], 'w1', 2)[0].text, 'uno dos')
 
 console.log('text role + generated resize ok')
 

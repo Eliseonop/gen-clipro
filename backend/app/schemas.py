@@ -330,7 +330,7 @@ class TimelineClip(BaseModel):
     audio_fx: Optional[dict] = None       # eq, compressor, reverb… (efectos de audio)
     muted: bool = False                 # silencia este clip (la pista puede seguir sonando)
     speed: float = 1.0                  # 0.1–10; timeline = fuente / speed
-    keep_pitch: bool = False            # audio: mantener tono (atempo) en vez de asetrate
+    keep_pitch: bool = True             # audio: mismo tono al acelerar (igual que el preview)
     reverse: bool = False
     speed_curve: Optional[dict] = None  # reserva; sin motor en esta entrega
     opacity: Optional[float] = None     # opacidad estática del clip (1 = opaco); los keyframes la animan
@@ -347,7 +347,7 @@ class TimelineClip(BaseModel):
 
 class Timeline(BaseModel):
     version: int = 1
-    schema_version: int = 3   # formato del JSON; migrado al cargar (ver migrations.py)
+    schema_version: int = 4   # formato del JSON; migrado al cargar (ver migrations.py)
     fps: int = 30
     width: int = 720               # tamaño de salida (formato configurable)
     height: int = 1280
@@ -357,7 +357,7 @@ class Timeline(BaseModel):
 
 
 class ExportRequest(BaseModel):
-    timeline: Optional[Timeline] = None   # si falta, se usa la guardada en el proyecto
+    timeline: Optional[dict] = None   # dict crudo: se migra antes de validar (schema_version default no debe saltarse v4)
 
 
 class Project(BaseModel):

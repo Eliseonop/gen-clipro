@@ -17,6 +17,7 @@ DEFAULTS = {
     "favorites": {"sfx": [], "audios": [], "textStyles": []},
     "yt_history": [],
     "api_keys": {},
+    "export": {"fps": 30, "quality": "standard"},
 }
 
 _KEY_MASKS = {"", "true", "false", "********", "••••", "••••••••"}
@@ -64,6 +65,7 @@ def load() -> dict:
             "favorites": _merge_favorites(None),
             "yt_history": [],
             "api_keys": {},
+            "export": dict(DEFAULTS["export"]),
         }
     try:
         data = json.loads(_FILE.read_text(encoding="utf-8"))
@@ -101,6 +103,13 @@ def save(data: dict) -> dict:
                     continue
                 merged[kid] = val
 
+        if "export" in incoming:
+            from .export_settings import normalize as _export_norm
+            incoming["export"] = _export_norm({
+                **(current.get("export") or {}),
+                **(incoming.get("export") or {}),
+            })
+
         current.update(incoming)
         current["api_keys"] = merged
         if merged.get("gemini"):
@@ -120,4 +129,6 @@ def public() -> dict:
     data.pop("gemini_api_key", None)
     data["gemini_api_key_set"] = bool(keys.get("gemini"))
     data["api_keys"] = {k: True for k in keys}
+    from .export_settings import normalize as _export_norm
+    data["export"] = _export_norm(data.get("export"))
     return data

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import {
   activeWordIndex, activeWordIndexFromWords, splitCaptionWords, applyThemeToStyle,
   wordFxList, hasWordFx, toggleWordFx, karaokeOn, chunkCaptionText, styleOpacity, wordOpacity,
+  wordsPerBoxOptions, activeWordsPerBox,
 } from './textKaraoke.js'
 import { SUBTITLE_THEMES, themeById } from './subtitleThemes.js'
 
@@ -61,6 +62,14 @@ assert.deepEqual(chunkCaptionText('uno dos tres cuatro cinco', 2), ['uno dos', '
 assert.deepEqual(chunkCaptionText('hola mundo', 10), ['hola mundo'])
 assert.deepEqual(chunkCaptionText('hola mundo', 0), ['hola mundo'])
 assert.deepEqual(chunkCaptionText('', 4), [])
+
+assert.deepEqual(wordsPerBoxOptions(0), [])
+assert.deepEqual(wordsPerBoxOptions(1), [1])
+assert.deepEqual(wordsPerBoxOptions(4), [1, 2, 3, 4])
+assert.deepEqual(wordsPerBoxOptions(20), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+assert.deepEqual(wordsPerBoxOptions(2, true), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+assert.equal(activeWordsPerBox([1, 2, 3, 4], 8), 4)
+assert.equal(activeWordsPerBox([1, 2, 3, 4], 2), 2)
 
 assert.equal(styleOpacity({}), 1)
 assert.equal(styleOpacity({ opacity: 0.4 }), 0.4)

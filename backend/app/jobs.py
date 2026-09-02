@@ -7,6 +7,7 @@ por Redis/Celery sin tocar la API.
 """
 from __future__ import annotations
 
+import logging
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -27,6 +28,7 @@ from .schemas import (
 
 _jobs: dict[str, Job] = {}
 _lock = threading.Lock()
+log = logging.getLogger("videoyt.jobs")
 
 
 class JobCancelled(Exception):
@@ -447,19 +449,24 @@ def _run_export(job_id: str, pid: str, timeline_dict: dict) -> None:
         from datetime import datetime
         from urllib.parse import quote
 
-        from . import compose, storage
+        from . import compose, migrations, storage
         from .schemas import Timeline
 
         project = projects.get_project(pid)
         if project is None:
             raise RuntimeError("Proyecto no encontrado.")
 
-        timeline = Timeline(**timeline_dict) if timeline_dict else project.timeline
+        raw_tl = migrations.migrate_timeline(timeline_dict) if timeline_dict else None
+        timeline = Timeline(**raw_tl) if raw_tl else project.timeline
         if timeline is None or not timeline.clips:
             raise RuntimeError("No hay nada en la timeline para exportar.")
 
         # Persistir la timeline usada, para no perder la edición.
-        projects.save_timeline(pid, timeline.model_dump())
+        # Si Windows tiene el JSON bloqueado, el render sigue igual.
+        try:
+            projects.save_timeline(pid, timeline.model_dump())
+        except OSError as exc:
+            log.warning("No se pudo guardar la timeline antes de exportar: %s", exc)
 
         base = storage.ensure_dirs(storage.project_base(project))
         exports = base / "exports"

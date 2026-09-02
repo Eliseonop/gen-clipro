@@ -43,16 +43,21 @@ class ClipSpeedTest(unittest.TestCase):
         self.assertIn("reverse", g)
         self.assertIn("setpts=PTS/2", g)
 
-    def test_audio_pitch_follows_speed_by_default(self):
+    def test_audio_keeps_pitch_by_default(self):
         g = audio_speed_filters({"kind": "audio", "speed": 2})
-        self.assertIn("asetrate=48000*2", g)
-        self.assertIn("aresample=48000", g)
-        self.assertNotIn("atempo", g)
+        self.assertIn("atempo=", g)
+        self.assertNotIn("asetrate", g)
 
     def test_audio_keep_pitch_uses_atempo(self):
         g = audio_speed_filters({"kind": "audio", "speed": 2, "keep_pitch": True})
         self.assertIn("atempo=", g)
         self.assertNotIn("asetrate", g)
+
+    def test_audio_without_keep_pitch_uses_asetrate(self):
+        g = audio_speed_filters({"kind": "audio", "speed": 2, "keep_pitch": False})
+        self.assertIn("asetrate=48000*2", g)
+        self.assertNotIn("atempo", g)
+        self.assertNotIn("asetrate=sample_rate", g)
 
 
 if __name__ == "__main__":
