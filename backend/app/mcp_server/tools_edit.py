@@ -164,6 +164,69 @@ def set_project_format(project_id: str, aspect: str | None = None, width: int | 
                   {"aspect": aspect, "width": width, "height": height, "fps": fps})
 
 
+# --- Propiedades por-clip (Etapa 4.5) ------------------------------------
+
+def set_clip_opacity(project_id: str, clip_id: str, opacity: float) -> dict:
+    """Opacidad estática del clip (0 = transparente, 1 = opaco)."""
+    return _apply(project_id, "set_clip_opacity", {"clip_id": clip_id, "opacity": opacity})
+
+
+def set_clip_speed(project_id: str, clip_id: str, speed: float | None = None,
+                   keep_pitch: bool | None = None, reverse: bool | None = None) -> dict:
+    """Velocidad del clip (0.1–10; no aplica a texto/imagen/figura). ``keep_pitch``
+    mantiene el tono; ``reverse`` invierte."""
+    return _apply(project_id, "set_clip_speed",
+                  {"clip_id": clip_id, "speed": speed, "keep_pitch": keep_pitch, "reverse": reverse})
+
+
+def set_clip_transition(project_id: str, clip_id: str, appear: str | None = None,
+                        exit: str | None = None) -> dict:
+    """Transición de entrada (``appear``) y salida (``exit``): none/fade/dissolve/
+    wipe/zoom/slide_*/pop."""
+    return _apply(project_id, "set_clip_transition",
+                  {"clip_id": clip_id, "appear": appear, "exit": exit})
+
+
+def set_text_role(project_id: str, clip_id: str, role: str) -> dict:
+    """Rol de un clip de texto: ``caption`` (subtítulo) o ``free`` (texto libre)."""
+    return _apply(project_id, "set_text_role", {"clip_id": clip_id, "role": role})
+
+
+def set_clip_effects(project_id: str, clip_id: str, effects: dict, replace: bool = False) -> dict:
+    """Efectos visuales (blur/grayscale/sepia/brightness…). MERGE por defecto; solo
+    clips visuales (vídeo/imagen)."""
+    return _apply(project_id, "set_clip_effects",
+                  {"clip_id": clip_id, "effects": effects, "replace": replace})
+
+
+def set_clip_audio_fx(project_id: str, clip_id: str, audio_fx: dict, replace: bool = False) -> dict:
+    """Efectos de audio (eq/compressor/reverb…). MERGE por defecto; solo clips de
+    vídeo o audio."""
+    return _apply(project_id, "set_clip_audio_fx",
+                  {"clip_id": clip_id, "audio_fx": audio_fx, "replace": replace})
+
+
+def set_clip_keyframes(project_id: str, clip_id: str, keyframes: dict | None) -> dict:
+    """Animación por keyframes: ``{enabled, items:[{id,t,interpolation,props}]}`` (o
+    None para borrarla). ``props``: x/y/scale/rotation/opacity."""
+    return _apply(project_id, "set_clip_keyframes", {"clip_id": clip_id, "keyframes": keyframes})
+
+
+def duplicate_clip(project_id: str, clip_id: str, start: float | None = None) -> dict:
+    """Duplica un clip (por defecto justo detrás del original en su pista)."""
+    return _apply(project_id, "duplicate_clip", {"clip_id": clip_id, "start": start})
+
+
+# --- Figuras / material nuevo --------------------------------------------
+
+def add_shape(project_id: str, shape: dict | None = None, track_id: str | None = None,
+              start: float = 0.0, duration: float | None = None) -> dict:
+    """Añade una figura vectorial (rect/línea/flecha/estrella/corazón…) a una pista
+    de vídeo (la crea si falta). ``shape`` = {type, fill, stroke, …}."""
+    return _apply(project_id, "add_shape",
+                  {"shape": shape, "track_id": track_id, "start": start, "duration": duration})
+
+
 # --- Pistas --------------------------------------------------------------
 
 def add_track(project_id: str, kind: str, name: str | None = None) -> dict:
@@ -174,6 +237,16 @@ def add_track(project_id: str, kind: str, name: str | None = None) -> dict:
 def remove_track(project_id: str, track_id: str) -> dict:
     """Elimina una pista y todos sus clips (deshacible con undo)."""
     return _apply(project_id, "remove_track", {"track_id": track_id})
+
+
+def link_tracks(project_id: str, track_id: str, to_track_id: str) -> dict:
+    """Liga una pista a otra (audio↔texto: al cambiar velocidad, la ligada se escala)."""
+    return _apply(project_id, "link_tracks", {"track_id": track_id, "to_track_id": to_track_id})
+
+
+def unlink_track(project_id: str, track_id: str) -> dict:
+    """Desliga una pista."""
+    return _apply(project_id, "unlink_track", {"track_id": track_id})
 
 
 # --- Historial -----------------------------------------------------------
@@ -207,8 +280,20 @@ def register(mcp) -> None:
     tool(mcp, access="write")(reframe_clip)
     tool(mcp, access="write")(add_subtitles)
     tool(mcp, access="write")(set_project_format)
+    # Etapa 4.5 — propiedades por-clip + figuras.
+    tool(mcp, access="write")(set_clip_opacity)
+    tool(mcp, access="write")(set_clip_speed)
+    tool(mcp, access="write")(set_clip_transition)
+    tool(mcp, access="write")(set_text_role)
+    tool(mcp, access="write")(set_clip_effects)
+    tool(mcp, access="write")(set_clip_audio_fx)
+    tool(mcp, access="write")(set_clip_keyframes)
+    tool(mcp, access="write")(duplicate_clip)
+    tool(mcp, access="write")(add_shape)
     tool(mcp, access="write")(add_track)
     tool(mcp, access="destructive")(remove_track)
+    tool(mcp, access="write")(link_tracks)
+    tool(mcp, access="write")(unlink_track)
     tool(mcp, access="write")(undo)
     tool(mcp, access="write")(redo)
     tool(mcp, access="write")(checkpoint)

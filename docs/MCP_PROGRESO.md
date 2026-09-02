@@ -105,6 +105,24 @@ registry ya distingue niveles.
 
 ---
 
+## ETAPA 4.5 — Poner al día la EDICIÓN con el editor nuevo (MCP-only) ✅ COMPLETA
+
+El editor creció (images/shapes, efectos, keyframes/anim, opacidad, audio_fx,
+transiciones dissolve/wipe, text_role, duplicar, speed, pistas ligadas, gemini).
+El MCP ya lo LEE (DTO al día por Edu) pero no lo escribía. Nuevas ops en
+`timeline_ops` (fuente única) + tools + capabilities. Alcance: **MCP-only** (sin
+paridad JS; el frontend ya hace estas ediciones por JS + PUT /timeline).
+
+- [x] `set_clip_opacity` · `set_clip_speed` (speed/keep_pitch/reverse) · `set_clip_transition` (appear/exit incl. dissolve/wipe)
+- [x] `set_clip_effects` (imagen: blur/grayscale/sepia/brightness…, merge) · `set_clip_audio_fx` (eq/compressor/reverb, merge)
+- [x] `set_text_role` (caption/free) · `set_clip_keyframes` (anim por snapshots, o None para borrar)
+- [x] `add_shape` (figura vectorial vía `shapes.normalize_shape`; crea pista de vídeo si falta) · `duplicate_clip` (dup_of) · `link_tracks`/`unlink_track`
+- [x] `fetch_image` (descarga+importa imagen desde URL → colocable con `add_to_timeline(asset_kind="images")`)
+- [x] `capabilities[]` rematado (shape/keyframes/effects/audio_fx/opacity/transition/voice:gemini/speed/tracks.link)
+- [x] Tests: 22 nuevos (14 ops puras + 8 tools/fetch/registro); **suite backend 433 OK**. Total MCP: **44 tools** (9 read · 32 write · 3 destructive)
+
+---
+
 ## ETAPA 5 — Media / YouTube ✅ COMPLETA
 
 Módulo `tools_media.py`. Envuelven servicios existentes (heatmap síncrono, job de
@@ -175,4 +193,4 @@ Tools mínimas (~14): `get_project_context`, `get_timeline`, `analyze_youtube`,
 
 ---
 
-_Última actualización: 2026-08-30 — **ETAPA 8 COMPLETA** (workflow-as-job: `create_short_from_youtube` + `make_short_from_library`; 32 tools MCP: 9 lectura + 20 escritura + 3 destructivas; 280 tests). Siguiente: Etapa 9 (config del cliente MCP + documentación de uso + E2E con IA real para validar los 3 flujos). `render_frame`/`render_preview` pospuestas._
+_Última actualización: 2026-09-02 — **ETAPA 4.5 COMPLETA** (puesta al día de la edición con el editor nuevo de Edu: 12 tools nuevas — efectos/opacidad/speed/transiciones/keyframes/text_role/shapes/duplicar/link + fetch_image; 44 tools MCP: 9 lectura + 32 escritura + 3 destructivas; 433 tests). Fase 0/1 NO necesitan rehacerse (schema aditivo v2→v4 con migraciones). Siguiente: Etapa 9 (config del cliente MCP + E2E). `render_frame`/`render_preview` pospuestas._

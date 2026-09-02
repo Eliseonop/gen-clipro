@@ -27,6 +27,18 @@ OPS = {
     "reframe_clip": timeline_ops.reframe_clip,
     "add_subtitles": timeline_ops.add_subtitles,
     "set_project_format": timeline_ops.set_project_format,
+    # Etapa 4.5 — propiedades por-clip y material nuevo.
+    "set_clip_opacity": timeline_ops.set_clip_opacity,
+    "set_clip_speed": timeline_ops.set_clip_speed,
+    "set_clip_transition": timeline_ops.set_clip_transition,
+    "set_text_role": timeline_ops.set_text_role,
+    "set_clip_effects": timeline_ops.set_clip_effects,
+    "set_clip_audio_fx": timeline_ops.set_clip_audio_fx,
+    "set_clip_keyframes": timeline_ops.set_clip_keyframes,
+    "add_shape": timeline_ops.add_shape,
+    "duplicate_clip": timeline_ops.duplicate_clip,
+    "link_tracks": timeline_ops.link_tracks,
+    "unlink_track": timeline_ops.unlink_track,
 }
 
 

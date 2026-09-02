@@ -18,8 +18,14 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 
-from . import fragment
-from .clip_kind import clip_fits_track, has_generated_duration, is_visual_clip
+from . import fragment, shapes
+from .clip_kind import (
+    clip_fits_track,
+    has_generated_duration,
+    is_visual_clip,
+    track_kind_for_clip,
+)
+from .clip_speed import SPEED_MAX, SPEED_MIN
 from .schemas import Keyframe, Reframe, Timeline, TimelineClip, TimelineTrack, Word
 
 TRACK_KINDS = ("video", "audio", "text")
@@ -370,3 +376,189 @@ def set_clip_layout(tl: Timeline, clip_id: str, position: str | None = None,
                 end = min(end, c.source_duration)
             c.out_point = _round(end)
     return EditResult(out, changed=[clip_id])
+
+
+# --- Etapa 4.5: propiedades por-clip (efectos, anim, shapes…) ------------
+
+APPEAR = ("none", "fade", "dissolve", "wipe", "zoom", "slide_up", "slide_left", "pop")
+EXIT = ("none", "fade", "dissolve", "wipe", "zoom", "slide_down", "slide_right", "pop")
+
+
+def set_clip_opacity(tl: Timeline, clip_id: str, opacity: float) -> EditResult:
+    """Opacidad estática del clip (0 = transparente, 1 = opaco)."""
+    out = _copy(tl)
+    c = _find_clip(out, clip_id)
+    o = float(opacity)
+    if not (0.0 <= o <= 1.0):
+        raise ValueError("opacity debe estar en [0, 1]")
+    c.opacity = o
+    return EditResult(out, changed=[clip_id])
+
+
+def set_clip_speed(tl: Timeline, clip_id: str, speed: float | None = None,
+                   keep_pitch: bool | None = None, reverse: bool | None = None) -> EditResult:
+    """Velocidad del clip (0.1–10; la fuente fija, la barra cambia). No aplica a
+    text/image/shape. ``keep_pitch`` mantiene el tono; ``reverse`` invierte."""
+    out = _copy(tl)
+    c = _find_clip(out, clip_id)
+    if c.kind in ("text", "image", "shape"):
+        raise ValueError("speed no aplica a clips de texto/imagen/figura")
+    if speed is not None:
+        s = float(speed)
+        if not (SPEED_MIN <= s <= SPEED_MAX):
+            raise ValueError(f"speed debe estar en [{SPEED_MIN}, {SPEED_MAX}]")
+        c.speed = s
+    if keep_pitch is not None:
+        c.keep_pitch = bool(keep_pitch)
+    if reverse is not None:
+        c.reverse = bool(reverse)
+    return EditResult(out, changed=[clip_id])
+
+
+def set_clip_transition(tl: Timeline, clip_id: str, appear: str | None = None,
+                        exit: str | None = None) -> EditResult:
+    """Transiciones de entrada (``appear``) y salida (``exit``) del clip."""
+    out = _copy(tl)
+    c = _find_clip(out, clip_id)
+    if appear is not None:
+        if appear not in APPEAR:
+            raise ValueError(f"appear inválido: {appear} (usa {APPEAR})")
+        c.appear = appear
+    if exit is not None:
+        if exit not in EXIT:
+            raise ValueError(f"exit inválido: {exit} (usa {EXIT})")
+        c.exit = exit
+    return EditResult(out, changed=[clip_id])
+
+
+def set_text_role(tl: Timeline, clip_id: str, role: str) -> EditResult:
+    """Rol de un clip de texto: ``caption`` (subtítulo) o ``free`` (texto libre)."""
+    out = _copy(tl)
+    c = _find_clip(out, clip_id)
+    if c.kind != "text":
+        raise ValueError("text_role solo aplica a clips de texto")
+    if role not in ("caption", "free"):
+        raise ValueError("role debe ser 'caption' o 'free'")
+    c.text_role = role
+    return EditResult(out, changed=[clip_id])
+
+
+def set_clip_effects(tl: Timeline, clip_id: str, effects: dict, replace: bool = False) -> EditResult:
+    """Efectos visuales del clip (blur/grayscale/sepia/brightness…). Por defecto
+    MERGE sobre los existentes; ``replace=True`` los sustituye. Solo clips visuales."""
+    out = _copy(tl)
+    c = _find_clip(out, clip_id)
+    if not is_visual_clip(c):
+        raise ValueError("effects solo aplica a clips visuales (vídeo/imagen)")
+    if not isinstance(effects, dict):
+        raise ValueError("effects debe ser un objeto")
+    base = {} if replace else dict(c.effects or {})
+    base.update(effects)
+    c.effects = base or None
+    return EditResult(out, changed=[clip_id])
+
+
+def set_clip_audio_fx(tl: Timeline, clip_id: str, audio_fx: dict, replace: bool = False) -> EditResult:
+    """Efectos de audio del clip (eq/compressor/reverb…). MERGE por defecto. Solo
+    clips con audio (vídeo/audio)."""
+    out = _copy(tl)
+    c = _find_clip(out, clip_id)
+    if c.kind not in ("video", "audio"):
+        raise ValueError("audio_fx solo aplica a clips de vídeo o audio")
+    if not isinstance(audio_fx, dict):
+        raise ValueError("audio_fx debe ser un objeto")
+    base = {} if replace else dict(c.audio_fx or {})
+    base.update(audio_fx)
+    c.audio_fx = base or None
+    return EditResult(out, changed=[clip_id])
+
+
+def set_clip_keyframes(tl: Timeline, clip_id: str, keyframes: dict | None) -> EditResult:
+    """Fija la animación por keyframes del clip: ``{enabled, items:[{id,t,interpolation,props}]}``.
+    ``None`` la borra."""
+    out = _copy(tl)
+    c = _find_clip(out, clip_id)
+    if keyframes is None:
+        c.keyframes = None
+        return EditResult(out, changed=[clip_id])
+    if not isinstance(keyframes, dict):
+        raise ValueError("keyframes debe ser un objeto {enabled, items}")
+    items = keyframes.get("items")
+    if items is not None and not isinstance(items, list):
+        raise ValueError("keyframes.items debe ser una lista")
+    c.keyframes = {"enabled": bool(keyframes.get("enabled", True)), "items": list(items or [])}
+    return EditResult(out, changed=[clip_id])
+
+
+def add_shape(tl: Timeline, shape: dict | None = None, track_id: str | None = None,
+              start: float = 0.0, duration: float | None = None) -> EditResult:
+    """Añade una figura vectorial (rect/línea/flecha/estrella…) como clip. Vive en
+    una pista de vídeo (crea una si falta). ``shape`` = {type, fill, stroke, …}."""
+    out = _copy(tl)
+    st = shapes.normalize_shape(shape or {})
+    created: list[str] = []
+    if track_id is None:
+        existing = next((t for t in out.tracks if t.kind == "video"), None)
+        if existing is None:
+            tid = _uid("K")
+            out.tracks.append(TimelineTrack(id=tid, kind="video", name=f"V{len(out.tracks) + 1}"))
+            created = [tid]
+        else:
+            tid = existing.id
+    else:
+        track = _find_track(out, track_id)
+        if track.kind != "video":
+            raise ValueError(f"una figura va en pista de vídeo, no '{track.kind}'")
+        tid = track_id
+    if start < 0:
+        raise ValueError("start no puede ser negativo")
+    dur = float(duration) if duration is not None else shapes.SHAPE_DEFAULT_DUR
+    if dur <= 0:
+        raise ValueError("duration debe ser > 0")
+    c = TimelineClip(
+        id=_uid("c"), track_id=tid, kind="shape", asset_kind="shape", asset_id="",
+        filename="", start=_round(start), in_point=0.0, out_point=_round(dur),
+        source_duration=_round(dur), shape=st, layout="fill", frame="full",
+    )
+    out.clips.append(c)
+    return EditResult(out, changed=[*created, c.id], warnings=_warn_overlaps(out, tid))
+
+
+def duplicate_clip(tl: Timeline, clip_id: str, start: float | None = None) -> EditResult:
+    """Duplica un clip (marca ``dup_of`` a la raíz del linaje). Por defecto lo
+    coloca justo detrás del original en su misma pista."""
+    out = _copy(tl)
+    c = _find_clip(out, clip_id)
+    d = c.model_copy(deep=True)
+    d.id = _uid("c")
+    d.dup_of = c.dup_of or c.id
+    if start is not None:
+        if start < 0:
+            raise ValueError("start no puede ser negativo")
+        d.start = _round(start)
+    else:
+        speed = c.speed or 1.0
+        d.start = _round(c.start + _clip_dur(c) / (speed if speed > 0 else 1.0))
+    out.clips.append(d)
+    return EditResult(out, changed=[d.id], warnings=_warn_overlaps(out, d.track_id))
+
+
+def link_tracks(tl: Timeline, track_id: str, to_track_id: str) -> EditResult:
+    """Liga una pista a otra (p.ej. audio↔texto): al cambiar velocidad, la ligada
+    se escala. Pasa ``to_track_id`` vacío/igual para desligar."""
+    out = _copy(tl)
+    track = _find_track(out, track_id)
+    if not to_track_id or to_track_id == track_id:
+        track.linked_track_id = None
+        return EditResult(out, changed=[track_id])
+    _find_track(out, to_track_id)   # debe existir
+    track.linked_track_id = to_track_id
+    return EditResult(out, changed=[track_id])
+
+
+def unlink_track(tl: Timeline, track_id: str) -> EditResult:
+    """Desliga una pista (quita su ``linked_track_id``)."""
+    out = _copy(tl)
+    track = _find_track(out, track_id)
+    track.linked_track_id = None
+    return EditResult(out, changed=[track_id])
