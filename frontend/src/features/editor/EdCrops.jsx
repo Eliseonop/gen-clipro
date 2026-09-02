@@ -1,54 +1,55 @@
 import { useEffect, useState } from 'react'
 import Icon from '../../components/Icon'
-import FlipSelect from '../../components/FlipSelect'
-import PanModeToggle from '../../components/PanModeToggle'
 import { fmt } from '../../lib/utils'
 import { kfColor } from '../../lib/panning'
-import { FRAME_OPTIONS, frameOf } from '../../lib/clipLayout'
-import { SPEED_MAX, SPEED_MIN, SPEED_PRESETS, clipSpeed, isVisualClip, sourceToTimeline } from './editorModel'
+import { SPEED_MAX, SPEED_MIN, SPEED_PRESETS, clipSpeed, isVisualClip } from './editorModel'
 import EdLayer from './EdLayer'
+import { canKeyframe, keyframesEnabled, normalizeItems } from '../../lib/clipKeyframes'
 
 function speedLabel(n) {
   return n % 1 === 0 ? `${n}x` : `${n.toFixed(1)}x`
 }
 
-// Panel junto a la timeline: recorte (keyframes) y propiedades del clip.
-export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHidden, onDelete, onSeek, onPanMode, onChangeFx, onChangeFrame, layer, onMoveLayer }) {
-  const [tab, setTab] = useState('crop')
-  const [track, setTrack] = useState(1)
-  const dual = !!(clip?.kind === 'video' && clip.reframe?.dual_crop)
+function kfList(clip) {
+  if (keyframesEnabled(clip) || (clip?.keyframes?.items || []).length) {
+    return normalizeItems(clip.keyframes.items)
+  }
+  if (isVisualClip(clip)) {
+    return [...(clip.reframe?.keyframes || [])].sort((a, b) => a.t - b.t)
+  }
+  return []
+}
+
+function kfTime(clip, k, snapshots) {
+  return snapshots ? k.t : k.t - (clip.in_point || 0)
+}
+
+// Panel junto a la timeline: keyframes numerados y propiedades del clip.
+export default function EdCrops({
+  clip, selKfId, onChangeFx, layer, onMoveLayer,
+  onSelectKf, onDeleteKf,
+}) {
+  const [tab, setTab] = useState('kf')
   const isVideo = isVisualClip(clip)
   const isImage = clip?.kind === 'image'
   const isAudio = clip?.kind === 'audio'
   const hasClip = isVideo || isAudio
-  useEffect(() => { setTrack(1) }, [clip?.id])
+  const snapshots = keyframesEnabled(clip) || (clip?.keyframes?.items || []).length > 0
+  const items = kfList(clip)
+
   useEffect(() => {
     if (clip?.kind === 'audio') setTab('props')
+    else if (canKeyframe(clip) || isVisualClip(clip)) setTab('kf')
   }, [clip?.id, clip?.kind])
-  const kfs = isVideo
-    ? [...((dual && track === 2 ? clip.reframe?.keyframes2 : clip.reframe?.keyframes) || [])].sort((a, b) => a.t - b.t)
-    : []
-  const typeLabel = clip?.frame === 'top'
-    ? 'Mitad superior'
-    : clip?.frame === 'bottom'
-      ? 'Mitad inferior'
-      : clip?.layout === 'overlay'
-        ? 'Superpuesto'
-        : dual
-          ? (clip.reframe.split_layout === 'horizontal'
-            || (clip.reframe.split_layout !== 'auto' && clip.reframe.split_orientation === 'horizontal')
-            ? 'Dividido L/R'
-            : clip.reframe.split_layout === 'auto' ? 'Dividido auto' : 'Dividido T/B')
-          : 'Vertical'
 
   return (
     <div className="ed-crops">
       <div className="ed-crops-tabs">
-        <button type="button" className={`ed-tab ${tab === 'crop' ? 'on' : ''}`} onClick={() => setTab('crop')}>
-          Recorte
+        <button type="button" className={`ed-tab ${tab === 'kf' ? 'on' : ''}`} onClick={() => setTab('kf')}>
+          Keyframes
         </button>
         <button type="button" className={`ed-tab ${tab === 'props' ? 'on' : ''}`} onClick={() => setTab('props')}>
-          Propiedades
+          Clip
         </button>
       </div>
 
@@ -115,66 +116,38 @@ export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHid
               </div>
             </div>
             )}
-            {isVideo && (
-              <label className="ed-prop">
-                Encuadre
-                <FlipSelect
-                  value={frameOf(clip)}
-                  options={FRAME_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
-                  onChange={(v) => onChangeFrame(v)}
-                />
-              </label>
-            )}
           </div>
         )
-      ) : !isVideo ? (
-        <div className="ed-crops-empty">{isAudio ? 'El recorte aplica a clips de vídeo.' : 'Selecciona un clip de vídeo para ver sus encuadres.'}</div>
       ) : (
-        <>
-          {dual && (
-            <div className="ed-crops-tabs" role="tablist" aria-label="Pista de encuadre">
-              <button type="button" className={`ed-tab ${track === 1 ? 'on' : ''}`} onClick={() => setTrack(1)}>
-                Pista 1
-              </button>
-              <button type="button" className={`ed-tab ${track === 2 ? 'on' : ''}`} onClick={() => setTrack(2)}>
-                Pista 2
-              </button>
-            </div>
-          )}
-          <div className="ed-crops-count">{kfs.length} encuadre{kfs.length === 1 ? '' : 's'}</div>
-          <div className="ed-crops-list">
-            {kfs.length === 0 && <div className="ed-crops-empty">Sin encuadres. Arrastra el recuadro en el Main o pulsa Encuadre en la timeline.</div>}
-            {kfs.map((k, i) => {
-              const local = k.t - clip.in_point
-              const hidden = hiddenKf?.has(k.id)
-              const panMode = k.pan_mode === 'direct' ? 'direct' : 'smooth'
-              return (
-                <div key={k.id || i}
-                  className={`ed-crop-row ${selKfId === k.id ? 'sel' : ''} ${panMode}`}
+        !canKeyframe(clip) && !isVideo ? (
+          <div className="ed-crops-empty">Selecciona un clip, imagen, figura o texto.</div>
+        ) : items.length === 0 ? (
+          <div className="ed-crops-empty">Mueve el encuadre para crear un keyframe en el cabezal.</div>
+        ) : (
+          <>
+            <div className="ed-crops-count">{items.length} keyframe{items.length === 1 ? '' : 's'}</div>
+            <div className="ed-crops-list">
+              {items.map((k, i) => (
+                <div
+                  key={k.id || i}
+                  className={`ed-crop-row ${selKfId === k.id ? 'sel' : ''}`}
                   style={{ borderLeftColor: kfColor(i) }}
-                  onClick={() => { onSelect(k.id); onSeek(sourceToTimeline(clip, k.t)) }}>
-                  <span className={`ed-crop-swatch ${panMode}`} style={{ background: kfColor(i) }} />
+                  onClick={() => onSelectKf?.(k)}
+                >
+                  <span className="ed-crop-swatch" style={{ background: kfColor(i) }} />
                   <div className="ed-crop-info">
-                    <span className="ed-crop-time">{fmt(local)}</span>
-                    <span className="ed-crop-type">{typeLabel}</span>
+                    <span className="ed-crop-time">Keyframe {i + 1}</span>
+                    <span className="ed-crop-type">{fmt(kfTime(clip, k, snapshots))}</span>
                   </div>
-                  <PanModeToggle
-                    value={panMode}
-                    onChange={(mode) => { onSelect(k.id); onPanMode?.(k, mode) }}
-                  />
-                  <button className="icon-btn" title={hidden ? 'Mostrar en Main' : 'Ocultar en Main'}
-                    onClick={(e) => { e.stopPropagation(); onToggleHidden(k.id) }}>
-                    <Icon name={hidden ? 'visibility_off' : 'visibility'} size={14} />
-                  </button>
-                  <button className="icon-btn" title="Eliminar encuadre"
-                    onClick={(e) => { e.stopPropagation(); onDelete(k) }}>
+                  <button className="icon-btn" title="Eliminar keyframe"
+                    onClick={(e) => { e.stopPropagation(); onDeleteKf?.(k) }}>
                     <Icon name="delete" size={14} />
                   </button>
                 </div>
-              )
-            })}
-          </div>
-        </>
+              ))}
+            </div>
+          </>
+        )
       )}
     </div>
   )

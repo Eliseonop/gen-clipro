@@ -1,5 +1,6 @@
 // Figuras vectoriales parametrizables (no PNG).
 // La geometría vive en un viewBox 0–100; x/y/w/h del clip son fracciones del canvas.
+import { applyShapePose, clipPose } from './clipAnim.js'
 
 export const SHAPE_DEFAULT_DUR = 5
 
@@ -400,8 +401,9 @@ export function dragShapePayload(item) {
 }
 
 export function drawShapeClip(ctx, clip, cw, ch, opts = {}) {
-  const st = normalizeShape(clip?.shape)
-  const box = shapeBox(st, cw, ch)
+  const pose = clipPose(clip, opts.time ?? 0)
+  const st = applyShapePose(normalizeShape(clip?.shape), pose)
+  const box = { cx: st.x * cw, cy: st.y * ch, bw: st.w * cw, bh: st.h * ch, rotation: st.rotation }
   const geo = shapeGeometry(st.type, st)
   const sw = Math.max(0.75, (st.strokeWidth || 0) * (ch / 720))
   ctx.save()

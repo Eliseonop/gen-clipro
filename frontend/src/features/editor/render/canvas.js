@@ -10,6 +10,8 @@ import { drawShapeClip } from '../../../lib/shapes'
 import { drawAlignGuides } from '../../../lib/alignGuides'
 import { clipDur, clipEnd, isVisualClip, newReframe, timelineToSource } from '../editorModel'
 import { applyCanvasFx, clipFxAt } from '../../../lib/clipFx'
+import { posedTransform, clipPose } from '../../../lib/clipAnim'
+import { keyframesOn, normalizeItems } from '../../../lib/clipKeyframes'
 import {
   cropWindow, destRectOnCanvas, isOverlay, mediaSize, sourceCropPx, videosAt,
 } from '../../../lib/clipLayout'
@@ -48,15 +50,16 @@ export function drawFramingOverlay(ctx, cw, ch, fm) {
   ctx.restore()
 }
 
-function overlayDest(ctx, media, clip, srcTime, outW, outH) {
+function overlayDest(ctx, media, clip, srcTime, outW, outH, localT) {
   const { w: vw, h: vh } = mediaSize(media)
-  const crop = cropWindow(clip, vw / vh, outW / outH, srcTime)
+  const crop = cropWindow(clip, vw / vh, outW / outH, srcTime, localT)
   const px = sourceCropPx(crop, vw, vh)
-  return { px, dest: destRectOnCanvas(clip.transform, px, outW, outH, ctx.canvas.width, ctx.canvas.height) }
+  return { px, dest: destRectOnCanvas(posedTransform(clip, localT), px, outW, outH, ctx.canvas.width, ctx.canvas.height) }
 }
 
-function drawOverlayLayer(ctx, media, clip, srcTime, outW, outH, fx) {
-  const { px, dest } = overlayDest(ctx, media, clip, srcTime, outW, outH)
+function drawOverlayLayer(ctx, media, clip, srcTime, outW, outH, fx, localT) {
+  const { px, dest } = overlayDest(ctx, media, clip, srcTime, outW, outH, localT)
+  const pose = clipPose(clip, localT)
   ctx.save()
   if (fx.wipe != null && fx.wipe < 1) {
     ctx.beginPath()
@@ -64,7 +67,7 @@ function drawOverlayLayer(ctx, media, clip, srcTime, outW, outH, fx) {
     ctx.clip()
   }
   if (fx.cssFilter && fx.cssFilter !== 'none') ctx.filter = fx.cssFilter
-  ctx.globalAlpha = fx.opacity
+  ctx.globalAlpha = fx.opacity * pose.opacity
   ctx.translate(dest.dx + dest.dw / 2 + fx.tx * dest.dw, dest.dy + dest.dh / 2 + fx.ty * dest.dh)
   ctx.rotate((dest.rotation || 0) * Math.PI / 180)
   ctx.scale(fx.scale, fx.scale)
@@ -73,8 +76,14 @@ function drawOverlayLayer(ctx, media, clip, srcTime, outW, outH, fx) {
   return dest
 }
 
-function fxForClip(clip, head) {
-  return clipFxAt(clip, Math.max(0, head - clip.start), clipDur(clip))
+function reframeForDraw(clip, localT, srcTime) {
+  if (!keyframesOn(clip) || clip.reframe?.dual_crop) return clip.reframe
+  const p = clipPose(clip, localT, srcTime)
+  return {
+    ...(clip.reframe || {}),
+    zoom: p.zoom,
+    keyframes: [{ t: srcTime, cx: p.cx, cy: p.cy, zoom: p.zoom, pan_mode: 'smooth' }],
+  }
 }
 
 function drawTransformHandles(ctx, dest) {
@@ -102,6 +111,11 @@ function drawTransformHandles(ctx, dest) {
   ctx.restore()
 }
 
+function fxForClip(clip, head) {
+  const localT = Math.max(0, head - (clip.start || 0))
+  return clipFxAt(clip, localT, clipDur(clip))
+}
+
 // Dibuja el compuesto (todas las pistas de vídeo, fondo→frente + textos) en un canvas.
 export function drawComposite(ctx, head, selClipIds, env) {
   const { clipsRef, tracksRef, mediaEls, outRef } = env
@@ -114,9 +128,10 @@ export function drawComposite(ctx, head, selClipIds, env) {
   let overlayDestSel = null
   let selRender = null
   for (const clip of videosAt(head, clipsRef.current, tracksRef.current)) {
+    const localT = Math.max(0, head - (clip.start || 0))
     if (clip.kind === 'shape') {
       const isSel = selected.has(clip.id)
-      const r = drawShapeClip(ctx, clip, cw, ch, { selected: isSel })
+      const r = drawShapeClip(ctx, clip, cw, ch, { selected: isSel, time: localT })
       if (isSel) selRender = r
       continue
     }
@@ -128,12 +143,13 @@ export function drawComposite(ctx, head, selClipIds, env) {
       : el.currentTime
     const fx = fxForClip(clip, head)
     if (isOverlay(clip)) {
-      const dest = drawOverlayLayer(ctx, el, clip, srcTime, outW, outH, fx)
+      const dest = drawOverlayLayer(ctx, el, clip, srcTime, outW, outH, fx, localT)
       if (selected.has(clip.id)) overlayDestSel = dest
     } else {
+      const pose = clipPose(clip, localT)
       ctx.save()
-      applyCanvasFx(ctx, fx, cw, ch)
-      drawReframe(ctx, el, clip.reframe, srcTime, outW / outH, { clear: false })
+      applyCanvasFx(ctx, { ...fx, opacity: fx.opacity * pose.opacity }, cw, ch)
+      drawReframe(ctx, el, reframeForDraw(clip, localT, srcTime), srcTime, outW / outH, { clear: false })
       ctx.restore()
     }
   }
@@ -152,12 +168,43 @@ export function drawComposite(ctx, head, selClipIds, env) {
   return selRender
 }
 
+function drawCropRuler(ctx, bx, by, bw, bh) {
+  ctx.save()
+  ctx.strokeStyle = 'rgba(255,255,255,0.4)'
+  ctx.lineWidth = 1
+  ctx.setLineDash([5, 4])
+  for (const f of [1 / 3, 2 / 3]) {
+    ctx.beginPath()
+    ctx.moveTo(bx + bw * f, by)
+    ctx.lineTo(bx + bw * f, by + bh)
+    ctx.moveTo(bx, by + bh * f)
+    ctx.lineTo(bx + bw, by + bh * f)
+    ctx.stroke()
+  }
+  ctx.setLineDash([])
+  ctx.strokeStyle = 'rgba(255, 213, 0, 0.92)'
+  for (let i = 0; i <= 10; i++) {
+    const f = i / 10
+    const x = bx + bw * f
+    const y = by + bh * f
+    const big = i % 5 === 0
+    const len = big ? 8 : 4
+    ctx.beginPath()
+    ctx.moveTo(x, by)
+    ctx.lineTo(x, by - len)
+    ctx.moveTo(bx, y)
+    ctx.lineTo(bx - len, y)
+    ctx.stroke()
+  }
+  ctx.restore()
+}
+
 // Dibujo del Main: siempre muestra el compuesto según la posición del cabezal.
 // La selección de un clip sólo afecta al borde de resaltado, nunca a la visibilidad temporal.
 export function drawMainView(head, env) {
   const {
     mainCanvasRef, clipsRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
-    playingRef, framingModeRef, mainTextBox, alignGuidesRef, clipModeRef,
+    playingRef, framingModeRef, mainTextBox, alignGuidesRef, clipModeRef, croppingRef,
   } = env
   const canvas = mainCanvasRef.current
   if (!canvas) return
@@ -192,7 +239,8 @@ export function drawMainView(head, env) {
     const rf = clip.reframe || newReframe()
     const outA = outRef.current.w / outRef.current.h
     const srcT = (playingRef.current && active && clip.kind !== 'image') ? el.currentTime : srcTime
-    const crop = cropWindow(clip, srcAspect, outA, srcT)
+    const localHead = Math.max(0, head - clip.start)
+    const crop = cropWindow(clip, srcAspect, outA, srcT, localHead)
     const { cx: pcx, cy: pcy, wf, hf } = crop
     const bx = (pcx - wf / 2) * cw2, by = (pcy - hf / 2) * ch2, bw = wf * cw2, bh = hf * ch2
     ctx.fillStyle = 'rgba(3,5,12,0.58)'
@@ -200,10 +248,14 @@ export function drawMainView(head, env) {
     ctx.fillRect(0, by + bh, cw2, ch2 - (by + bh))
     ctx.fillRect(0, by, bx, bh)
     ctx.fillRect(bx + bw, by, cw2 - (bx + bw), bh)
-    const kfs = [...(rf.keyframes || [])].sort((a, b) => a.t - b.t)
+    const kfs = keyframesOn(clip)
+      ? normalizeItems(clip.keyframes.items)
+      : [...(rf.keyframes || [])].sort((a, b) => a.t - b.t)
     kfs.forEach((k, i) => {
       if (hiddenKfRef.current.has(k.id)) return
-      const g = cropWindow({ ...clip, reframe: { ...rf, keyframes: [k] } }, srcAspect, outA, k.t)
+      const g = keyframesOn(clip)
+        ? cropWindow(clip, srcAspect, outA, srcT, k.t)
+        : cropWindow({ ...clip, reframe: { ...rf, keyframes: [k] } }, srcAspect, outA, k.t)
       const kx = (g.cx - g.wf / 2) * cw2, ky = (g.cy - g.hf / 2) * ch2
       ctx.strokeStyle = kfColor(i)
       ctx.lineWidth = k.id === selKfRef.current ? 3 : 1.5
@@ -211,6 +263,7 @@ export function drawMainView(head, env) {
     })
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 2
     ctx.strokeRect(bx, by, bw, bh)
+    if (croppingRef?.current) drawCropRuler(ctx, bx, by, bw, bh)
     const hs = 5
     ctx.fillStyle = '#ff3b5c'
     ctx.strokeStyle = '#fff'

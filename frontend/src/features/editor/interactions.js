@@ -7,17 +7,19 @@
 import { clamp, clampCenter, frameAt, zoomFromCorner, isNearCropCorner } from '../../lib/panning'
 import {
   canvasPointer, clampCrop, cropSizeFromCorner, cropWindow, destRectOnCanvas,
-  hitTransformHandle, isOverlay, mediaSize, newTransform, sourceCropPx,
+  hitTransformHandle, isOverlay, mediaSize, sourceCropPx,
 } from '../../lib/clipLayout'
 import { framingRect } from './render/canvas'
 import { snapAlign, textAlignTargets } from '../../lib/alignGuides'
 import { clipEnd, isVisualClip, timelineToSource } from './editorModel'
+import { clipPose, posedTransform } from '../../lib/clipAnim'
+import { keyframesOn } from '../../lib/clipKeyframes'
 
 export function createMainDownHandler(ctx) {
   const {
     mainCanvasRef, framingModeRef, playingRef, stopPlayback, setFramingMode,
     selectedClip, mainTextBox, changeStyle, changeShape, mediaEls, playhead, upsertKeyframe, outAspect,
-    changeReframe, clipsRef, tracksRef, playheadRef, alignGuidesRef,
+    changeReframe, clipsRef, tracksRef, playheadRef, alignGuidesRef, seek, croppingRef,
   } = ctx
 
   return function onMainDown(e) {
@@ -75,6 +77,8 @@ export function createMainDownHandler(ctx) {
       if (!render) return                 // texto no activo bajo el playhead
       if (playingRef.current) stopPlayback()
       const st = clip.style || {}
+      const localT = Math.max(0, playhead - (clip.start || 0))
+      const pose = clipPose(clip, localT)
       const sx = canvas.width / rect.width, sy = canvas.height / rect.height
       const px = (e.clientX - rect.left) * sx, py = (e.clientY - rect.top) * sy
       let mode = 'move'
@@ -84,7 +88,7 @@ export function createMainDownHandler(ctx) {
         else if (near(render.handles.r)) mode = 'width-r'
         else if (near(render.handles.l)) mode = 'width-l'
       }
-      const s0 = { x: st.x ?? 0.5, y: st.y ?? 0.5, w: st.w ?? 0.8, size: st.size ?? 0.07, cx: e.clientX, cy: e.clientY }
+      const s0 = { x: pose.x, y: pose.y, w: st.w ?? 0.8, size: st.size ?? 0.07, cx: e.clientX, cy: e.clientY }
       const move = (ev) => {
         const dxN = (ev.clientX - s0.cx) / rect.width, dyN = (ev.clientY - s0.cy) / rect.height
         if (mode === 'move') {
@@ -111,6 +115,8 @@ export function createMainDownHandler(ctx) {
       if (!render) return
       if (playingRef.current) stopPlayback()
       const st = clip.shape || {}
+      const localT = Math.max(0, playhead - (clip.start || 0))
+      const pose = clipPose(clip, localT)
       const sx = canvas.width / rect.width, sy = canvas.height / rect.height
       const px = (e.clientX - rect.left) * sx, py = (e.clientY - rect.top) * sy
       let mode = 'move'
@@ -124,8 +130,8 @@ export function createMainDownHandler(ctx) {
         else if (near(render.handles.t)) mode = 'height-t'
       }
       const s0 = {
-        x: st.x ?? 0.5, y: st.y ?? 0.5, w: st.w ?? 0.38, h: st.h ?? 0.16,
-        rotation: st.rotation ?? 0, cx: e.clientX, cy: e.clientY, px, py,
+        x: pose.x, y: pose.y, w: st.w ?? 0.38, h: st.h ?? 0.16, scale: pose.scale || 1,
+        rotation: pose.rotation ?? 0, cx: e.clientX, cy: e.clientY, px, py,
       }
       const move = (ev) => {
         const dxN = (ev.clientX - s0.cx) / rect.width, dyN = (ev.clientY - s0.cy) / rect.height
@@ -135,20 +141,20 @@ export function createMainDownHandler(ctx) {
           const snapped = snapAlign(rawX, rawY, textAlignTargets(clipsRef?.current, tracksRef?.current, playheadRef?.current ?? playhead, clip.id))
           if (alignGuidesRef) alignGuidesRef.current = snapped.guides
           changeShape(clip.id, { x: +snapped.x.toFixed(4), y: +snapped.y.toFixed(4) })
-        } else if (mode === 'width-r') changeShape(clip.id, { w: +clamp(s0.w + dxN * 2, 0.04, 1).toFixed(4) })
-        else if (mode === 'width-l') changeShape(clip.id, { w: +clamp(s0.w - dxN * 2, 0.04, 1).toFixed(4) })
-        else if (mode === 'height') changeShape(clip.id, { h: +clamp(s0.h + dyN * 2, 0.03, 1).toFixed(4) })
-        else if (mode === 'height-t') changeShape(clip.id, { h: +clamp(s0.h - dyN * 2, 0.03, 1).toFixed(4) })
+        } else if (mode === 'width-r') changeShape(clip.id, { w: +clamp(s0.w + dxN * 2 / (s0.scale || 1), 0.04, 1).toFixed(4) })
+        else if (mode === 'width-l') changeShape(clip.id, { w: +clamp(s0.w - dxN * 2 / (s0.scale || 1), 0.04, 1).toFixed(4) })
+        else if (mode === 'height') changeShape(clip.id, { h: +clamp(s0.h + dyN * 2 / (s0.scale || 1), 0.03, 1).toFixed(4) })
+        else if (mode === 'height-t') changeShape(clip.id, { h: +clamp(s0.h - dyN * 2 / (s0.scale || 1), 0.03, 1).toFixed(4) })
         else if (mode === 'corner') {
           changeShape(clip.id, {
-            w: +clamp(s0.w + dxN * 2, 0.04, 1).toFixed(4),
-            h: +clamp(s0.h + dyN * 2, 0.03, 1).toFixed(4),
+            w: +clamp(s0.w + dxN * 2 / (s0.scale || 1), 0.04, 1).toFixed(4),
+            h: +clamp(s0.h + dyN * 2 / (s0.scale || 1), 0.03, 1).toFixed(4),
           })
         } else if (mode === 'rotate') {
           const nx = (ev.clientX - rect.left) * sx
           const ny = (ev.clientY - rect.top) * sy
-          const cx = (st.x ?? 0.5) * canvas.width
-          const cy = (st.y ?? 0.5) * canvas.height
+          const cx = pose.x * canvas.width
+          const cy = pose.y * canvas.height
           const ang = Math.atan2(ny - cy, nx - cx) * 180 / Math.PI + 90
           changeShape(clip.id, { rotation: +ang.toFixed(1) })
         }
@@ -168,55 +174,68 @@ export function createMainDownHandler(ctx) {
     // Al reproducir, Main enseña el compuesto: el clic solo pausa, no recorta.
     if (playingRef.current) { stopPlayback(); return }
     const srcAspect = sz.w / sz.h
-    const localT = clamp(timelineToSource(clip, playhead), clip.in_point, clip.out_point)
-    const crop = cropWindow(clip, srcAspect, outAspect, localT)
+    const srcT = clamp(timelineToSource(clip, playhead), clip.in_point, clip.out_point)
+    const clipT = Math.max(0, playhead - clip.start)
+    const crop = cropWindow(clip, srcAspect, outAspect, srcT, clipT)
     const toNorm = (ev) => [clamp((ev.clientX - rect.left) / rect.width, 0, 1), clamp((ev.clientY - rect.top) / rect.height, 0, 1)]
     const [nx0, ny0] = toNorm(e)
     const zooming = isNearCropCorner(nx0, ny0, crop.cx, crop.cy, crop.wf, crop.hf, rect)
+    const end = clipEnd(clip)
+    const head = playheadRef?.current ?? playhead
+    if (head < clip.start - 0.02 || head >= end) seek?.(clip.start + 0.02)
+    if (croppingRef) croppingRef.current = true
+    const listenCrop = (move) => {
+      const up = () => {
+        if (croppingRef) croppingRef.current = false
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', up)
+      }
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', up)
+    }
 
     if (isOverlay(clip)) {
       const applyMove = (cx, cy) => {
         const c = clampCrop(cx, cy, crop.wf, crop.hf)
-        upsertKeyframe(clip, localT, c.cx, c.cy)
+        upsertKeyframe(clip, srcT, c.cx, c.cy)
       }
       const applySize = (nx, ny) => {
         const sized = cropSizeFromCorner(nx, ny, crop.cx, crop.cy)
         const c = clampCrop(crop.cx, crop.cy, sized.wf, sized.hf)
         changeReframe(clip.id, { crop_w: +c.wf.toFixed(4), crop_h: +c.hf.toFixed(4) })
-        upsertKeyframe(clip, localT, c.cx, c.cy)
+        upsertKeyframe(clip, srcT, c.cx, c.cy)
       }
       if (zooming) applySize(nx0, ny0)
       else applyMove(nx0, ny0)
-      const move = (ev) => {
+      listenCrop((ev) => {
         const [nx, ny] = toNorm(ev)
         if (zooming) applySize(nx, ny)
         else applyMove(nx, ny)
-      }
-      const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
-      window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+      })
       return
     }
 
     const rf = clip.reframe
-    const fr = frameAt(rf?.keyframes, localT, rf?.zoom ?? 1, rf?.pan_mode || 'smooth')
+    const pose = clipPose(clip, clipT, srcT)
+    const fr = keyframesOn(clip)
+      ? { zoom: pose.zoom, cx: pose.cx, cy: pose.cy }
+      : frameAt(rf?.keyframes, srcT, rf?.zoom ?? 1, rf?.pan_mode || 'smooth')
     const applyMove = (cx, cy) => {
       const c = clampCenter(cx, cy, fr.zoom, srcAspect, outAspect)
-      upsertKeyframe(clip, localT, c.cx, c.cy)
+      upsertKeyframe(clip, srcT, c.cx, c.cy)
     }
     const applyZoom = (nx, ny) => {
       const z = zoomFromCorner(nx, ny, crop.cx, crop.cy, srcAspect, outAspect)
       const c = clampCenter(crop.cx, crop.cy, z, srcAspect, outAspect)
-      upsertKeyframe(clip, localT, c.cx, c.cy, { zoom: z })
+      upsertKeyframe(clip, srcT, c.cx, c.cy, { zoom: z })
     }
     if (zooming) applyZoom(nx0, ny0)
     else applyMove(nx0, ny0)
-    const move = (ev) => {
+    listenCrop((ev) => {
       const [nx, ny] = toNorm(ev)
       if (zooming) applyZoom(nx, ny)
       else applyMove(nx, ny)
-    }
-    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
-    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+    })
   }
 }
 
@@ -237,15 +256,16 @@ export function createResultDownHandler(ctx) {
     if (!canvas || !sz.w) return
     if (playingRef.current) stopPlayback()
 
-    const localT = clamp(timelineToSource(clip, playhead), clip.in_point, clip.out_point)
-    const crop = cropWindow(clip, sz.w / sz.h, outW / outH, localT)
+    const localT = Math.max(0, playhead - clip.start)
+    const srcT = clamp(timelineToSource(clip, playhead), clip.in_point, clip.out_point)
+    const crop = cropWindow(clip, sz.w / sz.h, outW / outH, srcT, localT)
     const pxCrop = sourceCropPx(crop, sz.w, sz.h)
-    const dest = destRectOnCanvas(clip.transform, pxCrop, outW, outH, canvas.width, canvas.height)
+    const dest = destRectOnCanvas(posedTransform(clip, localT), pxCrop, outW, outH, canvas.width, canvas.height)
     const p0 = canvasPointer(e, canvas)
     const mode = hitTransformHandle(p0.x, p0.y, dest)
     if (!mode) return
 
-    const t0 = { ...newTransform(), ...clip.transform }
+    const t0 = posedTransform(clip, localT)
     const cx0 = dest.dx + dest.dw / 2
     const cy0 = dest.dy + dest.dh / 2
     const dist0 = Math.hypot(p0.x - cx0, p0.y - cy0) || 1

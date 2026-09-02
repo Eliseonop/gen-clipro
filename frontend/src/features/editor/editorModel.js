@@ -372,6 +372,31 @@ export function resizeGeneratedClip(orig, mode, deltaT) {
   return {}
 }
 
+/** Patch de recorte (asas izquierda/derecha) sobre un clip de timeline. */
+export function trimClipPatch(orig, mode, deltaT) {
+  if (!orig || (mode !== 'trim-left' && mode !== 'trim-right')) return null
+  if (isGeneratedDurationClip(orig)) return resizeGeneratedClip(orig, mode, deltaT)
+  const sp = clipSpeed(orig)
+  const minSrc = GEN_MIN_DUR * sp
+  if (mode === 'trim-left') {
+    const ni = Math.min(orig.out_point - minSrc, Math.max(0, orig.in_point + deltaT * sp))
+    const ns = Math.max(0, orig.start + (ni - orig.in_point) / sp)
+    return { in_point: +ni.toFixed(3), start: +ns.toFixed(3) }
+  }
+  const maxOut = orig.source_duration > 0 ? orig.source_duration : orig.out_point + 3600
+  const no = Math.min(maxOut, Math.max(orig.in_point + minSrc, orig.out_point + deltaT * sp))
+  return { out_point: +no.toFixed(3) }
+}
+
+/** Cabezal al que debe ir Resultado mientras se recorta un borde. */
+export function trimPreviewHead(orig, mode, deltaT) {
+  const patch = trimClipPatch(orig, mode, deltaT)
+  if (!patch) return null
+  const next = { ...orig, ...patch }
+  if (mode === 'trim-left') return next.start
+  return Math.max(next.start, clipEnd(next) - 0.04)
+}
+
 /** Recorta o alarga un clip para que dure `targetDur` en la timeline. Vídeo/audio no pasan de la fuente. */
 export function durationPatchToMatch(clip, targetDur) {
   const minDur = GEN_MIN_DUR

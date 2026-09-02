@@ -2,6 +2,7 @@
 // Las medidas son relativas al alto de salida: size = fracción de la altura.
 // x/y son el centro del texto en coordenadas normalizadas (0-1) de la salida.
 
+import { clipPose } from './clipAnim.js'
 import { clipFxAt } from './clipFx.js'
 import { activeWordIndex, activeWordIndexFromWords, applyThemeToStyle, hasWordFx, karaokeOn, styleOpacity, wordOpacity } from './textKaraoke.js'
 import { themeById } from './subtitleThemes.js'
@@ -179,11 +180,13 @@ function paintWord(ctx, word, x, y, size, st, active, motionOff) {
 export function drawTextClip(ctx, clip, cw, ch, opts = {}) {
   // Con opts.trackStyle, el estilo hereda de la pista (clip = override); si no,
   // usa el estilo del clip tal cual (retrocompatible).
-  const st = opts.trackStyle ? effectiveTextStyle(opts.trackStyle, clip.style) : (clip.style || {})
+  const st0 = opts.trackStyle ? effectiveTextStyle(opts.trackStyle, clip.style) : (clip.style || {})
+  const localT = opts.time == null ? 0 : opts.time - (clip.start || 0)
+  const pose = clipPose(clip, localT)
+  const st = { ...st0, x: pose.x, y: pose.y, opacity: pose.opacity, size: (st0.size ?? 0.07) * (pose.scale || 1) }
   const size = Math.max(10, (st.size ?? 0.07) * ch)
   const align = st.align || 'center'
   const dur = Math.max(0.01, (clip.out_point ?? 0) - (clip.in_point ?? 0))
-  const localT = opts.time == null ? 0 : opts.time - (clip.start || 0)
   const motionOff = opts.reduceMotion ?? reduceMotionOn()
   const skipBlock = motionOff || opts.selected
   const karaoke = karaokeOn(st)
