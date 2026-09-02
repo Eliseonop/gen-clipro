@@ -78,7 +78,7 @@ class TextRoleMigrationTest(unittest.TestCase):
             ],
         }
         out = migrations.migrate_timeline(tl)
-        self.assertEqual(out["schema_version"], 3)
+        self.assertEqual(out["schema_version"], migrations.CURRENT_SCHEMA_VERSION)
         roles = {c["id"]: c["text_role"] for c in out["clips"]}
         self.assertEqual(roles, {"a": "caption", "b": "free", "c": "caption"})
 
@@ -93,6 +93,38 @@ class TextRoleMigrationTest(unittest.TestCase):
         }
         out = migrations.migrate_timeline(tl)
         self.assertEqual(out["clips"][0]["text_role"], "free")
+
+
+class KeepPitchMigrationTest(unittest.TestCase):
+    def test_v3_keep_pitch_false_pasa_a_true(self):
+        tl = {
+            "schema_version": 3,
+            "clips": [
+                {"id": "a", "kind": "audio", "keep_pitch": False, "speed": 2},
+                {"id": "b", "kind": "video", "keep_pitch": True, "speed": 1},
+                {"id": "c", "kind": "audio", "speed": 1.5},
+            ],
+        }
+        out = migrations.migrate_timeline(tl)
+        self.assertEqual(out["schema_version"], 4)
+        by_id = {c["id"]: c for c in out["clips"]}
+        self.assertTrue(by_id["a"]["keep_pitch"])
+        self.assertTrue(by_id["b"]["keep_pitch"])
+        self.assertNotIn("keep_pitch", by_id["c"])
+
+    def test_v4_respeta_keep_pitch_false(self):
+        tl = {
+            "schema_version": 4,
+            "clips": [{"id": "a", "kind": "audio", "keep_pitch": False, "speed": 2}],
+        }
+        out = migrations.migrate_timeline(tl)
+        self.assertIs(out["clips"][0]["keep_pitch"], False)
+
+    def test_payload_sin_version_migra_keep_pitch_false(self):
+        tl = {"clips": [{"id": "a", "kind": "audio", "keep_pitch": False, "speed": 2}]}
+        out = migrations.migrate_timeline(tl)
+        self.assertTrue(out["clips"][0]["keep_pitch"])
+        self.assertEqual(out["schema_version"], migrations.CURRENT_SCHEMA_VERSION)
 
 
 if __name__ == "__main__":

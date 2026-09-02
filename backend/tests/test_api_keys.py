@@ -27,6 +27,8 @@ class ApiKeysSettingsTest(unittest.TestCase):
         self.assertNotIn("sk-abc", dump)
         self.assertEqual(pub["api_keys"], {"gemini": True, "openai": True})
         self.assertTrue(pub["gemini_api_key_set"])
+        self.assertEqual(pub["export"]["fps"], 30)
+        self.assertEqual(pub["export"]["quality"], "standard")
 
     def test_vacio_borra_la_clave(self):
         settings.save({"api_keys": {"gemini": "abc", "openai": "sk-1"}})

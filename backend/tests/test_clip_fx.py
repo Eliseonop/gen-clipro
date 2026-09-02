@@ -87,6 +87,25 @@ class ClipEffectsTest(unittest.TestCase):
         chain = video_fx_chain({"appear": "dissolve"}, 4, 720, 1280)
         self.assertIn("fade=t=in", chain)
 
+    def test_zoom_scale_evals_per_frame(self):
+        chain = video_fx_chain({"appear": "zoom"}, 4, 720, 1280)
+        self.assertIn("eval=frame", chain)
+        self.assertIn("scale=w=", chain)
+        self.assertIn("crop=720:1280:", chain)
+        self.assertNotIn("min(720", chain)
+
+    def test_overlay_zoom_does_not_fill_canvas(self):
+        chain = video_fx_chain({"appear": "zoom"}, 4, 720, 1280, fit_canvas=False)
+        self.assertIn("eval=frame", chain)
+        self.assertIn("scale=w=", chain)
+        self.assertNotIn("crop=720:1280:", chain)
+        self.assertNotIn("pad=w=", chain)
+
+    def test_motion_false_omite_el_scale_de_aparicion(self):
+        chain = video_fx_chain({"appear": "zoom"}, 4, 720, 1280, motion=False)
+        self.assertNotIn("scale=w=", chain)
+        self.assertNotIn("eval=frame", chain)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,7 +6,7 @@ mismo proceso.
 """
 from __future__ import annotations
 
-from .. import jobs, projects
+from .. import jobs, migrations, projects
 from ..schemas import Timeline
 from . import dto
 from .registry import tool
@@ -27,7 +27,7 @@ def export_project(project_id: str, timeline: dict | None = None) -> dict:
     con ``wait_for_job`` y recoge ``result.export_url``.
     """
     proj = _project_or_raise(project_id)
-    tl = Timeline(**timeline) if timeline else proj.timeline
+    tl = Timeline(**migrations.migrate_timeline(timeline)) if timeline else proj.timeline
     if tl is None or not tl.clips:
         raise ValueError("La timeline está vacía: no hay nada que exportar.")
     job = jobs.create_job()

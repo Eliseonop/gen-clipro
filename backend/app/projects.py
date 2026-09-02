@@ -7,7 +7,10 @@ la API. Los clips de cada proyecto viven en ``clips/<project_id>/``.
 from __future__ import annotations
 
 import json
+import os
+import stat
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +20,11 @@ from .schemas import AudioInfo, ClipInfo, ImageInfo, Project, Transcript
 
 _lock = threading.Lock()
 _FILE: Path = config.PROJECTS_FILE
+
+# En Windows, os.replace sobre un JSON abierto (antivirus, indexador, IDE)
+# lanza WinError 5 / 32. Reintentar y, si no, sobrescribir in-place.
+_REPLACE_ATTEMPTS = 12
+_REPLACE_DELAY = 0.04
 
 
 def _now() -> str:
@@ -32,11 +40,47 @@ def _load() -> dict:
         return {"projects": []}
 
 
+def _is_lock_error(exc: BaseException) -> bool:
+    if isinstance(exc, PermissionError):
+        return True
+    return getattr(exc, "winerror", None) in (5, 32)
+
+
+def _replace_file(src: Path, dest: Path) -> None:
+    """Sustituye dest por src. En Windows dest a menudo no se puede borrar."""
+    last: OSError | None = None
+    delay = _REPLACE_DELAY
+    for _ in range(_REPLACE_ATTEMPTS):
+        try:
+            if dest.exists():
+                dest.chmod(stat.S_IWRITE | stat.S_IREAD)
+            os.replace(src, dest)
+            return
+        except OSError as exc:
+            if not _is_lock_error(exc):
+                raise
+            last = exc
+            time.sleep(delay)
+            delay = min(0.25, delay * 1.5)
+    payload = src.read_bytes()
+    try:
+        with dest.open("wb") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+    except OSError as exc:
+        raise last or exc
+    try:
+        src.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _save(data: dict) -> None:
     _FILE.parent.mkdir(exist_ok=True)
     tmp = _FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(_FILE)   # reemplazo atómico
+    _replace_file(tmp, _FILE)
 
 
 def _project_from_dict(p: dict) -> Project:

@@ -24,7 +24,9 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import clipper, config, gpu, sfx, storage
-from .clip_fx import audio_fx_chain, overlay_xy_for_fx, video_fx_chain
+from .clip_fx import _scale_expr, audio_fx_chain, fx_windows, overlay_xy_for_fx, video_fx_chain
+from .clip_keyframes import keyframes_enabled
+from .schemas import Keyframe, Project, Reframe, Timeline, TimelineClip
 from .clip_layout import dest_rect_even, is_overlay, source_crop_px
 from .diagnostics import timed
 from .recipe_layout import contain_scale_filter, dual_slot_wh, join_dual_filters, split_orientation_for
@@ -36,6 +38,33 @@ from .text_ass import ass_filter_path, build_ass
 from .shapes import rasterize_timeline_shapes
 
 ProgressCb = Callable[[float, str], None]
+
+
+def _ffmpeg_export_error(stderr: str | None, returncode: int) -> str:
+    code = returncode & 0xFFFFFFFF
+    if code == 0xC0000005:
+        return "FFmpeg se cerró de forma inesperada al exportar."
+    text = (stderr or "").replace("\r", "\n")
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip() and not ln.strip().startswith("frame=")]
+    # La causa REAL (p. ej. un fallo al configurar el filtergraph) se imprime
+    # ANTES del teardown ("Could not open encoder before EOF", "Nothing was
+    # written…"). Quedarse solo con las últimas líneas oculta el motivo, así que
+    # priorizamos las líneas que sí explican el error.
+    _SIGNALS = ("error", "invalid", "failed", "undefined", "no such",
+                "cannot", "unable", "not found", "does not")
+    _NOISE = ("could not open encoder before eof", "terminating thread",
+              "task finished with error code", "nothing was written",
+              "conversion failed", "at least one of its streams")
+    causes = [
+        ln for ln in lines
+        if any(s in ln.lower() for s in _SIGNALS)
+        and not any(nz in ln.lower() for nz in _NOISE)
+    ]
+    picked = causes[:4] if causes else lines[-6:]
+    tail = "\n".join(picked)[-800:]
+    if tail:
+        return f"FFmpeg falló al exportar:\n{tail}"
+    return f"FFmpeg falló al exportar (código {returncode})."
 
 log = logging.getLogger("videoyt.compose")
 
@@ -74,26 +103,80 @@ def _even(n: float) -> int:
     return n - (n % 2) if n >= 2 else 2
 
 
-def _overlay_video_filter(path: Path, clip: TimelineClip, W: int, H: int, dur: float) -> tuple[str, str]:
-    """Crop de fuente (tamaño fijo) + scale/rotate del resultado. Devuelve (filtro, overlay=x:y)."""
+def _pose_prop_points(clip: TimelineClip, prop: str, dur: float) -> list[tuple[float, float]]:
+    """Muestras (t local, valor) de una propiedad de pose para expresiones FFmpeg."""
+    from .clip_keyframes import clip_props_at, keyframes_enabled
+
+    dur = max(0.0, float(dur))
+    times = {0.0, dur}
+    kf = clip.keyframes if isinstance(clip.keyframes, dict) else None
+    if keyframes_enabled(clip) and kf:
+        for it in kf.get("items") or []:
+            if not isinstance(it, dict):
+                continue
+            try:
+                times.add(max(0.0, min(dur, float(it.get("t", 0)))))
+            except (TypeError, ValueError):
+                pass
+    pts = []
+    for t in sorted(times):
+        pts.append((t, float(clip_props_at(clip, t).get(prop, 0))))
+    return pts or [(0.0, float(clip_props_at(clip, 0).get(prop, 0)))]
+
+
+def _overlay_video_filter(path: Path, clip: TimelineClip, W: int, H: int, dur: float,
+                          start: float = 0.0, fx: str = "") -> tuple[str, str]:
+    """Crop de fuente (tamaño fijo) + scale/rotate del resultado. Devuelve (filtro, overlay=x:y).
+
+    ``start`` es el instante del clip en la timeline. La escala se anima en el
+    *chain* del PIP (tiempo LOCAL, ``t``=0 en el primer fotograma), pero la
+    POSICIÓN se anima en el ``overlay`` final, cuyo ``t`` es el de la composición
+    (global). Por eso las expresiones de posición usan ``t-start`` para volver a
+    tiempo local del clip; si no, la animación se ve desfasada y, en clips que
+    empiezan tarde (p. ej. seg. 29), queda congelada en el último keyframe.
+    """
     from . import detect
     iw, ih = detect.dims(path)
     rf = clip.reframe
-    crop_w = float(rf.crop_w)
-    crop_h = float(rf.crop_h)
-    kfs = _shifted_keyframes(rf, clip.in_point, dur, 1) if rf else []
-    fr0 = frame_at(kfs, 0, rf.zoom or 1.0, rf.pan_mode or "smooth")
+    crop_w = float(getattr(rf, "crop_w", None) or 1.0)
+    crop_h = float(getattr(rf, "crop_h", None) or 1.0)
+    animated = keyframes_enabled(clip)
+    pose_dur = clip_timeline_duration(clip)
+    pose_scale = _pose_prop_points(clip, "scale", pose_dur)
+    pose_x = _pose_prop_points(clip, "x", pose_dur)
+    pose_y = _pose_prop_points(clip, "y", pose_dur)
+    pose_rot = _pose_prop_points(clip, "rotation", pose_dur)
+    if animated:
+        # Con pose-keyframes el crop (cx/cy/zoom de la fuente) lo dictan los
+        # PROPIOS pose-keyframes, no reframe.keyframes — igual que reframeForDraw
+        # en el preview. Si se usara reframe.keyframes, el export recortaría una
+        # región distinta de la imagen (p. ej. Doc: pose cx=0.25 vs reframe 0.73).
+        pose_cx = _pose_prop_points(clip, "cx", pose_dur)
+        pose_cy = _pose_prop_points(clip, "cy", pose_dur)
+        pose_zoom = _pose_prop_points(clip, "zoom", pose_dur)
+        kfs = [
+            Keyframe(t=t, cx=cx, cy=cy, zoom=(z or 1.0), pan_mode="smooth", fit=None)
+            for (t, cx), (_, cy), (_, z) in zip(pose_cx, pose_cy, pose_zoom)
+        ]
+    else:
+        kfs = _shifted_keyframes(rf, clip.in_point, dur, 1) if rf else []
+    fr0 = frame_at(kfs, 0, (rf.zoom if rf else None) or 1.0, (rf.pan_mode if rf else None) or "smooth")
     _, _, sw, sh = source_crop_px(crop_w, crop_h, fr0["cx"], fr0["cy"], iw, ih)
-    ox, oy, dw, dh, rot = dest_rect_even(clip.transform, sw, sh, W, H)
-    cw = min(_even(sw), iw - (iw % 2))
-    ch = min(_even(sh), ih - (ih % 2))
+    if not animated:
+        ox, oy, dw, dh, rot = dest_rect_even(clip.transform, sw, sh, W, H)
+    else:
+        rot = pose_rot[-1][1] if pose_rot else 0.0
+        ox = oy = dw = dh = 0
 
     def xy_at(t: float) -> tuple[float, float]:
-        fr = frame_at(kfs, t, rf.zoom or 1.0, rf.pan_mode or "smooth")
+        fr = frame_at(kfs, t, (rf.zoom if rf else None) or 1.0, (rf.pan_mode if rf else None) or "smooth")
         sx, sy, _, _ = source_crop_px(crop_w, crop_h, fr["cx"], fr["cy"], iw, ih)
         x = max(0, min(iw - cw, sx))
         y = max(0, min(ih - ch, sy))
         return x, y
+
+    cw = min(_even(sw), iw - (iw % 2))
+    ch = min(_even(sh), ih - (ih % 2))
 
     if not kfs:
         x, y = xy_at(0)
@@ -104,17 +187,47 @@ def _overlay_video_filter(path: Path, clip: TimelineClip, W: int, H: int, dur: f
             x, y = xy_at(kf.t)
             xs.append((kf.t, x))
             ys.append((kf.t, y))
-        mode = rf.pan_mode or "smooth"
+        mode = (rf.pan_mode if rf else None) or "smooth"
         x_expr = clipper._pw_expr_direct(xs) if mode == "direct" else clipper._pw_expr(xs)
         y_expr = clipper._pw_expr_direct(ys) if mode == "direct" else clipper._pw_expr(ys)
         crop_f = f"crop=w={cw}:h={ch}:x='{x_expr}':y='{y_expr}'"
 
-    chain = f"{crop_f},scale={dw}:{dh}"
-    if abs(rot) > 0.05:
-        chain += f",format=gbrap,rotate={rot:.3f}*PI/180:ow=rotw(iw):oh=roth(ih):c=none@0x00000000"
-        xy = f"x={ox}-(overlay_w-{dw})/2:y={oy}-(overlay_h-{dh})/2"
+    if animated:
+        # ESCALA: se aplica en el chain del PIP (scale eval=frame), donde 't' es
+        # tiempo LOCAL del clip. POSICIÓN: se aplica en el overlay final, donde
+        # 't' es tiempo de composición → usamos 't-start' para volver a local.
+        sc = clipper._pw_expr(pose_scale)
+        ad, ed = fx_windows(pose_dur)
+        appear_sc = _scale_expr(clip, pose_dur, ad, ed)
+        if appear_sc:
+            sc = f"({sc})*({appear_sc})"
+        tloc = f"(t-{start:.4f})"
+        x_n = clipper._pw_expr(pose_x, tvar=tloc)
+        y_n = clipper._pw_expr(pose_y, tvar=tloc)
+        # El color/efectos (eq, blur…) va ANTES del scale animado: un filtro que
+        # fije el tamaño DESPUÉS de 'scale=eval=frame' congela la animación.
+        fx_pre = f",{fx}" if fx else ""
+        chain = (
+            f"{crop_f},format=gbrap{fx_pre},"
+            f"scale=w='max(2\\,trunc({cw}*({sc})/2)*2)':"
+            f"h='max(2\\,trunc({ch}*({sc})/2)*2)':eval=frame"
+        )
+        if abs(rot) > 0.05:
+            chain += f",rotate={rot:.3f}*PI/180:ow=rotw(iw):oh=roth(ih):c=none@0x00000000"
+        # El PIP tiene tamaño variable (scale eval=frame) y se coloca DIRECTAMENTE
+        # con el overlay final, que sí admite 't' y 'overlay_w/overlay_h'. Nada de
+        # 'pad' a un lienzo fijo: 'pad' no admite 't' en x/y (rompía con posición
+        # animada → "Could not open encoder before EOF") y, si el PIP escalado
+        # supera WxH, falla con "Padded dimensions cannot be smaller than input".
+        # El centro del PIP queda en (x_n*W, y_n*H); overlay recorta lo que sobre.
+        xy = f"x='({x_n})*{W}-overlay_w/2':y='({y_n})*{H}-overlay_h/2'"
     else:
-        xy = f"x={ox}:y={oy}"
+        chain = f"{crop_f},scale={dw}:{dh}"
+        if abs(rot) > 0.05:
+            chain += f",format=gbrap,rotate={rot:.3f}*PI/180:ow=rotw(iw):oh=roth(ih):c=none@0x00000000"
+            xy = f"x={ox}-(overlay_w-{dw})/2:y={oy}-(overlay_h-{dh})/2"
+        else:
+            xy = f"x={ox}:y={oy}"
     return chain, xy
 
 
@@ -331,6 +444,11 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
     W -= W % 2
     H -= H % 2
     fps = int(timeline.fps or 30)
+    try:
+        from .export_settings import load as load_export
+        fps = int(load_export()["fps"] or fps)
+    except Exception:  # noqa: BLE001
+        pass
 
     # Orden de capas de vídeo: primero las pistas de vídeo inferiores (fondo),
     # las superiores encima. Índice de capa = posición de la pista de vídeo.
@@ -388,11 +506,17 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
     # --- Vídeo: fondo negro + overlays por capa ---
     filt.append(f"color=c=black:s={W}x{H}:r={fps}:d={total:.3f},format=yuv420p[base]")
 
-    # ordenar por capa de pista (fondo→arriba) y, en la misma pista, por orden en la lista.
+    # Orden de la cadena de overlays: por capa de pista (fondo→arriba) y, dentro
+    # de cada capa, por INSTANTE de inicio (start), con el orden en la lista como
+    # desempate. Es imprescindible que la cadena sea monótona en el tiempo: si se
+    # componen clips fuera de orden temporal, FFmpeg congela los `scale=eval=frame`
+    # de PIPs posteriores (las imágenes que crecen se quedan estáticas en el
+    # export). Ordenar por start también es lo correcto para la composición.
     clip_index = {c.id: i for i, c in enumerate(timeline.clips)}
     vclips_sorted = sorted(
         vclips,
-        key=lambda cp: (vlayer.get(cp[0].track_id, 0), clip_index.get(cp[0].id, 0)),
+        key=lambda cp: (vlayer.get(cp[0].track_id, 0), max(0.0, cp[0].start),
+                        clip_index.get(cp[0].id, 0)),
     )
     last_label = "base"
     n = 0
@@ -403,16 +527,27 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         end = start + dur
         overlay_xy = "x=0:y=0"
         src_dur = clip_source_duration(c)
-        if is_overlay(c) and c.reframe and c.reframe.crop_w and c.reframe.crop_h:
-            cropscale, overlay_xy = _overlay_video_filter(path, c, W, H, src_dur)
+        animated_ov = is_overlay(c) and keyframes_enabled(c)
+        fx = video_fx_chain(
+            c, dur, W, H,
+            fit_canvas=not is_overlay(c),
+            motion=not animated_ov,
+        )
+        if is_overlay(c):
+            # En overlay animado, 'scale=eval=frame' debe ser la ÚLTIMA operación
+            # de tamaño: un filtro de color/efecto (eq, blur…) colocado DESPUÉS
+            # congela la animación de escala (el PIP se queda en su tamaño inicial
+            # pequeño). Por eso el fx se inyecta ANTES del scale, dentro del
+            # cropscale, y NO se vuelve a añadir fuera.
+            cropscale, overlay_xy = _overlay_video_filter(
+                path, c, W, H, src_dur, start, fx=(fx if animated_ov else ""))
         elif c.reframe and (c.reframe.keyframes or c.reframe.dual_crop):
             cropscale = _reframe_cropscale(path, c.reframe, c.in_point, src_dur, W, H)
         else:
             cropscale = _plain_scale(W, H)
-        if is_still_clip(c):
+        if is_still_clip(c) or is_overlay(c):
             cropscale = f"{cropscale},format=gbrap"
-        fx = video_fx_chain(c, dur, W, H)
-        fx_part = f",{fx}" if fx else ""
+        fx_part = "" if animated_ov else (f",{fx}" if fx else "")
         spd = "" if is_still_clip(c) else video_speed_filters(c)
         spd_part = f",{spd}" if spd else ""
         overlay_xy = overlay_xy_for_fx(overlay_xy, c, start, dur, W, H)
@@ -454,8 +589,12 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         asp_part = f",{asp}" if asp else ""
         afx = audio_fx_chain(c)
         afx_part = f",{afx}" if afx else ""
-        chain = (f"[{k}:a]atrim={c.in_point:.3f}:{c.out_point:.3f},asetpts=PTS-STARTPTS{asp_part}{afx_part},"
-                 f"aresample=async=1,volume={vol:.3f}")
+        chain = (
+            f"[{k}:a]atrim={c.in_point:.3f}:{c.out_point:.3f},asetpts=PTS-STARTPTS,"
+            f"aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"
+            f"{asp_part}{afx_part},"
+            f"aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,volume={vol:.3f}"
+        )
         if start_ms > 0:
             chain += f",adelay={start_ms}:all=1"
         chain += f"[{alabel}]"
@@ -482,12 +621,12 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
     cmd = ["ffmpeg", "-y", *inputs, "-filter_complex", ";".join(filt),
            "-map", "[vout]"]
     if has_audio:
-        cmd += ["-map", "[aout]", "-c:a", "aac", "-b:a", config.AUDIO_BITRATE]
+        cmd += ["-map", "[aout]", "-c:a", "aac", "-ar", "48000", "-b:a", config.AUDIO_BITRATE]
     else:
         cmd += ["-an"]
     cmd += [
         *gpu.video_encoder_args(),
-        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+        "-pix_fmt", "yuv420p", "-r", str(fps), "-movflags", "+faststart",
         "-t", f"{total:.3f}",
         str(out_path),
     ]
@@ -518,7 +657,7 @@ def render(project: Project, timeline: Timeline, out_path: Path,
         with timed("render FFmpeg (export)", log, clips=len(timeline.clips)):
             proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
-        raise RuntimeError(f"FFmpeg falló al exportar:\n{proc.stderr[-1200:]}")
+        raise RuntimeError(_ffmpeg_export_error(proc.stderr, proc.returncode))
     if not out_path.exists():
         raise RuntimeError("La exportación no generó ningún archivo.")
     on_progress(1.0, "Vídeo final listo.")

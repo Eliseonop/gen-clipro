@@ -29,9 +29,17 @@ function providerHint(id) {
   return API_PROVIDERS.find((p) => p.id === id)?.hint || ''
 }
 
+const FPS_OPTS = [24, 25, 30, 60]
+const QUALITY_OPTS = [
+  { id: 'draft', label: 'Borrador', hint: 'Más rápido, más compresión' },
+  { id: 'standard', label: 'Estándar', hint: 'Equilibrio calidad / tamaño' },
+  { id: 'high', label: 'Alta', hint: 'Mejor calidad, export más lento' },
+]
+
 export default function EdSettings() {
   const [cfgTab, setCfgTab] = useState('keys')
   const [setKeys, setSetKeys] = useState({})
+  const [exportCfg, setExportCfg] = useState({ fps: 30, quality: 'standard' })
   const [form, setForm] = useState(null)
   const [value, setValue] = useState('')
   const [busy, setBusy] = useState(false)
@@ -52,6 +60,11 @@ export default function EdSettings() {
   async function reload() {
     const s = await getSettings()
     setSetKeys(s.api_keys && typeof s.api_keys === 'object' ? s.api_keys : {})
+    const ex = s.export && typeof s.export === 'object' ? s.export : {}
+    setExportCfg({
+      fps: [24, 25, 30, 60].includes(Number(ex.fps)) ? Number(ex.fps) : 30,
+      quality: ['draft', 'standard', 'high'].includes(ex.quality) ? ex.quality : 'standard',
+    })
   }
 
   useEffect(() => {
@@ -111,6 +124,21 @@ export default function EdSettings() {
     setBusy(false)
   }
 
+  async function saveExport(patch) {
+    const next = { ...exportCfg, ...patch }
+    setExportCfg(next)
+    setBusy(true)
+    setErr('')
+    try {
+      await putSettings({ export: next })
+      setToast({ type: 'success', message: 'Ajustes de export guardados.' })
+    } catch (e) {
+      setErr(e.message || 'No se pudo guardar.')
+      await reload()
+    }
+    setBusy(false)
+  }
+
   const rows = [...savedIds, ...extraIds]
 
   return (
@@ -122,6 +150,13 @@ export default function EdSettings() {
           onClick={() => setCfgTab('keys')}
         >
           API-KEYS
+        </button>
+        <button
+          type="button"
+          className={`ed-tab ${cfgTab === 'export' ? 'on' : ''}`}
+          onClick={() => setCfgTab('export')}
+        >
+          Exportar
         </button>
       </div>
 
@@ -189,6 +224,42 @@ export default function EdSettings() {
               <Icon name="add" size={16} /> Agregar
             </button>
           )}
+        </div>
+      )}
+
+      {cfgTab === 'export' && (
+        <div className="ed-cfg-export">
+          <label className="field">
+            <span>FPS</span>
+            <select
+              className="select"
+              value={exportCfg.fps}
+              disabled={busy}
+              onChange={(e) => saveExport({ fps: Number(e.target.value) })}
+            >
+              {FPS_OPTS.map((n) => (
+                <option key={n} value={n}>{n} fps</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Calidad</span>
+            <select
+              className="select"
+              value={exportCfg.quality}
+              disabled={busy}
+              onChange={(e) => saveExport({ quality: e.target.value })}
+            >
+              {QUALITY_OPTS.map((q) => (
+                <option key={q.id} value={q.id}>{q.label}</option>
+              ))}
+            </select>
+          </label>
+          <p className="ed-key-hint">
+            {QUALITY_OPTS.find((q) => q.id === exportCfg.quality)?.hint}.
+            El preview usa el canvas; el MP4 usa estos valores.
+          </p>
+          {err && <div className="ed-mat-err">{err}</div>}
         </div>
       )}
 

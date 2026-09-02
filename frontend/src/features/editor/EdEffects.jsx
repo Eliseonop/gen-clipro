@@ -6,7 +6,7 @@ import {
   VIDEO_FX_TOGGLES, fxNum, fxOn,
 } from '../../lib/clipFx'
 import { isVisualClip } from './editorModel'
-import { TextFxPanel } from './EdText'
+import EdText, { TextFxPanel } from './EdText'
 import EdTransform from './EdTransform'
 import { canKeyframe, KF_INTERPS, normalizeInterp, targetInterpItem } from '../../lib/clipKeyframes'
 
@@ -46,7 +46,7 @@ function KfTransitionSelect({ clip, selKfId, playhead, onInterp }) {
 
 export default function EdEffects({
   clip, onChangeFx, textStyle, textMode, onChangeTextStyle, onApplyTextPreset,
-  playhead, onPose, onChangeFrame, selKfId, onInterpKf,
+  playhead, onPose, onChangeFrame, selKfId, onInterpKf, textEditor,
 }) {
   const tabs = fxTabs(clip, textMode)
   const isTextFx = tabs[0] === 'text'
@@ -108,13 +108,35 @@ export default function EdEffects({
         </div>
         <div className="ed-fx-body">
           {activeTab === 'text' && (
-            <TextFxPanel
-              section="look"
-              style={st}
-              mode={mode}
-              onChangeStyle={onChangeTextStyle}
-              onApplyPreset={onApplyTextPreset}
-            />
+            <>
+              <EdText
+                mode={mode === 'track' ? 'track' : 'segment'}
+                clip={textEditor?.clip || (clip?.kind === 'text' ? clip : null)}
+                style={st}
+                selectionCount={textEditor?.selectionCount || 1}
+                onChangeText={textEditor?.onChangeText}
+                onChangeStyle={onChangeTextStyle}
+                onApplyPreset={onApplyTextPreset}
+                onChangeDur={textEditor?.onChangeDur}
+                onApplyAsGlobalTemplate={textEditor?.onApplyAsGlobalTemplate}
+                framing={textEditor?.framing}
+                onStartFraming={textEditor?.onStartFraming}
+                onSaveFraming={textEditor?.onSaveFraming}
+                onCancelFraming={textEditor?.onCancelFraming}
+                textFavorites={textEditor?.textFavorites}
+                onSaveFavorite={textEditor?.onSaveFavorite}
+                onApplyFavorite={textEditor?.onApplyFavorite}
+                onDeleteFavorite={textEditor?.onDeleteFavorite}
+                onFragment={textEditor?.onFragment}
+              />
+              <TextFxPanel
+                section="look"
+                style={st}
+                mode={mode}
+                onChangeStyle={onChangeTextStyle}
+                onApplyPreset={onApplyTextPreset}
+              />
+            </>
           )}
           {activeTab === 'transitions' && (
             <>

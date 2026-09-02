@@ -46,6 +46,11 @@ export function clipSpeed(c) {
   return Math.min(SPEED_MAX, Math.max(SPEED_MIN, s))
 }
 
+/** True = mismo tono al acelerar (HTML preservesPitch / FFmpeg atempo). Ausente = true. */
+export function clipKeepPitch(c) {
+  return c?.keep_pitch !== false
+}
+
 export const clipSourceDur = (c) => Math.max(0, (c?.out_point ?? 0) - (c?.in_point ?? 0))
 export const clipDur = (c) => clipSourceDur(c) / clipSpeed(c)
 export const clipEnd = (c) => c.start + clipDur(c)
@@ -168,7 +173,7 @@ export function textClipsFromTranscript(src, segments, trackId, style, transcrip
  *  fragmento toma su rebanada de palabras y su tiempo sale de esas marcas
  *  (relativas al fragmento). Sin ``words[]`` → reparto uniforme (igual que antes). */
 export function splitClipByMaxWords(clip, maxWords) {
-  if (isFreeText(clip)) return clip ? [clip] : []
+  if (!clip) return []
   const chunks = chunkCaptionText(clip?.text || '', maxWords)
   if (chunks.length <= 1) return clip ? [clip] : []
   const total = splitCaptionWords(clip.text || '').length || 1
@@ -224,10 +229,26 @@ export function splitClipByMaxWords(clip, maxWords) {
 export function splitTrackTextByMaxWords(clips, trackId, maxWords) {
   const out = []
   for (const c of clips || []) {
-    if (c.kind === 'text' && c.track_id === trackId) out.push(...splitClipByMaxWords(c, maxWords))
+    if (c.kind === 'text' && c.track_id === trackId && !isFreeText(c)) out.push(...splitClipByMaxWords(c, maxWords))
     else out.push(c)
   }
   return out
+}
+
+export function extraClipsAfterOneSplit(clip, maxWords) {
+  if (!clip || clip.kind !== 'text') return 0
+  return Math.max(0, splitClipByMaxWords(clip, maxWords).length - 1)
+}
+
+export function splitOneTextClip(clips, clipId, maxWords) {
+  const list = clips || []
+  const idx = list.findIndex((c) => c.id === clipId)
+  if (idx < 0) return list
+  const clip = list[idx]
+  if (clip?.kind !== 'text') return list
+  const parts = splitClipByMaxWords(clip, maxWords)
+  if (parts.length <= 1) return list
+  return list.slice(0, idx).concat(parts, list.slice(idx + 1))
 }
 
 /** Clips de una pista, de izquierda a derecha. */
@@ -523,6 +544,7 @@ export function displayTracks(tracks) {
 // --- Formatos de salida disponibles ---
 export const FORMATS = [
   { id: '9:16', w: 720, h: 1280 },
+  { id: '9:16 HD', w: 1080, h: 1920 },
   { id: '16:9', w: 1280, h: 720 },
   { id: '1:1', w: 1080, h: 1080 },
   { id: '4:5', w: 864, h: 1080 },
@@ -592,7 +614,7 @@ export function makeClip(assetKind, item, trackId, start, dur) {
     volume: 1,
     muted: false,
     speed: 1,
-    keep_pitch: false,
+    keep_pitch: true,
     reverse: false,
     speed_curve: null,
     reframe: visual
@@ -618,7 +640,7 @@ export function makeTextClip(trackId, start, dur, text, style, opts = {}) {
     id: uid('c'), track_id: trackId, kind: 'text', asset_kind: 'text', asset_id: uid('t'),
     filename: '', name: (text || 'Texto').slice(0, 22), start: +Math.max(0, start).toFixed(3),
     in_point: 0, out_point: +Math.max(0.5, dur).toFixed(3), source_duration: +Math.max(0.5, dur).toFixed(3),
-    volume: 1, muted: false, speed: 1, keep_pitch: false, reverse: false, speed_curve: null,
+    volume: 1, muted: false, speed: 1, keep_pitch: true, reverse: false, speed_curve: null,
     reframe: null, text: text || 'Texto', style: st,
     words: [], text_role: role,
     description: null,
@@ -645,7 +667,7 @@ export function makeShapeClip(trackId, start, dur, preset = {}) {
     volume: 1,
     muted: false,
     speed: 1,
-    keep_pitch: false,
+    keep_pitch: true,
     reverse: false,
     speed_curve: null,
     reframe: null,

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import Icon from '../../components/Icon'
 import { fmt } from '../../lib/utils'
 import { kfColor } from '../../lib/panning'
-import { SPEED_MAX, SPEED_MIN, SPEED_PRESETS, clipSpeed, isVisualClip } from './editorModel'
+import { SPEED_MAX, SPEED_MIN, SPEED_PRESETS, clipKeepPitch, clipSpeed, isVisualClip } from './editorModel'
 import EdLayer from './EdLayer'
 import { canKeyframe, keyframesEnabled, normalizeItems } from '../../lib/clipKeyframes'
 
@@ -33,9 +33,14 @@ export default function EdCrops({
   const isVideo = isVisualClip(clip)
   const isImage = clip?.kind === 'image'
   const isAudio = clip?.kind === 'audio'
+  const isText = clip?.kind === 'text'
   const hasClip = isVideo || isAudio
   const snapshots = keyframesEnabled(clip) || (clip?.keyframes?.items || []).length > 0
   const items = kfList(clip)
+  const propsTab = isText ? 'Capas' : 'Clip'
+  const kfEmpty = isText
+    ? 'Mueve el texto en el Main para crear un keyframe en el cabezal.'
+    : 'Mueve el encuadre para crear un keyframe en el cabezal.'
 
   useEffect(() => {
     if (clip?.kind === 'audio') setTab('props')
@@ -49,12 +54,20 @@ export default function EdCrops({
           Keyframes
         </button>
         <button type="button" className={`ed-tab ${tab === 'props' ? 'on' : ''}`} onClick={() => setTab('props')}>
-          Clip
+          {propsTab}
         </button>
       </div>
 
       {tab === 'props' ? (
-        !hasClip ? (
+        isText ? (
+          layer ? (
+            <div className="ed-props">
+              <EdLayer info={layer} onMove={onMoveLayer} />
+            </div>
+          ) : (
+            <div className="ed-crops-empty">Selecciona un texto para ordenar sus capas.</div>
+          )
+        ) : !hasClip ? (
           <div className="ed-crops-empty">Selecciona un clip para ver sus propiedades.</div>
         ) : (
           <div className="ed-props">
@@ -101,9 +114,9 @@ export default function EdCrops({
               <div className="ed-speed-toggles">
                 <button
                   type="button"
-                  className={`ed-mute ${clip.keep_pitch ? 'on' : ''}`}
+                  className={`ed-mute ${clipKeepPitch(clip) ? 'on' : ''}`}
                   title="Mantener el tono de la voz"
-                  onClick={() => onChangeFx({ keep_pitch: !clip.keep_pitch })}>
+                  onClick={() => onChangeFx({ keep_pitch: !clipKeepPitch(clip) })}>
                   Tono
                 </button>
                 <button
@@ -122,7 +135,7 @@ export default function EdCrops({
         !canKeyframe(clip) && !isVideo ? (
           <div className="ed-crops-empty">Selecciona un clip, imagen, figura o texto.</div>
         ) : items.length === 0 ? (
-          <div className="ed-crops-empty">Mueve el encuadre para crear un keyframe en el cabezal.</div>
+          <div className="ed-crops-empty">{kfEmpty}</div>
         ) : (
           <>
             <div className="ed-crops-count">{items.length} keyframe{items.length === 1 ? '' : 's'}</div>

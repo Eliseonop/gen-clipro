@@ -108,7 +108,7 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(v, hi))
 
 
-def _pw_expr(points: list[tuple[float, float]]) -> str:
+def _pw_expr(points: list[tuple[float, float]], tvar: str = "t") -> str:
     """Expresión FFmpeg de interpolación lineal por tramos value(t).
 
     Antes de ``t0`` mantiene ``v0``; entre cada par de puntos interpola en línea
@@ -123,9 +123,9 @@ def _pw_expr(points: list[tuple[float, float]]) -> str:
         t0, v0 = pts[i]
         t1, v1 = pts[i + 1]
         dt = (t1 - t0) or 1e-6
-        seg = f"({v0:.3f}+({v1 - v0:.3f})*(t-{t0:.4f})/{dt:.6f})"
-        expr = f"if(lt(t,{t1:.4f}),{seg},{expr})"
-    return f"if(lt(t,{pts[0][0]:.4f}),{pts[0][1]:.2f},{expr})"
+        seg = f"({v0:.3f}+({v1 - v0:.3f})*({tvar}-{t0:.4f})/{dt:.6f})"
+        expr = f"if(lt({tvar},{t1:.4f}),{seg},{expr})"
+    return f"if(lt({tvar},{pts[0][0]:.4f}),{pts[0][1]:.2f},{expr})"
 
 
 def _pw_expr_direct(points: list[tuple[float, float]]) -> str:

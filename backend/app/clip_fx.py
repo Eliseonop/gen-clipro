@@ -187,7 +187,7 @@ def _split_xy(base_xy: str) -> tuple[str, str]:
     for piece in (base_xy or "").split(":"):
         if "=" in piece:
             k, v = piece.split("=", 1)
-            parts[k] = v
+            parts[k] = v.strip("'")   # x/y pueden venir como expresión entre comillas
     return parts.get("x", "0"), parts.get("y", "0")
 
 
@@ -239,7 +239,9 @@ def _scale_expr(clip: Any, dur: float, ad: float, ed: float) -> str | None:
     return "*".join(terms)
 
 
-def video_fx_chain(clip: Any, dur: float, W: int, H: int) -> str:
+def video_fx_chain(
+    clip: Any, dur: float, W: int, H: int, fit_canvas: bool = True, motion: bool = True,
+) -> str:
     parts: list[str] = []
     look = look_ffmpeg(_field(clip, "look"))
     if look:
@@ -252,7 +254,7 @@ def video_fx_chain(clip: Any, dur: float, W: int, H: int) -> str:
     exit_ = _field(clip, "exit")
     ad, ed = fx_windows(dur)
     need_alpha = appear in ("fade", "pop", "dissolve") or exit_ in ("fade", "pop", "dissolve")
-    scale_expr = _scale_expr(clip, dur, ad, ed)
+    scale_expr = _scale_expr(clip, dur, ad, ed) if motion else None
 
     if need_alpha:
         parts.append("format=gbrap")
@@ -262,10 +264,18 @@ def video_fx_chain(clip: Any, dur: float, W: int, H: int) -> str:
             parts.append(f"fade=t=out:st={max(0.0, dur - ed):.3f}:d={ed:.3f}:alpha=1")
 
     if scale_expr:
-        parts.append(
-            f"scale='iw*({scale_expr})':'ih*({scale_expr})',"
-            f"crop='min({W}\\,iw)':'min({H}\\,ih)':'(in_w-out_w)/2':'(in_h-out_h)/2',"
-            f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black@0"
+        # FFmpeg 9 explota (Win 0xC0000005) si crop cambia de tamaño cada
+        # fotograma. scale eval=frame sí. En fill, la salida es SIEMPRE WxH.
+        # En overlay NO se rellena el canvas: si no, un PIP tapa al otro.
+        scale_f = (
+            f"scale=w='max(2\\,trunc(iw*({scale_expr})/2)*2)':"
+            f"h='max(2\\,trunc(ih*({scale_expr})/2)*2)':eval=frame"
         )
+        if fit_canvas:
+            scale_f += (
+                f",pad=w='max(iw\\,{W})':h='max(ih\\,{H})':x=(ow-iw)/2:y=(oh-ih)/2:eval=frame,"
+                f"crop={W}:{H}:(in_w-{W})/2:(in_h-{H})/2"
+            )
+        parts.append(scale_f)
 
     return ",".join(parts)

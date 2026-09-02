@@ -182,7 +182,7 @@ const MAT_NAV = [
 
 export default function EdMaterial({
   project, onAdd, onDragInfo, onBack, onRefresh, fav, onEditYtClip, selectedClip, onChangeFx,
-  textStyle, textMode, onChangeTextStyle, onApplyTextPreset,
+  textStyle, textMode, onChangeTextStyle, onApplyTextPreset, textEditor,
   matTab, onMatTab,
   playhead, onPose, onChangeFrame, selKfId, onInterpKf,
 }) {
@@ -889,6 +889,7 @@ export default function EdMaterial({
           onChangeFrame={onChangeFrame}
           selKfId={selKfId}
           onInterpKf={onInterpKf}
+          textEditor={textEditor}
         />
       )}
       {tab === 'settings' && <EdSettings />}
