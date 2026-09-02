@@ -307,8 +307,8 @@ class TimelineClip(BaseModel):
     """
     id: str
     track_id: str
-    kind: str                     # "video" | "audio" | "text" | "image"
-    asset_kind: str               # "clips" | "audios" | "images" | "sfx" | "text"
+    kind: str                     # "video" | "audio" | "text" | "image" | "shape"
+    asset_kind: str               # "clips" | "audios" | "images" | "sfx" | "text" | "shape"
     asset_id: str                 # index del clip o id del audio (como texto)
     filename: str
     name: Optional[str] = None
@@ -323,9 +323,11 @@ class TimelineClip(BaseModel):
     layout: str = "fill"                  # "fill" | "overlay"
     transform: Optional[dict] = None     # {x, y, scale, rotation} si layout=overlay
     frame: str = "full"                   # full | top | bottom | free
-    appear: str = "none"                  # none | fade | zoom | slide_up | slide_left | pop
-    exit: str = "none"                    # none | fade | zoom | slide_down | slide_right | pop
+    appear: str = "none"                  # none | fade | dissolve | wipe | zoom | slide_up | slide_left | pop
+    exit: str = "none"                    # none | fade | dissolve | wipe | zoom | slide_down | slide_right | pop
     look: str = "none"                    # none | bw | cinematic | vintage | contrast | warm | cool | saturated
+    effects: Optional[dict] = None        # blur, grayscale, sepia, brightness… (efectos de imagen)
+    audio_fx: Optional[dict] = None       # eq, compressor, reverb… (efectos de audio)
     muted: bool = False                 # silencia este clip (la pista puede seguir sonando)
     speed: float = 1.0                  # 0.1–10; timeline = fuente / speed
     keep_pitch: bool = False            # audio: mantener tono (atempo) en vez de asetrate
@@ -334,6 +336,7 @@ class TimelineClip(BaseModel):
     words: list[Word] = []                # (texto) timing real por palabra, RELATIVO al inicio del clip
     origin: Optional[dict] = None         # (texto) procedencia: {transcript_id, segment_index, fragment_index, word_range, source_range}
     text_role: Optional[str] = None       # "caption" | "free"; None = inferir al usar
+    shape: Optional[dict] = None          # figura vectorial: type, fill, stroke, x/y/w/h…
     asset_scope: str = "project"          # "project" | "library"
     description: Optional[str] = None
     dup_of: Optional[str] = None          # id del clip original si es una copia

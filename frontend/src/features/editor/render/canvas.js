@@ -6,6 +6,7 @@
 // de la llamada, igual que hacía el componente. Así el comportamiento por frame no cambia.
 import { drawReframe, kfColor, cropCornerNorms, clamp } from '../../../lib/panning'
 import { drawTextClip } from '../../../lib/textstyles'
+import { drawShapeClip } from '../../../lib/shapes'
 import { drawAlignGuides } from '../../../lib/alignGuides'
 import { clipDur, clipEnd, isVisualClip, newReframe, timelineToSource } from '../editorModel'
 import { applyCanvasFx, clipFxAt } from '../../../lib/clipFx'
@@ -57,6 +58,11 @@ function overlayDest(ctx, media, clip, srcTime, outW, outH) {
 function drawOverlayLayer(ctx, media, clip, srcTime, outW, outH, fx) {
   const { px, dest } = overlayDest(ctx, media, clip, srcTime, outW, outH)
   ctx.save()
+  if (fx.wipe != null && fx.wipe < 1) {
+    ctx.beginPath()
+    ctx.rect(dest.dx, dest.dy, dest.dw * Math.max(0, fx.wipe), dest.dh)
+    ctx.clip()
+  }
   if (fx.cssFilter && fx.cssFilter !== 'none') ctx.filter = fx.cssFilter
   ctx.globalAlpha = fx.opacity
   ctx.translate(dest.dx + dest.dw / 2 + fx.tx * dest.dw, dest.dy + dest.dh / 2 + fx.ty * dest.dh)
@@ -106,7 +112,14 @@ export function drawComposite(ctx, head, selClipIds, env) {
   ctx.fillRect(0, 0, cw, ch)
 
   let overlayDestSel = null
+  let selRender = null
   for (const clip of videosAt(head, clipsRef.current, tracksRef.current)) {
+    if (clip.kind === 'shape') {
+      const isSel = selected.has(clip.id)
+      const r = drawShapeClip(ctx, clip, cw, ch, { selected: isSel })
+      if (isSel) selRender = r
+      continue
+    }
     const el = mediaEls.current.get(clip.id)
     const { w: mw } = mediaSize(el)
     if (!el || !mw) continue
@@ -125,7 +138,6 @@ export function drawComposite(ctx, head, selClipIds, env) {
     }
   }
 
-  let selRender = null
   for (const c of clipsRef.current) {
     if (c.kind !== 'text') continue
     const track = tracksRef.current.find((t) => t.id === c.track_id)

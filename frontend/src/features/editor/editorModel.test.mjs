@@ -12,7 +12,9 @@ import {
   duplicateClipOntoTrack, dupCount, lineageRoot, syncMaterialInstances,
   applyFaceTrack, isEditingExistingClip, clipSaveIndex,
   trackContextItems, linkedPartnerName, linkTrackPair, unlinkTrackPair,
-  applyAudioSpeedToLinkedText,
+  applyAudioSpeedToLinkedText, makeShapeClip, isGeneratedDurationClip,
+  matchClipsToFirstDuration, durationPatchToMatch,
+  clipLayerInfo, moveClipLayer, canLayerClip,
 } from './editorModel.js'
 
 const vFast = { kind: 'video', start: 10, in_point: 2, out_point: 6, speed: 2 }
@@ -21,6 +23,7 @@ assert.equal(clipDur(vFast), 2)
 assert.equal(clipEnd(vFast), 12)
 assert.equal(clipSpeed(vFast), 2)
 assert.equal(clipSpeed({ kind: 'text', speed: 4 }), 1)
+assert.equal(clipSpeed({ kind: 'shape', speed: 4 }), 1)
 assert.equal(clipSpeed({ kind: 'video' }), 1)
 assert.equal(clipSpeed({ kind: 'audio', speed: 99 }), SPEED_MAX)
 assert.equal(clipSpeed({ kind: 'video', speed: 0 }), 1)
@@ -205,7 +208,16 @@ assert.deepEqual(next.ids, ['a', 'b', 'c'])
 assert.equal(next.anchorId, 'c')
 
 next = nextClipSelection(selClips, ['a'], 'a', 'd', { range: true })
-assert.deepEqual(next, { ids: ['d'], anchorId: 'd' })
+assert.deepEqual(next.ids, ['a', 'd'])
+assert.equal(next.anchorId, 'a')
+
+next = nextClipSelection(selClips, ['v'], 'v', 'a', { range: true })
+assert.deepEqual(next.ids, ['v', 'a'])
+assert.equal(next.anchorId, 'v')
+
+next = nextClipSelection(selClips, ['a', 'd'], 'a', 'd', { range: true })
+assert.deepEqual(next.ids, ['a'])
+assert.equal(next.anchorId, 'a')
 
 next = nextClipSelection(selClips, ['a', 'b', 'c'], 'a', 'b', { keepGroup: true })
 assert.deepEqual(next.ids, ['a', 'b', 'c'])
@@ -238,6 +250,65 @@ assert.deepEqual(left.map((c) => c.id), ['b', 'd', 'v'])
 
 console.log('clip multi-select ok')
 
+const timed = [
+  { id: 'img', kind: 'image', start: 0, in_point: 0, out_point: 8, source_duration: 8, track_id: 'V1' },
+  { id: 'shp', kind: 'shape', start: 1, in_point: 0, out_point: 3, source_duration: 3, track_id: 'V2' },
+  { id: 'vid', kind: 'video', start: 0, in_point: 1, out_point: 4, source_duration: 5, track_id: 'V1' },
+  { id: 'aud', kind: 'audio', start: 0, in_point: 0, out_point: 12, source_duration: 12, track_id: 'A1' },
+]
+const sameLen = matchClipsToFirstDuration(timed, ['img', 'shp'])
+assert.equal(sameLen.find((c) => c.id === 'img').out_point, 8)
+assert.equal(sameLen.find((c) => c.id === 'shp').start, 0)
+assert.equal(sameLen.find((c) => c.id === 'shp').out_point, 8)
+assert.equal(sameLen.find((c) => c.id === 'shp').source_duration, 8)
+assert.equal(sameLen.find((c) => c.id === 'shp').track_id, 'V2')
+
+const capped = matchClipsToFirstDuration(timed, ['img', 'vid'])
+assert.equal(capped.find((c) => c.id === 'vid').start, 0)
+assert.equal(capped.find((c) => c.id === 'vid').out_point, 5)
+assert.equal(capped.find((c) => c.id === 'vid').source_duration, 5)
+assert.equal(capped.find((c) => c.id === 'vid').track_id, 'V1')
+
+const audCut = matchClipsToFirstDuration(timed, ['shp', 'aud'])
+assert.equal(audCut.find((c) => c.id === 'aud').start, 1)
+assert.equal(audCut.find((c) => c.id === 'aud').out_point, 3)
+assert.equal(durationPatchToMatch({ kind: 'video', in_point: 0, out_point: 2, source_duration: 2 }, 10).out_point, 2)
+assert.deepEqual(matchClipsToFirstDuration(timed, ['img']), timed)
+const spedVid = matchClipsToFirstDuration([
+  { id: 'img', kind: 'image', start: 10, in_point: 0, out_point: 4, source_duration: 4, track_id: 'V1' },
+  { id: 'vid', kind: 'video', start: 2, in_point: 0, out_point: 2, source_duration: 10, speed: 2, track_id: 'V2' },
+], ['img', 'vid'])
+assert.equal(spedVid.find((c) => c.id === 'vid').start, 10)
+assert.equal(spedVid.find((c) => c.id === 'vid').out_point, 8)
+assert.equal(clipDur(spedVid.find((c) => c.id === 'vid')), 4)
+assert.equal(spedVid.find((c) => c.id === 'vid').track_id, 'V2')
+
+const sameLane = matchClipsToFirstDuration([
+  { id: 'a', kind: 'image', start: 10, in_point: 0, out_point: 2, source_duration: 2, track_id: 'V1' },
+  { id: 'b', kind: 'shape', start: 3, in_point: 0, out_point: 5, source_duration: 5, track_id: 'V1' },
+], ['a', 'b'])
+assert.equal(sameLane.find((c) => c.id === 'b').start, 10)
+assert.equal(sameLane.find((c) => c.id === 'b').out_point, 2)
+assert.equal(sameLane.find((c) => c.id === 'b').track_id, 'V1')
+assert.deepEqual(sameLane.map((c) => c.id), ['b', 'a'])
+
+const stacked = [
+  { id: 'img', kind: 'image', track_id: 'V1', start: 0 },
+  { id: 'shp', kind: 'shape', track_id: 'V1', start: 0 },
+  { id: 'other', kind: 'video', track_id: 'V2', start: 0 },
+]
+assert.equal(canLayerClip(stacked[1]), true)
+assert.deepEqual(clipLayerInfo(stacked, 'img'), { index: 1, count: 2, canBack: false, canFront: true })
+assert.deepEqual(clipLayerInfo(stacked, 'shp'), { index: 2, count: 2, canBack: true, canFront: false })
+const sentBack = moveClipLayer(stacked, 'shp', 'back')
+assert.deepEqual(sentBack.map((c) => c.id), ['shp', 'img', 'other'])
+assert.equal(clipLayerInfo(sentBack, 'shp').index, 1)
+assert.deepEqual(moveClipLayer(stacked, 'img', 'front').map((c) => c.id), ['shp', 'img', 'other'])
+assert.deepEqual(moveClipLayer(stacked, 'shp', 'backward').map((c) => c.id), ['shp', 'img', 'other'])
+assert.deepEqual(moveClipLayer(stacked, 'img', 'forward').map((c) => c.id), ['shp', 'img', 'other'])
+assert.equal(moveClipLayer(stacked, 'img', 'back'), stacked)
+assert.equal(moveClipLayer(stacked, 'shp', 'front'), stacked)
+
 assert.equal(previewElementVolume(1, 1, false), 1)
 assert.equal(previewElementVolume(1, 0.3, false), 0.3)
 assert.equal(previewElementVolume(0.5, 0.5, false), 0.25)
@@ -262,6 +333,16 @@ assert.equal(themedFree.style.theme, 'neon')
 
 const madeCap = makeTextClip('T1', 0, 2, 'Hola', {}, { text_role: 'caption' })
 assert.equal(madeCap.text_role, 'caption')
+
+const shapeClip = makeShapeClip('V2', 1, 5, { type: 'arrow', label: 'Flecha' })
+assert.equal(shapeClip.kind, 'shape')
+assert.equal(shapeClip.asset_kind, 'shape')
+assert.equal(shapeClip.shape.type, 'arrow')
+assert.equal(shapeClip.out_point, 5)
+assert.equal(trackKindForClip('shape'), 'video')
+assert.equal(laneKindForAsset('shape'), 'video')
+assert.equal(isGeneratedDurationClip(shapeClip), true)
+assert.equal(canCaptionClip(shapeClip), false)
 
 const watermark = { kind: 'text', text_role: 'free', start: 2, in_point: 0, out_point: 3, source_duration: 3 }
 const grown = resizeGeneratedClip(watermark, 'trim-right', 12)

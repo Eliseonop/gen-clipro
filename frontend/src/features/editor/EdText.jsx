@@ -27,6 +27,131 @@ function themePreviewStyle(theme) {
   }
 }
 
+export function TextFxPanel({ section = 'look', style, mode = 'clip', onChangeStyle, onApplyPreset }) {
+  const st = style || {}
+  const isTrack = mode === 'track'
+  const themed = !!selectedSubtitleThemeId(st)
+  const showKaraoke = isTrack || themed
+  const set = (patch) => onChangeStyle?.(patch)
+  const themeId = selectedSubtitleThemeId(st)
+
+  if (section === 'appear') {
+    return (
+      <label className="ed-prop">
+        Aparición
+        <FlipSelect
+          value={st.block_appear || 'none'}
+          options={BLOCK_APPEAR_OPTIONS}
+          onChange={(v) => set({ block_appear: v })}
+        />
+      </label>
+    )
+  }
+
+  return (
+    <>
+      <div className="ed-fx-label">Temas</div>
+      <div className="ed-theme-grid">
+        {SUBTITLE_THEMES.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={`ed-theme-card ${themeId === t.id ? 'on' : ''}`}
+            onClick={() => onApplyPreset?.(t)}
+            title={t.name}
+          >
+            <span className="ed-theme-chip" style={themePreviewStyle(t)}>
+              <span className="idle">Aa</span>
+              <span className="hot" style={{ color: t.style.highlight_color }}>Aa</span>
+            </span>
+            <span className="ed-theme-name">{t.name}</span>
+          </button>
+        ))}
+      </div>
+
+      {showKaraoke && (
+        <>
+          <div className="ed-fx-label">Palabra activa</div>
+          <div className="ed-text-dense four">
+            {WORD_FX_OPTIONS.map((o) => (
+              <label key={o.value} className="ed-chip" title="Se pueden combinar">
+                <input
+                  type="checkbox"
+                  checked={hasWordFx(st, o.value)}
+                  onChange={() => set({ word_fx: toggleWordFx(st.word_fx, o.value) })}
+                />
+                {o.label}
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+
+      <div className="ed-fx-label">Color</div>
+      <div className="ed-text-dense five">
+        <label className="ed-mini ed-swatch" title="Color del texto">
+          <span>Texto</span>
+          <input type="color" value={st.color || '#ffffff'} onChange={(e) => set({ color: e.target.value })} />
+        </label>
+        {showKaraoke && (
+          <label className="ed-mini ed-swatch" title="Color de la palabra activa">
+            <span>Resalte</span>
+            <input type="color" value={st.highlight_color || '#ffe566'} onChange={(e) => set({ highlight_color: e.target.value })} />
+          </label>
+        )}
+        <label className="ed-mini ed-swatch" title="Color del borde">
+          <span>Borde</span>
+          <input type="color" value={st.border_color || '#000000'} onChange={(e) => set({ border_color: e.target.value })} />
+        </label>
+        <label className="ed-mini ed-swatch" title="Fondo">
+          <span>Fondo</span>
+          <input type="color" value={st.bg && st.bg !== 'none' ? st.bg : '#111318'}
+            onChange={(e) => set({ bg: e.target.value })} />
+        </label>
+        <label className="ed-mini" title="Grosor del borde">
+          <span>Grosor</span>
+          <input type="range" min="0" max="14" step="1" value={st.border_width || 0}
+            onChange={(e) => set({ border_width: Number(e.target.value) })} />
+        </label>
+      </div>
+
+      <div className="ed-text-dense four">
+        <label className="ed-chip"><input type="checkbox" checked={!!st.shadow} onChange={(e) => set({ shadow: e.target.checked })} /> Sombra</label>
+        <label className="ed-chip"><input type="checkbox" checked={!!st.glow} onChange={(e) => set({ glow: e.target.checked })} /> Brillo</label>
+        <label className="ed-chip"><input type="checkbox" checked={!!st.bold} onChange={(e) => set({ bold: e.target.checked })} /> Negrita</label>
+        <label className="ed-chip">
+          <input type="checkbox" checked={st.bg && st.bg !== 'none'} onChange={(e) => set({ bg: e.target.checked ? (st.bg && st.bg !== 'none' ? st.bg : '#111318') : 'none' })} /> Caja
+        </label>
+      </div>
+      <label className="ed-mini" title="Opacidad del texto">
+        <span>Opacidad {Math.round(styleOpacity(st) * 100)}%</span>
+        <input type="range" min="0" max="100" step="1" value={Math.round(styleOpacity(st) * 100)}
+          onChange={(e) => set({ opacity: Number(e.target.value) / 100 })} />
+      </label>
+      {st.bg && st.bg !== 'none' && (
+        <label className="ed-mini"><span>Opacidad fondo</span>
+          <input type="range" min="0.1" max="1" step="0.05" value={st.bg_opacity ?? 0.55}
+            onChange={(e) => set({ bg_opacity: Number(e.target.value) })} />
+        </label>
+      )}
+      {showKaraoke && (
+        <div className="ed-text-dense two">
+          <label className="ed-mini" title="Opacidad de la palabra que se está diciendo">
+            <span>Activa {Math.round((st.active_opacity ?? 1) * 100)}%</span>
+            <input type="range" min="0" max="100" step="1" value={Math.round((st.active_opacity ?? 1) * 100)}
+              onChange={(e) => set({ active_opacity: Number(e.target.value) / 100 })} />
+          </label>
+          <label className="ed-mini" title="Opacidad de las palabras que aún no están activas">
+            <span>Inactiva {Math.round((st.inactive_opacity ?? 1) * 100)}%</span>
+            <input type="range" min="0" max="100" step="1" value={Math.round((st.inactive_opacity ?? 1) * 100)}
+              onChange={(e) => set({ inactive_opacity: Number(e.target.value) / 100 })} />
+          </label>
+        </div>
+      )}
+    </>
+  )
+}
+
 export default function EdText({
   mode = 'segment', clip, style, onChangeText, onChangeStyle, onApplyPreset, onChangeDur,
   onApplyAsGlobalTemplate, framing, onStartFraming, onSaveFraming, onCancelFraming,
@@ -36,13 +161,10 @@ export default function EdText({
   const st = style || {}
   const isTrack = mode === 'track'
   const isFree = !isTrack && isFreeText(clip)
-  const themed = !!selectedSubtitleThemeId(st)
-  const showKaraoke = isTrack || themed
   const multi = !isTrack && selectionCount > 1
   const set = (patch) => onChangeStyle(patch)
   const dur = clip ? clip.out_point - clip.in_point : 0
   const currentPx = sizeToNearestPx(st.size)
-  const themeId = selectedSubtitleThemeId(st)
   const [tab, setTab] = useState('props')
   const saved = textFavorites || []
 
@@ -81,30 +203,28 @@ export default function EdText({
         </div>
       ) : (
         <div className="ed-text-body">
-          {isTrack && <p className="muted small">Se aplica a todos los textos de la pista y a los nuevos.</p>}
+          {isTrack && <p className="muted small">Se aplica a todos los textos de la pista y a los nuevos. Temas y colores están en Efectos.</p>}
           {multi && (
-            <p className="muted small">{selectionCount} textos seleccionados. Estilo y encuadre se aplican a todos; el contenido, solo al último clic.</p>
+            <p className="muted small">{selectionCount} textos seleccionados. Estilo y posición se aplican a todos; el contenido, solo al último clic.</p>
           )}
 
-          {onStartFraming && (
+          {isTrack && onStartFraming && (
             <div className="ed-text-actions">
               {!framing ? (
-                <button className="primary alt small" onClick={onStartFraming} title={isTrack ? 'Definir posición y tamaño de los textos con un recuadro en el Main' : 'Definir posición y tamaño de los textos seleccionados'}>
+                <button className="primary alt small" onClick={onStartFraming} title="Definir posición y tamaño de los textos con un recuadro en el Main">
                   <Icon name="crop_free" size={15} /> Encuadrar
                 </button>
               ) : (
                 <>
-                  <button className="primary small" onClick={onSaveFraming} title={isTrack ? 'Aplicar el encuadre a todos los textos de la pista' : 'Aplicar el encuadre a los textos seleccionados'}>
+                  <button className="primary small" onClick={onSaveFraming} title="Aplicar el encuadre a todos los textos de la pista">
                     <Icon name="check" size={15} /> Guardar
                   </button>
                   <button className="ghost small" onClick={onCancelFraming}>Cancelar</button>
                 </>
               )}
-              {isTrack && (
-                <button type="button" className="ghost small" title="Guardar encuadre, tema y tamaño en Favoritos" onClick={() => { onSaveFavorite?.(st); setTab('fav') }}>
-                  <Icon name="star" size={15} /> Favorito
-                </button>
-              )}
+              <button type="button" className="ghost small" title="Guardar encuadre, tema y tamaño en Favoritos" onClick={() => { onSaveFavorite?.(st); setTab('fav') }}>
+                <Icon name="star" size={15} /> Favorito
+              </button>
             </div>
           )}
           {isTrack && !onStartFraming && (
@@ -112,12 +232,8 @@ export default function EdText({
               <Icon name="star" size={15} /> Favorito
             </button>
           )}
-          {framing && (
-            <p className="muted small">
-              {isTrack
-                ? 'Mueve y ajusta el recuadro amarillo en el Main. Al guardar define posición, ancho y tamaño de los textos.'
-                : 'El recuadro amarillo se aplica solo a los textos seleccionados.'}
-            </p>
+          {framing && isTrack && (
+            <p className="muted small">Mueve y ajusta el recuadro amarillo en el Main. Al guardar define posición, ancho y tamaño de los textos de la pista.</p>
           )}
 
           {!isTrack && (
@@ -125,26 +241,7 @@ export default function EdText({
               placeholder="Escribe el texto…" onChange={(e) => onChangeText(e.target.value)} />
           )}
 
-          <div className="ed-theme-label">Temas</div>
-          <div className="ed-theme-grid">
-            {SUBTITLE_THEMES.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                className={`ed-theme-card ${themeId === t.id ? 'on' : ''}`}
-                onClick={() => onApplyPreset(t)}
-                title={t.name}
-              >
-                <span className="ed-theme-chip" style={themePreviewStyle(t)}>
-                  <span className="idle">Aa</span>
-                  <span className="hot" style={{ color: t.style.highlight_color }}>Aa</span>
-                </span>
-                <span className="ed-theme-name">{t.name}</span>
-              </button>
-            ))}
-          </div>
-
-          <div className="ed-text-dense four">
+          <div className="ed-text-dense three">
             <label className="ed-mini" title="Tipo de letra">
               <span>Fuente</span>
               <FlipSelect className="mini" title={st.font || 'Arial'} value={st.font || 'Arial'}
@@ -162,91 +259,7 @@ export default function EdText({
                 options={[{ value: 'left', label: '◀' }, { value: 'center', label: '■' }, { value: 'right', label: '▶' }]}
                 onChange={(v) => set({ align: v })} />
             </label>
-            <label className="ed-mini" title="Entrada del bloque">
-              <span>In</span>
-              <FlipSelect className="mini" value={st.block_appear || 'none'} options={BLOCK_APPEAR_OPTIONS}
-                onChange={(v) => set({ block_appear: v })} />
-            </label>
           </div>
-
-          {showKaraoke && (
-          <>
-          <div className="ed-theme-label">Palabra activa</div>
-          <div className="ed-text-dense four">
-            {WORD_FX_OPTIONS.map((o) => (
-              <label key={o.value} className="ed-chip" title="Se pueden combinar">
-                <input
-                  type="checkbox"
-                  checked={hasWordFx(st, o.value)}
-                  onChange={() => set({ word_fx: toggleWordFx(st.word_fx, o.value) })}
-                />
-                {o.label}
-              </label>
-            ))}
-          </div>
-          </>
-          )}
-
-          <div className="ed-text-dense five">
-            <label className="ed-mini ed-swatch" title="Color del texto">
-              <span>Texto</span>
-              <input type="color" value={st.color || '#ffffff'} onChange={(e) => set({ color: e.target.value })} />
-            </label>
-            {showKaraoke && (
-            <label className="ed-mini ed-swatch" title="Color de la palabra activa">
-              <span>Resalte</span>
-              <input type="color" value={st.highlight_color || '#ffe566'} onChange={(e) => set({ highlight_color: e.target.value })} />
-            </label>
-            )}
-            <label className="ed-mini ed-swatch" title="Color del borde">
-              <span>Borde</span>
-              <input type="color" value={st.border_color || '#000000'} onChange={(e) => set({ border_color: e.target.value })} />
-            </label>
-            <label className="ed-mini ed-swatch" title="Fondo">
-              <span>Fondo</span>
-              <input type="color" value={st.bg && st.bg !== 'none' ? st.bg : '#111318'}
-                onChange={(e) => set({ bg: e.target.value })} />
-            </label>
-            <label className="ed-mini" title="Grosor del borde">
-              <span>Grosor</span>
-              <input type="range" min="0" max="14" step="1" value={st.border_width || 0}
-                onChange={(e) => set({ border_width: Number(e.target.value) })} />
-            </label>
-          </div>
-
-          <div className="ed-text-dense four">
-            <label className="ed-chip"><input type="checkbox" checked={!!st.shadow} onChange={(e) => set({ shadow: e.target.checked })} /> Sombra</label>
-            <label className="ed-chip"><input type="checkbox" checked={!!st.glow} onChange={(e) => set({ glow: e.target.checked })} /> Brillo</label>
-            <label className="ed-chip"><input type="checkbox" checked={!!st.bold} onChange={(e) => set({ bold: e.target.checked })} /> Negrita</label>
-            <label className="ed-chip">
-              <input type="checkbox" checked={st.bg && st.bg !== 'none'} onChange={(e) => set({ bg: e.target.checked ? (st.bg && st.bg !== 'none' ? st.bg : '#111318') : 'none' })} /> Caja
-            </label>
-          </div>
-          <label className="ed-mini" title="Opacidad del texto">
-            <span>Opacidad {Math.round(styleOpacity(st) * 100)}%</span>
-            <input type="range" min="0" max="100" step="1" value={Math.round(styleOpacity(st) * 100)}
-              onChange={(e) => set({ opacity: Number(e.target.value) / 100 })} />
-          </label>
-          {st.bg && st.bg !== 'none' && (
-            <label className="ed-mini"><span>Opacidad fondo</span>
-              <input type="range" min="0.1" max="1" step="0.05" value={st.bg_opacity ?? 0.55}
-                onChange={(e) => set({ bg_opacity: Number(e.target.value) })} />
-            </label>
-          )}
-          {showKaraoke && (
-          <div className="ed-text-dense two">
-            <label className="ed-mini" title="Opacidad de la palabra que se está diciendo">
-              <span>Activa {Math.round((st.active_opacity ?? 1) * 100)}%</span>
-              <input type="range" min="0" max="100" step="1" value={Math.round((st.active_opacity ?? 1) * 100)}
-                onChange={(e) => set({ active_opacity: Number(e.target.value) / 100 })} />
-            </label>
-            <label className="ed-mini" title="Opacidad de las palabras que aún no están activas">
-              <span>Inactiva {Math.round((st.inactive_opacity ?? 1) * 100)}%</span>
-              <input type="range" min="0" max="100" step="1" value={Math.round((st.inactive_opacity ?? 1) * 100)}
-                onChange={(e) => set({ inactive_opacity: Number(e.target.value) / 100 })} />
-            </label>
-          </div>
-          )}
 
           {isTrack && (
             <>
@@ -304,7 +317,7 @@ export default function EdText({
               </div>
               <p className="muted small">
                 {isFree ? 'Arrastra los extremos del clip en la timeline para cambiar la duración. ' : ''}
-                <Icon name="drag_pan" size={13} /> Arrastra en el Main: las líneas rosa marcan el centro y otros textos.
+                <Icon name="drag_pan" size={13} /> Arrastra el texto en el Main. Global copia estilo y posición a todos los textos.
               </p>
             </>
           )}
@@ -318,7 +331,7 @@ export default function EdText({
               <button
                 type="button"
                 className="ghost small"
-                title="Aplicar este estilo a todos los textos del Timeline"
+                title="Aplica estilo y posición de este texto a todos los textos del Timeline"
                 onClick={onApplyAsGlobalTemplate}
               >
                 <Icon name="style" size={15} /> Global

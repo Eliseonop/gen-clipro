@@ -8,7 +8,8 @@ Estrategia:
   * Cada clip de vídeo se recorta a su fragmento ``[in, out]``, se le aplica su
     reframe (reutilizando la lógica de ``clipper``), se escala a 720x1280 y se
     coloca en su instante de la timeline (``setpts``). Se apilan por orden de
-    pista (las pistas superiores tapan a las inferiores) con ``overlay`` sobre un
+    pista (las pistas superiores tapan a las inferiores) y, en la misma pista,
+    por el orden de la lista (el último queda encima) con ``overlay`` sobre un
     fondo negro, activándose solo durante su ventana temporal.
   * Cada clip de audio (de pista de audio, o de un clip de vídeo cuya pista no
     esté silenciada) se recorta, se retrasa a su instante (``adelay``), se ajusta
@@ -18,11 +19,12 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 
 from . import clipper, config, gpu, sfx, storage
-from .clip_fx import overlay_xy_for_fx, video_fx_chain
+from .clip_fx import audio_fx_chain, overlay_xy_for_fx, video_fx_chain
 from .clip_layout import dest_rect_even, is_overlay, source_crop_px
 from .diagnostics import timed
 from .recipe_layout import contain_scale_filter, dual_slot_wh, join_dual_filters, split_orientation_for
@@ -31,15 +33,27 @@ from .clip_audio import clip_mixes_audio
 from .clip_kind import ASSET_DISK_KIND, clip_fits_track, ffmpeg_input_args, ffmpeg_trim_window, is_still_clip
 from .clip_speed import audio_speed_filters, clip_source_duration, clip_timeline_duration, video_speed_filters
 from .text_ass import ass_filter_path, build_ass
+from .shapes import rasterize_timeline_shapes
 
 ProgressCb = Callable[[float, str], None]
 
 log = logging.getLogger("videoyt.compose")
 
+
+def overlay_order(clips, video_track_ids: list[str]) -> list[str]:
+    """IDs de clips de vídeo de fondo a frente: pista inferior primero, luego orden en la lista."""
+    vlayer = {tid: i for i, tid in enumerate(video_track_ids)}
+    index = {c.id: i for i, c in enumerate(clips)}
+    vis = [c for c in clips if c.track_id in vlayer]
+    vis.sort(key=lambda c: (vlayer.get(c.track_id, 0), index.get(c.id, 0)))
+    return [c.id for c in vis]
+
 _MEDIA_KIND = {k: v for k, v in ASSET_DISK_KIND.items() if v != "sfx"}
 
 
-def _clip_path(project: Project, clip: TimelineClip) -> Optional[Path]:
+def _clip_path(project: Project, clip: TimelineClip, shape_files: Optional[dict] = None) -> Optional[Path]:
+    if getattr(clip, "kind", None) == "shape":
+        return (shape_files or {}).get(clip.id)
     if clip.asset_kind == "sfx":
         return sfx.resolve(clip.filename)
     kind = _MEDIA_KIND.get(clip.asset_kind)
@@ -310,7 +324,7 @@ def _text_chain(timeline: Timeline, W: int, H: int, in_label: str) -> tuple[list
 
 
 def build_command(project: Project, timeline: Timeline, out_path: Path,
-                  ass_path: Optional[Path] = None) -> list[str]:
+                  ass_path: Optional[Path] = None, shape_files: Optional[dict] = None) -> list[str]:
     """Construye la lista de argumentos de ffmpeg para renderizar la timeline."""
     W = int(timeline.width or config.OUTPUT_WIDTH)
     H = int(timeline.height or config.OUTPUT_HEIGHT)
@@ -335,7 +349,7 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         dur = _clip_duration(c)
         if dur <= 0.02:
             continue
-        path = _clip_path(project, c)
+        path = _clip_path(project, c, shape_files)
         if path is None or not path.exists():
             continue
         if track.kind == "video" and clip_fits_track(c.kind, "video"):
@@ -374,8 +388,12 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
     # --- Vídeo: fondo negro + overlays por capa ---
     filt.append(f"color=c=black:s={W}x{H}:r={fps}:d={total:.3f},format=yuv420p[base]")
 
-    # ordenar por capa de pista (fondo→arriba) y luego por inicio.
-    vclips_sorted = sorted(vclips, key=lambda cp: (vlayer.get(cp[0].track_id, 0), cp[0].start))
+    # ordenar por capa de pista (fondo→arriba) y, en la misma pista, por orden en la lista.
+    clip_index = {c.id: i for i, c in enumerate(timeline.clips)}
+    vclips_sorted = sorted(
+        vclips,
+        key=lambda cp: (vlayer.get(cp[0].track_id, 0), clip_index.get(cp[0].id, 0)),
+    )
     last_label = "base"
     n = 0
     for (c, path, _t) in vclips_sorted:
@@ -434,7 +452,9 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         alabel = f"a{m}"
         asp = audio_speed_filters(c)
         asp_part = f",{asp}" if asp else ""
-        chain = (f"[{k}:a]atrim={c.in_point:.3f}:{c.out_point:.3f},asetpts=PTS-STARTPTS{asp_part},"
+        afx = audio_fx_chain(c)
+        afx_part = f",{afx}" if afx else ""
+        chain = (f"[{k}:a]atrim={c.in_point:.3f}:{c.out_point:.3f},asetpts=PTS-STARTPTS{asp_part}{afx_part},"
                  f"aresample=async=1,volume={vol:.3f}")
         if start_ms > 0:
             chain += f",adelay={start_ms}:all=1"
@@ -488,13 +508,15 @@ def render(project: Project, timeline: Timeline, out_path: Path,
     if texts:
         ass_path = out_path.with_suffix(".ass")
         ass_path.write_text(build_ass(timeline.clips, W, H, timeline.tracks), encoding="utf-8")
-    cmd = build_command(project, timeline, out_path, ass_path=ass_path)
-    on_progress(0.15, "Renderizando el vídeo final con FFmpeg…")
-    log.info("Export: %d clip(s), encoder=%s crf=%s → %s",
-             len(timeline.clips), gpu.selected_encoder(), config.VIDEO_CRF,
-             out_path.name)
-    with timed("render FFmpeg (export)", log, clips=len(timeline.clips)):
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+    with tempfile.TemporaryDirectory(prefix="vy-shapes-") as td:
+        shape_files = rasterize_timeline_shapes(timeline, Path(td), W, H)
+        cmd = build_command(project, timeline, out_path, ass_path=ass_path, shape_files=shape_files)
+        on_progress(0.15, "Renderizando el vídeo final con FFmpeg…")
+        log.info("Export: %d clip(s), encoder=%s crf=%s → %s",
+                 len(timeline.clips), gpu.selected_encoder(), config.VIDEO_CRF,
+                 out_path.name)
+        with timed("render FFmpeg (export)", log, clips=len(timeline.clips)):
+            proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"FFmpeg falló al exportar:\n{proc.stderr[-1200:]}")
     if not out_path.exists():

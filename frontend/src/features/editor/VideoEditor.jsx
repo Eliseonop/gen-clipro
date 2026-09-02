@@ -9,7 +9,7 @@ import { defaultTextStyle, subtitleStyle, wrappedText, ensureEditorFonts, select
 import { applyThemeToStyle } from '../../lib/textKaraoke'
 import {
   uid, FORMATS, mediaUrl, defaultTracks, newReframe, withKfIds,
-  makeClip, makeTextClip, clipDur, clipEnd, clipPlaybackMuted, clipSpeed, timelineToSource, sourceToTimeline, splitClipAt,
+  makeClip, makeTextClip, makeShapeClip, clipDur, clipEnd, clipPlaybackMuted, clipSpeed, timelineToSource, sourceToTimeline, splitClipAt,
   canCaptionClip, removeTrack, shouldConfirmTrackDelete,
   extraClipsAfterSplit, splitTrackTextByMaxWords,
   nextClipSelection, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
@@ -18,9 +18,11 @@ import {
   duplicateClipOntoTrack, syncMaterialInstances, applyFaceTrack,
   isEditingExistingClip, clipSaveIndex,
   trackContextItems, linkedPartnerName, linkTrackPair, unlinkTrackPair,
-  applyAudioSpeedToLinkedText,
+  applyAudioSpeedToLinkedText, matchClipsToFirstDuration,
+  clipLayerInfo, moveClipLayer, canLayerClip,
 } from './editorModel'
 import { textRole } from '../../lib/textRole'
+import { SHAPE_DEFAULT_DUR } from '../../lib/shapes'
 import { applyFrame, disableOverlay, enableOverlay, isOverlay, mediaSize, newTransform, videosAt } from '../../lib/clipLayout'
 import { drawComposite, drawMainView } from './render/canvas'
 import { useExportJob } from './hooks/useExportJob'
@@ -32,6 +34,7 @@ import EdMaterial from './EdMaterial'
 import EdTimeline from './EdTimeline'
 import EdCrops from './EdCrops'
 import EdText from './EdText'
+import EdShape from './EdShape'
 import AnchoredMenu from '../../components/AnchoredMenu'
 import JobStatusBar from '../../components/JobStatusBar'
 import './editor.css'
@@ -138,6 +141,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
 
   const duration = clips.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
   const selectedClip = clips.find((c) => c.id === selClipId) || null
+  const layerInfo = selectedClip && canLayerClip(selectedClip) ? clipLayerInfo(clips, selectedClip.id) : null
   const outAspect = outW / outH
 
   // Ajusta el buffer del canvas de Resultado al formato elegido (sin deformar).
@@ -166,6 +170,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             appear: c.appear || 'none',
             exit: c.exit || 'none',
             look: c.look || 'none',
+            effects: c.effects && typeof c.effects === 'object' ? c.effects : {},
+            audio_fx: c.audio_fx && typeof c.audio_fx === 'object' ? c.audio_fx : {},
             muted: !!c.muted,
             speed: c.speed,
             keep_pitch: !!c.keep_pitch,
@@ -538,6 +544,16 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   }
 
   function addAsset(assetKind, item) {
+    if (assetKind === 'shape') {
+      const track = targetTrackFor('video')
+      if (!track) return
+      const trackEnd = clips.filter((c) => c.track_id === track.id).reduce((m, c) => Math.max(m, clipEnd(c)), 0)
+      const clip = makeShapeClip(track.id, trackEnd, SHAPE_DEFAULT_DUR, item)
+      setClips((prev) => [...prev, clip])
+      setSelClipId(clip.id)
+      setSelClipIds([clip.id])
+      return
+    }
     const clipKind = assetKind === 'clips' ? 'video' : assetKind === 'images' ? 'image' : 'audio'
     const track = targetTrackFor(trackKindForClip(clipKind))
     if (!track) return
@@ -554,6 +570,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   }
 
   function dropAsset(payload, trackId, startTime) {
+    if (payload.asset_kind === 'shape' || payload.kind === 'shape') {
+      const clip = makeShapeClip(trackId, startTime, payload.duration || SHAPE_DEFAULT_DUR, payload)
+      setClips((prev) => [...prev, clip])
+      setSelClipId(clip.id)
+      setSelClipIds([clip.id])
+      return
+    }
     const clip = makeClip(payload.asset_kind, {
       index: payload.asset_id, id: payload.asset_id, filename: payload.filename,
       name: payload.name, label: payload.name, duration: payload.duration, end: payload.duration, start: 0,
@@ -712,6 +735,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (clip.track_id) setSelTrackId(clip.track_id)
     if (!keepGroup) setFramingMode(null)
     return next
+  }
+  function matchSelectedDurations() {
+    const ids = selIdsRef.current
+    if (!ids || ids.length < 2) return
+    setClips((prev) => matchClipsToFirstDuration(prev, ids))
+  }
+  function moveLayer(clipId, action) {
+    if (!clipId) return
+    setClips((prev) => moveClipLayer(prev, clipId, action))
   }
   function moveGroup(origs, deltaT) {
     setClips((prev) => groupMoveFromOrig(prev, origs, deltaT))
@@ -894,6 +926,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     const ids = selIdsRef.current.includes(id) ? selIdsRef.current : [id]
     setClips((prev) => patchClipsStyle(prev, ids, patch))
   }
+  function changeShape(id, patch) {
+    const ids = new Set(selIdsRef.current.includes(id) ? selIdsRef.current : [id])
+    setClips((prev) => prev.map((c) => (
+      ids.has(c.id) && c.kind === 'shape' ? { ...c, shape: { ...(c.shape || {}), ...patch } } : c
+    )))
+  }
   function applyPreset(id, preset) {
     const ids = new Set(selIdsRef.current.includes(id) ? selIdsRef.current : [id])
     const source = clipsRef.current.find((c) => c.id === id)
@@ -931,13 +969,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setSelKfId(null)
     setSelTrackId(track.id)
     setFramingMode({ trackId: track.id, x: st.x ?? 0.5, y: st.y ?? 0.5, w: st.w ?? 0.8, h })
-  }
-  function startFramingSelection() {
-    const ids = selIdsRef.current.filter((id) => clipsRef.current.find((c) => c.id === id)?.kind === 'text')
-    if (!ids.length) return
-    const st = clipsRef.current.find((c) => c.id === ids[0])?.style || defaultTextStyle()
-    const h = clamp((st.size ?? 0.07) * 1.5, 0.05, 0.5)
-    setFramingMode({ clipIds: ids, x: st.x ?? 0.5, y: st.y ?? 0.5, w: st.w ?? 0.8, h })
   }
   function saveFraming() {
     const fm = framingMode
@@ -1082,7 +1113,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   // --- Arrastrar en el Main: mover texto o reencuadrar ---
   const onMainDown = createMainDownHandler({
     mainCanvasRef, framingModeRef, playingRef, stopPlayback, setFramingMode,
-    selectedClip, mainTextBox, changeStyle, mediaEls, playhead, upsertKeyframe, outAspect,
+    selectedClip, mainTextBox, changeStyle, changeShape, mediaEls, playhead, upsertKeyframe, outAspect,
     changeReframe, clipsRef, tracksRef, playheadRef, alignGuidesRef,
   })
   const onResultDown = createResultDownHandler({
@@ -1115,7 +1146,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const curFormat = FORMATS.find((f) => f.w === outW && f.h === outH)?.id || 'custom'
 
   // Elementos multimedia ocultos (el texto no tiene medio)
-  const mediaPool = clips.filter((c) => c.kind !== 'text').map((c) => {
+  const mediaPool = clips.filter((c) => c.kind !== 'text' && c.kind !== 'shape').map((c) => {
     const common = {
       src: mediaUrl(project.id, c),
       ref: (el) => { if (el) mediaEls.current.set(c.id, el); else mediaEls.current.delete(c.id) },
@@ -1136,8 +1167,23 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const canEditFrame = isVisualClip(selectedClip)
   const overlayOn = isOverlay(selectedClip)
   const isTextSel = selectedClip?.kind === 'text'
+  const isShapeSel = selectedClip?.kind === 'shape'
   const selTrackObj = tracks.find((t) => t.id === selTrackId)
   const isTextTrackSel = !selectedClip && selTrackObj?.kind === 'text'
+
+  function patchClipFx(patch) {
+    const ids = new Set(selIdsRef.current)
+    setClips((prev) => {
+      let next = prev
+      if (patch.speed != null) {
+        for (const id of ids) {
+          const audio = next.find((c) => c.id === id)
+          next = applyAudioSpeedToLinkedText(next, tracksRef.current, audio, patch.speed)
+        }
+      }
+      return next.map((c) => (ids.has(c.id) && c.kind !== 'text' ? { ...c, ...patch } : c))
+    })
+  }
 
   return (
     <div className={`veditor${mainColTab === 'clip' ? ' clip-mode' : ''}${linkPick ? ' link-picking' : ''}`}>
@@ -1153,6 +1199,18 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onRefresh={onChange}
           fav={fav}
           onEditYtClip={openClipEditor}
+          selectedClip={selectedClip}
+          onChangeFx={patchClipFx}
+          textStyle={isTextSel ? selectedClip.style : (isTextTrackSel ? selTrackObj.style : null)}
+          textMode={isTextSel ? 'clip' : (isTextTrackSel ? 'track' : null)}
+          onChangeTextStyle={(patch) => {
+            if (isTextSel) changeStyle(selectedClip.id, patch)
+            else if (isTextTrackSel) changeTrackStyle(selTrackObj.id, patch)
+          }}
+          onApplyTextPreset={(p) => {
+            if (isTextSel) applyPreset(selectedClip.id, p)
+            else if (isTextTrackSel) applyTrackPreset(selTrackObj.id, p)
+          }}
         />
 
         {/* MAIN / CLIP EDITOR */}
@@ -1176,7 +1234,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           <div className="ed-main-body">
             <div className="ed-main-stage" ref={mainStageRef}
               onPointerDown={onMainDown}
-              style={{ cursor: (canEditFrame || isTextSel || framingMode) ? 'crosshair' : 'default' }}>
+              style={{ cursor: (canEditFrame || isTextSel || isShapeSel || framingMode) ? 'crosshair' : 'default' }}>
               <canvas ref={mainCanvasRef} width={520} height={292} className="ed-main-canvas" />
               {mainColTab === 'clip' && clipMeta.preparing && (
                 <div className="ed-stage-prep">
@@ -1198,6 +1256,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                     ? `${selClipIds.length} textos · arrastra en el timeline para mover el grupo`
                     : 'Arrastra el texto para moverlo · botón Global para aplicar a todos'}
                 </div>
+              )}
+              {isShapeSel && (
+                <div className="ed-stage-hint">Arrastra la figura para moverla · esquinas para tamaño · círculo para rotar</div>
               )}
               {framingMode && <div className="ed-stage-hint">Ajusta el recuadro amarillo y pulsa Guardar</div>}
             </div>
@@ -1359,6 +1420,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           }}
           onMutateClip={mutateClip}
           onMoveGroup={moveGroup}
+          onMatchDuration={matchSelectedDurations}
           onSplit={splitClip}
           onDuplicate={duplicateSelected}
           onFaceTrack={mainColTab === 'clip' ? startFaceTrack : undefined}
@@ -1411,10 +1473,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               })
             }}
             onApplyAsGlobalTemplate={() => applyGlobalTemplate(selectedClip)}
-            framing={!!framingMode && (framingMode.clipIds?.length > 0)}
-            onStartFraming={startFramingSelection}
-            onSaveFraming={saveFraming}
-            onCancelFraming={cancelFraming}
             textFavorites={fav.favs.textStyles}
             onSaveFavorite={(st) => fav.saveTextStyle(st)}
             onApplyFavorite={applyTextFavorite}
@@ -1434,27 +1492,32 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             onDeleteFavorite={(id) => fav.removeTextStyle(id)}
             onFragment={() => requestFragmentTrack(selTrackObj.id)}
           />
+        ) : isShapeSel ? (
+          <EdShape
+            clip={selectedClip}
+            layer={layerInfo}
+            onMoveLayer={(action) => moveLayer(selectedClip.id, action)}
+            onChangeShape={(patch) => changeShape(selectedClip.id, patch)}
+            onChangeDur={(d) => {
+              if (!Number.isFinite(d) || d <= 0) return
+              const next = Math.max(0.15, d)
+              mutateClip(selectedClip.id, {
+                out_point: +(selectedClip.in_point + next).toFixed(3),
+                source_duration: +(selectedClip.in_point + next).toFixed(3),
+              })
+            }}
+          />
         ) : (
           <EdCrops
             clip={selectedClip} selKfId={selKfId} hiddenKf={hiddenKf}
+            layer={layerInfo}
+            onMoveLayer={(action) => moveLayer(selectedClip.id, action)}
             onSelect={setSelKfId}
             onToggleHidden={toggleKfHidden}
             onDelete={(kf) => deleteKeyframe(selectedClip, kf)}
             onSeek={seek}
             onPanMode={(kf, mode) => patchKeyframePan(selectedClip, kf, mode)}
-            onChangeFx={(patch) => {
-              const ids = new Set(selIdsRef.current)
-              setClips((prev) => {
-                let next = prev
-                if (patch.speed != null) {
-                  for (const id of ids) {
-                    const audio = next.find((c) => c.id === id)
-                    next = applyAudioSpeedToLinkedText(next, tracksRef.current, audio, patch.speed)
-                  }
-                }
-                return next.map((c) => (ids.has(c.id) && c.kind !== 'text' ? { ...c, ...patch } : c))
-              })
-            }}
+            onChangeFx={patchClipFx}
             onChangeFrame={(slot) => applyClipFrame(selectedClip, slot)}
           />
         )}
@@ -1482,6 +1545,25 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                 <Icon name="style" size={15} /> Aplicar como plantilla global
               </button>
             )}
+            {canLayerClip(ctxMenu.clip) && (() => {
+              const info = clipLayerInfo(clips, ctxMenu.clip.id)
+              return (
+                <>
+                  <button disabled={!info.canFront} onClick={() => { moveLayer(ctxMenu.clip.id, 'forward'); setCtxMenu(null) }}>
+                    <Icon name="arrow_upward" size={15} /> Adelante
+                  </button>
+                  <button disabled={!info.canBack} onClick={() => { moveLayer(ctxMenu.clip.id, 'backward'); setCtxMenu(null) }}>
+                    <Icon name="arrow_downward" size={15} /> Atrás
+                  </button>
+                  <button disabled={!info.canFront} onClick={() => { moveLayer(ctxMenu.clip.id, 'front'); setCtxMenu(null) }}>
+                    <Icon name="flip_to_front" size={15} /> Al frente
+                  </button>
+                  <button disabled={!info.canBack} onClick={() => { moveLayer(ctxMenu.clip.id, 'back'); setCtxMenu(null) }}>
+                    <Icon name="flip_to_back" size={15} /> Al fondo
+                  </button>
+                </>
+              )
+            })()}
             <button onClick={() => { splitClip(ctxMenu.clip.id, playhead); setCtxMenu(null) }}><Icon name="content_cut" size={15} /> Dividir aquí</button>
             <button onClick={() => { duplicateSelected(ctxMenu.clip); setCtxMenu(null) }}><Icon name="content_copy" size={15} /> Duplicar</button>
             <button className="danger" onClick={() => { deleteClip(ctxMenu.clip.id); setCtxMenu(null) }}><Icon name="delete" size={15} /> Eliminar</button>

@@ -4,16 +4,16 @@ import FlipSelect from '../../components/FlipSelect'
 import PanModeToggle from '../../components/PanModeToggle'
 import { fmt } from '../../lib/utils'
 import { kfColor } from '../../lib/panning'
-import { APPEAR_OPTIONS, EXIT_OPTIONS, LOOK_OPTIONS } from '../../lib/clipFx'
 import { FRAME_OPTIONS, frameOf } from '../../lib/clipLayout'
 import { SPEED_MAX, SPEED_MIN, SPEED_PRESETS, clipSpeed, isVisualClip, sourceToTimeline } from './editorModel'
+import EdLayer from './EdLayer'
 
 function speedLabel(n) {
   return n % 1 === 0 ? `${n}x` : `${n.toFixed(1)}x`
 }
 
 // Panel junto a la timeline: recorte (keyframes) y propiedades del clip.
-export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHidden, onDelete, onSeek, onPanMode, onChangeFx, onChangeFrame }) {
+export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHidden, onDelete, onSeek, onPanMode, onChangeFx, onChangeFrame, layer, onMoveLayer }) {
   const [tab, setTab] = useState('crop')
   const [track, setTrack] = useState(1)
   const dual = !!(clip?.kind === 'video' && clip.reframe?.dual_crop)
@@ -57,6 +57,7 @@ export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHid
           <div className="ed-crops-empty">Selecciona un clip para ver sus propiedades.</div>
         ) : (
           <div className="ed-props">
+            {layer && <EdLayer info={layer} onMove={onMoveLayer} />}
             {isImage && (
               <div className="ed-prop" style={{ fontSize: 12, color: 'var(--muted)' }}>Tipo: Imagen</div>
             )}
@@ -115,40 +116,14 @@ export default function EdCrops({ clip, selKfId, hiddenKf, onSelect, onToggleHid
             </div>
             )}
             {isVideo && (
-              <>
-                <label className="ed-prop">
-                  Encuadre
-                  <FlipSelect
-                    value={frameOf(clip)}
-                    options={FRAME_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
-                    onChange={(v) => onChangeFrame(v)}
-                  />
-                </label>
-                <label className="ed-prop">
-                  Aparición
-                  <FlipSelect
-                    value={clip.appear || 'none'}
-                    options={APPEAR_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
-                    onChange={(v) => onChangeFx({ appear: v })}
-                  />
-                </label>
-                <label className="ed-prop">
-                  Salida
-                  <FlipSelect
-                    value={clip.exit || 'none'}
-                    options={EXIT_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
-                    onChange={(v) => onChangeFx({ exit: v })}
-                  />
-                </label>
-                <label className="ed-prop">
-                  Filtros
-                  <FlipSelect
-                    value={clip.look || 'none'}
-                    options={LOOK_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
-                    onChange={(v) => onChangeFx({ look: v })}
-                  />
-                </label>
-              </>
+              <label className="ed-prop">
+                Encuadre
+                <FlipSelect
+                  value={frameOf(clip)}
+                  options={FRAME_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
+                  onChange={(v) => onChangeFrame(v)}
+                />
+              </label>
             )}
           </div>
         )

@@ -30,7 +30,13 @@ const wideOnTop = [clip('b', 'V1', 3, 4), clip('a', 'V1', 0, 10)]
 assert.equal(hidesUnder(clip('a', 'V1', 0, 10), clip('b', 'V1', 3, 4), wideOnTop), true)
 const smallOnTop = [clip('a', 'V1', 0, 10), clip('b', 'V1', 3, 4)]
 assert.equal(hidesUnder(clip('a', 'V1', 0, 10), clip('b', 'V1', 3, 4), smallOnTop), false)
-assert.equal(hidesUnder(clip('a', 'V1', 0, 10), clip('b', 'V1', 0, 10), [clip('b', 'V1', 0, 10), clip('a', 'V1', 0, 10)]), false)
+assert.equal(hidesUnder(clip('a', 'V1', 0, 10), clip('b', 'V1', 0, 10), [clip('b', 'V1', 0, 10), clip('a', 'V1', 0, 10)]), true)
+assert.equal(hidesUnder(clip('b', 'V1', 0, 10), clip('a', 'V1', 0, 10), [clip('b', 'V1', 0, 10), clip('a', 'V1', 0, 10)]), false)
+
+const almostOnTop = [clip('q', 'V1', 2, 10), clip('p', 'V1', 0, 10)]
+assert.equal(hidesUnder(clip('p', 'V1', 0, 10), clip('q', 'V1', 2, 10), almostOnTop), true)
+const shyOverlap = [clip('q', 'V1', 2.2, 10), clip('p', 'V1', 0, 10)]
+assert.equal(hidesUnder(clip('p', 'V1', 0, 10), clip('q', 'V1', 2.2, 10), shyOverlap), false)
 
 const row = [
   clip('b', 'V1', 3, 4),
@@ -48,6 +54,7 @@ assert.deepEqual(v1[1].clipIds.slice().sort(), ['d', 'e'])
 assert.equal(overlapClusters(row, 'V2').length, 0)
 assert.equal(overlapClusters([], 'V1').length, 0)
 assert.equal(overlapClusters(smallOnTop, 'V1').length, 0)
+assert.equal(overlapClusters([clip('a', 'V1', 0, 10), clip('b', 'V1', 0, 10)], 'V1').length, 1)
 
 const partialOnly = [clip('p', 'V1', 0, 10), clip('q', 'V1', 8, 4)]
 assert.equal(overlapClusters(partialOnly, 'V1').length, 0)
@@ -129,5 +136,16 @@ assert.equal(noStair.layouts.get('a').variant, 'solo')
 assert.equal(noStair.layouts.get('b').variant, 'solo')
 assert.equal(noStair.layouts.get('a').height, clipH)
 assert.equal(noStair.layouts.get('b').height, clipH)
+
+const sameRange = [clip('b', 'V1', 10, 2), clip('a', 'V1', 10, 2)]
+const sameStair = stackViewForTrack(sameRange, 'V1', [], null, rowH)
+assert.equal(sameStair.height, rowH + STACK_STEP)
+assert.equal(sameStair.layouts.get('a').variant, 'front')
+assert.equal(sameStair.layouts.get('b').variant, 'step')
+assert.equal(sameStair.layouts.get('b').top, STACK_PAD + STACK_STEP)
+
+const eighty = stackViewForTrack(almostOnTop, 'V1', [], null, rowH)
+assert.equal(eighty.layouts.get('p').variant, 'front')
+assert.equal(eighty.layouts.get('q').variant, 'step')
 
 console.log('clipStack layout ok')

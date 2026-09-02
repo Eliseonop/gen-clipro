@@ -16,7 +16,7 @@ import { clipEnd, isVisualClip, timelineToSource } from './editorModel'
 export function createMainDownHandler(ctx) {
   const {
     mainCanvasRef, framingModeRef, playingRef, stopPlayback, setFramingMode,
-    selectedClip, mainTextBox, changeStyle, mediaEls, playhead, upsertKeyframe, outAspect,
+    selectedClip, mainTextBox, changeStyle, changeShape, mediaEls, playhead, upsertKeyframe, outAspect,
     changeReframe, clipsRef, tracksRef, playheadRef, alignGuidesRef,
   } = ctx
 
@@ -97,6 +97,61 @@ export function createMainDownHandler(ctx) {
         else if (mode === 'width-r') changeStyle(clip.id, { w: +clamp(s0.w + dxN * 2, 0.1, 1).toFixed(4) })
         else if (mode === 'width-l') changeStyle(clip.id, { w: +clamp(s0.w - dxN * 2, 0.1, 1).toFixed(4) })
         else if (mode === 'size') changeStyle(clip.id, { size: +clamp(s0.size + dyN * 0.3, 0.02, 0.3).toFixed(4) })
+      }
+      const up = () => {
+        if (alignGuidesRef) alignGuidesRef.current = null
+        window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up)
+      }
+      window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+      return
+    }
+
+    if (clip.kind === 'shape') {
+      const render = mainTextBox.current
+      if (!render) return
+      if (playingRef.current) stopPlayback()
+      const st = clip.shape || {}
+      const sx = canvas.width / rect.width, sy = canvas.height / rect.height
+      const px = (e.clientX - rect.left) * sx, py = (e.clientY - rect.top) * sy
+      let mode = 'move'
+      if (render.handles) {
+        const near = (h) => h && Math.abs(px - h.x) < 12 && Math.abs(py - h.y) < 12
+        if (near(render.handles.rot)) mode = 'rotate'
+        else if (near(render.handles.br)) mode = 'corner'
+        else if (near(render.handles.r)) mode = 'width-r'
+        else if (near(render.handles.l)) mode = 'width-l'
+        else if (near(render.handles.b)) mode = 'height'
+        else if (near(render.handles.t)) mode = 'height-t'
+      }
+      const s0 = {
+        x: st.x ?? 0.5, y: st.y ?? 0.5, w: st.w ?? 0.38, h: st.h ?? 0.16,
+        rotation: st.rotation ?? 0, cx: e.clientX, cy: e.clientY, px, py,
+      }
+      const move = (ev) => {
+        const dxN = (ev.clientX - s0.cx) / rect.width, dyN = (ev.clientY - s0.cy) / rect.height
+        if (mode === 'move') {
+          const rawX = clamp(s0.x + dxN, 0, 1)
+          const rawY = clamp(s0.y + dyN, 0, 1)
+          const snapped = snapAlign(rawX, rawY, textAlignTargets(clipsRef?.current, tracksRef?.current, playheadRef?.current ?? playhead, clip.id))
+          if (alignGuidesRef) alignGuidesRef.current = snapped.guides
+          changeShape(clip.id, { x: +snapped.x.toFixed(4), y: +snapped.y.toFixed(4) })
+        } else if (mode === 'width-r') changeShape(clip.id, { w: +clamp(s0.w + dxN * 2, 0.04, 1).toFixed(4) })
+        else if (mode === 'width-l') changeShape(clip.id, { w: +clamp(s0.w - dxN * 2, 0.04, 1).toFixed(4) })
+        else if (mode === 'height') changeShape(clip.id, { h: +clamp(s0.h + dyN * 2, 0.03, 1).toFixed(4) })
+        else if (mode === 'height-t') changeShape(clip.id, { h: +clamp(s0.h - dyN * 2, 0.03, 1).toFixed(4) })
+        else if (mode === 'corner') {
+          changeShape(clip.id, {
+            w: +clamp(s0.w + dxN * 2, 0.04, 1).toFixed(4),
+            h: +clamp(s0.h + dyN * 2, 0.03, 1).toFixed(4),
+          })
+        } else if (mode === 'rotate') {
+          const nx = (ev.clientX - rect.left) * sx
+          const ny = (ev.clientY - rect.top) * sy
+          const cx = (st.x ?? 0.5) * canvas.width
+          const cy = (st.y ?? 0.5) * canvas.height
+          const ang = Math.atan2(ny - cy, nx - cx) * 180 / Math.PI + 90
+          changeShape(clip.id, { rotation: +ang.toFixed(1) })
+        }
       }
       const up = () => {
         if (alignGuidesRef) alignGuidesRef.current = null
