@@ -1,6 +1,6 @@
 import unittest
 
-from app.clip_fx import FX_DUR, clip_fx_at, look_ffmpeg, overlay_xy_for_fx, video_fx_chain
+from app.clip_fx import FX_DUR, audio_fx_chain, clip_fx_at, effects_ffmpeg, look_ffmpeg, overlay_xy_for_fx, video_fx_chain
 from app.schemas import TimelineClip
 
 
@@ -69,6 +69,23 @@ class TimelineClipFxFieldsTest(unittest.TestCase):
         self.assertEqual(c.exit, "none")
         self.assertEqual(c.look, "none")
         self.assertEqual(c.frame, "full")
+        self.assertIsNone(c.effects)
+        self.assertIsNone(c.audio_fx)
+
+
+class ClipEffectsTest(unittest.TestCase):
+    def test_blur_and_grayscale_in_ffmpeg(self):
+        chain = effects_ffmpeg({"effects": {"blur": 2, "grayscale": True}}, 720, 1280)
+        self.assertIn("gblur", chain)
+        self.assertIn("hue=s=0", chain)
+
+    def test_audio_echo_filter(self):
+        chain = audio_fx_chain({"audio_fx": {"echo": True}})
+        self.assertIn("aecho", chain)
+
+    def test_dissolve_uses_alpha_fade(self):
+        chain = video_fx_chain({"appear": "dissolve"}, 4, 720, 1280)
+        self.assertIn("fade=t=in", chain)
 
 
 if __name__ == "__main__":

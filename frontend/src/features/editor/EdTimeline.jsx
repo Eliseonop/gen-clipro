@@ -78,7 +78,7 @@ const laneKindFor = laneKindForAsset
 export default function EdTimeline({
   tracks, clips, pps, setPps, duration, playhead, rowH, setRowH,
   selectedClipId, selectedClipIds, selectedTrackId, selectedClip, selKfId, dragInfo,
-  onSeek, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onMoveGroup, onSplit, onDuplicate, onDeleteClip,
+  onSeek, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onMoveGroup, onMatchDuration, onSplit, onDuplicate, onDeleteClip,
   previewVol, onPreviewVol,
   onDropAsset, onTrackToggle, onTrackCompact, onAddTrack, onAddTextTrack, onMoveKeyframe, onSelectKf, onAddKf, onDeleteKf, onContextClip, onContextTrack,
   onFaceTrack, faceTrackBusy, faceTrackDisabled,
@@ -310,6 +310,10 @@ export default function EdTimeline({
           )}
         </div>
         <div className="ed-tl-tools-right">
+          <button className="ghost small" onClick={() => onMatchDuration?.()} disabled={selectedIds.length < 2} title="Copiar el rango de tiempo del primer clip (mismo inicio y mismo fin). Cada uno se queda en su pista. Un vídeo o audio no se alarga más que su fuente.">
+            <Icon name="straighten" size={15} /> Igualar
+          </button>
+          <span className="ed-tl-sep" />
           <button className="ghost small" onClick={() => onAddTrack('video')} title="Añadir pista de vídeo"><Icon name="add" size={14} /> V</button>
           <button className="ghost small" onClick={() => onAddTrack('audio')} title="Añadir pista de audio"><Icon name="add" size={14} /> A</button>
           <button className="ghost small" onClick={onAddTextTrack} title="Añadir pista de texto"><Icon name="add" size={14} /> Texto</button>
@@ -466,6 +470,7 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
 
       {isVideo && <div className="ed-clip-label"><Icon name={clip.kind === 'image' ? 'image' : (clip.muted ? 'volume_off' : 'movie')} size={12} /> {clip.name}{speedBadge}</div>}
       {isText && <div className="ed-clip-label"><Icon name="title" size={12} /> {clip.text || clip.name}</div>}
+      {clip.kind === 'shape' && <div className="ed-clip-label"><Icon name="category" size={12} /> {clip.name}</div>}
       {clip.kind === 'audio' && (
         <div className="ed-clip-wave">
           {bars.map((h, i) => <span key={i} style={{ height: `${Math.round(h * 100)}%` }} />)}

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { clipFxAt, FX_DUR, lookCss } from './clipFx.js'
+import { clipFxAt, effectsCss, FX_DUR, lookCss } from './clipFx.js'
 
 const dur = 4
 const mid = { appear: 'none', exit: 'none', look: 'none' }
@@ -57,6 +57,22 @@ const short = { appear: 'fade', exit: 'fade', look: 'none' }
 assert.equal(clipFxAt(short, 0, 0.5).opacity, 0)
 assert.equal(clipFxAt(short, 0.25, 0.5).opacity, 1)
 assert.equal(clipFxAt(short, 0.5, 0.5).opacity, 0)
+
+// Dissolve se comporta como fade
+const dissolveIn = { appear: 'dissolve', exit: 'none', look: 'none' }
+assert.equal(clipFxAt(dissolveIn, 0, dur).opacity, 0)
+assert.equal(clipFxAt(dissolveIn, FX_DUR, dur).opacity, 1)
+
+// Wipe: revela de izquierda a derecha
+const wipeIn = { appear: 'wipe', exit: 'none', look: 'none' }
+assert.equal(clipFxAt(wipeIn, 0, dur).wipe, 0)
+assert.equal(clipFxAt(wipeIn, FX_DUR, dur).wipe, 1)
+assert.equal(clipFxAt(wipeIn, 0, dur).opacity, 1)
+
+// Efectos apilados sobre el look
+assert.match(effectsCss({ look: 'none', effects: { grayscale: true, blur: 2 } }), /grayscale/)
+assert.match(effectsCss({ look: 'none', effects: { grayscale: true, blur: 2 } }), /blur\(2px\)/)
+assert.equal(effectsCss({ look: 'none', effects: {} }), 'none')
 
 // Filtro visual constante en todo el clip
 assert.match(lookCss('bw'), /grayscale/)

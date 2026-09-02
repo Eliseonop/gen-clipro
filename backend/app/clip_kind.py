@@ -10,13 +10,14 @@ from pathlib import Path
 CLIP_TRACK_KIND = {
     "video": "video",
     "image": "video",
+    "shape": "video",
     "audio": "audio",
     "text": "text",
 }
 
 VISUAL_CLIP_KINDS = frozenset({"video", "image"})
-GENERATED_DURATION_KINDS = frozenset({"text", "image"})
-STILL_KINDS = frozenset({"image"})
+GENERATED_DURATION_KINDS = frozenset({"text", "image", "shape"})
+STILL_KINDS = frozenset({"image", "shape"})
 
 ASSET_DISK_KIND = {
     "clips": "video",

@@ -19,14 +19,32 @@ export function fullyCovers(outer, inner) {
   return outer.start <= inner.start && ie <= oe
 }
 
+export const COVER_RATIO = 0.8
+
 function clipWidth(c) {
   return clipEnd(c) - c.start
 }
 
-/** El ancho `cover` está encima (más tarde en el array) y tapa por completo a `hidden`. */
+function overlapDur(a, b) {
+  const start = Math.max(a.start, b.start)
+  const end = Math.min(clipEnd(a), clipEnd(b))
+  return Math.max(0, end - start)
+}
+
+/** El de encima cubre ≥80% del de debajo (rangos iguales incluidos). */
+export function coversMost(cover, hidden) {
+  if (!cover || !hidden || cover.id === hidden.id) return false
+  if (cover.track_id !== hidden.track_id) return false
+  const hw = clipWidth(hidden)
+  if (hw <= 0) return false
+  return overlapDur(cover, hidden) >= hw * COVER_RATIO
+}
+
+/** `cover` está encima (más tarde en el array), no es más estrecho, y tapa ≥80% de `hidden`. */
 export function hidesUnder(cover, hidden, clips) {
-  if (!fullyCovers(cover, hidden)) return false
-  if (clipWidth(cover) <= clipWidth(hidden)) return false
+  if (!cover || !hidden) return false
+  if (clipWidth(cover) < clipWidth(hidden)) return false
+  if (!coversMost(cover, hidden)) return false
   let last = null
   for (const c of clips || []) {
     if (c.id === cover.id || c.id === hidden.id) last = c.id

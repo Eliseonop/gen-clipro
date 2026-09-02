@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
+import { createPortal } from 'react-dom'
 import Icon from '../../components/Icon'
 import { fmt } from '../../lib/utils'
 import { FAV_CAT } from '../../lib/favorites'
@@ -6,6 +7,9 @@ import { analyze, listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryIte
 import MaterialClipGrid, { dragPayload, useToggle, useExclusiveMedia, Empty, ImageCard, MaterialMenuBtn } from './MaterialClipGrid'
 import SfxClassifyModal from './SfxClassifyModal'
 import ImageAddModal from './ImageAddModal'
+import EdSettings from './EdSettings'
+import EdEffects from './EdEffects'
+import EdShapes from './EdShapes'
 import AudioTab from '../audio/AudioTab'
 import ConfirmModal from '../../components/ConfirmModal'
 import AnchoredMenu from '../../components/AnchoredMenu'
@@ -164,7 +168,22 @@ function withProjectScope(items, kind) {
   }))
 }
 
-export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onRefresh, fav, onEditYtClip }) {
+const MAT_NAV = [
+  { id: 'video', icon: 'movie', label: 'Video' },
+  { id: 'image', icon: 'image', label: 'Imagen' },
+  { id: 'audio', icon: 'mic', label: 'Audio' },
+  { id: 'sfx', icon: 'graphic_eq', label: 'SFX' },
+  { id: 'effects', icon: 'auto_awesome', label: 'Efectos' },
+  { id: 'shapes', icon: 'category', label: 'Figuras' },
+  { id: 'text', icon: 'title', label: 'Texto', empty: true },
+  { id: 'transitions', icon: 'animation', label: 'Transiciones', empty: true },
+  { id: 'settings', icon: 'settings', label: 'Configuración', sep: true },
+]
+
+export default function EdMaterial({
+  project, onAdd, onDragInfo, onBack, onRefresh, fav, onEditYtClip, selectedClip, onChangeFx,
+  textStyle, textMode, onChangeTextStyle, onApplyTextPreset,
+}) {
   const [tab, setTab] = useState('video')
   const [videoFilter, setVideoFilter] = useState('all')
   const [audioFilter, setAudioFilter] = useState('all')
@@ -197,9 +216,18 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onRefre
   const dropDepth = useRef(0)
   const vidDropDepth = useRef(0)
   const ytT0 = useRef(0)
+  const [navTip, setNavTip] = useState(null)
+  const navTipTimer = useRef(0)
+  const navTipOn = useRef(false)
+  const navTipNext = useRef(null)
   const clips = project.clips || []
   const audios = project.audios || []
   const images = project.images || []
+  const navCounts = {
+    video: clips.length + (library.clips || []).length,
+    image: images.length + (library.images || []).length,
+    audio: audios.length + (library.audios || []).length,
+  }
   const onPlayMedia = useExclusiveMedia()
   const di = onDragInfo || (() => {})
 
@@ -258,6 +286,7 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onRefre
   }
 
   useEffect(() => { reloadLibrary() }, [reloadLibrary, project.id, clips.length, audios.length, images.length])
+  useEffect(() => () => clearTimeout(navTipTimer.current), [])
 
   useEffect(() => {
     if (tab !== 'image') return undefined
@@ -568,6 +597,27 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onRefre
     if (link) { setYtUrl(link); setYtErr(''); setImportMsg('') }
   }
 
+  function openNavTip(e, text) {
+    const r = e.currentTarget.getBoundingClientRect()
+    navTipNext.current = { text, left: Math.round(r.right + 8), top: Math.round(r.top + r.height / 2) }
+    if (navTipOn.current) {
+      setNavTip(navTipNext.current)
+      return
+    }
+    clearTimeout(navTipTimer.current)
+    navTipTimer.current = window.setTimeout(() => {
+      navTipOn.current = true
+      setNavTip(navTipNext.current)
+    }, 80)
+  }
+  function closeNavTip() {
+    clearTimeout(navTipTimer.current)
+    navTipOn.current = false
+    setNavTip(null)
+  }
+
+  const navItem = MAT_NAV.find((x) => x.id === tab)
+
   return (
     <div
       className={`ed-material${fileDrop ? ' file-drop' : ''}`}
@@ -576,28 +626,45 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onRefre
       onDragLeave={onFileDragLeave}
       onDrop={onFileDrop}
     >
-      <div className="ed-mat-head">
-        <div className="ed-mat-title">
-          <button className="ed-back" onClick={onBack} type="button" title="Volver a proyectos">
-            <Icon name="arrow_back" size={22} />
-          </button>
-          <span className="ed-mat-label" title={project.name}></span>
+      <nav className="ed-mat-nav" aria-label="Materiales" onMouseLeave={closeNavTip}>
+        <button
+          className="ed-back"
+          onClick={onBack}
+          type="button"
+          aria-label="Volver a proyectos"
+          onMouseEnter={(e) => openNavTip(e, 'Volver a proyectos')}
+        >
+          <Icon name="arrow_back" size={20} />
+        </button>
+        <div className="ed-mat-nav-scroll" onScroll={closeNavTip}>
+          {MAT_NAV.map((item) => {
+            const n = navCounts[item.id]
+            const label = n != null ? `${item.label} (${n})` : item.label
+            return (
+              <Fragment key={item.id}>
+                {item.sep ? <div className="ed-mat-nav-sep" aria-hidden="true" /> : null}
+                <button
+                  type="button"
+                  className={`ed-mat-nav-btn${tab === item.id ? ' on' : ''}`}
+                  aria-label={label}
+                  aria-current={tab === item.id ? 'page' : undefined}
+                  onMouseEnter={(e) => openNavTip(e, label)}
+                  onClick={() => setTab(item.id)}
+                >
+                  <Icon name={item.icon} size={20} />
+                </button>
+              </Fragment>
+            )
+          })}
         </div>
-      </div>
-      <div className="ed-mat-tabs">
-        <button className={`ed-tab ${tab === 'video' ? 'on' : ''}`} onClick={() => setTab('video')}>
-          <Icon name="movie" size={15} /> Video <span className="ed-count">{clips.length + (library.clips || []).length}</span>
-        </button>
-        <button className={`ed-tab ${tab === 'image' ? 'on' : ''}`} onClick={() => setTab('image')}>
-          <Icon name="image" size={15} /> Imagen <span className="ed-count">{images.length + (library.images || []).length}</span>
-        </button>
-        <button className={`ed-tab ${tab === 'audio' ? 'on' : ''}`} onClick={() => setTab('audio')}>
-          <Icon name="mic" size={15} /> Audio <span className="ed-count">{audios.length + (library.audios || []).length}</span>
-        </button>
-        <button className={`ed-tab ${tab === 'sfx' ? 'on' : ''}`} onClick={() => setTab('sfx')}>
-          <Icon name="graphic_eq" size={15} /> SFX
-        </button>
-      </div>
+      </nav>
+      {navTip && createPortal(
+        <div className="ed-fast-tip" style={{ left: navTip.left, top: navTip.top }} role="tooltip">
+          {navTip.text}
+        </div>,
+        document.body,
+      )}
+      <div className="ed-mat-body">
       {err && <div className="ed-mat-err">{err}</div>}
 
       {tab === 'video' && (
@@ -804,6 +871,26 @@ export default function EdMaterial({ project, onAdd, onDragInfo, onBack, onRefre
       )}
 
       {tab === 'sfx' && <SfxTab onAdd={onAdd} onPlay={onPlayMedia} di={di} fav={fav} />}
+      {tab === 'shapes' && <EdShapes onAdd={onAdd} onDragInfo={di} />}
+      {tab === 'effects' && (
+        <EdEffects
+          clip={selectedClip}
+          onChangeFx={onChangeFx}
+          textStyle={textStyle}
+          textMode={textMode}
+          onChangeTextStyle={onChangeTextStyle}
+          onApplyTextPreset={onApplyTextPreset}
+        />
+      )}
+      {tab === 'settings' && <EdSettings />}
+      {navItem?.empty && (
+        <div className="ed-mat-list">
+          <div className="ed-mat-empty">
+            <Icon name={navItem.icon} size={28} />
+          </div>
+        </div>
+      )}
+      </div>
 
       {imgAddOpen && (
         <ImageAddModal

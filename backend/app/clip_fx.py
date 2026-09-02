@@ -57,9 +57,9 @@ def clip_fx_at(clip: Any, local_t: float, duration: float) -> dict:
     tx = 0.0
     ty = 0.0
 
-    if appear in ("fade", "pop"):
+    if appear in ("fade", "pop", "dissolve"):
         opacity *= ap
-    if exit_ in ("fade", "pop"):
+    if exit_ in ("fade", "pop", "dissolve"):
         opacity *= ep
 
     if appear == "zoom":
@@ -81,6 +81,101 @@ def clip_fx_at(clip: Any, local_t: float, duration: float) -> dict:
         ty += _lerp(0.0, 1.0, 1.0 - ep)
 
     return {"opacity": opacity, "scale": scale, "tx": tx, "ty": ty, "look": _field(clip, "look")}
+
+
+def _effects_map(clip: Any) -> dict:
+    if isinstance(clip, dict):
+        raw = clip.get("effects")
+    else:
+        raw = getattr(clip, "effects", None)
+    return raw if isinstance(raw, dict) else {}
+
+
+def _audio_fx_map(clip: Any) -> dict:
+    if isinstance(clip, dict):
+        raw = clip.get("audio_fx")
+    else:
+        raw = getattr(clip, "audio_fx", None)
+    return raw if isinstance(raw, dict) else {}
+
+
+def _fx_on(raw, key: str) -> bool:
+    val = raw.get(key)
+    if val is True:
+        return True
+    if val is False or val is None:
+        return False
+    try:
+        return float(val) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _fx_num(raw, key: str) -> float:
+    val = raw.get(key)
+    if val is True:
+        return 1.0
+    try:
+        return float(val or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def effects_ffmpeg(clip: Any, W: int, H: int) -> str:
+    e = _effects_map(clip)
+    parts: list[str] = []
+    blur = _fx_num(e, "blur")
+    if blur > 0:
+        parts.append(f"gblur=sigma={min(20.0, blur):.2f}")
+    sharpen = _fx_num(e, "sharpen")
+    if sharpen > 0:
+        parts.append(f"unsharp=5:5:{min(5.0, sharpen):.2f}:5:5:0")
+    if _fx_on(e, "grayscale"):
+        parts.append("hue=s=0")
+    if _fx_on(e, "sepia"):
+        parts.append("colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131")
+    if _fx_on(e, "vhs"):
+        parts.append("eq=contrast=1.35:saturation=0.65,hue=h=-8")
+    grain = _fx_num(e, "grain")
+    if grain > 0:
+        parts.append(f"noise=alls={min(60.0, grain):.0f}:allf=t")
+    px = _fx_num(e, "pixelate")
+    if px >= 2:
+        n = min(32.0, max(2.0, px))
+        parts.append(
+            f"scale=iw/{n:.0f}:ih/{n:.0f}:flags=neighbor,scale={W}:{H}:flags=neighbor"
+        )
+    b = _fx_num(e, "brightness")
+    c = _fx_num(e, "contrast")
+    s = _fx_num(e, "saturation")
+    eq_bits: list[str] = []
+    if b:
+        eq_bits.append(f"brightness={b:.3f}")
+    if c:
+        eq_bits.append(f"contrast={1 + c:.3f}")
+    if s:
+        eq_bits.append(f"saturation={max(0.0, 1 + s):.3f}")
+    if eq_bits:
+        parts.append("eq=" + ":".join(eq_bits))
+    return ",".join(parts)
+
+
+def audio_fx_chain(clip: Any) -> str:
+    fx = _audio_fx_map(clip)
+    parts: list[str] = []
+    if _fx_on(fx, "eq"):
+        parts.append("equalizer=f=3000:t=q:w=1:g=4")
+    if _fx_on(fx, "compressor"):
+        parts.append("acompressor=threshold=0.1:ratio=4:attack=20:release=200")
+    if _fx_on(fx, "reverb"):
+        parts.append("aecho=0.8:0.88:40:0.4")
+    if _fx_on(fx, "echo"):
+        parts.append("aecho=0.8:0.9:1000:0.3")
+    if _fx_on(fx, "denoise"):
+        parts.append("highpass=f=80,lowpass=f=12000")
+    if _fx_on(fx, "distortion"):
+        parts.append("acrusher=bits=8:mode=log")
+    return ",".join(parts)
 
 
 def look_ffmpeg(look: str | None) -> str:
@@ -149,18 +244,21 @@ def video_fx_chain(clip: Any, dur: float, W: int, H: int) -> str:
     look = look_ffmpeg(_field(clip, "look"))
     if look:
         parts.append(look)
+    extra = effects_ffmpeg(clip, W, H)
+    if extra:
+        parts.append(extra)
 
     appear = _field(clip, "appear")
     exit_ = _field(clip, "exit")
     ad, ed = fx_windows(dur)
-    need_alpha = appear in ("fade", "pop") or exit_ in ("fade", "pop")
+    need_alpha = appear in ("fade", "pop", "dissolve") or exit_ in ("fade", "pop", "dissolve")
     scale_expr = _scale_expr(clip, dur, ad, ed)
 
     if need_alpha:
         parts.append("format=gbrap")
-        if appear in ("fade", "pop") and ad > 0:
+        if appear in ("fade", "pop", "dissolve") and ad > 0:
             parts.append(f"fade=t=in:st=0:d={ad:.3f}:alpha=1")
-        if exit_ in ("fade", "pop") and ed > 0:
+        if exit_ in ("fade", "pop", "dissolve") and ed > 0:
             parts.append(f"fade=t=out:st={max(0.0, dur - ed):.3f}:d={ed:.3f}:alpha=1")
 
     if scale_expr:

@@ -170,9 +170,16 @@ const tracks = [
 const layered = videosAt(2, [
   { id: 'v', kind: 'video', track_id: 'V1', start: 0, in_point: 0, out_point: 10 },
   { id: 'm', kind: 'image', track_id: 'V2', start: 1, in_point: 0, out_point: 5 },
+  { id: 's', kind: 'shape', track_id: 'V2', start: 1, in_point: 0, out_point: 5 },
   { id: 'a', kind: 'audio', track_id: 'A1', start: 0, in_point: 0, out_point: 10 },
 ], tracks)
-assert.deepEqual(layered.map((c) => c.id), ['v', 'm'])
+assert.deepEqual(layered.map((c) => c.id), ['v', 'm', 's'])
+const sameTrackFront = videosAt(2, [
+  { id: 'v', kind: 'video', track_id: 'V1', start: 0, in_point: 0, out_point: 10 },
+  { id: 's', kind: 'shape', track_id: 'V2', start: 1, in_point: 0, out_point: 5 },
+  { id: 'm', kind: 'image', track_id: 'V2', start: 1, in_point: 0, out_point: 5 },
+], tracks)
+assert.deepEqual(sameTrackFront.map((c) => c.id), ['v', 's', 'm'])
 assert.equal(mediaSize({ videoWidth: 1920, videoHeight: 1080 }).w, 1920)
 assert.equal(mediaSize({ naturalWidth: 800, naturalHeight: 600 }).w, 800)
 assert.equal(mediaSize({ videoWidth: 0, naturalWidth: 400, naturalHeight: 300 }).h, 300)

@@ -36,7 +36,9 @@ def api_key() -> str:
     env = (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
     if env:
         return env
-    return str((settings.load() or {}).get("gemini_api_key") or "").strip()
+    data = settings.load() or {}
+    keys = data.get("api_keys") if isinstance(data.get("api_keys"), dict) else {}
+    return str(keys.get("gemini") or data.get("gemini_api_key") or "").strip()
 
 
 def unavailable_reason() -> str | None:

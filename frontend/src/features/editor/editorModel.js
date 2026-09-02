@@ -5,6 +5,7 @@ import { defaultTextStyle } from '../../lib/textstyles.js'
 import { isMasterReframe } from '../../lib/recipeLayout.js'
 import { chunkCaptionText, splitCaptionWords } from '../../lib/textKaraoke.js'
 import { isFreeText } from '../../lib/textRole.js'
+import { defaultShape, SHAPE_DEFAULT_DUR } from '../../lib/shapes.js'
 
 // --- Identificadores estables ---
 let _uid = 1
@@ -23,23 +24,23 @@ export function isVisualClip(c) {
 }
 
 export function isGeneratedDurationClip(c) {
-  return c?.kind === 'text' || c?.kind === 'image'
+  return c?.kind === 'text' || c?.kind === 'image' || c?.kind === 'shape'
 }
 
 export function trackKindForClip(kind) {
-  if (kind === 'image' || kind === 'video') return 'video'
+  if (kind === 'image' || kind === 'video' || kind === 'shape') return 'video'
   if (kind === 'audio') return 'audio'
   if (kind === 'text') return 'text'
   return kind
 }
 
 export function laneKindForAsset(assetKind) {
-  if (assetKind === 'clips' || assetKind === 'video' || assetKind === 'images' || assetKind === 'image') return 'video'
+  if (assetKind === 'clips' || assetKind === 'video' || assetKind === 'images' || assetKind === 'image' || assetKind === 'shape') return 'video'
   return 'audio'
 }
 
 export function clipSpeed(c) {
-  if (!c || c.kind === 'text' || c.kind === 'image') return 1
+  if (!c || c.kind === 'text' || c.kind === 'image' || c.kind === 'shape') return 1
   const s = Number(c.speed)
   if (!Number.isFinite(s) || s <= 0) return 1
   return Math.min(SPEED_MAX, Math.max(SPEED_MIN, s))
@@ -251,7 +252,8 @@ export function rangeSelectOnTrack(clips, trackId, fromId, toId) {
 
 /**
  * Siguiente selección de clips.
- * additive = Ctrl/Cmd, range = Shift, keepGroup = clic en un clip ya marcado.
+ * additive = Ctrl/Cmd (mismo tipo), range = Shift (rango en la pista; en otra pista suma al grupo).
+ * El primer id del grupo es la referencia (p. ej. igualar duración). keepGroup = clic en un clip ya marcado.
  */
 export function nextClipSelection(clips, selectedIds, anchorId, clickedId, mods = {}) {
   const list = clips || []
@@ -273,6 +275,17 @@ export function nextClipSelection(clips, selectedIds, anchorId, clickedId, mods 
 
   if (mods.range && anchor && anchor.track_id === clicked.track_id) {
     return { ids: rangeSelectOnTrack(list, clicked.track_id, anchorId, clickedId), anchorId: clickedId }
+  }
+
+  if (mods.range) {
+    if (selected.includes(clickedId)) {
+      const ids = selected.filter((id) => id !== clickedId)
+      if (!ids.length) return { ids: [clickedId], anchorId: clickedId }
+      return { ids, anchorId: ids[0] }
+    }
+    const base = selected.length ? selected : (anchorId ? [anchorId] : [])
+    const ids = base.includes(clickedId) ? base : [...base, clickedId]
+    return { ids, anchorId: ids[0] }
   }
 
   if (mods.keepGroup && selected.includes(clickedId) && selected.length > 1) {
@@ -357,6 +370,121 @@ export function resizeGeneratedClip(orig, mode, deltaT) {
     }
   }
   return {}
+}
+
+/** Recorta o alarga un clip para que dure `targetDur` en la timeline. Vídeo/audio no pasan de la fuente. */
+export function durationPatchToMatch(clip, targetDur) {
+  const minDur = GEN_MIN_DUR
+  const want = Math.max(minDur, Number(targetDur) || 0)
+  const inP = Number(clip?.in_point) || 0
+  const outP = Number(clip?.out_point) || 0
+  const sp = clipSpeed(clip)
+  let newOut = inP + want * sp
+  if (isGeneratedDurationClip(clip)) {
+    const src = Number(clip?.source_duration) > 0 ? Number(clip.source_duration) : outP
+    return {
+      out_point: +newOut.toFixed(3),
+      source_duration: +Math.max(src, newOut).toFixed(3),
+    }
+  }
+  const srcDur = Number(clip?.source_duration) || 0
+  const maxOut = srcDur > 0 ? srcDur : outP
+  const minOut = inP + minDur * sp
+  newOut = Math.min(maxOut, Math.max(minOut, newOut))
+  if (maxOut < minOut) newOut = maxOut
+  return { out_point: +newOut.toFixed(3) }
+}
+
+/** Deja `frontId` encima (más tarde en el array) y los de `behindIds` de la misma pista detrás. */
+export function sendClipsBehind(clips, frontId, behindIds) {
+  const list = clips || []
+  const front = list.find((c) => c.id === frontId)
+  if (!front) return list
+  const behindSet = new Set(behindIds || [])
+  const pending = list.filter((c) => behindSet.has(c.id) && c.track_id === front.track_id)
+  if (!pending.length) return list
+  const pendingIds = new Set(pending.map((c) => c.id))
+  const out = []
+  for (const c of list) {
+    if (pendingIds.has(c.id)) continue
+    if (c.id === frontId) {
+      out.push(...pending, c)
+      continue
+    }
+    out.push(c)
+  }
+  return out
+}
+
+/** Copia el rango de timeline del primer clip (mismo start y misma duración). Cada clip se queda en su pista. */
+export function matchClipsToFirstDuration(clips, selectedIds) {
+  const ids = (selectedIds || []).filter(Boolean)
+  if (ids.length < 2) return clips || []
+  const first = (clips || []).find((c) => c.id === ids[0])
+  if (!first) return clips || []
+  const targetDur = clipDur(first)
+  const targetStart = +Math.max(0, Number(first.start) || 0).toFixed(3)
+  const rest = ids.slice(1)
+  const restSet = new Set(rest)
+  const next = (clips || []).map((c) => {
+    if (!restSet.has(c.id)) return c
+    return { ...c, start: targetStart, ...durationPatchToMatch(c, targetDur) }
+  })
+  return sendClipsBehind(next, first.id, rest)
+}
+
+export function canLayerClip(clip) {
+  const k = clip?.kind
+  return k === 'video' || k === 'image' || k === 'shape' || k === 'text'
+}
+
+/** Capa en la pista: 1 = fondo, `count` = frente. */
+export function clipLayerInfo(clips, clipId) {
+  const list = clips || []
+  const clip = list.find((c) => c.id === clipId)
+  if (!clip) return { index: 1, count: 1, canBack: false, canFront: false }
+  const row = list.filter((c) => c.track_id === clip.track_id)
+  const p = row.findIndex((c) => c.id === clipId)
+  const count = row.length
+  return {
+    index: p + 1,
+    count,
+    canBack: p > 0,
+    canFront: p >= 0 && p < count - 1,
+  }
+}
+
+/** `back` al fondo, `backward` una capa atrás, `forward` una adelante, `front` al frente. */
+export function moveClipLayer(clips, clipId, action) {
+  const list = clips || []
+  const clip = list.find((c) => c.id === clipId)
+  if (!clip) return list
+  const trackIds = []
+  const trackIdx = []
+  list.forEach((c, i) => {
+    if (c.track_id === clip.track_id) {
+      trackIds.push(c.id)
+      trackIdx.push(i)
+    }
+  })
+  const p = trackIds.indexOf(clipId)
+  if (p < 0) return list
+  let next = trackIds.slice()
+  if (action === 'backward' && p > 0) {
+    const t = next[p - 1]; next[p - 1] = next[p]; next[p] = t
+  } else if (action === 'forward' && p < next.length - 1) {
+    const t = next[p + 1]; next[p + 1] = next[p]; next[p] = t
+  } else if (action === 'back' && p > 0) {
+    next = [clipId, ...trackIds.filter((id) => id !== clipId)]
+  } else if (action === 'front' && p < next.length - 1) {
+    next = [...trackIds.filter((id) => id !== clipId), clipId]
+  } else {
+    return list
+  }
+  const byId = new Map(list.map((c) => [c.id, c]))
+  const out = list.slice()
+  next.forEach((id, k) => { out[trackIdx[k]] = byId.get(id) })
+  return out
 }
 
 // Orden en pantalla: texto (arriba), luego vídeo (capa superior arriba), luego audio.
@@ -450,6 +578,8 @@ export function makeClip(assetKind, item, trackId, start, dur) {
     appear: 'none',
     exit: 'none',
     look: 'none',
+    effects: {},
+    audio_fx: {},
     description: item.description || null,
     dup_of: null,
   }
@@ -466,6 +596,40 @@ export function makeTextClip(trackId, start, dur, text, style, opts = {}) {
     volume: 1, muted: false, speed: 1, keep_pitch: false, reverse: false, speed_curve: null,
     reframe: null, text: text || 'Texto', style: st,
     words: [], text_role: role,
+    description: null,
+    dup_of: null,
+  }
+}
+
+export function makeShapeClip(trackId, start, dur, preset = {}) {
+  const type = preset.type || preset.shape?.type || preset.shape_type || 'rect'
+  const st = { ...defaultShape(type), ...(preset.shape || {}) }
+  const span = +Math.max(0.3, dur || SHAPE_DEFAULT_DUR).toFixed(3)
+  return {
+    id: uid('c'),
+    track_id: trackId,
+    kind: 'shape',
+    asset_kind: 'shape',
+    asset_id: type,
+    filename: '',
+    name: preset.label || preset.name || st.type,
+    start: +Math.max(0, start).toFixed(3),
+    in_point: 0,
+    out_point: span,
+    source_duration: span,
+    volume: 1,
+    muted: false,
+    speed: 1,
+    keep_pitch: false,
+    reverse: false,
+    speed_curve: null,
+    reframe: null,
+    appear: 'none',
+    exit: 'none',
+    look: 'none',
+    effects: {},
+    audio_fx: {},
+    shape: st,
     description: null,
     dup_of: null,
   }

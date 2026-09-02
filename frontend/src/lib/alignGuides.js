@@ -50,11 +50,16 @@ export function snapAlign(x, y, targets, threshold = SNAP_THRESHOLD) {
 export function textAlignTargets(clips, tracks, head, exceptId) {
   const others = []
   for (const c of clips || []) {
-    if (c.kind !== 'text' || c.id === exceptId) continue
+    if ((c.kind !== 'text' && c.kind !== 'shape') || c.id === exceptId) continue
     const track = (tracks || []).find((t) => t.id === c.track_id)
     if (track?.hidden) continue
     const dur = Math.max(0, (c.out_point ?? 0) - (c.in_point ?? 0))
     if (head < (c.start ?? 0) - 0.02 || head >= (c.start ?? 0) + dur) continue
+    if (c.kind === 'shape') {
+      const st = c.shape || {}
+      others.push({ x: st.x ?? 0.5, y: st.y ?? 0.5, w: st.w ?? 0.38 })
+      continue
+    }
     const st = c.style || {}
     others.push({ x: st.x ?? 0.5, y: st.y ?? 0.5, w: st.w ?? 0.8 })
   }

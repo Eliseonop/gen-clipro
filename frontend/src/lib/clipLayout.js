@@ -161,18 +161,24 @@ export function applyFrame(clip, slot, srcAspect, outAspect, srcTime, srcW, srcH
   }
 }
 
-/** Clips de vídeo visibles en `head`, de fondo a frente. */
+/** Clips de vídeo visibles en `head`, de fondo a frente (pista, luego orden en la lista). */
 export function videosAt(head, clips, tracks) {
+  const list = clips || []
   const vids = (tracks || []).filter((t) => t.kind === 'video')
   const layer = (id) => vids.findIndex((t) => t.id === id)
-  return (clips || [])
+  const index = new Map(list.map((c, i) => [c.id, i]))
+  return list
     .filter((c) => {
-      if (!isVisualClip(c)) return false
+      if (!isVisualClip(c) && c.kind !== 'shape') return false
       const track = (tracks || []).find((t) => t.id === c.track_id)
       if (!track || track.hidden) return false
       return head >= c.start - 0.02 && head < clipEnd(c)
     })
-    .sort((a, b) => layer(a.track_id) - layer(b.track_id))
+    .sort((a, b) => {
+      const dl = layer(a.track_id) - layer(b.track_id)
+      if (dl) return dl
+      return (index.get(a.id) ?? 0) - (index.get(b.id) ?? 0)
+    })
 }
 
 /** Puntero → píxeles del bitmap, respetando object-fit: contain. */
