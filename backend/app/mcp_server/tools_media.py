@@ -96,7 +96,25 @@ def delete_media(project_id: str, kind: str, ident: str) -> dict:
     return {"ok": True, "deleted": ident, "kind": kind, "file_deleted": file_deleted}
 
 
+def fetch_image(project_id: str, url: str, label: str | None = None) -> dict:
+    """Descarga una imagen desde una URL y la añade al proyecto.
+
+    Devuelve la imagen creada (``id`` para colocarla luego con
+    ``add_to_timeline(asset_kind="images")``).
+    """
+    from .. import images
+    proj = _project_or_raise(project_id)
+    if not (url or "").strip():
+        raise ValueError("Falta la URL de la imagen.")
+    name, data = images.fetch_image(url)
+    info = images.import_image(proj, name, data, label=label)
+    return {"ok": True, "image": {"id": info.id, "filename": info.filename,
+                                  "label": info.label, "width": info.width,
+                                  "height": info.height, "url": info.url}}
+
+
 def register(mcp) -> None:
     tool(mcp, access="read")(analyze_youtube)
     tool(mcp, access="write")(create_clips_from_segments)
+    tool(mcp, access="write")(fetch_image)
     tool(mcp, access="destructive")(delete_media)
