@@ -537,6 +537,14 @@
 .ed-clip-wave { position: absolute; inset: 0; display: flex; align-items: center; gap: 1px; padding: 4px 8px; }
 .ed-clip-wave > span { flex: 1; background: rgba(120,160,255,0.55); border-radius: 1px; min-width: 1px; }
 .ed-clip-label.audio { position: absolute; left: 8px; top: 3px; background: rgba(0,0,0,0.35); border-radius: 4px; padding: 1px 5px; }
+.ed-clip-copy {
+  position: absolute; right: 8px; top: 3px; z-index: 5;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; padding: 0; border: 0; border-radius: 4px;
+  background: rgba(0,0,0,0.45); color: #fff; cursor: pointer;
+}
+.ed-clip-copy:hover { background: rgba(0,0,0,0.7); }
+.ed-clip-copy:disabled { opacity: 0.35; cursor: default; }
 .ed-kf-dot {
   position: absolute; top: 50%; width: 14px; height: 14px; border: 2px solid #05060a; border-radius: 50%;
   transform: translate(-50%, -50%); cursor: ew-resize; z-index: 5; box-shadow: 0 0 5px rgba(0,0,0,0.6);

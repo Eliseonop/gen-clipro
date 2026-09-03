@@ -627,7 +627,7 @@ export function makeClip(assetKind, item, trackId, start, dur) {
     look: 'none',
     effects: {},
     audio_fx: {},
-    description: item.description || null,
+    description: item.description || item.text || null,
     dup_of: null,
   }
 }
@@ -752,7 +752,32 @@ export function applyFaceTrack(reframe, keyframes, mode) {
   })
 }
 
-export function trackContextItems(track, { linked = false, canLink = false } = {}) {
+export function clipCopyText(clip, materials) {
+  const own = String(clip?.description || clip?.text || '').trim()
+  if (own) return own
+  if (clip?.kind && clip.kind !== 'audio') return ''
+  const id = String(clip?.asset_id || '')
+  const file = clip?.filename
+  if (!id && !file) return ''
+  const hit = (materials || []).find((a) => (
+    (id && (String(a.id) === id || String(a.asset_id) === id))
+    || (file && a.filename === file)
+  ))
+  return String(hit?.description || hit?.text || '').trim()
+}
+
+export function trackTextContent(clips, trackId) {
+  return (clips || [])
+    .filter((c) => c?.track_id === trackId && c?.kind === 'text')
+    .sort((a, b) => (Number(a.start) || 0) - (Number(b.start) || 0))
+    .map((c) => String(c.text || '').trim())
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+export function trackContextItems(track, { linked = false, canLink = false, hasText = false } = {}) {
   const items = []
   if (track?.kind === 'audio') {
     items.push({
@@ -760,6 +785,9 @@ export function trackContextItems(track, { linked = false, canLink = false } = {
       label: linked ? 'Desrelacionar' : 'Relacionar',
       disabled: !linked && !canLink,
     })
+  }
+  if (track?.kind === 'text') {
+    items.push({ id: 'copy-text', label: 'Copiar texto', disabled: !hasText })
   }
   items.push({ id: 'delete', label: 'Eliminar', danger: true })
   return items

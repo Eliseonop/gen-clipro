@@ -20,6 +20,7 @@ import {
   trackContextItems, linkedPartnerName, linkTrackPair, unlinkTrackPair,
   applyAudioSpeedToLinkedText, matchClipsToFirstDuration,
   clipLayerInfo, moveClipLayer, canLayerClip,
+  trackTextContent, clipCopyText,
 } from './editorModel'
 import { textRole } from '../../lib/textRole'
 import { SHAPE_DEFAULT_DUR } from '../../lib/shapes'
@@ -798,6 +799,26 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setTrackMenu(null)
     if (!track) return
     setTracks((prev) => unlinkTrackPair(prev, track.id))
+  }
+  async function copyPlain(text, okMsg) {
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setClipToast({ type: 'success', message: okMsg })
+    } catch {
+      setClipToast({ type: 'error', message: 'No se pudo copiar.' })
+    }
+  }
+  async function copyTrackText(track) {
+    setTrackMenu(null)
+    if (!track || track.kind !== 'text') return
+    await copyPlain(trackTextContent(clipsRef.current, track.id), 'Texto copiado.')
+  }
+  async function copyClipDescription(clip) {
+    setCtxMenu(null)
+    if (!clip || clip.kind !== 'audio') return
+    const live = clipsRef.current.find((c) => c.id === clip.id) || clip
+    await copyPlain(clipCopyText(live, project.audios), 'Descripción copiada.')
   }
   function selectTrack(id) {
     setSelTrackId(id)
@@ -1749,6 +1770,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           linkPick={linkPick}
           onPickLinkTrack={pickLinkTextTrack}
           onCancelLinkPick={cancelLinkPick}
+          onCopyDesc={copyClipDescription}
+          audioMaterials={project.audios}
         />
         {isShapeSel ? (
           <EdShape
@@ -1820,6 +1843,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                 </>
               )
             })()}
+            {ctxMenu.clip.kind === 'audio' && (
+              <button
+                disabled={!clipCopyText(ctxMenu.clip, project.audios)}
+                onClick={() => copyClipDescription(ctxMenu.clip)}
+              >
+                <Icon name="content_copy" size={15} /> Copiar descripción
+              </button>
+            )}
             <button onClick={() => { splitClip(ctxMenu.clip.id, playhead); setCtxMenu(null) }}><Icon name="content_cut" size={15} /> Dividir aquí</button>
             <button onClick={() => { duplicateSelected(ctxMenu.clip); setCtxMenu(null) }}><Icon name="content_copy" size={15} /> Duplicar</button>
             <button className="danger" onClick={() => { deleteClip(ctxMenu.clip.id); setCtxMenu(null) }}><Icon name="delete" size={15} /> Eliminar</button>
@@ -1838,6 +1869,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             {trackContextItems(tracks.find((t) => t.id === trackMenu.track.id) || trackMenu.track, {
               linked: !!(tracks.find((t) => t.id === trackMenu.track.id) || trackMenu.track).linked_track_id,
               canLink: tracks.some((t) => t.kind === 'text'),
+              hasText: !!trackTextContent(clips, trackMenu.track.id),
             }).map((item) => (
               <button
                 key={item.id}
@@ -1846,10 +1878,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                 onClick={() => {
                   if (item.id === 'link') startLinkPick(trackMenu.track)
                   else if (item.id === 'unlink') unlinkTrack(trackMenu.track)
+                  else if (item.id === 'copy-text') copyTrackText(trackMenu.track)
                   else if (item.id === 'delete') requestDeleteTrack(trackMenu.track)
                 }}
               >
-                <Icon name={item.id === 'link' ? 'link' : item.id === 'unlink' ? 'link_off' : 'delete'} size={15} />
+                <Icon name={item.id === 'link' ? 'link' : item.id === 'unlink' ? 'link_off' : item.id === 'copy-text' ? 'content_copy' : 'delete'} size={15} />
                 {item.label}
               </button>
             ))}

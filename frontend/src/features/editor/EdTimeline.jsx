@@ -3,7 +3,7 @@ import Icon from '../../components/Icon'
 import FlipPopover from '../../components/FlipPopover'
 import { fmt } from '../../lib/utils'
 import { pseudoWaveform, clamp, kfColor } from '../../lib/panning'
-import { clipDur, clipSourceDur, clipSpeed, displayTracks, isVisualClip, laneKindForAsset, linkedPartnerName, trackKindForClip, trimClipPatch, trimPreviewHead } from './editorModel'
+import { clipCopyText, clipDur, clipSourceDur, clipSpeed, displayTracks, isVisualClip, laneKindForAsset, linkedPartnerName, trackKindForClip, trimClipPatch, trimPreviewHead } from './editorModel'
 import { alignOthers, alignThresholdSec, asAlignClip, snapClipGroup, snapClipMove, snapClipTrim, timelineAlignHits } from './timelineAlign'
 import { keyframesEnabled, normalizeItems } from '../../lib/clipKeyframes'
 import { snapToFrame } from '../../lib/projectFps'
@@ -84,7 +84,7 @@ export default function EdTimeline({
   previewVol, onPreviewVol,
   onDropAsset, onTrackToggle, onTrackCompact, onAddTrack, onAddTextTrack, onMoveKeyframe, onSelectKf, onAddKf, onDeleteKf, onContextClip, onContextTrack,
   onFaceTrack, faceTrackBusy, faceTrackDisabled,
-  linkPick, onPickLinkTrack, onCancelLinkPick,
+  linkPick, onPickLinkTrack, onCancelLinkPick, onCopyDesc, audioMaterials,
 }) {
   const lanesRef = useRef(null)
   const bodyRef = useRef(null)
@@ -464,7 +464,9 @@ export default function EdTimeline({
                         onDown={(e, mode) => startClipDrag(e, c, mode)}
                         onKfDown={(e, kf, idx) => startKfDrag(e, c, kf, idx)}
                         onContext={(e) => onContextClip?.(e, c)}
-                        onDouble={() => onDoubleClip?.(c)} />
+                        onDouble={() => onDoubleClip?.(c)}
+                        onCopyDesc={onCopyDesc}
+                        audioMaterials={audioMaterials} />
                     )
                   })}
                   {view.toggle && (
@@ -497,7 +499,7 @@ export default function EdTimeline({
   )
 }
 
-function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onContext, onDouble, fps = 30 }) {
+function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onContext, onDouble, onCopyDesc, audioMaterials, fps = 30 }) {
   const dur = clipDur(clip)
   const srcDur = clipSourceDur(clip)
   const sp = clipSpeed(clip)
@@ -511,6 +513,7 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
   const speedBadge = !isText && sp !== 1 ? (
     <em className="ed-clip-speed">{sp % 1 === 0 ? `${sp}x` : `${sp.toFixed(1)}x`}</em>
   ) : null
+  const audioDesc = clip.kind === 'audio' ? clipCopyText(clip, audioMaterials) : ''
 
   return (
     <div className={`ed-clip ${clip.kind} ${layout.variant !== 'solo' ? layout.variant : ''} ${selected ? 'sel' : ''} ${clip.muted ? 'muted' : ''}`}
@@ -529,6 +532,18 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
         <div className="ed-clip-wave">
           {bars.map((h, i) => <span key={i} style={{ height: `${Math.round(h * 100)}%` }} />)}
           <span className="ed-clip-label audio"><Icon name={clip.muted ? 'volume_off' : 'graphic_eq'} size={12} /> {clip.name}{speedBadge}</span>
+          {onCopyDesc && w >= 36 && (
+            <button
+              type="button"
+              className="ed-clip-copy"
+              disabled={!audioDesc}
+              title={audioDesc ? 'Copiar descripción' : 'Sin descripción'}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); onCopyDesc(clip) }}
+            >
+              <Icon name="content_copy" size={12} />
+            </button>
+          )}
         </div>
       )}
 

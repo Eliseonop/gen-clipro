@@ -21,7 +21,7 @@ export function dragPayload(assetKind, item) {
     kind: isImage ? 'image' : (assetKind === 'clips' ? 'video' : 'audio'),
     reframe: item.reframe || null,
     scope: fromLibrary ? 'library' : 'project',
-    description: item.description || null,
+    description: item.description || item.text || null,
   })
 }
 
