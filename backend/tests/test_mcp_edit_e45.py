@@ -51,6 +51,23 @@ class EditE45Test(unittest.TestCase):
         self.assertEqual(len(shapes), 1)
         self.assertTrue(res["ok"])
 
+    def test_add_sfx_creates_audio_clip(self):
+        with patch("app.sfx.resolve", return_value=Path("x/whoosh.wav")), \
+             patch("app.mcp_server.tools_edit._probe_duration", return_value=1.5):
+            res = tools_edit.add_to_timeline(self.pid, "sfx", "whoosh/a.wav")
+        self.assertTrue(res["ok"])
+        tl = projects.get_project(self.pid).timeline
+        sfxc = [c for c in tl.clips if c.asset_kind == "sfx"]
+        self.assertEqual(len(sfxc), 1)
+        self.assertEqual(sfxc[0].kind, "audio")
+        self.assertEqual(sfxc[0].filename, "whoosh/a.wav")
+        self.assertIn("audio", {t.kind for t in tl.tracks})
+
+    def test_add_sfx_unknown_raises(self):
+        with patch("app.sfx.resolve", return_value=None):
+            with self.assertRaises(ValueError):
+                tools_edit.add_to_timeline(self.pid, "sfx", "nope")
+
     def test_duplicate_clip_persists(self):
         tools_edit.duplicate_clip(self.pid, "v")
         clips = projects.get_project(self.pid).timeline.clips

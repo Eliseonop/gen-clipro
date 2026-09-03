@@ -8,6 +8,7 @@ el mismo ``emit``.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Awaitable, Callable
 
 from .. import settings
@@ -16,6 +17,36 @@ CallTool = Callable[[str, dict], Awaitable[dict]]  # (name, args) -> {ok,data,te
 Emit = Callable[[dict], Awaitable[None]]
 
 DEFAULT_MODEL = "gemini-3.6-flash"
+
+RETRY_ATTEMPTS = 3
+RETRY_BASE_DELAY = 1.5  # s; backoff exponencial (1.5, 3, 6)
+# Solo SATURACIÓN temporal (no la cuota 429, que reintentar no arregla).
+_RETRYABLE_TOKENS = ("503", "unavailable", "500", "internal")
+
+
+def _retryable(exc: Exception) -> bool:
+    """¿Error transitorio del proveedor (saturación) que conviene reintentar?"""
+    code = getattr(exc, "code", None)
+    if code in (500, 503):
+        return True
+    s = str(exc).lower()
+    return any(tok in s for tok in _RETRYABLE_TOKENS)
+
+
+def _friendly_error(exc: Exception) -> str:
+    """Mensaje claro para el usuario según el tipo de error del proveedor."""
+    s = str(exc)
+    low = s.lower()
+    code = getattr(exc, "code", None)
+    if code == 429 or "resource_exhausted" in low or "quota" in low:
+        return ("Has agotado la cuota de Gemini (el free tier limita las peticiones "
+                "por día/minuto). Espera al reinicio de la cuota, cambia el modelo "
+                "en Configuración, o usa un plan con más límite.")
+    if code == 503 or "unavailable" in low:
+        return "Gemini está saturado ahora mismo. Inténtalo de nuevo en un momento."
+    if code in (401, 403) or "api key" in low or "api_key" in low or "permission" in low:
+        return "Problema con la API key de Gemini. Revísala en Configuración."
+    return f"Gemini: {s}"
 
 
 def ai_config() -> dict:
@@ -83,21 +114,33 @@ class GeminiProvider(AIProvider):
             turn_text = ""
             calls = []
             turn_parts = []   # parts CRUDOS del modelo (conservan thought_signature)
-            try:
-                stream = await client.aio.models.generate_content_stream(
-                    model=self._model, contents=convo, config=cfg)
-                async for chunk in stream:
-                    cand = (chunk.candidates or [None])[0]
-                    parts = (cand.content.parts if cand and cand.content else []) or []
-                    for p in parts:
-                        turn_parts.append(p)
-                        if getattr(p, "text", None):
-                            turn_text += p.text
-                            await emit({"type": "text", "delta": p.text})
-                        if getattr(p, "function_call", None):
-                            calls.append(p.function_call)
-            except Exception as exc:  # noqa: BLE001
-                await emit({"type": "error", "message": f"Gemini: {exc}"})
+            got = False
+            for attempt in range(RETRY_ATTEMPTS):
+                turn_text, calls, turn_parts = "", [], []
+                try:
+                    stream = await client.aio.models.generate_content_stream(
+                        model=self._model, contents=convo, config=cfg)
+                    async for chunk in stream:
+                        cand = (chunk.candidates or [None])[0]
+                        parts = (cand.content.parts if cand and cand.content else []) or []
+                        for p in parts:
+                            turn_parts.append(p)
+                            if getattr(p, "text", None):
+                                turn_text += p.text
+                                await emit({"type": "text", "delta": p.text})
+                            if getattr(p, "function_call", None):
+                                calls.append(p.function_call)
+                    got = True
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    # Reintenta errores transitorios (503/429/500) si aún no hubo texto.
+                    if _retryable(exc) and not turn_text and attempt < RETRY_ATTEMPTS - 1:
+                        await emit({"type": "status", "message": "El modelo está saturado; reintentando…"})
+                        await asyncio.sleep(RETRY_BASE_DELAY * (2 ** attempt))
+                        continue
+                    await emit({"type": "error", "message": _friendly_error(exc)})
+                    return final_text
+            if not got:
                 return final_text
 
             if turn_text:

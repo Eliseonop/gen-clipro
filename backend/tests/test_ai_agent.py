@@ -165,6 +165,20 @@ class ConversationsStoreTest(unittest.TestCase):
         self.assertEqual(conversations.list_conversations("p1")[0]["id"], c1)
 
 
+class RetryableTest(unittest.TestCase):
+    def test_only_overload_is_retryable(self):
+        from app.ai import providers
+        self.assertTrue(providers._retryable(Exception("503 UNAVAILABLE high demand")))
+        self.assertFalse(providers._retryable(Exception("429 RESOURCE_EXHAUSTED")))  # cuota: no reintentar
+        self.assertFalse(providers._retryable(Exception("400 INVALID_ARGUMENT")))
+
+    def test_friendly_error_messages(self):
+        from app.ai import providers
+        self.assertIn("cuota", providers._friendly_error(Exception("429 RESOURCE_EXHAUSTED quota")).lower())
+        self.assertIn("saturado", providers._friendly_error(Exception("503 UNAVAILABLE")).lower())
+        self.assertIn("api key", providers._friendly_error(Exception("403 permission denied API key")).lower())
+
+
 class McpClientTest(unittest.TestCase):
     def test_in_process_discovers_tools(self):
         from app.ai.mcp_client import McpToolset
