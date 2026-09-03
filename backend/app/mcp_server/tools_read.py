@@ -40,7 +40,35 @@ def list_media(project_id: str) -> dict:
     return dto.media_list(proj)
 
 
+def search_transcript(project_id: str, query: str, limit: int = 20) -> dict:
+    """Busca texto en las transcripciones del proyecto y devuelve dónde se dice,
+    con marcas de tiempo. Sirve para editar POR CONTENIDO ('corta donde dice X').
+
+    Cada coincidencia trae: ``scope`` (project/clip), ``clip_index`` o
+    ``transcript_id``, ``start``/``end`` (segundos) y el ``text``.
+    """
+    proj = _project_or_raise(project_id)
+    q = (query or "").strip().lower()
+    if not q:
+        raise ValueError("Falta el texto a buscar (query).")
+    matches: list[dict] = []
+    for tr in proj.transcripts or []:
+        for seg in tr.segments or []:
+            if q in (seg.text or "").lower():
+                matches.append({"scope": "project", "transcript_id": tr.id,
+                                "start": seg.start, "end": seg.end, "text": seg.text})
+    for c in proj.clips or []:
+        tr = getattr(c, "transcript", None)
+        if tr:
+            for seg in tr.segments or []:
+                if q in (seg.text or "").lower():
+                    matches.append({"scope": "clip", "clip_index": c.index,
+                                    "start": seg.start, "end": seg.end, "text": seg.text})
+    return {"query": query, "count": len(matches), "matches": matches[:max(1, int(limit))]}
+
+
 def register(mcp) -> None:
     tool(mcp, access="read")(get_timeline)
     tool(mcp, access="read")(inspect_clip)
     tool(mcp, access="read")(list_media)
+    tool(mcp, access="read")(search_transcript)
