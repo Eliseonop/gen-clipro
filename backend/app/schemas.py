@@ -150,6 +150,7 @@ class ClipInfo(BaseModel):
     created_at: Optional[str] = None
     label: Optional[str] = None
     description: Optional[str] = None
+    description_ai: Optional[str] = None      # descripción generada por la IA (no pisa la tuya)
     reframe: Optional[Reframe] = None
     transcript: Optional["Transcript"] = None   # guion del fragmento (relativo al clip)
     origin: Optional[str] = None              # "youtube" | "compose" | "pexels" | "giphy"

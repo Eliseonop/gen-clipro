@@ -25,6 +25,7 @@ from . import (
     tools_media,
     tools_read,
     tools_render,
+    tools_vision,
     tools_workflow,
 )
 
@@ -50,6 +51,7 @@ tools_media.register(mcp)     # Etapa 5: analyze_youtube, create_clips_from_segm
 tools_audio.register(mcp)     # Etapa 6: transcribe, generate_subtitles, generate_voice, search_sfx
 tools_render.register(mcp)    # Etapa 7: export_project, list_jobs, cancel_job
 tools_workflow.register(mcp)  # Etapa 8: create_short_from_youtube, make_short_from_library
+tools_vision.register(mcp)    # Visión: get_frame (ojos) + set_clip_ai_description
 
 # Sub-app ASGI para montar en /mcp. El path interno es "/" porque el mount ya
 # aporta el prefijo /mcp.

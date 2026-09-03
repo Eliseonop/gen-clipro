@@ -38,6 +38,11 @@ const TOOL_LABELS = {
   get_timeline: 'Mirando la timeline…',
   inspect_clip: 'Revisando el clip…',
   list_media: 'Revisando el material…',
+  get_frame: 'Mirando el clip…',
+  set_clip_ai_description: 'Describiendo el material…',
+  list_projects: 'Listando proyectos…',
+  search_transcript: 'Buscando en el guion…',
+  auto_reframe: 'Reencuadrando (cara)…',
 }
 const toolLabel = (t) => TOOL_LABELS[t] || 'Trabajando…'
 
