@@ -83,6 +83,14 @@ class ClipEffectsTest(unittest.TestCase):
         chain = audio_fx_chain({"audio_fx": {"echo": True}})
         self.assertIn("aecho", chain)
 
+    def test_audio_fx_scales_with_intensity(self):
+        full = audio_fx_chain({"audio_fx": {"eq": 1}})
+        half = audio_fx_chain({"audio_fx": {"eq": 0.5}})
+        self.assertIn("equalizer", full)
+        self.assertIn("g=4.00", full)
+        self.assertIn("g=2.00", half)
+        self.assertEqual(audio_fx_chain({"audio_fx": {"eq": 0}}), "")
+
     def test_dissolve_uses_alpha_fade(self):
         chain = video_fx_chain({"appear": "dissolve"}, 4, 720, 1280)
         self.assertIn("fade=t=in", chain)

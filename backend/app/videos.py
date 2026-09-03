@@ -21,7 +21,21 @@ def _next_index(project) -> int:
     return max([*existing, 99999]) + 1
 
 
-def import_video(project, filename: str, data: bytes) -> ClipInfo:
+def import_video(
+    project,
+    filename: str,
+    data: bytes,
+    *,
+    label: str | None = None,
+    description: str | None = None,
+    origin: str | None = None,
+    source: str | None = None,
+    provider: str | None = None,
+    external_id: str | None = None,
+    source_url: str | None = None,
+    author: str | None = None,
+    license_info: str | None = None,
+) -> ClipInfo:
     ext = Path(filename or "").suffix.lower()
     if ext not in VIDEO_EXTS:
         raise ValueError("Formato de vídeo no válido. Usa MP4, MOV, MKV, WEBM…")
@@ -49,10 +63,15 @@ def import_video(project, filename: str, data: bytes) -> ClipInfo:
         url=f"/api/media/{project.id}/video/{quote(dest_name)}",
         start=0.0,
         end=duration,
-        source_url=None,
-        label=Path(filename).stem,
-        origin="import",
-        source="external",
+        source_url=source_url,
+        label=label or Path(filename).stem,
+        description=description,
+        origin=origin or "import",
+        source=source or "external",
+        provider=provider,
+        external_id=external_id,
+        author=author,
+        license_info=license_info,
     )
     projects.add_clips(project.id, [info])
     return info

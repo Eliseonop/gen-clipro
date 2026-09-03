@@ -50,6 +50,12 @@ class ApiKeysSettingsTest(unittest.TestCase):
         self.assertTrue(pub["api_keys"]["gemini"])
         self.assertNotIn("legacy-key", json.dumps(pub))
 
+    def test_api_key_lee_proveedor(self):
+        settings.save({"api_keys": {"pexels": "px-secret", "giphy": "gp-secret"}})
+        self.assertEqual(settings.api_key("pexels"), "px-secret")
+        self.assertEqual(settings.api_key("giphy"), "gp-secret")
+        self.assertEqual(settings.api_key("missing"), "")
+
 
 if __name__ == "__main__":
     unittest.main()

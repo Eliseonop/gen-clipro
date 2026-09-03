@@ -11,11 +11,13 @@ import EdSettings from './EdSettings'
 import EdEffects from './EdEffects'
 import EdShapes from './EdShapes'
 import EdChat from './EdChat'
+import EdExplore from './EdExplore'
 import AudioTab from '../audio/AudioTab'
 import ConfirmModal from '../../components/ConfirmModal'
 import AnchoredMenu from '../../components/AnchoredMenu'
 import { canDeleteMaterial, materialIdent, materialMenuItems, materialDeleteTitle, materialLabel } from './materialMenu'
 import { clipCopyText } from './editorModel'
+import { isTypingTarget, scopeShortcutIndex, scopeTabsFor, stepNavId, wheelStepDir } from './materialNav'
 import JobStatusBar from '../../components/JobStatusBar'
 import FlipPopover from '../../components/FlipPopover'
 import Toast from '../../components/Toast'
@@ -214,11 +216,16 @@ function CargarRecList({ segments, videoId, preview, setPreview, configs, onEdit
       })
 }
 
-function ScopeFilter({ value, onChange, includeLoad = false, loadId = 'cargar', loadLabel = 'Cargar clips' }) {
+function ScopeFilter({ value, onChange, includeLoad = false, loadId = 'cargar', loadLabel = 'Cargar clips', includeExplore = false }) {
   return (
     <div className="ed-scope-filter">
       <button type="button" className={`ed-tab ${value === 'all' ? 'on' : ''}`} onClick={() => onChange('all')}>Todos</button>
       <button type="button" className={`ed-tab ${value === 'saved' ? 'on' : ''}`} onClick={() => onChange('saved')}>Guardados</button>
+      {includeExplore && (
+        <button type="button" className={`ed-tab ${value === 'explore' ? 'on' : ''}`} onClick={() => onChange('explore')}>
+          Explorar
+        </button>
+      )}
       {includeLoad && (
         <button type="button" className={`ed-tab ${value === loadId ? 'on' : ''}`} onClick={() => onChange(loadId)}>
           <Icon name="add" size={14} /> {loadLabel}
@@ -257,7 +264,8 @@ export default function EdMaterial({
   matTab, onMatTab,
   playhead, onPose, onChangeFrame, selKfId, onInterpKf,
   fps = 30, onExportFps,
-  aiContext, onReloadTimeline,
+  aiContext, onReloadTimeline, timelineClips,
+  audioMode, trackLabel, trackEmpty, onAddKf, onFade,
 }) {
   const [tabState, setTabState] = useState('video')
   const tab = matTab ?? tabState
@@ -295,10 +303,16 @@ export default function EdMaterial({
   const dropDepth = useRef(0)
   const vidDropDepth = useRef(0)
   const ytT0 = useRef(0)
+  const [chatBusy, setChatBusy] = useState(false)
   const [navTip, setNavTip] = useState(null)
   const navTipTimer = useRef(0)
   const navTipOn = useRef(false)
   const navTipNext = useRef(null)
+  const tabRef = useRef(tab)
+  const setTabRef = useRef(setTab)
+  const wheelLock = useRef(0)
+  tabRef.current = tab
+  setTabRef.current = setTab
   const clips = project.clips || []
   const audios = project.audios || []
   const images = project.images || []
@@ -383,6 +397,44 @@ export default function EdMaterial({
 
   useEffect(() => {
     getSettings().then((s) => setYtHistory(normalizeHistory(s.yt_history))).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    function onKey(e) {
+      if (isTypingTarget(document.activeElement) || isTypingTarget(e.target)) return
+      if (document.querySelector('.modal-overlay')) return
+      const ids = scopeTabsFor(tabRef.current)
+      const idx = scopeShortcutIndex(e)
+      if (idx < 0 || !ids.length || idx >= ids.length) return
+      e.preventDefault()
+      const id = ids[idx]
+      const t = tabRef.current
+      if (t === 'video') setVideoFilter(id)
+      else if (t === 'image') setImageFilter(id)
+      else if (t === 'audio') setAudioFilter(id)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  useEffect(() => {
+    function onWheel(e) {
+      if (!e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return
+      if (isTypingTarget(document.activeElement)) return
+      if (e.target?.closest?.('.ed-timeline-wrap')) return
+      if (e.target?.closest?.('.modal-overlay')) return
+      const dir = wheelStepDir(e.deltaX, e.deltaY)
+      if (!dir) return
+      e.preventDefault()
+      const now = performance.now()
+      if (now < wheelLock.current) return
+      wheelLock.current = now + 200
+      const ids = MAT_NAV.map((x) => x.id)
+      const next = stepNavId(ids, tabRef.current, dir)
+      if (next !== tabRef.current) setTabRef.current(next)
+    }
+    window.addEventListener('wheel', onWheel, { passive: false })
+    return () => window.removeEventListener('wheel', onWheel)
   }, [])
 
   function openMatMenu(e, kind, item) {
@@ -761,10 +813,10 @@ export default function EdMaterial({
                 {item.sep ? <div className="ed-mat-nav-sep" aria-hidden="true" /> : null}
                 <button
                   type="button"
-                  className={`ed-mat-nav-btn${tab === item.id ? ' on' : ''}`}
-                  aria-label={label}
+                  className={`ed-mat-nav-btn${tab === item.id ? ' on' : ''}${item.id === 'chat' && chatBusy ? ' working' : ''}`}
+                  aria-label={item.id === 'chat' && chatBusy ? `${label} (trabajando)` : label}
                   aria-current={tab === item.id ? 'page' : undefined}
-                  onMouseEnter={(e) => openNavTip(e, label)}
+                  onMouseEnter={(e) => openNavTip(e, item.id === 'chat' && chatBusy ? `${label} (trabajando)` : label)}
                   onClick={() => setTab(item.id)}
                 >
                   <Icon name={item.icon} size={20} />
@@ -934,18 +986,21 @@ export default function EdMaterial({
         </div>
       )}
 
-      {tab === 'image' && (
-        <div
-          className="ed-mat-list"
-          onContextMenu={(e) => {
-            if (e.target.closest('.ed-card, button, input, textarea')) return
-            e.preventDefault()
-            setMatMenu(null)
-            setImgPaneMenu({ x: e.clientX, y: e.clientY })
-          }}
-        >
-          <div className="ed-img-toolbar">
-            <ScopeFilter value={imageFilter} onChange={setImageFilter} />
+      <div
+        className={tab === 'image'
+          ? `ed-mat-list${imageFilter === 'explore' ? ' pinned' : ''}`
+          : 'ed-hidden-panel'}
+        onContextMenu={(e) => {
+          if (tab !== 'image' || imageFilter === 'explore') return
+          if (e.target.closest('.ed-card, button, input, textarea')) return
+          e.preventDefault()
+          setMatMenu(null)
+          setImgPaneMenu({ x: e.clientX, y: e.clientY })
+        }}
+      >
+        <div className="ed-img-toolbar">
+          <ScopeFilter value={imageFilter} onChange={setImageFilter} includeExplore />
+          {imageFilter !== 'explore' && (
             <button
               type="button"
               className="ed-sfx-add"
@@ -954,25 +1009,36 @@ export default function EdMaterial({
             >
               <Icon name="add" size={16} />
             </button>
-          </div>
-          {shownImages.length === 0
-            ? <Empty text={imageFilter === 'saved' ? 'No hay imágenes guardadas.' : 'Sin imágenes. Clic derecho para pegar, o pulsa +.'} />
-            : (
-              <div className="ed-mat-grid">
-                {shownImages.map((im) => (
-                  <ImageCard
-                    key={`${im.scope}-${im.id}`}
-                    image={im}
-                    onAdd={() => onAdd('images', im)}
-                    di={di}
-                    onMenu={(e) => openMatMenu(e, 'images', im)}
-                    onSaveDescription={im.scope === 'library' ? undefined : (text) => saveImageDescription(im, text)}
-                  />
-                ))}
-              </div>
-            )}
+          )}
         </div>
-      )}
+        {tab === 'image' && imageFilter !== 'explore' && (shownImages.length === 0
+          ? <Empty text={imageFilter === 'saved' ? 'No hay imágenes guardadas.' : 'Sin imágenes. Clic derecho para pegar, o pulsa +.'} />
+          : (
+            <div className="ed-mat-grid">
+              {shownImages.map((im) => (
+                <ImageCard
+                  key={`${im.scope}-${im.id}`}
+                  image={im}
+                  onAdd={() => onAdd('images', im)}
+                  di={di}
+                  onMenu={(e) => openMatMenu(e, 'images', im)}
+                  onSaveDescription={im.scope === 'library' ? undefined : (text) => saveImageDescription(im, text)}
+                />
+              ))}
+            </div>
+          ))}
+        <div className={imageFilter === 'explore' ? 'ed-explore-slot' : 'ed-hidden-panel'}>
+            <EdExplore
+              projectId={project.id}
+              project={project}
+              timelineClips={timelineClips}
+              active={tab === 'image' && imageFilter === 'explore'}
+              onImported={() => onRefresh?.()}
+              onToast={setMatToast}
+              onOpenSettings={() => setTab('settings')}
+            />
+        </div>
+      </div>
 
       {tab === 'audio' && (
         <div className="ed-mat-list">
@@ -1023,12 +1089,20 @@ export default function EdMaterial({
           onInterpKf={onInterpKf}
           fps={fps}
           textEditor={textEditor}
+          audioMode={audioMode}
+          trackLabel={trackLabel}
+          trackEmpty={trackEmpty}
+          onAddKf={onAddKf}
+          onFade={onFade}
         />
       )}
       {tab === 'settings' && <EdSettings onExportFps={onExportFps} />}
-      {tab === 'chat' && (
-        <EdChat project={project} context={aiContext} onReload={onReloadTimeline} />
-      )}
+      <div
+        className={tab === 'chat' ? 'ed-mat-list pinned' : 'ed-hidden-panel'}
+        aria-hidden={tab !== 'chat'}
+      >
+        <EdChat project={project} context={aiContext} onReload={onReloadTimeline} onBusy={setChatBusy} />
+      </div>
       {navItem?.empty && (
         <div className="ed-mat-list">
           <div className="ed-mat-empty">

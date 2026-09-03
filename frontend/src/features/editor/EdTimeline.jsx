@@ -5,7 +5,7 @@ import { fmt } from '../../lib/utils'
 import { pseudoWaveform, clamp, kfColor } from '../../lib/panning'
 import { clipCopyText, clipDur, clipSourceDur, clipSpeed, displayTracks, isVisualClip, laneKindForAsset, linkedPartnerName, trackKindForClip, trimClipPatch, trimPreviewHead } from './editorModel'
 import { alignOthers, alignThresholdSec, asAlignClip, snapClipGroup, snapClipMove, snapClipTrim, timelineAlignHits } from './timelineAlign'
-import { keyframesEnabled, normalizeItems } from '../../lib/clipKeyframes'
+import { keyframesEnabled, normalizeItems, clipVolumeAt, clampVolume, sampleVolumeCurve, VOL_MAX } from '../../lib/clipKeyframes'
 import { snapToFrame } from '../../lib/projectFps'
 import { stackViewForTrack } from './clipStack.js'
 import { headerScrollPad, timelineWheelAction } from './timelineWheel'
@@ -77,12 +77,57 @@ function FaceTrackButton({ onPick, disabled, busy }) {
 
 const laneKindFor = laneKindForAsset
 
+function TrackName({ track, onRename }) {
+  const [draft, setDraft] = useState(null)
+  const editing = draft != null
+
+  function commit() {
+    const name = (draft ?? '').trim()
+    setDraft(null)
+    if (name && name !== track.name) onRename?.(track.id, name)
+  }
+
+  if (editing) {
+    return (
+      <input
+        className="ed-th-name-input"
+        value={draft}
+        autoFocus
+        maxLength={32}
+        aria-label="Nombre de la pista"
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          e.stopPropagation()
+          if (e.key === 'Enter') { e.preventDefault(); commit() }
+          if (e.key === 'Escape') { e.preventDefault(); setDraft(null) }
+        }}
+      />
+    )
+  }
+  return (
+    <span
+      className="ed-th-name"
+      title={`${track.name} — doble clic para renombrar`}
+      onDoubleClick={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        setDraft(track.name || '')
+      }}
+    >
+      {track.name}
+    </span>
+  )
+}
+
 export default function EdTimeline({
   tracks, clips, pps, setPps, duration, playhead, rowH, setRowH, fps = 30,
   selectedClipId, selectedClipIds, selectedTrackId, selectedClip, selKfId, dragInfo,
   onSeek, onScrub, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onMoveGroup, onMatchDuration, onSplit, onDuplicate, onDeleteClip,
   previewVol, onPreviewVol,
-  onDropAsset, onTrackToggle, onTrackCompact, onAddTrack, onAddTextTrack, onMoveKeyframe, onSelectKf, onAddKf, onDeleteKf, onContextClip, onContextTrack,
+  onDropAsset, onTrackToggle, onTrackCompact, onAddTrack, onAddTextTrack, onRenameTrack, onMoveKeyframe, onSelectKf, onAddKf, onDeleteKf, onContextClip, onContextTrack,
   onFaceTrack, faceTrackBusy, faceTrackDisabled,
   linkPick, onPickLinkTrack, onCancelLinkPick, onCopyDesc, audioMaterials,
 }) {
@@ -296,14 +341,23 @@ export default function EdTimeline({
     e.stopPropagation()
     onSelectKf(kf.id)
     const startX = e.clientX
+    const startY = e.clientY
     const orig = kf.t
+    const origVol = clip.kind === 'audio'
+      ? clampVolume(kf.props?.volume ?? clipVolumeAt(clip, kf.t))
+      : null
+    const hostH = e.currentTarget.parentElement?.clientHeight || 28
     const move = (ev) => {
       const deltaT = (ev.clientX - startX) / pps
       const dur = clipDur(clip)
       const nt = clip.keyframes?.enabled
         ? clamp(orig + deltaT, 0, dur)
         : clamp(orig + deltaT, clip.in_point, clip.out_point)
-      onMoveKeyframe(clip.id, kf.id, snapToFrame(nt, fps))
+      let extra
+      if (origVol != null && hostH > 0) {
+        extra = { props: { volume: clampVolume(origVol + ((startY - ev.clientY) / hostH) * VOL_MAX) } }
+      }
+      onMoveKeyframe(clip.id, kf.id, snapToFrame(nt, fps), extra)
     }
     const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
@@ -397,7 +451,7 @@ export default function EdTimeline({
                     <Icon name="link" size={11} /> {partner}
                   </span>
                 )}
-                <span className="ed-th-name">{t.name}</span>
+                <TrackName track={t} onRename={onRenameTrack} />
                 <span className="ed-th-btns">
                   <button className={`ed-th-btn ${t.hidden ? 'off' : ''}`} title="Visibilidad"
                     onClick={(e) => { e.stopPropagation(); if (picking) return; onTrackToggle(t.id, 'hidden') }} disabled={t.kind === 'audio'}>
@@ -499,6 +553,24 @@ export default function EdTimeline({
   )
 }
 
+function VolumeCurve({ clip, width, height }) {
+  const dur = clipDur(clip)
+  const h = Math.max(4, height)
+  const w = Math.max(4, width)
+  const pts = sampleVolumeCurve(clip, dur, Math.max(16, Math.round(w / 6)))
+  if (!pts.length) return null
+  const d = pts.map((p, i) => {
+    const x = (p.t / dur) * w
+    const y = (1 - clampVolume(p.v) / VOL_MAX) * (h - 2) + 1
+    return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`
+  }).join(' ')
+  return (
+    <svg className="ed-clip-vol" width={w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-hidden="true">
+      <path d={d} />
+    </svg>
+  )
+}
+
 function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onContext, onDouble, onCopyDesc, audioMaterials, fps = 30 }) {
   const dur = clipDur(clip)
   const srcDur = clipSourceDur(clip)
@@ -546,6 +618,7 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
           )}
         </div>
       )}
+      {clip.kind === 'audio' && <VolumeCurve clip={clip} width={w} height={layout.height} />}
 
       {selected && kfs.map((k, i) => {
         const kl = animKfs
@@ -553,10 +626,13 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
           : ((k.t - clip.in_point) / (srcDur || 1)) * w
         if (kl < -3 || kl > w + 3) return null
         const hold = (k.interpolation === 'hold' || k.pan_mode === 'direct')
+        const vol = clip.kind === 'audio' ? clampVolume(k.props?.volume ?? clipVolumeAt(clip, k.t)) : null
+        const top = vol == null ? undefined : `${(1 - vol / VOL_MAX) * 100}%`
+        const volHint = vol == null ? '' : ` · ${Math.round(vol * 100)}%`
         return (
-          <span key={k.id || i} className={`ed-kf-dot ${hold ? 'direct' : ''} ${k.id === selKfId ? 'sel' : ''}`}
-            style={{ left: kl, background: kfColor(i) }}
-            title={`Keyframe ${i + 1} · ${fmtRuler(animKfs ? k.t : k.t - clip.in_point, { step: 1 / Math.max(fps, 1), fps })}`}
+          <span key={k.id || i} className={`ed-kf-dot ${hold ? 'direct' : ''} ${k.id === selKfId ? 'sel' : ''} ${vol != null ? 'vol' : ''}`}
+            style={{ left: kl, top, background: kfColor(i) }}
+            title={`Keyframe ${i + 1} · ${fmtRuler(animKfs ? k.t : k.t - clip.in_point, { step: 1 / Math.max(fps, 1), fps })}${volHint}`}
             onPointerDown={(e) => { e.stopPropagation(); onKfDown(e, k, i) }}>{i + 1}</span>
         )
       })}

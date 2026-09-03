@@ -8,12 +8,19 @@ import {
 import { isVisualClip } from './editorModel'
 import EdText, { TextFxPanel } from './EdText'
 import EdTransform from './EdTransform'
-import { canKeyframe, KF_INTERPS, normalizeInterp, targetInterpItem } from '../../lib/clipKeyframes'
+import {
+  canKeyframe, clipPropsAt, clipVolumeAt, clampVolume, KF_INTERPS, keyframesEnabled,
+  normalizeInterp, targetInterpItem, VOL_MAX,
+} from '../../lib/clipKeyframes'
 
-function fxTabs(clip, textMode) {
+function fxTabs(clip, textMode, audioMode) {
   if (textMode === 'clip' || textMode === 'track' || clip?.kind === 'text') return ['text', 'transitions']
+  if (audioMode === 'track') return ['audio']
   if (!clip) return []
-  if (isVisualClip(clip)) return ['video', 'transitions']
+  if (isVisualClip(clip)) {
+    if (clip.kind === 'video') return ['video', 'audio', 'transitions']
+    return ['video', 'transitions']
+  }
   if (clip.kind === 'audio') return ['audio']
   return []
 }
@@ -44,22 +51,156 @@ function KfTransitionSelect({ clip, selKfId, playhead, onInterp, fps }) {
   )
 }
 
+function VolumePanel({ clip, playhead, onChangeFx, onPose, onAddKf, onFade, trackMode }) {
+  const localT = Math.max(0, (playhead ?? 0) - (clip.start || 0))
+  const keyed = !trackMode && keyframesEnabled(clip)
+  const vol = keyed ? clipVolumeAt(clip, localT) : clampVolume(clip?.volume ?? 1)
+  const pct = Math.round(vol * 100)
+
+  function setVolume(next) {
+    const v = clampVolume(next)
+    if (keyed) onPose?.({ volume: v })
+    else onChangeFx?.({ volume: v })
+  }
+
+  return (
+    <div className="ed-speed ed-vol">
+      <div className="ed-speed-head">
+        <span>{trackMode ? 'Volumen de la pista' : 'Volumen'}</span>
+        <strong>{pct}%</strong>
+      </div>
+      <div className="ed-vol-meter" aria-hidden="true">
+        <span style={{ width: `${Math.min(100, (vol / VOL_MAX) * 100)}%` }} />
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={Math.round(VOL_MAX * 100)}
+        step="1"
+        value={pct}
+        aria-label="Volumen"
+        aria-valuemin={0}
+        aria-valuemax={Math.round(VOL_MAX * 100)}
+        aria-valuenow={pct}
+        onChange={(e) => setVolume(Number(e.target.value) / 100)}
+      />
+      <label className="ed-vol-num">
+        Valor
+        <input
+          type="number"
+          min={0}
+          max={Math.round(VOL_MAX * 100)}
+          step="1"
+          value={pct}
+          aria-label="Volumen en porcentaje"
+          onChange={(e) => {
+            const n = Number(e.target.value)
+            if (!Number.isFinite(n)) return
+            setVolume(n / 100)
+          }}
+        />
+        <em>%</em>
+      </label>
+      <div className="ed-speed-toggles">
+        <button type="button" className="ed-mute" title="Subir de 0 al volumen actual" onClick={() => onFade?.('in')}>
+          Fade in
+        </button>
+        <button type="button" className="ed-mute" title="Bajar del volumen actual a 0" onClick={() => onFade?.('out')}>
+          Fade out
+        </button>
+      </div>
+      <button
+        type="button"
+        className={`ed-mute ${clip?.muted ? 'on' : ''}`}
+        onClick={() => onChangeFx?.({ muted: !clip?.muted })}
+        title={trackMode ? 'Silenciar todos los clips de la pista' : 'Silenciar solo este clip'}
+      >
+        <Icon name={clip?.muted ? 'volume_off' : 'volume_up'} size={15} />
+        Mute
+      </button>
+      {!trackMode && canKeyframe(clip) && (
+        <button
+          type="button"
+          className="ed-mute"
+          title="Keyframe de volumen en el cabezal"
+          onClick={() => onAddKf?.()}
+        >
+          <Icon name="timeline" size={15} />
+          Keyframe
+        </button>
+      )}
+    </div>
+  )
+}
+
+export function AudioFxGrid({ clip, playhead, onChangeFx, onPose, trackMode }) {
+  const audioFx = clip?.audio_fx && typeof clip.audio_fx === 'object' ? clip.audio_fx : {}
+  const localT = Math.max(0, (playhead ?? 0) - (clip?.start || 0))
+  const live = !trackMode && keyframesEnabled(clip) ? clipPropsAt(clip, localT) : null
+
+  function valueOf(id) {
+    if (live) return Math.min(1, Math.max(0, Number(live[id]) || 0))
+    return fxNum(audioFx, id)
+  }
+
+  function setFx(id, val) {
+    const n = Math.min(1, Math.max(0, Number(val) || 0))
+    if (!trackMode && keyframesEnabled(clip)) onPose?.({ [id]: n })
+    else onChangeFx?.({ audio_fx: { ...audioFx, [id]: n } })
+  }
+
+  function toggle(item) {
+    const on = valueOf(item.id) > 0
+    setFx(item.id, on ? 0 : (item.def ?? 1))
+  }
+
+  return (
+    <div className="ed-fx-grid">
+      {AUDIO_FX_TOGGLES.map((item) => {
+        const v = valueOf(item.id)
+        const on = v > 0
+        return (
+          <div key={item.id} className={`ed-fx-card ${on ? 'on' : ''}`}>
+            <button type="button" className="ed-fx-card-btn" onClick={() => toggle(item)}>
+              <Icon name={item.icon} size={18} />
+              <span>{item.label}</span>
+            </button>
+            {on && (
+              <input
+                type="range"
+                min={item.min ?? 0}
+                max={item.max ?? 1}
+                step={item.step ?? 0.05}
+                value={v}
+                aria-label={`Intensidad ${item.label}`}
+                onChange={(e) => setFx(item.id, Number(e.target.value))}
+              />
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function EdEffects({
   clip, onChangeFx, textStyle, textMode, onChangeTextStyle, onApplyTextPreset,
   playhead, onPose, onChangeFrame, selKfId, onInterpKf, textEditor, fps = 30,
+  audioMode, trackLabel, onAddKf, onFade, trackEmpty,
 }) {
-  const tabs = fxTabs(clip, textMode)
+  const trackMode = audioMode === 'track'
+  const tabs = fxTabs(clip, textMode, audioMode)
   const isTextFx = tabs[0] === 'text'
   const [tab, setTab] = useState(tabs[0] || 'video')
   const activeTab = tabs.includes(tab) ? tab : (tabs[0] || 'video')
-  const showKf = canKeyframe(clip)
+  const showKf = canKeyframe(clip) && !trackMode
 
   useEffect(() => {
     setTab((t) => {
-      const next = fxTabs(clip, textMode)
+      const next = fxTabs(clip, textMode, audioMode)
       return next.includes(t) ? t : (next[0] || 'video')
     })
-  }, [clip?.id, clip?.kind, textMode])
+  }, [clip?.id, clip?.kind, textMode, audioMode])
 
   const kfBlock = showKf ? (
     <EdTransform
@@ -69,6 +210,14 @@ export default function EdEffects({
       onChangeFrame={onChangeFrame}
     />
   ) : null
+
+  if (trackMode && trackEmpty) {
+    return (
+      <div className="ed-mat-list">
+        <div className="ed-mat-empty">Esta pista no tiene clips. Añade un audio para editar volumen y efectos.</div>
+      </div>
+    )
+  }
 
   if (!tabs.length && !showKf) {
     return (
@@ -155,14 +304,10 @@ export default function EdEffects({
     )
   }
 
-  const effects = clip.effects && typeof clip.effects === 'object' ? clip.effects : {}
-  const audioFx = clip.audio_fx && typeof clip.audio_fx === 'object' ? clip.audio_fx : {}
+  const effects = clip?.effects && typeof clip.effects === 'object' ? clip.effects : {}
 
   function patchEffects(next) {
     onChangeFx?.({ effects: { ...effects, ...next } })
-  }
-  function patchAudio(next) {
-    onChangeFx?.({ audio_fx: { ...audioFx, ...next } })
   }
 
   function toggleVideo(item) {
@@ -172,6 +317,36 @@ export default function EdEffects({
     }
     patchEffects({ [item.id]: fxOn(effects, item.id) ? 0 : item.def })
   }
+
+  const audioBlock = (
+    <>
+      {trackMode && (
+        <p className="ed-key-hint">
+          Se aplica a todos los clips de esta pista{trackLabel ? ` (${trackLabel})` : ''}.
+        </p>
+      )}
+      <VolumePanel
+        clip={clip}
+        playhead={playhead}
+        onChangeFx={onChangeFx}
+        onPose={onPose}
+        onAddKf={onAddKf}
+        onFade={onFade}
+        trackMode={trackMode}
+      />
+      <div className="ed-fx-label">Efectos</div>
+      <AudioFxGrid
+        clip={clip}
+        playhead={playhead}
+        onChangeFx={onChangeFx}
+        onPose={onPose}
+        trackMode={trackMode}
+      />
+      {!trackMode && (
+        <KfTransitionSelect clip={clip} selKfId={selKfId} playhead={playhead} onInterp={onInterpKf} fps={fps} />
+      )}
+    </>
+  )
 
   return (
     <div className="ed-fx">
@@ -270,21 +445,7 @@ export default function EdEffects({
           </>
         )}
 
-        {activeTab === 'audio' && (
-          <div className="ed-fx-grid">
-            {AUDIO_FX_TOGGLES.map((item) => {
-              const on = fxOn(audioFx, item.id)
-              return (
-                <div key={item.id} className={`ed-fx-card ${on ? 'on' : ''}`}>
-                  <button type="button" className="ed-fx-card-btn" onClick={() => patchAudio({ [item.id]: !on })}>
-                    <Icon name={item.icon} size={18} />
-                    <span>{item.label}</span>
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-        )}
+        {activeTab === 'audio' && audioBlock}
       </div>
     </div>
   )

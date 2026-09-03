@@ -34,11 +34,15 @@ OPS = {
     "set_text_role": timeline_ops.set_text_role,
     "set_clip_effects": timeline_ops.set_clip_effects,
     "set_clip_audio_fx": timeline_ops.set_clip_audio_fx,
+    "set_clip_volume": timeline_ops.set_clip_volume,
+    "set_track_audio": timeline_ops.set_track_audio,
     "set_clip_keyframes": timeline_ops.set_clip_keyframes,
+    "animate_clip": timeline_ops.animate_clip,
     "add_shape": timeline_ops.add_shape,
     "duplicate_clip": timeline_ops.duplicate_clip,
     "link_tracks": timeline_ops.link_tracks,
     "unlink_track": timeline_ops.unlink_track,
+    "rename_track": timeline_ops.rename_track,
 }
 
 

@@ -26,8 +26,8 @@ import { textRole } from '../../lib/textRole'
 import { SHAPE_DEFAULT_DUR } from '../../lib/shapes'
 import { applyFrame, disableOverlay, enableOverlay, isOverlay, mediaSize, newTransform, videosAt } from '../../lib/clipLayout'
 import {
-  canKeyframe, deleteKeyframeItem, flattenPatch, keyframeIdAt,
-  normalizeItems, patchKeyframe, upsertKeyframeAt,
+  AUDIO_FX_KEYS, applyVolumeFade, canKeyframe, clipVolumeAt, clampVolume, deleteKeyframeItem, flattenPatch, keyframeIdAt,
+  normalizeItems, opensEffectsOnSelect, patchKeyframe, upsertKeyframeAt,
 } from '../../lib/clipKeyframes'
 import { drawComposite, drawMainView } from './render/canvas'
 import { useExportJob } from './hooks/useExportJob'
@@ -328,7 +328,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         const expected = clamp(timelineToSource(c, head), c.in_point, c.out_point)
         if (active && playingRef.current) {
           el.muted = clipPlaybackMuted(c, track)
-          el.volume = previewElementVolume(c.volume ?? 1, previewVolRef.current, clipPlaybackMuted(c, track))
+          el.volume = previewElementVolume(clipVolumeAt(c, Math.max(0, head - (c.start || 0))), previewVolRef.current, clipPlaybackMuted(c, track))
           if (c.reverse) {
             if (!el.paused) el.pause()
             if (Math.abs(el.currentTime - expected) > 0.04) { try { el.currentTime = expected } catch { /* noop */ } }
@@ -827,7 +827,28 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setSelKfId(null)
     setFramingMode(null)
     const t = tracksRef.current.find((x) => x.id === id)
-    if (t?.kind === 'text') setMatTab('effects')
+    if (t?.kind === 'text' || t?.kind === 'audio') setMatTab('effects')
+  }
+  function renameTrack(id, name) {
+    const n = String(name || '').trim().slice(0, 32)
+    if (!n) return
+    setTracks((prev) => prev.map((t) => (t.id === id ? { ...t, name: n } : t)))
+  }
+  function patchTrackAudio(trackId, patch) {
+    setClips((prev) => prev.map((c) => {
+      if (c.track_id !== trackId || (c.kind !== 'audio' && c.kind !== 'video')) return c
+      const next = { ...c, ...patch }
+      if (patch.audio_fx && typeof patch.audio_fx === 'object') {
+        next.audio_fx = { ...(c.audio_fx && typeof c.audio_fx === 'object' ? c.audio_fx : {}), ...patch.audio_fx }
+      }
+      return next
+    }))
+  }
+  function fadeTrackAudio(trackId, side) {
+    setClips((prev) => prev.map((c) => {
+      if (c.track_id !== trackId || (c.kind !== 'audio' && c.kind !== 'video')) return c
+      return applyVolumeFade(c, clipDur(c), side)
+    }))
   }
   function handleSelectClip(clip, e) {
     if (!clip) return { ids: [], anchorId: null }
@@ -844,7 +865,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setSelKfId(null)
     if (clip.track_id) setSelTrackId(clip.track_id)
     if (!keepGroup) setFramingMode(null)
-    if (canKeyframe(clip)) setMatTab('effects')
+    if (opensEffectsOnSelect(clip)) setMatTab('effects')
     return next
   }
   function matchSelectedDurations() {
@@ -883,6 +904,16 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       return { ...c, style }
     }
     let next = { ...c }
+    if (patch.volume != null) next.volume = clampVolume(patch.volume)
+    const fxPatch = {}
+    for (const key of AUDIO_FX_KEYS) {
+      if (patch[key] != null && Number.isFinite(Number(patch[key]))) {
+        fxPatch[key] = Math.min(1, Math.max(0, Number(patch[key])))
+      }
+    }
+    if (Object.keys(fxPatch).length) {
+      next.audio_fx = { ...(c.audio_fx && typeof c.audio_fx === 'object' ? c.audio_fx : {}), ...fxPatch }
+    }
     if (patch.opacity != null) next.opacity = patch.opacity
     if (c.layout === 'overlay' || c.transform) {
       const tr = { ...newTransform(), ...c.transform }
@@ -1030,10 +1061,17 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (!clip || !canKeyframe(clip)) return
     setClips((prev) => prev.map((c) => {
       if (c.id !== clip.id) return c
-      const t = localTOf(c)
+      const t = clamp(localTOf(c), 0, clipDur(c))
       const next = upsertKf(c, t, {})
       markKf(next, t)
       return next
+    }))
+  }
+  function applySelectedFade(side) {
+    const ids = new Set(selIdsRef.current)
+    setClips((prev) => prev.map((c) => {
+      if (!ids.has(c.id) || (c.kind !== 'audio' && c.kind !== 'video')) return c
+      return applyVolumeFade(c, clipDur(c), side)
     }))
   }
   function patchKeyframePan(clip, kf, mode) {
@@ -1075,10 +1113,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     const kf = [...(clip.reframe?.keyframes || []), ...(clip.reframe?.keyframes2 || [])].find((k) => k.id === selKfId)
     if (kf) deleteKeyframe(clip, kf)
   }
-  function moveKeyframe(clipId, kfId, newT) {
+  function moveKeyframe(clipId, kfId, newT, extra) {
     setClips((prev) => prev.map((c) => {
       if (c.id !== clipId) return c
-      if (c.keyframes?.enabled) return patchKeyframe(c, kfId, { t: newT }, fpsRef.current)
+      if (c.keyframes?.enabled) {
+        const patch = { t: newT }
+        if (extra?.props) patch.props = extra.props
+        return patchKeyframe(c, kfId, patch, fpsRef.current)
+      }
       if (!c.reframe) return c
       const kfs = (c.reframe.keyframes || []).map((k) => (k.id === kfId ? { ...k, t: newT } : k))
       return { ...c, reframe: { ...c.reframe, keyframes: kfs } }
@@ -1440,6 +1482,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const isShapeSel = selectedClip?.kind === 'shape'
   const selTrackObj = tracks.find((t) => t.id === selTrackId)
   const isTextTrackSel = !selectedClip && selTrackObj?.kind === 'text'
+  const isAudioTrackSel = !selectedClip && selTrackObj?.kind === 'audio'
+  const trackAudioClip = isAudioTrackSel
+    ? clips.find((c) => c.track_id === selTrackObj.id && (c.kind === 'audio' || c.kind === 'video'))
+    : null
 
   function patchClipFx(patch) {
     const ids = new Set(selIdsRef.current)
@@ -1469,8 +1515,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onRefresh={onChange}
           fav={fav}
           onEditYtClip={openClipEditor}
-          selectedClip={selectedClip}
-          onChangeFx={patchClipFx}
+          selectedClip={isAudioTrackSel ? (trackAudioClip || { kind: 'audio', volume: 1, muted: false, audio_fx: {}, start: 0 }) : selectedClip}
+          onChangeFx={isAudioTrackSel ? (patch) => patchTrackAudio(selTrackObj.id, patch) : patchClipFx}
+          audioMode={isAudioTrackSel ? 'track' : null}
+          trackLabel={isAudioTrackSel ? selTrackObj.name : null}
+          trackEmpty={isAudioTrackSel && !trackAudioClip}
+          onAddKf={isAudioTrackSel ? undefined : addKeyframeAtPlayhead}
+          onFade={isAudioTrackSel ? (side) => fadeTrackAudio(selTrackObj.id, side) : applySelectedFade}
           textStyle={isTextSel ? effectiveTextStyle(selTrackObj?.style, selectedClip.style) : (isTextTrackSel ? selTrackObj.style : null)}
           textMode={isTextSel ? 'clip' : (isTextTrackSel ? 'track' : null)}
           onChangeTextStyle={(patch) => {
@@ -1483,12 +1534,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           }}
           matTab={matTab}
           onMatTab={setMatTab}
+          timelineClips={clips}
           playhead={playhead}
           fps={fps}
           onExportFps={setFps}
           aiContext={{ project_id: project.id, selected_clip_id: selClipId || null, selected_track_id: selTrackId || null, current_time: Math.round((playhead || 0) * 100) / 100 }}
           onReloadTimeline={reloadTimeline}
-          onPose={(patch) => selectedClip && commitPose(selectedClip.id, patch)}
+          onPose={(patch) => !isAudioTrackSel && selectedClip && commitPose(selectedClip.id, patch)}
           onChangeFrame={(slot) => applyClipFrame(selectedClip, slot)}
           selKfId={selKfId}
           onInterpKf={interpAnimKf}
@@ -1747,6 +1799,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onTrackCompact={compactTrack}
           onAddTrack={addTrack}
           onAddTextTrack={addTextTrack}
+          onRenameTrack={renameTrack}
           onMoveKeyframe={moveKeyframe}
           onSelectKf={selectTimelineKf}
           onAddKf={addKeyframeAtPlayhead}
@@ -1796,6 +1849,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             layer={layerInfo}
             onMoveLayer={(action) => moveLayer(selectedClip.id, action)}
             onChangeFx={patchClipFx}
+            onAddKf={addKeyframeAtPlayhead}
             onSelectKf={(k) => k && selectTimelineKf(k.id)}
             onDeleteKf={deleteAnimKf}
           />
@@ -1876,13 +1930,18 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                 className={item.danger ? 'danger' : undefined}
                 disabled={item.disabled}
                 onClick={() => {
-                  if (item.id === 'link') startLinkPick(trackMenu.track)
+                  if (item.id === 'rename') {
+                    const t = tracks.find((x) => x.id === trackMenu.track.id) || trackMenu.track
+                    const name = window.prompt('Nombre de la pista', t.name || '')
+                    if (name != null) renameTrack(t.id, name)
+                    setTrackMenu(null)
+                  } else if (item.id === 'link') startLinkPick(trackMenu.track)
                   else if (item.id === 'unlink') unlinkTrack(trackMenu.track)
                   else if (item.id === 'copy-text') copyTrackText(trackMenu.track)
                   else if (item.id === 'delete') requestDeleteTrack(trackMenu.track)
                 }}
               >
-                <Icon name={item.id === 'link' ? 'link' : item.id === 'unlink' ? 'link_off' : item.id === 'copy-text' ? 'content_copy' : 'delete'} size={15} />
+                <Icon name={item.id === 'rename' ? 'edit' : item.id === 'link' ? 'link' : item.id === 'unlink' ? 'link_off' : item.id === 'copy-text' ? 'content_copy' : 'delete'} size={15} />
                 {item.label}
               </button>
             ))}

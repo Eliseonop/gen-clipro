@@ -778,7 +778,7 @@ export function trackTextContent(clips, trackId) {
 }
 
 export function trackContextItems(track, { linked = false, canLink = false, hasText = false } = {}) {
-  const items = []
+  const items = [{ id: 'rename', label: 'Renombrar' }]
   if (track?.kind === 'audio') {
     items.push({
       id: linked ? 'unlink' : 'link',

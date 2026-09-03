@@ -45,6 +45,18 @@ class EditE45Test(unittest.TestCase):
         tools_edit.set_clip_effects(self.pid, "v", {"blur": 4})
         self.assertEqual(self._clip().effects["blur"], 4)
 
+    def test_set_clip_volume_persists(self):
+        tools_edit.set_clip_volume(self.pid, "v", volume=0.25, muted=True)
+        c = self._clip()
+        self.assertAlmostEqual(c.volume, 0.25)
+        self.assertTrue(c.muted)
+
+    def test_rename_track_persists(self):
+        res = tools_edit.rename_track(self.pid, "V1", "Principal")
+        self.assertTrue(res["ok"])
+        names = [t["name"] for t in res["timeline"]["tracks"]]
+        self.assertIn("Principal", names)
+
     def test_add_shape_persists(self):
         res = tools_edit.add_shape(self.pid, shape={"type": "rect", "fill": "#00ff00"})
         shapes = [c for c in projects.get_project(self.pid).timeline.clips if c.kind == "shape"]
@@ -79,6 +91,29 @@ class EditE45Test(unittest.TestCase):
         tools_edit.undo(self.pid)
         self.assertIsNone(self._clip().opacity)
 
+    def test_animate_clip_persists(self):
+        res = tools_edit.animate_clip(self.pid, "v", "spin_in", duration=0.4)
+        self.assertTrue(res["ok"])
+        kf = self._clip().keyframes
+        self.assertTrue(kf["enabled"])
+        self.assertGreater(kf["items"][0]["props"]["rotation"], 300)
+
+    def test_animate_clip_follow_audio(self):
+        tl = _timeline()
+        tl.tracks.append(TimelineTrack(id="A1", kind="audio", name="SFX"))
+        tl.clips.append(TimelineClip(
+            id="sfx1", track_id="A1", kind="audio", asset_kind="sfx",
+            asset_id="w", filename="whoosh.wav", start=0.0, in_point=0.0,
+            out_point=1.0, source_duration=1.0,
+        ))
+        projects.save_timeline(self.pid, tl.model_dump())
+        env = [(0.0, 0.0), (0.4, 1.0)]
+        with patch("app.mcp_server.tools_edit._follow_audio_envelope", return_value=(env, [])):
+            res = tools_edit.animate_clip(self.pid, "v", "slide_left", follow_audio_id="sfx1")
+        self.assertTrue(res["ok"])
+        x0 = self._clip().keyframes["items"][0]["props"]["x"]
+        self.assertLess(x0, 0.0)
+
 
 class FetchImageTest(unittest.TestCase):
     def setUp(self):
@@ -110,7 +145,8 @@ class RegistrationTest(unittest.TestCase):
         specs = registry.registered()
         for name in ("set_clip_opacity", "set_clip_speed", "set_clip_transition",
                      "set_text_role", "set_clip_effects", "set_clip_audio_fx",
-                     "set_clip_keyframes", "duplicate_clip", "add_shape",
+                     "set_clip_volume", "set_track_audio", "rename_track",
+                     "set_clip_keyframes", "animate_clip", "duplicate_clip", "add_shape",
                      "link_tracks", "unlink_track", "fetch_image"):
             self.assertIn(name, specs)
             self.assertEqual(specs[name].access, "write")

@@ -27,6 +27,7 @@ const TOOL_LABELS = {
   set_clip_opacity: 'Ajustando la opacidad…',
   set_clip_transition: 'Aplicando transición…',
   set_clip_keyframes: 'Animando el clip…',
+  animate_clip: 'Animando el clip…',
   set_text_role: 'Ajustando el texto…',
   undo: 'Deshaciendo…',
   redo: 'Rehaciendo…',
@@ -47,7 +48,7 @@ const EXAMPLES = [
   'Deshaz lo último.',
 ]
 
-export default function EdChat({ project, context, onReload }) {
+export default function EdChat({ project, context, onReload, onBusy }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -58,6 +59,10 @@ export default function EdChat({ project, context, onReload }) {
   const scrollRef = useRef(null)
 
   useEffect(() => { ctxRef.current = context }, [context])
+  useEffect(() => {
+    onBusy?.(busy)
+    return () => onBusy?.(false)
+  }, [busy, onBusy])
   useEffect(() => { getAiConfig().then(setCfg).catch(() => setCfg({ available: false, reason: 'No se pudo consultar el proveedor.' })) }, [])
   useEffect(() => { scrollRef.current?.scrollTo({ top: 9e9, behavior: 'smooth' }) }, [messages])
 

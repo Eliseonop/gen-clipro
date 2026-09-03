@@ -131,6 +131,14 @@ def save(data: dict) -> dict:
         return current
 
 
+def api_key(name: str) -> str:
+    """Clave de un proveedor (Pexels, GIPHY, Gemini…). Vacío si no está configurada."""
+    kid = str(name or "").strip()
+    if not kid:
+        return ""
+    return str(_api_keys_map(load()).get(kid) or "").strip()
+
+
 def public() -> dict:
     """Ajustes para el frontend: no expone secretos de API."""
     data = dict(load())

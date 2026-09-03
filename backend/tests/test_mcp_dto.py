@@ -73,6 +73,8 @@ class ProjectContextTest(unittest.TestCase):
         ctx = dto.project_context(_make_project())
         caps = ctx["capabilities"]
         self.assertIn("clip.speed:0.1-10|keep_pitch|reverse", caps)
+        self.assertIn("clip.volume:0-2|mute|fade_in|fade_out", caps)
+        self.assertIn("tracks.rename", caps)
         self.assertIn("clip.position:top|bottom|full", caps)
         self.assertIn("media.library", caps)
         self.assertIn("media.image", caps)

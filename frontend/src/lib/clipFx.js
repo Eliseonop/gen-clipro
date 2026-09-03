@@ -46,12 +46,12 @@ export const COLOR_FX = [
 ]
 
 export const AUDIO_FX_TOGGLES = [
-  { id: 'eq', label: 'Equalizer', icon: 'equalizer' },
-  { id: 'compressor', label: 'Compressor', icon: 'compress' },
-  { id: 'reverb', label: 'Reverb', icon: 'waves' },
-  { id: 'echo', label: 'Echo', icon: 'record_voice_over' },
-  { id: 'denoise', label: 'Noise reduction', icon: 'hearing' },
-  { id: 'distortion', label: 'Distortion', icon: 'speaker' },
+  { id: 'eq', label: 'Equalizer', icon: 'equalizer', kind: 'range', min: 0, max: 1, step: 0.05, def: 1 },
+  { id: 'compressor', label: 'Compressor', icon: 'compress', kind: 'range', min: 0, max: 1, step: 0.05, def: 1 },
+  { id: 'reverb', label: 'Reverb', icon: 'waves', kind: 'range', min: 0, max: 1, step: 0.05, def: 1 },
+  { id: 'echo', label: 'Echo', icon: 'record_voice_over', kind: 'range', min: 0, max: 1, step: 0.05, def: 1 },
+  { id: 'denoise', label: 'Noise reduction', icon: 'hearing', kind: 'range', min: 0, max: 1, step: 0.05, def: 1 },
+  { id: 'distortion', label: 'Distortion', icon: 'speaker', kind: 'range', min: 0, max: 1, step: 0.05, def: 1 },
 ]
 
 export const LOOK_OPTIONS = [

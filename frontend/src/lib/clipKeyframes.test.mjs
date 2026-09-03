@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import {
   easeT, interpItems, enableKeyframes, upsertKeyframeAt, clipPropsAt, keyframesOn,
   deleteKeyframeItem, normalizeInterp, keyframeIdAt,
+  canKeyframe, opensEffectsOnSelect, clipVolumeAt, applyVolumeFade, sampleVolumeCurve,
 } from './clipKeyframes.js'
 
 assert.equal(normalizeInterp('direct'), 'hold')
@@ -65,5 +66,51 @@ assert.ok(e.x < 0.5)
 
 assert.equal(clipPropsAt({ kind: 'image', opacity: null }, 0).opacity, 1)
 assert.equal(clipPropsAt({ kind: 'image', opacity: 0.4 }, 0).opacity, 0.4)
+
+assert.equal(canKeyframe({ kind: 'audio' }), true)
+assert.equal(opensEffectsOnSelect({ kind: 'audio' }), true)
+assert.equal(opensEffectsOnSelect({ kind: 'video' }), true)
+assert.equal(opensEffectsOnSelect({ kind: 'shape' }), true)
+
+assert.equal(clipVolumeAt({ kind: 'audio', volume: 0.5 }, 0), 0.5)
+
+const volClip = {
+  kind: 'audio',
+  volume: 1,
+  keyframes: {
+    enabled: true,
+    items: [
+      { t: 0, interpolation: 'linear', props: { volume: 1 } },
+      { t: 3, interpolation: 'linear', props: { volume: 0.3 } },
+      { t: 5, interpolation: 'linear', props: { volume: 0.8 } },
+    ],
+  },
+}
+assert.ok(Math.abs(clipVolumeAt(volClip, 0) - 1) < 1e-9)
+assert.ok(Math.abs(clipVolumeAt(volClip, 3) - 0.3) < 1e-9)
+assert.ok(Math.abs(clipVolumeAt(volClip, 1.5) - 0.65) < 1e-9)
+assert.ok(Math.abs(clipVolumeAt(volClip, 4) - 0.55) < 1e-9)
+
+const fxClip = {
+  kind: 'audio',
+  audio_fx: { reverb: 0 },
+  keyframes: {
+    enabled: true,
+    items: [
+      { t: 0, interpolation: 'linear', props: { reverb: 0 } },
+      { t: 2, interpolation: 'linear', props: { reverb: 1 } },
+    ],
+  },
+}
+assert.ok(Math.abs(clipPropsAt(fxClip, 1).reverb - 0.5) < 1e-9)
+
+const faded = applyVolumeFade({ kind: 'audio', volume: 1 }, 5, 'in', 0.5)
+assert.equal(faded.keyframes.enabled, true)
+assert.ok(Math.abs(clipVolumeAt(faded, 0)) < 1e-9)
+assert.ok(Math.abs(clipVolumeAt(faded, 0.5) - 1) < 1e-9)
+
+const curve = sampleVolumeCurve(volClip, 5, 10)
+assert.ok(curve.length >= 3)
+assert.ok(Math.abs(curve[0].v - 1) < 1e-9)
 
 console.log('clipKeyframes ok')
