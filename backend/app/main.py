@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import config, diagnostics, heatmap, jobs, migrations, projects, settings, storage, timeline_store, tts
+from . import config, diagnostics, heatmap, jobs, migrations, projects, settings, storage, timeline_store, transcribe_settings, tts
 from .mcp_server import server as mcp_server
 from .schemas import (
     AnalyzeRequest,
@@ -424,7 +424,7 @@ def generate_subtitles(project_id: str, body: dict = Body(...)) -> Job:
         raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
     filename = (body or {}).get("filename") or ""
     asset_kind = (body or {}).get("asset_kind") or "audios"
-    model = (body or {}).get("model") or "base"
+    model = transcribe_settings.resolve((body or {}).get("model"))
     language = (body or {}).get("language")
     if not filename:
         raise HTTPException(status_code=400, detail="Falta el archivo de audio.")

@@ -6,8 +6,10 @@ import { pseudoWaveform, clamp, kfColor } from '../../lib/panning'
 import { clipDur, clipSourceDur, clipSpeed, displayTracks, isVisualClip, laneKindForAsset, linkedPartnerName, trackKindForClip, trimClipPatch, trimPreviewHead } from './editorModel'
 import { alignOthers, alignThresholdSec, asAlignClip, snapClipGroup, snapClipMove, snapClipTrim, timelineAlignHits } from './timelineAlign'
 import { keyframesEnabled, normalizeItems } from '../../lib/clipKeyframes'
+import { snapToFrame } from '../../lib/projectFps'
 import { stackViewForTrack } from './clipStack.js'
 import { headerScrollPad, timelineWheelAction } from './timelineWheel'
+import { buildTicks, clampPps, fmtRuler, tickStep } from './timelineScale'
 
 function PreviewVolButton({ value = 1, onChange }) {
   const [open, setOpen] = useState(false)
@@ -76,7 +78,7 @@ function FaceTrackButton({ onPick, disabled, busy }) {
 const laneKindFor = laneKindForAsset
 
 export default function EdTimeline({
-  tracks, clips, pps, setPps, duration, playhead, rowH, setRowH,
+  tracks, clips, pps, setPps, duration, playhead, rowH, setRowH, fps = 30,
   selectedClipId, selectedClipIds, selectedTrackId, selectedClip, selKfId, dragInfo,
   onSeek, onScrub, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onMoveGroup, onMatchDuration, onSplit, onDuplicate, onDeleteClip,
   previewVol, onPreviewVol,
@@ -92,6 +94,10 @@ export default function EdTimeline({
   const [expandedClusterId, setExpandedClusterId] = useState(null)
   const [trimGuide, setTrimGuide] = useState(null) // { t, dur }
   const [alignTimes, setAlignTimes] = useState(null) // number[] mientras se mueve/recorta
+  const [scrollX, setScrollX] = useState(0)
+  const [viewW, setViewW] = useState(900)
+  const rulerStep = tickStep(pps, fps, !!trimGuide)
+  const rulerLong = duration >= 3600
 
   const rows = displayTracks(tracks)
   const totalW = Math.max(duration + 4, 12) * pps
@@ -143,6 +149,34 @@ export default function EdTimeline({
     }
   }, [rows.length, rowH])
 
+  useEffect(() => {
+    const el = lanesRef.current
+    if (!el) return
+    let raf = 0
+    const sync = () => {
+      setScrollX(el.scrollLeft)
+      setViewW(el.clientWidth)
+    }
+    const onScroll = () => {
+      if (raf) return
+      raf = requestAnimationFrame(() => { raf = 0; sync() })
+    }
+    sync()
+    el.addEventListener('scroll', onScroll, { passive: true })
+    const ro = new ResizeObserver(sync)
+    ro.observe(el)
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      ro.disconnect()
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [rows.length])
+
+  useEffect(() => {
+    const w = lanesRef.current?.clientWidth || viewW
+    setPps((p) => clampPps(p, duration, w, fps))
+  }, [duration, fps])
+
   // Rueda: zoom solo sobre la regla; en pistas, scroll vertical. ctrl=alto; shift=horizontal.
   useEffect(() => {
     const body = bodyRef.current
@@ -163,8 +197,9 @@ export default function EdTimeline({
       }
       if (action === 'scrollX') { scroll.scrollLeft += e.deltaY; return }
       const t = xToTime(e.clientX)
+      const w = scroll.clientWidth || viewW
       setPps((p) => {
-        const np = clamp(e.deltaY < 0 ? p * 1.15 : p / 1.15, 8, 500)
+        const np = clampPps(e.deltaY < 0 ? p * 1.2 : p / 1.2, duration, w, fps)
         requestAnimationFrame(() => {
           const rect = scroll.getBoundingClientRect()
           scroll.scrollLeft = t * np - (e.clientX - rect.left)
@@ -175,7 +210,7 @@ export default function EdTimeline({
     body.addEventListener('wheel', onWheel, { passive: false })
     return () => body.removeEventListener('wheel', onWheel)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pps])
+  }, [pps, duration, fps])
 
   function onRulerDown(e) {
     setExpandedClusterId(null)
@@ -268,7 +303,7 @@ export default function EdTimeline({
       const nt = clip.keyframes?.enabled
         ? clamp(orig + deltaT, 0, dur)
         : clamp(orig + deltaT, clip.in_point, clip.out_point)
-      onMoveKeyframe(clip.id, kf.id, +nt.toFixed(3))
+      onMoveKeyframe(clip.id, kf.id, snapToFrame(nt, fps))
     }
     const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
@@ -327,15 +362,15 @@ export default function EdTimeline({
           <button className="ghost small" onClick={() => onAddTrack('audio')} title="Añadir pista de audio"><Icon name="add" size={14} /> A</button>
           <button className="ghost small" onClick={onAddTextTrack} title="Añadir pista de texto"><Icon name="add" size={14} /> Texto</button>
           <span className="ed-zoom">
-            <button className="icon-btn" onClick={() => setPps((p) => Math.max(8, p / 1.4))} title="Alejar"><Icon name="zoom_out" size={17} /></button>
-            <button className="icon-btn" onClick={() => setPps((p) => Math.min(500, p * 1.4))} title="Acercar"><Icon name="zoom_in" size={17} /></button>
+            <button className="icon-btn" onClick={() => setPps((p) => clampPps(p / 1.4, duration, viewW, fps))} title="Alejar"><Icon name="zoom_out" size={17} /></button>
+            <button className="icon-btn" onClick={() => setPps((p) => clampPps(p * 1.4, duration, viewW, fps))} title="Acercar"><Icon name="zoom_in" size={17} /></button>
           </span>
         </div>
       </div>
 
       <div className="ed-tl-body" ref={bodyRef}>
         <div className="ed-tl-headers" ref={headersRef}>
-          <div className="ed-ruler-corner">{fmt(playhead)}</div>
+          <div className="ed-ruler-corner">{fmtRuler(playhead, { step: rulerStep, fps, long: rulerLong })}</div>
           {rows.map((t) => {
             const view = viewsByTrack.get(t.id)
             const vh = view.height
@@ -372,7 +407,7 @@ export default function EdTimeline({
                     onClick={(e) => { e.stopPropagation(); if (picking) return; onTrackToggle(t.id, 'muted') }} disabled={t.kind === 'text'}>
                     <Icon name={t.muted ? 'volume_off' : 'volume_up'} size={14} />
                   </button>
-                  <button className="ed-th-btn" title="Juntar clips (sin huecos ni solapes)"
+                  <button className="ed-th-btn" title="Juntar clips al inicio (sin huecos ni solapes)"
                     onClick={(e) => { e.stopPropagation(); if (picking) return; onTrackCompact(t.id) }} disabled={t.locked}>
                     <Icon name="compress" size={14} />
                   </button>
@@ -389,12 +424,12 @@ export default function EdTimeline({
         <div className="ed-tl-scroll" ref={lanesRef}>
           <div className="ed-tl-inner" style={{ width: totalW }}>
             <div className={`ed-ruler${trimGuide ? ' live' : ''}`} title="Rueda: zoom de tiempo" onPointerDown={onRulerDown}>
-              {buildTicks(duration + 4, pps, !!trimGuide).map((tk) => (
-                <span key={tk.t} className={`ed-tick${tk.minor ? ' minor' : ''}`} style={{ left: tk.t * pps }}><i />{tk.major ? <em>{fmt(tk.t)}</em> : null}</span>
+              {buildTicks(duration + 4, pps, { fps, dense: !!trimGuide, scrollX, viewW }).map((tk) => (
+                <span key={`${tk.minor ? 'm' : 'M'}-${tk.t}`} className={`ed-tick${tk.minor ? ' minor' : ''}`} style={{ left: tk.t * pps }}><i />{tk.major ? <em>{fmtRuler(tk.t, { step: tk.step, fps, long: rulerLong })}</em> : null}</span>
               ))}
               {trimGuide && (
                 <span className="ed-trim-chip" style={{ left: trimGuide.t * pps }}>
-                  {fmt(trimGuide.t)}
+                  {fmtRuler(trimGuide.t, { step: rulerStep, fps, long: rulerLong })}
                   <em>{fmt(trimGuide.dur)}</em>
                 </span>
               )}
@@ -424,7 +459,7 @@ export default function EdTimeline({
                     const lay = view.layouts.get(c.id)
                     if (!lay || lay.variant === 'hidden') return null
                     return (
-                      <ClipBlock key={c.id} clip={c} pps={pps} layout={lay}
+                      <ClipBlock key={c.id} clip={c} pps={pps} layout={lay} fps={fps}
                         selected={selectedIds.includes(c.id)} selKfId={selKfId}
                         onDown={(e, mode) => startClipDrag(e, c, mode)}
                         onKfDown={(e, kf, idx) => startKfDrag(e, c, kf, idx)}
@@ -462,7 +497,7 @@ export default function EdTimeline({
   )
 }
 
-function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onContext, onDouble }) {
+function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onContext, onDouble, fps = 30 }) {
   const dur = clipDur(clip)
   const srcDur = clipSourceDur(clip)
   const sp = clipSpeed(clip)
@@ -506,30 +541,10 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
         return (
           <span key={k.id || i} className={`ed-kf-dot ${hold ? 'direct' : ''} ${k.id === selKfId ? 'sel' : ''}`}
             style={{ left: kl, background: kfColor(i) }}
-            title={`Keyframe ${i + 1} · ${fmt(animKfs ? k.t : k.t - clip.in_point)}`}
+            title={`Keyframe ${i + 1} · ${fmtRuler(animKfs ? k.t : k.t - clip.in_point, { step: 1 / Math.max(fps, 1), fps })}`}
             onPointerDown={(e) => { e.stopPropagation(); onKfDown(e, k, i) }}>{i + 1}</span>
         )
       })}
     </div>
   )
-}
-
-function buildTicks(maxT, pps, dense = false) {
-  const targetPx = dense ? 48 : 90
-  const rawStep = targetPx / pps
-  const steps = dense
-    ? [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300]
-    : [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300]
-  const step = steps.find((s) => s >= rawStep) || 600
-  const ticks = []
-  for (let t = 0; t <= maxT; t += step) ticks.push({ t: +t.toFixed(2), major: true })
-  if (dense && step >= 0.5) {
-    const minor = step / 5
-    for (let t = 0; t <= maxT; t += minor) {
-      const n = +t.toFixed(2)
-      if (ticks.some((tk) => Math.abs(tk.t - n) < 1e-6)) continue
-      ticks.push({ t: n, major: false, minor: true })
-    }
-  }
-  return ticks
 }

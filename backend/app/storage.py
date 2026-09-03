@@ -16,6 +16,8 @@ from pathlib import Path
 
 from . import config
 
+_MEDIA_URL_RE = re.compile(r"/api/media/([^/]+)/(video|audio|image)/(.+)$")
+
 
 def default_base(project_id: str) -> Path:
     return config.OUTPUT_DIR / project_id
@@ -56,6 +58,29 @@ def resolve_media(project, kind: str, filename: str) -> Path | None:
     if base not in target.parents:
         return None
     return target
+
+
+def is_media_url(url: str) -> bool:
+    return bool(_MEDIA_URL_RE.search(url or ""))
+
+
+def try_local_media(url: str) -> Path | None:
+    """Si ``url`` es ``/api/media/...`` (o un http que la incluye) y el archivo existe."""
+    from urllib.parse import unquote
+
+    from . import projects
+
+    m = _MEDIA_URL_RE.search(url or "")
+    if not m:
+        return None
+    pid, kind, filename = m.group(1), m.group(2), unquote(m.group(3))
+    proj = projects.get_project(pid)
+    if proj is None:
+        return None
+    path = resolve_media(proj, kind, filename)
+    if path is None or not path.exists():
+        return None
+    return path
 
 
 def library_root() -> Path:

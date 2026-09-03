@@ -1,6 +1,7 @@
 // Estado y sondeo del job de exportación del timeline.
 import { useState, useEffect } from 'react'
 import { getJob, getSettings, saveTimeline, exportTimeline } from '../../../services/api'
+import { normalizeFps } from '../../../lib/projectFps'
 
 export function useExportJob(projectId, { timelinePayload, exportPayload }) {
   const [exportJob, setExportJob] = useState(null)
@@ -19,8 +20,7 @@ export function useExportJob(projectId, { timelinePayload, exportPayload }) {
       let fps = 30
       try {
         const s = await getSettings()
-        const n = Number(s?.export?.fps)
-        if (n === 24 || n === 25 || n === 30 || n === 50 || n === 60) fps = n
+        fps = normalizeFps(s?.export?.fps)
       } catch { /* usa 30 */ }
       const tl = { ...timelinePayload(), fps }
       const ex = { ...exportPayload(), fps }

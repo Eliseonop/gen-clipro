@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import Icon from '../../components/Icon'
-import { fmt } from '../../lib/utils'
+import { fmt, parseTime } from '../../lib/utils'
 import { FAV_CAT } from '../../lib/favorites'
 import { analyze, listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryItem, unsaveLibraryItem, uploadImages, uploadVideo, uploadAudio, getSettings, putSettings, deleteMaterial, updateMaterial, fetchRemoteImage } from '../../services/api'
 import MaterialClipGrid, { dragPayload, useToggle, useExclusiveMedia, Empty, ImageCard, MaterialMenuBtn } from './MaterialClipGrid'
@@ -70,18 +70,88 @@ function pickDefaultSfxCat(categories, current) {
   return (other || cats[0] || {}).id || ''
 }
 
-function CargarRecList({ segments, videoId, preview, setPreview, configs, onEdit }) {
-  if (!segments.length) {
-    return (
-      <div className="ed-cargar-empty">
-        <Icon name="auto_awesome" size={22} />
-        <p>Este vídeo no tiene tramos recomendados.</p>
-      </div>
-    )
+function TimeInput({ label, value, onCommit }) {
+  const [text, setText] = useState(fmt(value))
+  useEffect(() => { setText(fmt(value)) }, [value])
+  function commit() {
+    const s = parseTime(text)
+    if (s == null) { setText(fmt(value)); return }
+    onCommit(s)
   }
   return (
-    <div className="ed-cargar-recs clips-panel-body">
-      {segments.map((s) => {
+    <label className="field">
+      <span>{label}</span>
+      <input
+        className="ed-yt-url"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => e.key === 'Enter' && commit()}
+      />
+    </label>
+  )
+}
+
+function CargarCustom({
+  duration, videoId, inT, outT, setInT, setOutT, preview, setPreview, onEdit, onUseFull,
+}) {
+  const dur = Number(duration) || 0
+  const span = Math.max(0, outT - inT)
+  const showing = preview === 'custom'
+  function clampStart(s) {
+    const max = dur > 0.5 ? Math.max(0, (outT || dur) - 0.5) : Math.max(0, outT - 0.5)
+    setInT(Math.max(0, Math.min(s, max)))
+  }
+  function clampEnd(s) {
+    const hi = dur > 0.5 ? dur : Math.max(s, inT + 0.5)
+    setOutT(Math.min(hi, Math.max(s, inT + 0.5)))
+  }
+  return (
+    <div className="ed-cargar-custom">
+      <div className="ed-key-row-head">
+        <span className="ed-key-name">Clip personalizado</span>
+        <span className="ed-key-set">{fmt(span)}</span>
+      </div>
+      <p className="ed-key-hint">Inicio y fin sobre el vídeo completo. También puedes usarlo entero.</p>
+      <div className="ed-cargar-times">
+        <TimeInput label="Inicio" value={inT} onCommit={clampStart} />
+        <TimeInput label="Fin" value={outT} onCommit={clampEnd} />
+      </div>
+      {showing && videoId && (
+        <div className="seg-player-mini">
+          <iframe
+            src={`https://www.youtube.com/embed/${videoId}?start=${Math.floor(inT)}&end=${Math.ceil(outT)}&autoplay=1&rel=0`}
+            title="Clip personalizado"
+            allow="autoplay; encrypted-media"
+            allowFullScreen
+          />
+        </div>
+      )}
+      <div className="clip-card-actions">
+        <button className="primary small edit-btn" type="button" onClick={onEdit} disabled={span < 0.5}>
+          <Icon name="movie_edit" size={16} /> Crear clip
+        </button>
+        <button
+          className="ghost small"
+          type="button"
+          onClick={() => setPreview(showing ? null : 'custom')}
+          title="Previsualizar el recorte"
+          disabled={!videoId || span < 0.5}
+        >
+          <Icon name={showing ? 'close' : 'play_arrow'} size={16} />
+          {showing ? 'Cerrar' : 'Ver'}
+        </button>
+      </div>
+      <button className="ghost small ed-cargar-full" type="button" onClick={onUseFull} title="Abrir el vídeo completo en el Clip Editor">
+        <Icon name="movie" size={16} /> Usar vídeo completo
+      </button>
+    </div>
+  )
+}
+
+function CargarRecList({ segments, videoId, preview, setPreview, configs, onEdit }) {
+  if (!segments.length) return null
+  return segments.map((s) => {
         const scorePct = Math.round((s.score || 0) * 100)
         const isEdited = !!configs[`seg-${s.index}`]
         const isPreviewing = preview === s.index
@@ -139,9 +209,7 @@ function CargarRecList({ segments, videoId, preview, setPreview, configs, onEdit
             </div>
           </div>
         )
-      })}
-    </div>
-  )
+      })
 }
 
 function ScopeFilter({ value, onChange, includeLoad = false, loadId = 'cargar', loadLabel = 'Cargar clips' }) {
@@ -185,6 +253,7 @@ export default function EdMaterial({
   textStyle, textMode, onChangeTextStyle, onApplyTextPreset, textEditor,
   matTab, onMatTab,
   playhead, onPose, onChangeFrame, selKfId, onInterpKf,
+  fps = 30, onExportFps,
 }) {
   const [tabState, setTabState] = useState('video')
   const tab = matTab ?? tabState
@@ -202,6 +271,8 @@ export default function EdMaterial({
   const [ytElapsed, setYtElapsed] = useState(0)
   const [ytResult, setYtResult] = useState(null)
   const [ytPreview, setYtPreview] = useState(null)
+  const [ytIn, setYtIn] = useState(0)
+  const [ytOut, setYtOut] = useState(30)
   const [ytConfigs, setYtConfigs] = useState({})
   const [ytHistory, setYtHistory] = useState([])
   const [histOpen, setHistOpen] = useState(false)
@@ -440,6 +511,9 @@ export default function EdMaterial({
     try {
       const res = await analyze({ url, ...YT_ANALYZE_OPTS })
       setYtResult(res)
+      const dur = Number(res?.video?.duration) || 0
+      setYtIn(0)
+      setYtOut(dur > 0.5 ? Math.min(dur, 30) : 30)
       try {
         const s = await getSettings()
         setYtHistory(normalizeHistory(s.yt_history))
@@ -464,6 +538,29 @@ export default function EdMaterial({
       description: s.description || s.label || '',
       videoId: ytResult?.video?.id,
     })
+  }
+
+  function ytRange(start, end) {
+    const dur = Number(ytResult?.video?.duration) || 0
+    let a = Math.max(0, Number(start) || 0)
+    let b = Math.max(a + 0.5, Number(end) || 0)
+    if (dur > 0.5) {
+      b = Math.min(dur, b)
+      a = Math.max(0, Math.min(a, b - 0.5))
+    }
+    return [+a.toFixed(2), +b.toFixed(2)]
+  }
+
+  function openCustomClip() {
+    const [start, end] = ytRange(ytIn, ytOut)
+    if (end - start < 0.5) { setYtErr('El rango es demasiado corto.'); return }
+    openYtEditor({ index: 100000 + (Date.now() % 900000), start, end, description: 'Clip personalizado' })
+  }
+
+  function openFullVideo() {
+    const dur = Number(ytResult?.video?.duration) || 0
+    const end = dur > 0.5 ? dur : Math.max(ytOut, 30)
+    openYtEditor({ index: 100000 + (Date.now() % 900000), start: 0, end, description: 'Vídeo completo' })
   }
 
   function openProjectClip(c) {
@@ -776,16 +873,35 @@ export default function EdMaterial({
                 <>
                   <div className="ed-yt-meta">
                     <strong title={ytResult.video?.title}>{ytResult.video?.title || 'Vídeo cargado'}</strong>
-                    <span>Recomendados ({(ytResult.has_heatmap ? ytResult.segments : []).length})</span>
+                    <span>
+                      {ytResult.video?.duration ? fmt(ytResult.video.duration) : ''}
+                      {(ytResult.has_heatmap ? ytResult.segments : []).length
+                        ? ` · ${(ytResult.has_heatmap ? ytResult.segments : []).length} recomendados`
+                        : ' · Sin tramos recomendados'}
+                    </span>
                   </div>
-                  <CargarRecList
-                    segments={ytResult.has_heatmap ? (ytResult.segments || []) : []}
-                    videoId={ytResult.video?.id}
-                    preview={ytPreview}
-                    setPreview={setYtPreview}
-                    configs={ytConfigs}
-                    onEdit={openYtEditor}
-                  />
+                  <div className="ed-cargar-recs clips-panel-body">
+                    <CargarCustom
+                      duration={ytResult.video?.duration}
+                      videoId={ytResult.video?.id}
+                      inT={ytIn}
+                      outT={ytOut}
+                      setInT={setYtIn}
+                      setOutT={setYtOut}
+                      preview={ytPreview}
+                      setPreview={setYtPreview}
+                      onEdit={openCustomClip}
+                      onUseFull={openFullVideo}
+                    />
+                    <CargarRecList
+                      segments={ytResult.has_heatmap ? (ytResult.segments || []) : []}
+                      videoId={ytResult.video?.id}
+                      preview={ytPreview}
+                      setPreview={setYtPreview}
+                      configs={ytConfigs}
+                      onEdit={openYtEditor}
+                    />
+                  </div>
                 </>
               )}
             </div>
@@ -889,10 +1005,11 @@ export default function EdMaterial({
           onChangeFrame={onChangeFrame}
           selKfId={selKfId}
           onInterpKf={onInterpKf}
+          fps={fps}
           textEditor={textEditor}
         />
       )}
-      {tab === 'settings' && <EdSettings />}
+      {tab === 'settings' && <EdSettings onExportFps={onExportFps} />}
       {navItem?.empty && (
         <div className="ed-mat-list">
           <div className="ed-mat-empty">

@@ -99,7 +99,8 @@ export const deleteMaterial = (pid, kind, id) => del(`/api/projects/${pid}/mater
 export const autoDescribeClip = (pid, index) => post(`/api/projects/${pid}/materials/clips/${index}/auto-describe`, {})
 export const getManifest = (pid) => get(`/api/projects/${pid}/manifest`)
 export const putManifest = (pid, data) => put(`/api/projects/${pid}/manifest`, data)
-export const transcribeClip = (pid, index, model) => post(`/api/projects/${pid}/clips/${index}/transcribe`, { model })
+export const transcribeClip = (pid, index, model) =>
+  post(`/api/projects/${pid}/clips/${index}/transcribe`, model ? { model } : {})
 
 // --- Editor de vídeo (timeline) ---
 export const getTimeline = (pid) => get(`/api/projects/${pid}/timeline`)

@@ -27,7 +27,19 @@ log = logging.getLogger("videoyt.clipper")
 
 
 def _download_source(url: str, dest_dir: Path, on_progress: ProgressCb) -> Path:
-    """Descarga el vídeo completo (mejor calidad <=1080p) y devuelve su ruta."""
+    """Resuelve el vídeo fuente: archivo local del proyecto, o descarga con yt-dlp."""
+    from . import storage
+
+    local = storage.try_local_media(url)
+    if local is not None:
+        on_progress(0.35, "Usando el vídeo local…")
+        return local
+    if storage.is_media_url(url):
+        raise RuntimeError(
+            "No se encontró el archivo de vídeo en el proyecto. "
+            "Comprueba que sigue en la carpeta de material."
+        )
+
     outtmpl = str(dest_dir / "source.%(ext)s")
     opts = {
         "quiet": True,

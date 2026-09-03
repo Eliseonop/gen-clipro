@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import {
   easeT, interpItems, enableKeyframes, upsertKeyframeAt, clipPropsAt, keyframesOn,
-  deleteKeyframeItem, normalizeInterp,
+  deleteKeyframeItem, normalizeInterp, keyframeIdAt,
 } from './clipKeyframes.js'
 
 assert.equal(normalizeInterp('direct'), 'hold')
@@ -29,9 +29,16 @@ const hold = upsertKeyframeAt(on, 2, { x: 0.8 }, 'hold')
 assert.equal(clipPropsAt(hold, 1).x, 0.2)
 assert.ok(Math.abs(clipPropsAt(hold, 2).x - 0.8) < 1e-9)
 
-const same = upsertKeyframeAt(two, 2.02, { x: 0.9 })
+const same = upsertKeyframeAt(two, 2 + 1 / 120, { x: 0.9 }, undefined, 30)
 assert.equal(same.keyframes.items.length, 2)
 assert.ok(Math.abs(same.keyframes.items[1].props.x - 0.9) < 1e-9)
+
+const nextFrame = upsertKeyframeAt(two, 2 + 1 / 30, { x: 0.1 }, undefined, 30)
+assert.equal(nextFrame.keyframes.items.length, 3)
+
+assert.equal(keyframeIdAt(two, 2, 30), two.keyframes.items[1].id)
+assert.equal(keyframeIdAt(two, 2 + 1 / 120, 30), two.keyframes.items[1].id)
+assert.equal(keyframeIdAt(two, 0, 30), two.keyframes.items[0].id)
 
 assert.equal(keyframesOn(clip), false)
 assert.equal(keyframesOn(two), true)

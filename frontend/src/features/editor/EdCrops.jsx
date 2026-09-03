@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import Icon from '../../components/Icon'
-import { fmt } from '../../lib/utils'
 import { kfColor } from '../../lib/panning'
 import { SPEED_MAX, SPEED_MIN, SPEED_PRESETS, clipKeepPitch, clipSpeed, isVisualClip } from './editorModel'
 import EdLayer from './EdLayer'
 import { canKeyframe, keyframesEnabled, normalizeItems } from '../../lib/clipKeyframes'
+import { fmtRuler } from './timelineScale'
+import { frameDuration } from '../../lib/projectFps'
 
 function speedLabel(n) {
   return n % 1 === 0 ? `${n}x` : `${n.toFixed(1)}x`
@@ -27,7 +28,7 @@ function kfTime(clip, k, snapshots) {
 // Panel junto a la timeline: keyframes numerados y propiedades del clip.
 export default function EdCrops({
   clip, selKfId, onChangeFx, layer, onMoveLayer,
-  onSelectKf, onDeleteKf,
+  onSelectKf, onDeleteKf, fps = 30,
 }) {
   const [tab, setTab] = useState('kf')
   const isVideo = isVisualClip(clip)
@@ -150,7 +151,7 @@ export default function EdCrops({
                   <span className="ed-crop-swatch" style={{ background: kfColor(i) }} />
                   <div className="ed-crop-info">
                     <span className="ed-crop-time">Keyframe {i + 1}</span>
-                    <span className="ed-crop-type">{fmt(kfTime(clip, k, snapshots))}</span>
+                    <span className="ed-crop-type">{fmtRuler(kfTime(clip, k, snapshots), { step: frameDuration(fps), fps })}</span>
                   </div>
                   <button className="icon-btn" title="Eliminar keyframe"
                     onClick={(e) => { e.stopPropagation(); onDeleteKf?.(k) }}>

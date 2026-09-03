@@ -14,14 +14,14 @@ from typing import Callable, Optional
 
 from faster_whisper import WhisperModel
 
-from . import gpu, ytdlp
+from . import gpu, transcribe_settings, ytdlp
 
 log = logging.getLogger("videoyt.transcribe")
 
 ProgressCb = Callable[[float, str], None]
 
 # Modelos válidos (de más rápido/menos preciso a más lento/más preciso).
-MODELS = ["tiny", "base", "small", "medium", "large-v3"]
+MODELS = list(transcribe_settings.MODELS)
 
 _models: dict[str, tuple[str, WhisperModel]] = {}
 _infer_lock = threading.Lock()
@@ -120,8 +120,7 @@ def _collect_segments(segments, info, on_progress: ProgressCb, base: float) -> d
 def _transcribe_path(path: str, model_size: str, language: Optional[str],
                      on_progress: ProgressCb, base: float = 0.3) -> dict:
     """Transcribe un archivo de audio/vídeo ya en disco."""
-    if model_size not in MODELS:
-        model_size = "base"
+    model_size = transcribe_settings.resolve(model_size)
 
     on_progress(base * 0.66, f"Cargando modelo {model_size}…")
     with _infer_lock:

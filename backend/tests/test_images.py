@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from app import projects, storage
 from app.clip_kind import IMAGE_DEFAULT_DUR, clip_fits_track, is_still_clip
@@ -44,6 +45,19 @@ class StorageImageTest(unittest.TestCase):
 
     def test_resolve_media_rechaza_kind_invalido(self):
         self.assertIsNone(storage.resolve_media(self.proj, "pdf", "x.pdf"))
+
+    def test_try_local_media_decodifica_espacios(self):
+        path = self.tmp / "video" / "Ver pelicula.mp4"
+        path.write_bytes(b"fake-mp4")
+        url = "/api/media/p1/video/Ver%20pelicula.mp4"
+        with patch("app.projects.get_project", return_value=self.proj):
+            got = storage.try_local_media(url)
+        self.assertEqual(got, path.resolve())
+
+    def test_try_local_media_ignora_youtube(self):
+        self.assertIsNone(storage.try_local_media("https://www.youtube.com/watch?v=abc"))
+        self.assertFalse(storage.is_media_url("https://www.youtube.com/watch?v=abc"))
+        self.assertTrue(storage.is_media_url("/api/media/p1/video/Ver%20pelicula.mp4"))
 
 
 class ImageInfoSchemaTest(unittest.TestCase):
