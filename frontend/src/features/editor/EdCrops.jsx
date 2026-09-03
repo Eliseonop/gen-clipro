@@ -3,7 +3,9 @@ import Icon from '../../components/Icon'
 import { kfColor } from '../../lib/panning'
 import { SPEED_MAX, SPEED_MIN, SPEED_PRESETS, clipKeepPitch, clipSpeed, isVisualClip } from './editorModel'
 import EdLayer from './EdLayer'
-import { canKeyframe, keyframesEnabled, normalizeItems } from '../../lib/clipKeyframes'
+import {
+  canKeyframe, clampVolume, hasVolumeControls, keyframesEnabled, normalizeItems,
+} from '../../lib/clipKeyframes'
 import { fmtRuler } from './timelineScale'
 import { frameDuration } from '../../lib/projectFps'
 
@@ -25,10 +27,10 @@ function kfTime(clip, k, snapshots) {
   return snapshots ? k.t : k.t - (clip.in_point || 0)
 }
 
-// Panel junto a la timeline: keyframes numerados y propiedades del clip.
+// Panel junto a la timeline: keyframes numerados y velocidad del clip.
 export default function EdCrops({
   clip, selKfId, onChangeFx, layer, onMoveLayer,
-  onSelectKf, onDeleteKf, fps = 30,
+  onSelectKf, onDeleteKf, fps = 30, onAddKf,
 }) {
   const [tab, setTab] = useState('kf')
   const isVideo = isVisualClip(clip)
@@ -39,9 +41,11 @@ export default function EdCrops({
   const snapshots = keyframesEnabled(clip) || (clip?.keyframes?.items || []).length > 0
   const items = kfList(clip)
   const propsTab = isText ? 'Capas' : 'Clip'
-  const kfEmpty = isText
-    ? 'Mueve el texto en el Main para crear un keyframe en el cabezal.'
-    : 'Mueve el encuadre para crear un keyframe en el cabezal.'
+  const kfEmpty = isAudio
+    ? 'Ajusta el volumen en Efectos o pulsa Agregar keyframe en el cabezal.'
+    : isText
+      ? 'Mueve el texto en el Main para crear un keyframe en el cabezal.'
+      : 'Mueve el encuadre para crear un keyframe en el cabezal.'
 
   useEffect(() => {
     if (clip?.kind === 'audio') setTab('props')
@@ -75,16 +79,6 @@ export default function EdCrops({
             {layer && <EdLayer info={layer} onMove={onMoveLayer} />}
             {isImage && (
               <div className="ed-prop" style={{ fontSize: 12, color: 'var(--muted)' }}>Tipo: Imagen</div>
-            )}
-            {!isImage && (
-            <button
-              type="button"
-              className={`ed-mute ${clip.muted ? 'on' : ''}`}
-              onClick={() => onChangeFx({ muted: !clip.muted })}
-              title="Silenciar solo este clip (la pista sigue igual)">
-              <Icon name={clip.muted ? 'volume_off' : 'volume_up'} size={15} />
-              Mute
-            </button>
             )}
             {!isImage && (
             <div className="ed-speed">
@@ -136,7 +130,14 @@ export default function EdCrops({
         !canKeyframe(clip) && !isVideo ? (
           <div className="ed-crops-empty">Selecciona un clip, imagen, figura o texto.</div>
         ) : items.length === 0 ? (
-          <div className="ed-crops-empty">{kfEmpty}</div>
+          <div className="ed-crops-empty">
+            {kfEmpty}
+            {canKeyframe(clip) && (
+              <button type="button" className="ed-mute" style={{ marginTop: 10 }} onClick={() => onAddKf?.()}>
+                Agregar keyframe
+              </button>
+            )}
+          </div>
         ) : (
           <>
             <div className="ed-crops-count">{items.length} keyframe{items.length === 1 ? '' : 's'}</div>
@@ -151,7 +152,12 @@ export default function EdCrops({
                   <span className="ed-crop-swatch" style={{ background: kfColor(i) }} />
                   <div className="ed-crop-info">
                     <span className="ed-crop-time">Keyframe {i + 1}</span>
-                    <span className="ed-crop-type">{fmtRuler(kfTime(clip, k, snapshots), { step: frameDuration(fps), fps })}</span>
+                    <span className="ed-crop-type">
+                      {fmtRuler(kfTime(clip, k, snapshots), { step: frameDuration(fps), fps })}
+                      {hasVolumeControls(clip) && k.props?.volume != null
+                        ? ` · ${Math.round(clampVolume(k.props.volume) * 100)}%`
+                        : ''}
+                    </span>
                   </div>
                   <button className="icon-btn" title="Eliminar keyframe"
                     onClick={(e) => { e.stopPropagation(); onDeleteKf?.(k) }}>
@@ -160,6 +166,13 @@ export default function EdCrops({
                 </div>
               ))}
             </div>
+            {canKeyframe(clip) && (
+              <div className="ed-crops-add">
+                <button type="button" className="ed-mute" onClick={() => onAddKf?.()}>
+                  Agregar keyframe
+                </button>
+              </div>
+            )}
           </>
         )
       )}

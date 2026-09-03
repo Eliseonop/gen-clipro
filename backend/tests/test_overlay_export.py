@@ -48,6 +48,22 @@ class OverlayExportTest(unittest.TestCase):
         self.assertTrue(xy.startswith("x='"))
 
     @patch("app.detect.dims", return_value=(1000, 800))
+    def test_keyframes_animan_rotacion(self, _dims):
+        clip = _overlay_clip(keyframes={
+            "enabled": True,
+            "items": [
+                {"id": "a", "t": 0.0, "interpolation": "linear",
+                 "props": {"x": 0.5, "y": 0.5, "scale": 1.0, "rotation": 360, "opacity": 0}},
+                {"id": "b", "t": 0.4, "interpolation": "linear",
+                 "props": {"x": 0.5, "y": 0.5, "scale": 1.0, "rotation": 0, "opacity": 1}},
+            ],
+        })
+        chain, _xy = _overlay_video_filter(Path("a.png"), clip, 720, 1280, 0.913)
+        self.assertIn("rotate=a=", chain)
+        self.assertIn("360", chain)
+        self.assertIn("geq=", chain)
+
+    @patch("app.detect.dims", return_value=(1000, 800))
     def test_posicion_usa_tiempo_local_del_clip(self, _dims):
         # Un overlay que empieza tarde (seg. 29) mueve x de 0.2 a 0.8. El overlay
         # se evalúa en tiempo de composición, así que la expresión de posición
@@ -129,6 +145,30 @@ class OverlayExportTest(unittest.TestCase):
     def test_aparicion_zoom_en_pip_no_rellena_el_lienzo(self):
         chain = video_fx_chain({"appear": "zoom"}, 1, 720, 1280, fit_canvas=False)
         self.assertNotIn("crop=720:1280:", chain)
+
+
+class FillPoseExportTest(unittest.TestCase):
+    def test_fill_pose_gira_y_desplaza(self):
+        from app.compose import _fill_pose_filter, pose_transform_animates
+        clip = TimelineClip(
+            id="v", track_id="V1", kind="video", asset_kind="clips",
+            asset_id="0", filename="a.mp4", start=0.0, in_point=0.0,
+            out_point=2.0, source_duration=2.0, layout="fill",
+            keyframes={
+                "enabled": True,
+                "items": [
+                    {"id": "a", "t": 0.0, "interpolation": "linear",
+                     "props": {"x": -0.2, "y": 0.5, "scale": 0.4, "rotation": 180, "opacity": 0}},
+                    {"id": "b", "t": 0.4, "interpolation": "linear",
+                     "props": {"x": 0.5, "y": 0.5, "scale": 1.0, "rotation": 0, "opacity": 1}},
+                ],
+            },
+        )
+        self.assertTrue(pose_transform_animates(clip))
+        chain, xy = _fill_pose_filter(clip, 720, 1280, 0.0, "scale=720:1280")
+        self.assertIn("eval=frame", chain)
+        self.assertIn("rotate=a=", chain)
+        self.assertIn("overlay_w", xy)
 
 
 class OverlayChainOrderTest(unittest.TestCase):

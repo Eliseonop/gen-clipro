@@ -78,6 +78,33 @@ class PropertyOpsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ops.set_clip_audio_fx(_tl(), "t", {"reverb": 0.3})   # texto no
 
+    def test_clip_volume_and_mute(self):
+        r = ops.set_clip_volume(_tl(), "au", volume=0.4, muted=True)
+        c = _clip(r, "au")
+        self.assertAlmostEqual(c.volume, 0.4)
+        self.assertTrue(c.muted)
+        with self.assertRaises(ValueError):
+            ops.set_clip_volume(_tl(), "t", volume=0.5)
+
+    def test_clip_volume_fade_creates_keyframes(self):
+        r = ops.set_clip_volume(_tl(), "au", fade="in")
+        kf = _clip(r, "au").keyframes
+        self.assertTrue(kf["enabled"])
+        self.assertGreaterEqual(len(kf["items"]), 2)
+        self.assertAlmostEqual(kf["items"][0]["props"]["volume"], 0.0)
+
+    def test_track_audio_applies_to_all(self):
+        r = ops.set_track_audio(_tl(), "A1", volume=0.2, muted=True)
+        self.assertAlmostEqual(_clip(r, "au").volume, 0.2)
+        self.assertTrue(_clip(r, "au").muted)
+
+    def test_rename_track(self):
+        r = ops.rename_track(_tl(), "A1", "SFX")
+        t = next(x for x in r.timeline.tracks if x.id == "A1")
+        self.assertEqual(t.name, "SFX")
+        with self.assertRaises(ValueError):
+            ops.rename_track(_tl(), "A1", "   ")
+
     def test_keyframes_set_and_clear(self):
         kf = {"enabled": True, "items": [{"id": "k1", "t": 0.0, "props": {"scale": 1.0}}]}
         r = ops.set_clip_keyframes(_tl(), "v", kf)
@@ -86,6 +113,31 @@ class PropertyOpsTest(unittest.TestCase):
         self.assertIsNone(_clip(r2, "v").keyframes)
         with self.assertRaises(ValueError):
             ops.set_clip_keyframes(_tl(), "v", {"items": "no-lista"})
+
+    def test_animate_clip_spin_in(self):
+        r = ops.animate_clip(_tl(), "v", "spin_in", duration=0.4)
+        c = _clip(r, "v")
+        self.assertTrue(c.keyframes["enabled"])
+        self.assertGreaterEqual(len(c.keyframes["items"]), 2)
+        self.assertGreater(c.keyframes["items"][0]["props"]["rotation"], 300)
+
+    def test_animate_clip_zoom_in_writes_reframe(self):
+        r = ops.animate_clip(_tl(), "v", "zoom_in", duration=0.5)
+        c = _clip(r, "v")
+        self.assertIsNotNone(c.reframe)
+        self.assertGreaterEqual(len(c.reframe.keyframes), 2)
+        self.assertGreater(c.reframe.keyframes[0].zoom, c.reframe.keyframes[1].zoom)
+
+    def test_animate_clip_rejects_audio(self):
+        with self.assertRaises(ValueError):
+            ops.animate_clip(_tl(), "au", "fade_in")
+
+    def test_animate_clip_envelope(self):
+        env = [(0.0, 0.0), (0.3, 1.0)]
+        r = ops.animate_clip(_tl(), "v", "slide_left", envelope=env)
+        xs = [it["props"]["x"] for it in _clip(r, "v").keyframes["items"]]
+        self.assertLess(xs[0], 0.0)
+        self.assertAlmostEqual(xs[-1], 0.5, places=2)
 
     def test_duplicate(self):
         r = ops.duplicate_clip(_tl(), "v")
@@ -133,8 +185,9 @@ class CapabilitiesTest(unittest.TestCase):
         from app.mcp_server import dto
         caps = dto.capabilities()
         for c in ("media.shape", "clip.opacity:0-1", "clip.effects:blur|grayscale|sepia|brightness|contrast|saturation",
-                  "clip.keyframes:x|y|scale|rotation|opacity", "voice:kokoro|piper|gemini", "tracks.link"):
+                  "clip.keyframes:x|y|scale|rotation|opacity|volume|audio_fx", "voice:kokoro|piper|gemini", "tracks.link"):
             self.assertIn(c, caps)
+        self.assertIn("clip.animate:zoom|spin|slide|fade|pop|pulse|follow_audio", caps)
 
 
 if __name__ == "__main__":

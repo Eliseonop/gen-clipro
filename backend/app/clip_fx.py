@@ -163,18 +163,25 @@ def effects_ffmpeg(clip: Any, W: int, H: int) -> str:
 def audio_fx_chain(clip: Any) -> str:
     fx = _audio_fx_map(clip)
     parts: list[str] = []
-    if _fx_on(fx, "eq"):
-        parts.append("equalizer=f=3000:t=q:w=1:g=4")
-    if _fx_on(fx, "compressor"):
-        parts.append("acompressor=threshold=0.1:ratio=4:attack=20:release=200")
-    if _fx_on(fx, "reverb"):
-        parts.append("aecho=0.8:0.88:40:0.4")
-    if _fx_on(fx, "echo"):
-        parts.append("aecho=0.8:0.9:1000:0.3")
-    if _fx_on(fx, "denoise"):
+    eq = min(1.0, max(0.0, _fx_num(fx, "eq")))
+    if eq > 0:
+        parts.append(f"equalizer=f=3000:t=q:w=1:g={4.0 * eq:.2f}")
+    comp = min(1.0, max(0.0, _fx_num(fx, "compressor")))
+    if comp > 0:
+        parts.append(f"acompressor=threshold=0.1:ratio={1.0 + 7.0 * comp:.2f}:attack=20:release=200")
+    rev = min(1.0, max(0.0, _fx_num(fx, "reverb")))
+    if rev > 0:
+        parts.append(f"aecho=0.8:0.88:{40.0 * rev:.1f}:{0.4 * rev:.2f}")
+    echo = min(1.0, max(0.0, _fx_num(fx, "echo")))
+    if echo > 0:
+        parts.append(f"aecho=0.8:0.9:{1000.0 * echo:.1f}:{0.3 * echo:.2f}")
+    den = min(1.0, max(0.0, _fx_num(fx, "denoise")))
+    if den > 0:
         parts.append("highpass=f=80,lowpass=f=12000")
-    if _fx_on(fx, "distortion"):
-        parts.append("acrusher=bits=8:mode=log")
+    dist = min(1.0, max(0.0, _fx_num(fx, "distortion")))
+    if dist > 0:
+        bits = max(4.0, min(12.0, 12.0 - 8.0 * dist))
+        parts.append(f"acrusher=bits={bits:.0f}:mode=log")
     return ",".join(parts)
 
 

@@ -12,9 +12,16 @@ export const KF_INTERPS = [
   { id: 'ease-in-out', label: 'Ease In-Out' },
   { id: 'hold', label: 'Hold' },
 ]
+export const AUDIO_FX_KEYS = ['eq', 'compressor', 'reverb', 'echo', 'denoise', 'distortion']
+export const VOL_MIN = 0
+export const VOL_MAX = 2
+
 // Propiedades animables. Para añadir volumen, blur, color, etc. basta con
 // incluir la clave aquí y guardarla en cada snapshot; interpItems la interpolará.
-export const KF_PROP_KEYS = ['x', 'y', 'scale', 'rotation', 'opacity', 'cx', 'cy', 'zoom']
+export const KF_PROP_KEYS = [
+  'x', 'y', 'scale', 'rotation', 'opacity', 'cx', 'cy', 'zoom',
+  'volume', ...AUDIO_FX_KEYS,
+]
 
 let _kfUid = 1
 export function kfId() {
@@ -26,9 +33,34 @@ function num(v, d) {
   return Number.isFinite(n) ? n : d
 }
 
+export function clampVolume(v) {
+  return Math.min(VOL_MAX, Math.max(VOL_MIN, num(v, 1)))
+}
+
+function audioStatic(clip) {
+  const fx = clip?.audio_fx && typeof clip.audio_fx === 'object' ? clip.audio_fx : {}
+  const out = { volume: clampVolume(clip?.volume ?? 1) }
+  for (const key of AUDIO_FX_KEYS) {
+    const v = fx[key]
+    if (v === true) out[key] = 1
+    else if (v === false || v == null) out[key] = 0
+    else out[key] = Math.min(1, Math.max(0, num(v, 0)))
+  }
+  return out
+}
+
 export function canKeyframe(clip) {
   const k = clip?.kind
-  return k === 'video' || k === 'image' || k === 'shape' || k === 'text'
+  return k === 'video' || k === 'image' || k === 'shape' || k === 'text' || k === 'audio'
+}
+
+/** Al seleccionar un clip animable (incluido audio) se abre Efectos. */
+export function opensEffectsOnSelect(clip) {
+  return canKeyframe(clip)
+}
+
+export function hasVolumeControls(clip) {
+  return clip?.kind === 'audio' || clip?.kind === 'video'
 }
 
 export function keyframesOn(clip) {
@@ -80,6 +112,7 @@ export function staticProps(clip) {
       cx: 0.5,
       cy: 0.5,
       zoom: 1,
+      ...audioStatic(clip),
     }
   }
   if (clip?.kind === 'text') {
@@ -93,6 +126,7 @@ export function staticProps(clip) {
       cx: 0.5,
       cy: 0.5,
       zoom: 1,
+      ...audioStatic(clip),
     }
   }
   const tr = clip?.transform || {}
@@ -106,6 +140,7 @@ export function staticProps(clip) {
     cx: 0.5,
     cy: 0.5,
     zoom: num(rf.zoom, 1),
+    ...audioStatic(clip),
   }
 }
 
@@ -245,7 +280,42 @@ export function poseFromProps(props) {
     cx: num(p.cx, 0.5),
     cy: num(p.cy, 0.5),
     zoom: num(p.zoom, 1),
+    volume: clampVolume(p.volume),
   }
+}
+
+export function clipVolumeAt(clip, localT, srcTime) {
+  return clampVolume(clipPropsAt(clip, localT, srcTime).volume)
+}
+
+export function sampleVolumeCurve(clip, duration, steps = 48) {
+  const dur = Math.max(1e-6, num(duration, 0))
+  const n = Math.max(8, Math.round(num(steps, 48)))
+  const times = new Set()
+  for (let i = 0; i <= n; i++) times.add((i / n) * dur)
+  if (keyframesEnabled(clip)) {
+    for (const k of normalizeItems(clip.keyframes?.items)) {
+      if (k.t >= 0 && k.t <= dur) times.add(k.t)
+    }
+  }
+  return [...times].sort((a, b) => a - b).map((t) => ({ t, v: clipVolumeAt(clip, t) }))
+}
+
+/** Fade in/out de volumen con keyframes (no destructivo). `duration` es la del clip en la timeline. */
+export function applyVolumeFade(clip, duration, side, fadeDur = 0.5) {
+  const dur = Math.max(0.05, num(duration, 0))
+  const window = Math.min(Math.max(0.05, num(fadeDur, 0.5)), dur / 2)
+  const peak = clampVolume(clip?.volume ?? 1)
+  const target = peak > 0.001 ? peak : 1
+  let next = { ...clip, volume: target }
+  if (side === 'in') {
+    next = upsertKeyframeAt(next, 0, { volume: 0 }, 'ease-out')
+    next = upsertKeyframeAt(next, window, { volume: target }, 'ease-out')
+  } else {
+    next = upsertKeyframeAt(next, Math.max(0, dur - window), { volume: target }, 'ease-in')
+    next = upsertKeyframeAt(next, dur, { volume: 0 }, 'ease-in')
+  }
+  return next
 }
 
 export function flattenPatch(patch, kind) {

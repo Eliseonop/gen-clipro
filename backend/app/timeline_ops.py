@@ -126,6 +126,38 @@ def _warn_overlaps(tl: Timeline, track_id: str) -> list[str]:
     return [f"solape en {track_id}: {a} ↔ {b}" for a, b in track_overlaps(tl, track_id)]
 
 
+def _clip_tl_dur(c: TimelineClip) -> float:
+    span = max(0.0, (c.out_point or 0.0) - (c.in_point or 0.0))
+    if c.kind in ("text", "image", "shape"):
+        return span
+    sp = float(c.speed or 1.0)
+    return span / sp if sp > 0 else span
+
+
+def _apply_audio_to_clip(c: TimelineClip, volume=None, muted=None, audio_fx=None,
+                         replace_fx: bool = False, fade: str | None = None,
+                         fade_dur: float = 0.5) -> None:
+    from .clip_keyframes import apply_volume_fade, clamp_volume
+    if c.kind not in ("video", "audio"):
+        raise ValueError("volumen/audio_fx solo aplica a clips de vídeo o audio")
+    if volume is not None:
+        c.volume = clamp_volume(volume)
+    if muted is not None:
+        c.muted = bool(muted)
+    if audio_fx is not None:
+        if not isinstance(audio_fx, dict):
+            raise ValueError("audio_fx debe ser un objeto")
+        base = {} if replace_fx else dict(c.audio_fx or {})
+        base.update(audio_fx)
+        c.audio_fx = base or None
+    if fade:
+        if fade not in ("in", "out"):
+            raise ValueError("fade debe ser 'in' o 'out'")
+        data = apply_volume_fade(c.model_dump(), _clip_tl_dur(c), fade, fade_dur)
+        c.volume = data.get("volume", c.volume)
+        c.keyframes = data.get("keyframes")
+
+
 # --- Pistas --------------------------------------------------------------
 
 def add_track(tl: Timeline, kind: str, name: str | None = None, track_id: str | None = None) -> EditResult:
@@ -138,6 +170,17 @@ def add_track(tl: Timeline, kind: str, name: str | None = None, track_id: str | 
     prefix = {"video": "V", "audio": "A", "text": "T"}[kind]
     out.tracks.append(TimelineTrack(id=tid, kind=kind, name=name or f"{prefix}{len(out.tracks) + 1}"))
     return EditResult(out, changed=[tid])
+
+
+def rename_track(tl: Timeline, track_id: str, name: str) -> EditResult:
+    """Cambia el nombre visible de una pista (A1, SFX, Voz…). El id no cambia."""
+    label = (name or "").strip()[:32]
+    if not label:
+        raise ValueError("el nombre de la pista no puede estar vacío")
+    out = _copy(tl)
+    t = _find_track(out, track_id)
+    t.name = label
+    return EditResult(out, changed=[track_id])
 
 
 def remove_track(tl: Timeline, track_id: str) -> EditResult:
@@ -459,22 +502,51 @@ def set_clip_effects(tl: Timeline, clip_id: str, effects: dict, replace: bool = 
 
 
 def set_clip_audio_fx(tl: Timeline, clip_id: str, audio_fx: dict, replace: bool = False) -> EditResult:
-    """Efectos de audio del clip (eq/compressor/reverb…). MERGE por defecto. Solo
-    clips con audio (vídeo/audio)."""
+    """Efectos de audio (eq/compressor/reverb/echo/denoise/distortion, 0–1).
+    MERGE por defecto. Solo clips de vídeo o audio."""
     out = _copy(tl)
     c = _find_clip(out, clip_id)
-    if c.kind not in ("video", "audio"):
-        raise ValueError("audio_fx solo aplica a clips de vídeo o audio")
-    if not isinstance(audio_fx, dict):
-        raise ValueError("audio_fx debe ser un objeto")
-    base = {} if replace else dict(c.audio_fx or {})
-    base.update(audio_fx)
-    c.audio_fx = base or None
+    _apply_audio_to_clip(c, audio_fx=audio_fx, replace_fx=replace)
     return EditResult(out, changed=[clip_id])
 
 
+def set_clip_volume(tl: Timeline, clip_id: str, volume: float | None = None,
+                    muted: bool | None = None, fade: str | None = None,
+                    fade_dur: float = 0.5) -> EditResult:
+    """Volumen 0–2 (100% = 1, máximo 200%), mute y fade in/out por keyframes."""
+    out = _copy(tl)
+    c = _find_clip(out, clip_id)
+    if volume is None and muted is None and not fade:
+        raise ValueError("pasa volume, muted y/o fade")
+    _apply_audio_to_clip(c, volume=volume, muted=muted, fade=fade, fade_dur=fade_dur)
+    return EditResult(out, changed=[clip_id])
+
+
+def set_track_audio(tl: Timeline, track_id: str, volume: float | None = None,
+                    muted: bool | None = None, audio_fx: dict | None = None,
+                    replace_fx: bool = False, fade: str | None = None,
+                    fade_dur: float = 0.5) -> EditResult:
+    """Aplica volumen/mute/fx/fade a todos los clips de audio o vídeo de la pista."""
+    out = _copy(tl)
+    _find_track(out, track_id)
+    if volume is None and muted is None and audio_fx is None and not fade:
+        raise ValueError("pasa volume, muted, audio_fx y/o fade")
+    changed: list[str] = []
+    for c in out.clips:
+        if c.track_id != track_id or c.kind not in ("video", "audio"):
+            continue
+        _apply_audio_to_clip(c, volume=volume, muted=muted, audio_fx=audio_fx,
+                             replace_fx=replace_fx, fade=fade, fade_dur=fade_dur)
+        changed.append(c.id)
+    if not changed:
+        raise ValueError("esa pista no tiene clips de audio o vídeo")
+    return EditResult(out, changed=changed)
+
+
 def set_clip_keyframes(tl: Timeline, clip_id: str, keyframes: dict | None) -> EditResult:
-    """Fija la animación por keyframes del clip: ``{enabled, items:[{id,t,interpolation,props}]}``.
+    """Animación por keyframes: ``{enabled, items:[{id,t,interpolation,props}]}``.
+    ``props`` puede incluir x/y/scale/rotation/opacity y también volume (0–2) y
+    efectos de audio (eq/compressor/reverb/echo/denoise/distortion, 0–1).
     ``None`` la borra."""
     out = _copy(tl)
     c = _find_clip(out, clip_id)
@@ -487,6 +559,44 @@ def set_clip_keyframes(tl: Timeline, clip_id: str, keyframes: dict | None) -> Ed
     if items is not None and not isinstance(items, list):
         raise ValueError("keyframes.items debe ser una lista")
     c.keyframes = {"enabled": bool(keyframes.get("enabled", True)), "items": list(items or [])}
+    return EditResult(out, changed=[clip_id])
+
+
+def animate_clip(tl: Timeline, clip_id: str, motion: str, duration: float | None = None,
+                 intensity: float = 1.0, turns: float = 1.0, envelope: list | None = None) -> EditResult:
+    """Genera keyframes de pose (zoom, giro, slide, fade, pop) sin que el agente
+    los escriba a mano. ``envelope`` es opcional: ``[(t_local, amp), ...]`` 0–1
+    (p. ej. RMS de un SFX). En clips fill, el zoom también se escribe en reframe
+    para que el export coincida con el preview."""
+    from . import clip_motion
+    from .clip_speed import clip_speed as _spd
+
+    out = _copy(tl)
+    c = _find_clip(out, clip_id)
+    if c.kind not in clip_motion.ANIMATABLE:
+        raise ValueError("animate_clip solo aplica a vídeo, imagen, texto o figura")
+    items = clip_motion.build_motion_items(
+        c, motion, duration=duration, intensity=intensity, turns=turns, envelope=envelope)
+    c.keyframes = clip_motion.merge_visual_keyframes(c, items)
+    m = clip_motion.normalize_motion(motion)
+    if m in ("zoom_in", "zoom_out") and not clip_motion.uses_scale_zoom(c):
+        spd = _spd(c)
+        kfs = []
+        last_zoom = 1.0
+        for it in items:
+            props = it.get("props") if isinstance(it.get("props"), dict) else {}
+            z = max(0.1, min(1.0, float(props.get("zoom") or 1.0)))
+            last_zoom = z
+            kfs.append(Keyframe(
+                t=_round(c.in_point + float(it["t"]) * spd),
+                cx=_clamp01(props.get("cx", 0.5)),
+                cy=_clamp01(props.get("cy", 0.5)),
+                zoom=z,
+            ))
+        reframe = c.reframe.model_copy(deep=True) if c.reframe else Reframe()
+        reframe.zoom = last_zoom
+        reframe.keyframes = kfs
+        c.reframe = reframe
     return EditResult(out, changed=[clip_id])
 
 

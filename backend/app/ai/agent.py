@@ -40,6 +40,16 @@ def _system_prompt(context_summary: str | None, context: dict | None) -> str:
         "Cuando el usuario diga 'ese clip', 'este', 'el anterior', usa el clip "
         "seleccionado o el contexto de la conversación; si hay ambigüedad real, "
         "pregunta en vez de adivinar.",
+        "Audio: volumen 0–2 (1=100%), mute, fade in/out y efectos "
+        "(eq/compressor/reverb/echo/denoise/distortion) con set_clip_volume, "
+        "set_clip_audio_fx y keyframes (props.volume / props.eq…). Si habla de "
+        "una pista o línea de audio, usa set_track_audio. Las pistas se pueden "
+        "renombrar (rename_track); los nombres tipo A1/A2 son por defecto, "
+        "puedes poner SFX, Voz, etc.",
+        "Animación: usa animate_clip (zoom_in/out, spin_in, slide_*, fade_in, "
+        "pop, pulse). NO escribas set_clip_keyframes a mano. Si debe seguir un "
+        "SFX o whoosh, pasa follow_audio_id del clip de audio. reframe_clip es "
+        "solo encuadre de fuente, no una animación de aparición.",
         "Para tareas largas (crear un short) puedes usar los workflows de alto "
         "nivel si encajan, o encadenar tools. No expliques nombres técnicos de "
         "tools al usuario.",

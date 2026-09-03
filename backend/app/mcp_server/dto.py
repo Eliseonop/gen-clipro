@@ -20,9 +20,11 @@ CAPABILITIES = [
     "clip.speed:0.1-10|keep_pitch|reverse",
     "clip.transition:fade|dissolve|wipe|zoom|slide|pop",
     "clip.opacity:0-1",
+    "clip.volume:0-2|mute|fade_in|fade_out",
     "clip.effects:blur|grayscale|sepia|brightness|contrast|saturation",
-    "clip.audio_fx:eq|compressor|reverb",
-    "clip.keyframes:x|y|scale|rotation|opacity",
+    "clip.audio_fx:eq|compressor|reverb|echo|denoise|distortion",
+    "clip.keyframes:x|y|scale|rotation|opacity|volume|audio_fx",
+    "clip.animate:zoom|spin|slide|fade|pop|pulse|follow_audio",
     "clip.duplicate",
     "subtitles.fragmentation:max_words",
     "text.role:caption|free",
@@ -32,6 +34,8 @@ CAPABILITIES = [
     "media.shape",
     "voice:kokoro|piper|gemini",
     "tracks.link",
+    "tracks.rename",
+    "tracks.audio:volume|mute|fx|fade",
     "history.undo_redo|checkpoints",
 ]
 
@@ -156,6 +160,9 @@ def _clip_summary(c, dup_count: int = 0, track_kind: str | None = None) -> dict:
             "source_duration": c.source_duration,
         },
     }
+    if c.kind in ("video", "audio"):
+        d["volume"] = round(c.volume if c.volume is not None else 1.0, 3)
+        d["has_audio_fx"] = bool(c.audio_fx)
     if c.kind == "text":
         d["text"] = c.text
         d["text_role"] = resolve_text_role(c)

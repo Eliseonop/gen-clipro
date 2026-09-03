@@ -207,6 +207,10 @@ def save_from_project(project_id: str, resource_type: str, ident: str) -> dict:
         "reframe": raw.get("reframe"),
         "width": raw.get("width"),
         "height": raw.get("height"),
+        "provider": raw.get("provider"),
+        "external_id": raw.get("external_id"),
+        "author": raw.get("author"),
+        "license_info": raw.get("license_info"),
     }
 
     try:

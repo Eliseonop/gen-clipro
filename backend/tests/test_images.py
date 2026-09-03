@@ -152,6 +152,21 @@ class ImageImportTest(unittest.TestCase):
         info = import_image(proj, "meme.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 32, description="logo canal")
         self.assertEqual(info.description, "logo canal")
 
+    def test_import_gif_animado_conserva_gif(self):
+        from app.images import import_image
+        gif = b"GIF89a" + b"\x00" * 24
+        proj = projects.get_project(self.pid)
+        info = import_image(
+            proj, "loop.gif", gif, keep_gif=True,
+            origin="giphy", provider="giphy", external_id="abc",
+            author="Ada", source_url="https://giphy.com/gifs/abc", license_info="GIPHY",
+        )
+        self.assertTrue(info.filename.endswith(".gif"))
+        self.assertEqual(info.provider, "giphy")
+        self.assertEqual(info.external_id, "abc")
+        path = storage.resolve_media(proj, "image", info.filename)
+        self.assertEqual(path.read_bytes()[:6], b"GIF89a")
+
     def test_import_sin_extension_si_es_png(self):
         from app.images import import_image
         proj = projects.get_project(self.pid)

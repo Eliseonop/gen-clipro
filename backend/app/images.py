@@ -129,6 +129,15 @@ def import_image(
     data: bytes,
     description: str | None = None,
     label: str | None = None,
+    *,
+    keep_gif: bool = False,
+    origin: str | None = None,
+    source: str | None = None,
+    provider: str | None = None,
+    external_id: str | None = None,
+    source_url: str | None = None,
+    author: str | None = None,
+    license_info: str | None = None,
 ) -> ImageInfo:
     """Guarda la imagen como PNG de trabajo en ``image/`` y la registra."""
     if not data:
@@ -144,15 +153,20 @@ def import_image(
             ext = guessed
         if ext and ext not in IMAGE_EXTS and not guessed:
             raise ValueError("Formato no válido. Usa PNG, JPG, WebP o GIF.")
-    png = to_working_png(name, data)
+    is_gif = data[:6] in GIF_MAGICS
     storage.ensure_dirs(storage.project_base(project))
     ident = _new_id()
     stem = storage.safe_name(Path(name).stem)
-    dest_name = f"{stem}_{ident}.png"
+    if keep_gif and is_gif:
+        dest_name = f"{stem}_{ident}.gif"
+        payload = data
+    else:
+        payload = to_working_png(name, data)
+        dest_name = f"{stem}_{ident}.png"
     dest = storage.resolve_media(project, "image", dest_name)
     if dest is None:
         raise ValueError("No se pudo guardar la imagen.")
-    dest.write_bytes(png)
+    dest.write_bytes(payload)
     w, h = probe_size(dest)
     info = ImageInfo(
         id=ident,
@@ -162,8 +176,13 @@ def import_image(
         height=h,
         label=(label or Path(name).stem or None),
         description=(description or None),
-        origin="upload",
-        source="external",
+        origin=origin or "upload",
+        source=source or "external",
+        provider=provider,
+        external_id=external_id,
+        source_url=source_url,
+        author=author,
+        license_info=license_info,
     )
     projects.add_image(project.id, info)
     return info

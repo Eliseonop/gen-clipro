@@ -25,7 +25,7 @@ from typing import Callable, Optional
 
 from . import clipper, config, gpu, sfx, storage
 from .clip_fx import _scale_expr, audio_fx_chain, fx_windows, overlay_xy_for_fx, video_fx_chain
-from .clip_keyframes import keyframes_enabled
+from .clip_keyframes import keyframes_enabled, volume_filter
 from .schemas import Keyframe, Project, Reframe, Timeline, TimelineClip
 from .clip_layout import dest_rect_even, is_overlay, source_crop_px
 from .diagnostics import timed
@@ -124,6 +124,81 @@ def _pose_prop_points(clip: TimelineClip, prop: str, dur: float) -> list[tuple[f
     return pts or [(0.0, float(clip_props_at(clip, 0).get(prop, 0)))]
 
 
+def _pose_spread(pts: list[tuple[float, float]]) -> float:
+    if not pts:
+        return 0.0
+    vs = [v for _, v in pts]
+    return max(vs) - min(vs)
+
+
+def pose_transform_animates(clip: TimelineClip) -> bool:
+    """True si x/y/scale/rotation/opacity cambian (no el recorte zoom/cx/cy)."""
+    if not keyframes_enabled(clip):
+        return False
+    dur = clip_timeline_duration(clip)
+    for prop, eps in (("x", 0.004), ("y", 0.004), ("scale", 0.01),
+                      ("rotation", 0.08), ("opacity", 0.015)):
+        if _pose_spread(_pose_prop_points(clip, prop, dur)) > eps:
+            return True
+    return False
+
+
+def _rotate_chain(pose_rot: list[tuple[float, float]], local: bool = True) -> str:
+    """Filtro rotate: expresión si gira, constante si no, vacío si ~0."""
+    if not pose_rot:
+        return ""
+    spread = _pose_spread(pose_rot)
+    rot = pose_rot[-1][1]
+    if local and spread > 0.08:
+        expr = clipper._pw_expr(pose_rot).replace(",", "\\,")
+        return f",rotate=a='({expr})*PI/180':ow=rotw(iw):oh=roth(ih):c=none@0x00000000"
+    if abs(rot) > 0.05:
+        return f",rotate={rot:.3f}*PI/180:ow=rotw(iw):oh=roth(ih):c=none@0x00000000"
+    return ""
+
+
+def _alpha_chain(clip: TimelineClip, pose_dur: float) -> str:
+    """Opacidad animada o estática < 1 (geq usa T = segundos locales)."""
+    pts = _pose_prop_points(clip, "opacity", pose_dur)
+    if not pts:
+        return ""
+    spread = _pose_spread(pts)
+    val = pts[0][1]
+    if spread < 0.015:
+        if val >= 0.995:
+            return ""
+        return f",format=gbrap,colorchannelmixer=aa={max(0.0, min(1.0, val)):.3f}"
+    expr = clipper._pw_expr(pts, tvar="T").replace(",", "\\,")
+    return (
+        f",format=gbrap,"
+        f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':a='255*min(1\\,max(0\\,{expr}))'"
+    )
+
+
+def _fill_pose_filter(clip: TimelineClip, W: int, H: int, start: float,
+                      base_cs: str, fx: str = "") -> tuple[str, str]:
+    """Aplica scale/rotate/posición/opacidad de pose a un clip fill ya escalado a WxH."""
+    pose_dur = clip_timeline_duration(clip)
+    pose_scale = _pose_prop_points(clip, "scale", pose_dur)
+    pose_x = _pose_prop_points(clip, "x", pose_dur)
+    pose_y = _pose_prop_points(clip, "y", pose_dur)
+    pose_rot = _pose_prop_points(clip, "rotation", pose_dur)
+    sc = clipper._pw_expr(pose_scale)
+    tloc = f"(t-{start:.4f})"
+    x_n = clipper._pw_expr(pose_x, tvar=tloc)
+    y_n = clipper._pw_expr(pose_y, tvar=tloc)
+    fx_pre = f",{fx}" if fx else ""
+    chain = (
+        f"{base_cs},format=gbrap{fx_pre},"
+        f"scale=w='max(2\\,trunc({W}*({sc})/2)*2)':"
+        f"h='max(2\\,trunc({H}*({sc})/2)*2)':eval=frame"
+    )
+    chain += _rotate_chain(pose_rot, local=True)
+    chain += _alpha_chain(clip, pose_dur)
+    xy = f"x='({x_n})*{W}-overlay_w/2':y='({y_n})*{H}-overlay_h/2'"
+    return chain, xy
+
+
 def _overlay_video_filter(path: Path, clip: TimelineClip, W: int, H: int, dur: float,
                           start: float = 0.0, fx: str = "") -> tuple[str, str]:
     """Crop de fuente (tamaño fijo) + scale/rotate del resultado. Devuelve (filtro, overlay=x:y).
@@ -212,8 +287,8 @@ def _overlay_video_filter(path: Path, clip: TimelineClip, W: int, H: int, dur: f
             f"scale=w='max(2\\,trunc({cw}*({sc})/2)*2)':"
             f"h='max(2\\,trunc({ch}*({sc})/2)*2)':eval=frame"
         )
-        if abs(rot) > 0.05:
-            chain += f",rotate={rot:.3f}*PI/180:ow=rotw(iw):oh=roth(ih):c=none@0x00000000"
+        chain += _rotate_chain(pose_rot, local=True)
+        chain += _alpha_chain(clip, pose_dur)
         # El PIP tiene tamaño variable (scale eval=frame) y se coloca DIRECTAMENTE
         # con el overlay final, que sí admite 't' y 'overlay_w/overlay_h'. Nada de
         # 'pad' a un lienzo fijo: 'pad' no admite 't' en x/y (rompía con posición
@@ -528,10 +603,11 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         overlay_xy = "x=0:y=0"
         src_dur = clip_source_duration(c)
         animated_ov = is_overlay(c) and keyframes_enabled(c)
+        fill_pose = (not is_overlay(c)) and pose_transform_animates(c)
         fx = video_fx_chain(
             c, dur, W, H,
             fit_canvas=not is_overlay(c),
-            motion=not animated_ov,
+            motion=not (animated_ov or fill_pose),
         )
         if is_overlay(c):
             # En overlay animado, 'scale=eval=frame' debe ser la ÚLTIMA operación
@@ -541,13 +617,20 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
             # cropscale, y NO se vuelve a añadir fuera.
             cropscale, overlay_xy = _overlay_video_filter(
                 path, c, W, H, src_dur, start, fx=(fx if animated_ov else ""))
+        elif fill_pose:
+            if c.reframe and (c.reframe.keyframes or c.reframe.dual_crop):
+                base_cs = _reframe_cropscale(path, c.reframe, c.in_point, src_dur, W, H)
+            else:
+                base_cs = _plain_scale(W, H)
+            cropscale, overlay_xy = _fill_pose_filter(
+                c, W, H, start, base_cs, fx=(fx if fill_pose else ""))
         elif c.reframe and (c.reframe.keyframes or c.reframe.dual_crop):
             cropscale = _reframe_cropscale(path, c.reframe, c.in_point, src_dur, W, H)
         else:
             cropscale = _plain_scale(W, H)
-        if is_still_clip(c) or is_overlay(c):
+        if is_still_clip(c) or is_overlay(c) or fill_pose:
             cropscale = f"{cropscale},format=gbrap"
-        fx_part = "" if animated_ov else (f",{fx}" if fx else "")
+        fx_part = "" if (animated_ov or fill_pose) else (f",{fx}" if fx else "")
         spd = "" if is_still_clip(c) else video_speed_filters(c)
         spd_part = f",{spd}" if spd else ""
         overlay_xy = overlay_xy_for_fx(overlay_xy, c, start, dur, W, H)
@@ -558,7 +641,7 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
             f"{cropscale},fps={fps}{spd_part}{fx_part},setpts=PTS-STARTPTS+{start:.3f}/TB[{vlabel}]"
         )
         out_label = f"ov{n}"
-        ov_fmt = ":format=auto" if (fx or is_still_clip(c)) else ""
+        ov_fmt = ":format=auto" if (fx or is_still_clip(c) or fill_pose) else ""
         filt.append(
             f"[{last_label}][{vlabel}]overlay={overlay_xy}:eof_action=pass"
             f"{ov_fmt}:enable='between(t,{start:.3f},{end:.3f})'[{out_label}]"
@@ -583,17 +666,17 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
     for (c, path, track) in aclips:
         k = idx_of[c.id]
         start_ms = int(round(max(0.0, c.start) * 1000))
-        vol = max(0.0, c.volume if c.volume is not None else 1.0)
         alabel = f"a{m}"
         asp = audio_speed_filters(c)
         asp_part = f",{asp}" if asp else ""
         afx = audio_fx_chain(c)
         afx_part = f",{afx}" if afx else ""
+        vol_part = volume_filter(c)
         chain = (
             f"[{k}:a]atrim={c.in_point:.3f}:{c.out_point:.3f},asetpts=PTS-STARTPTS,"
             f"aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"
             f"{asp_part}{afx_part},"
-            f"aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,volume={vol:.3f}"
+            f"aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,{vol_part}"
         )
         if start_ms > 0:
             chain += f",adelay={start_ms}:all=1"

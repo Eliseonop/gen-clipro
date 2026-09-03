@@ -31,7 +31,12 @@ from . import (
 INSTRUCTIONS = (
     "Editor de vídeo (YouTube → clips verticales 9:16 → timeline → subtítulos → "
     "export). Empieza por get_project_context(project_id) para orientarte: te da "
-    "formato, material, timeline, historial y las capabilities disponibles."
+    "formato, material, timeline, historial y las capabilities disponibles. "
+    "Audio: set_clip_volume (0–2, mute, fade in/out), set_clip_audio_fx, "
+    "set_track_audio para toda una pista, rename_track para nombrar líneas "
+    "(A1/SFX/Voz). Los keyframes pueden animar volume y los fx de audio. "
+    "Para animar un clip (zoom, giro, slide, aparecer con un SFX) usa "
+    "animate_clip; no escribas keyframes a mano."
 )
 
 mcp = MCPServer(name="video-yt", instructions=INSTRUCTIONS)

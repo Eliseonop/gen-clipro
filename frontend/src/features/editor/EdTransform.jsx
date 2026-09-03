@@ -30,7 +30,7 @@ function Slider({ label, value, min, max, step, format, onChange }) {
 export default function EdTransform({
   clip, playhead, onPose, onChangeFrame,
 }) {
-  if (!canKeyframe(clip)) return null
+  if (!canKeyframe(clip) || clip.kind === 'audio') return null
   const localT = Math.max(0, (playhead ?? 0) - (clip.start || 0))
   const pose = clipPose(clip, localT)
   const overlay = isOverlay(clip)

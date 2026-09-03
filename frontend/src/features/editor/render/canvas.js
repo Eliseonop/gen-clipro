@@ -149,6 +149,16 @@ export function drawComposite(ctx, head, selClipIds, env) {
       const pose = clipPose(clip, localT)
       ctx.save()
       applyCanvasFx(ctx, { ...fx, opacity: fx.opacity * pose.opacity }, cw, ch)
+      const dx = (pose.x - 0.5) * cw
+      const dy = (pose.y - 0.5) * ch
+      const rot = pose.rotation || 0
+      const sc = pose.scale ?? 1
+      if (dx || dy || rot || Math.abs(sc - 1) > 0.001) {
+        ctx.translate(cw / 2 + dx, ch / 2 + dy)
+        ctx.rotate(rot * Math.PI / 180)
+        ctx.scale(sc, sc)
+        ctx.translate(-cw / 2, -ch / 2)
+      }
       drawReframe(ctx, el, reframeForDraw(clip, localT, srcTime), srcTime, outW / outH, { clear: false })
       ctx.restore()
     }

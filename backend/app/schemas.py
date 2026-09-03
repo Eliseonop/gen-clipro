@@ -152,8 +152,12 @@ class ClipInfo(BaseModel):
     description: Optional[str] = None
     reframe: Optional[Reframe] = None
     transcript: Optional["Transcript"] = None   # guion del fragmento (relativo al clip)
-    origin: Optional[str] = None              # "youtube" | "compose"
+    origin: Optional[str] = None              # "youtube" | "compose" | "pexels" | "giphy"
     source: Optional[str] = None              # "external" | "generated"
+    provider: Optional[str] = None            # "pexels" | "giphy"
+    external_id: Optional[str] = None
+    author: Optional[str] = None
+    license_info: Optional[str] = None
 
 
 class CreateProjectRequest(BaseModel):
@@ -260,6 +264,11 @@ class ImageInfo(BaseModel):
     description: Optional[str] = None
     origin: Optional[str] = "upload"
     source: Optional[str] = "external"
+    provider: Optional[str] = None            # "pexels" | "giphy"
+    external_id: Optional[str] = None
+    source_url: Optional[str] = None
+    author: Optional[str] = None
+    license_info: Optional[str] = None
 
 
 class SaveLibraryRequest(BaseModel):
@@ -275,6 +284,30 @@ class UpdateMaterialRequest(BaseModel):
 
 class ImageFetchRequest(BaseModel):
     url: str
+
+
+class ExploreSearchRequest(BaseModel):
+    query: str = ""
+    page: int = Field(default=1, ge=1, le=80)
+    media: str = "all"          # all | photo | video | gif
+    provider: str = "all"       # all | pexels | giphy
+
+
+class ExploreItem(BaseModel):
+    id: Optional[str] = None
+    provider: str
+    external_id: str
+    kind: str                   # photo | video | gif
+    title: Optional[str] = None
+    thumb_url: Optional[str] = None
+    preview_url: Optional[str] = None
+    download_url: str
+    width: Optional[int] = None
+    height: Optional[int] = None
+    duration: Optional[float] = None
+    author: Optional[str] = None
+    source_url: Optional[str] = None
+    license_info: Optional[str] = None
 
 
 class ClipTranscribeRequest(BaseModel):

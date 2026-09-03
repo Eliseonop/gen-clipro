@@ -475,7 +475,7 @@ console.log('duplicate + sync + face-track ok')
 
 assert.deepEqual(
   trackContextItems({ kind: 'text' }, { linked: false, canLink: true, hasText: true }).map((i) => i.id),
-  ['copy-text', 'delete'],
+  ['rename', 'copy-text', 'delete'],
 )
 assert.equal(trackContextItems({ kind: 'text' }, { hasText: false }).find((i) => i.id === 'copy-text').disabled, true)
 assert.equal(
@@ -498,10 +498,10 @@ assert.equal(ttsClip.description, 'hola mundo')
 assert.equal(clipCopyText(ttsClip), 'hola mundo')
 assert.deepEqual(
   trackContextItems({ kind: 'audio' }, { linked: false, canLink: true }).map((i) => i.label),
-  ['Relacionar', 'Eliminar'],
+  ['Renombrar', 'Relacionar', 'Eliminar'],
 )
 assert.equal(trackContextItems({ kind: 'audio' }, { linked: true }).find((i) => i.id === 'unlink').label, 'Desrelacionar')
-assert.equal(trackContextItems({ kind: 'audio' }, { linked: false, canLink: false })[0].disabled, true)
+assert.equal(trackContextItems({ kind: 'audio' }, { linked: false, canLink: false }).find((i) => i.id === 'link').disabled, true)
 
 const pairIn = [
   { id: 'A1', kind: 'audio', name: 'A1', linked_track_id: null },
