@@ -7,10 +7,12 @@ from pathlib import Path
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, diagnostics, heatmap, jobs, migrations, projects, settings, storage, timeline_store, transcribe_settings, tts
+from .ai import agent as ai_agent
+from .ai import providers as ai_providers
 from .mcp_server import server as mcp_server
 from .schemas import (
     AnalyzeRequest,
@@ -715,6 +717,37 @@ def get_settings() -> dict:
 def put_settings(data: dict) -> dict:
     settings.save(data)
     return settings.public()
+
+
+# --- Chat IA (agente que opera el MCP existente) -----------------------
+
+@app.get("/api/ai/config")
+def ai_config() -> dict:
+    """Estado del proveedor de IA (sin exponer la API key)."""
+    cfg = ai_providers.ai_config()
+    reason = None
+    try:
+        reason = ai_providers.get_provider().unavailable_reason()
+    except Exception as exc:  # noqa: BLE001
+        reason = str(exc)
+    return {"provider": cfg["provider"], "model": cfg["model"],
+            "available": reason is None, "reason": reason}
+
+
+@app.post("/api/ai/chat")
+async def ai_chat(body: dict = Body(...)) -> StreamingResponse:
+    """Turno de chat con la IA. Devuelve eventos SSE (text/tool/reload/done/error).
+
+    El navegador NO habla con el MCP: el backend gestiona proveedor + cliente MCP
+    in-process. La API key nunca sale del backend.
+    """
+    project_id = (body or {}).get("project_id") or ""
+    message = (body or {}).get("message") or ""
+    conversation_id = (body or {}).get("conversation_id")
+    context = (body or {}).get("context") if isinstance((body or {}).get("context"), dict) else None
+    stream = ai_agent.sse(project_id, message, context=context, conversation_id=conversation_id)
+    return StreamingResponse(stream, media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.get("/api/job/{job_id}", response_model=Job)

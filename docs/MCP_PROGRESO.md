@@ -183,6 +183,24 @@ compose); runners en `jobs.py`; tools en `tools_workflow.py`.
 
 ---
 
+## CHAT IA NATIVO — agente Gemini sobre el MCP existente 🔧 (Fase 1 COMPLETA)
+
+Chat IA dentro del editor web: un agente en el backend usa el **MCP existente**
+(cliente in-process `Client(mcp)`, cero tools duplicadas) para operar el editor.
+Fuente de verdad intacta (`timeline_store`/`timeline_ops`). Claude Code sigue
+conectándose a `/mcp` igual.
+
+**Fase 1 (núcleo) ✅** — commit pendiente:
+- `app/ai/mcp_client.py` (Client in-process → descubre 44 tools, JSON-Schema para function-calling), `providers.py` (`AIProvider` + `GeminiProvider` google-genai, modelo `gemini-3.6-flash`; OpenAI/Claude preparados), `agent.py` (loop máx-iters + contexto `get_project_context` + tag auditoría `source:ai_chat` + evento `reload`), `conversations.py` (memoria en memoria, recorte de tokens).
+- `POST /api/ai/chat` (SSE) + `GET /api/ai/config` (sin exponer la key). El navegador NO habla con `/mcp`.
+- Frontend: pestaña **Chat IA** en `EdMaterial` (nav existente) + `EdChat.jsx` (streaming, chips de tool con etiqueta amigable), `VideoEditor.reloadTimeline()` recarga el editor tras ediciones (sin 2º estado), contexto (selected_clip/current_time).
+- Reutiliza la Gemini API key de `settings` (nunca sale del backend).
+- **Verificado E2E real con Gemini**: "¿qué formato/cuántos clips?" → el modelo llamó `get_project_context` y respondió correcto. Tests: 6 nuevos (agente con provider falso + MCP in-process real + auditoría). Suite backend **445 OK**.
+- [~] **Fase 2** (pendiente): streaming de texto por tokens, progreso de jobs en UI (get_job/wait_for_job), modo debug de tools.
+- [~] **Fase 3** (pendiente): confirmación de tools destructivas antes de ejecutar, ajustes IA (proveedor/modelo) en Configuración, checkpoint automático antes de workflows.
+
+---
+
 ## 🎯 MVP 1 — una IA crea un vídeo completo
 
 Tools mínimas (~14): `get_project_context`, `get_timeline`, `analyze_youtube`,
