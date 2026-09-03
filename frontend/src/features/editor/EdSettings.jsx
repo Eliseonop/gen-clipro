@@ -85,6 +85,7 @@ export default function EdSettings({ onExportFps }) {
   const [aiCfg, setAiCfg] = useState(null)
   const [aiProv, setAiProv] = useState('')
   const [aiModel, setAiModel] = useState('')
+  const [aiBaseUrl, setAiBaseUrl] = useState('')
   const [aiEdit, setAiEdit] = useState(false)
 
   const savedIds = useMemo(
@@ -119,13 +120,14 @@ export default function EdSettings({ onExportFps }) {
     setAiCfg(c)
     setAiProv(c.provider)
     setAiModel(c.model)
+    setAiBaseUrl(c.base_url || '')
   }
 
   async function saveAi() {
     setBusy(true)
     setErr('')
     try {
-      await putSettings({ ai: { provider: aiProv, model: aiModel.trim() } })
+      await putSettings({ ai: { provider: aiProv, model: aiModel.trim(), base_url: aiBaseUrl.trim() } })
       await reloadAi()
       setAiEdit(false)
       setToast({ type: 'success', message: 'Proveedor de IA guardado.' })
@@ -357,13 +359,28 @@ export default function EdSettings({ onExportFps }) {
                   placeholder="modelo"
                 />
               </label>
+              {(aiCfg?.providers || []).find((p) => p.id === aiProv)?.local && (
+                <label className="field">
+                  <span>Servidor (base URL)</span>
+                  <input
+                    className="ed-cfg-input"
+                    value={aiBaseUrl}
+                    disabled={!aiEdit || busy}
+                    onChange={(e) => setAiBaseUrl(e.target.value)}
+                    placeholder="http://localhost:1234/v1"
+                  />
+                </label>
+              )}
               {!aiEdit && aiCfg && !aiCfg.available && <p className="ed-key-hint">{aiCfg.reason}</p>}
               {aiProv === 'openrouter' && aiEdit && (
                 <p className="ed-key-hint">Con <b>openrouter/free</b> elige solo un modelo gratis disponible (recomendado). O escribe uno concreto, p. ej. <b>nvidia/nemotron-3-super-120b-a12b:free</b>.</p>
               )}
+              {aiProv === 'lmstudio' && aiEdit && (
+                <p className="ed-key-hint">Local con <b>LM Studio</b>: arranca su servidor (Developer → Start Server, :1234) y carga un modelo con <b>tool use</b> (p. ej. Qwen2.5-7B/14B-Instruct). El "Modelo" debe coincidir con el id cargado.</p>
+              )}
               {aiEdit && (
                 <div className="ed-key-actions">
-                  <button type="button" className="ghost small" onClick={() => { setAiEdit(false); if (aiCfg) { setAiProv(aiCfg.provider); setAiModel(aiCfg.model) } }} disabled={busy}>Cancelar</button>
+                  <button type="button" className="ghost small" onClick={() => { setAiEdit(false); if (aiCfg) { setAiProv(aiCfg.provider); setAiModel(aiCfg.model); setAiBaseUrl(aiCfg.base_url || '') } }} disabled={busy}>Cancelar</button>
                   <button type="button" className="primary small" onClick={saveAi} disabled={busy}>{busy ? 'Guardando…' : 'Guardar'}</button>
                 </div>
               )}

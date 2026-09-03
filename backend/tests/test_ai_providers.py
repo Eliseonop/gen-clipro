@@ -42,6 +42,16 @@ class ProviderSelectionTest(unittest.TestCase):
         p = providers.get_provider()
         self.assertIsNotNone(p.unavailable_reason())
 
+    def test_lmstudio_local_no_key_needed(self):
+        settings.save({"ai": {"provider": "lmstudio", "model": "qwen2.5-7b-instruct",
+                              "base_url": "http://localhost:4321/v1"}})
+        cfg = providers.ai_config()
+        self.assertEqual(cfg["provider"], "lmstudio")
+        self.assertEqual(cfg["base_url"], "http://localhost:4321/v1")
+        p = providers.get_provider()
+        self.assertIsNone(p.unavailable_reason())   # sin key, disponible (openai instalado)
+        self.assertEqual(p._base_url, "http://localhost:4321/v1")   # override respetado
+
 
 if __name__ == "__main__":
     unittest.main()
