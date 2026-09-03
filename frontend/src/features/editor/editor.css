@@ -1277,3 +1277,15 @@
 .ed-chat-input { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border, #333); }
 .ed-chat-input input { flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border, #333); background: transparent; color: inherit; font-size: 13px; }
 .ed-chat-input input:disabled { opacity: 0.6; }
+
+/* Chat IA — Fase 2 (cabecera, jobs) */
+.ed-chat-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border, #333); }
+.ed-chat-newbtn { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 5px 9px; border-radius: 8px; border: 1px solid var(--border, #333); background: transparent; color: inherit; cursor: pointer; }
+.ed-chat-newbtn:hover:not(:disabled) { background: rgba(127,127,127,0.12); }
+.ed-chat-head .icon-btn.on { color: var(--accent, #3b82f6); }
+.ed-chat-job { display: flex; flex-direction: column; gap: 4px; font-size: 12px; margin: 2px 0; }
+.ed-chat-job-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; opacity: 0.85; }
+.ed-chat-job-pct { font-variant-numeric: tabular-nums; opacity: 0.7; }
+.ed-chat-bar { height: 6px; border-radius: 4px; background: rgba(127,127,127,0.2); overflow: hidden; }
+.ed-chat-bar-fill { height: 100%; background: var(--accent, #3b82f6); transition: width 0.3s ease; }
+.ed-chat-bar-fill.err { background: #ef4444; }

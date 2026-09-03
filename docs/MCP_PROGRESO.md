@@ -196,7 +196,12 @@ conectándose a `/mcp` igual.
 - Frontend: pestaña **Chat IA** en `EdMaterial` (nav existente) + `EdChat.jsx` (streaming, chips de tool con etiqueta amigable), `VideoEditor.reloadTimeline()` recarga el editor tras ediciones (sin 2º estado), contexto (selected_clip/current_time).
 - Reutiliza la Gemini API key de `settings` (nunca sale del backend).
 - **Verificado E2E real con Gemini**: "¿qué formato/cuántos clips?" → el modelo llamó `get_project_context` y respondió correcto. Tests: 6 nuevos (agente con provider falso + MCP in-process real + auditoría). Suite backend **445 OK**.
-- [~] **Fase 2** (pendiente): streaming de texto por tokens, progreso de jobs en UI (get_job/wait_for_job), modo debug de tools.
+**Fase 2 ✅** — commit pendiente:
+- [x] **Streaming de texto por tokens** (`generate_content_stream`; el texto aparece progresivamente). Ojo Gemini 3.x: hay que conservar los `parts` originales del stream (llevan `thought_signature`) al devolver los functionCall, si no da 400.
+- [x] **Progreso de jobs en el chat**: el agente auto-espera los jobs (poll `get_job`) y emite eventos `job` con progreso → barra en vivo en la UI.
+- [x] **Historial persistente por proyecto**: `data/conversations/<pid>.json` (varias conversaciones con título/timestamps); endpoints `GET/DELETE /api/ai/conversations…`; `EdChat` carga el último chat al abrir + botón "Nuevo chat".
+- [x] **Modo debug**: toggle en el chat que muestra los nombres técnicos de las tools.
+- [x] Refactor del provider a modelo emit-callback (permite interleaving de eventos de job). Verificado E2E real (mutación 16:9→9:16 con streaming + reload + persistencia). Tests: 8 (agente/jobs/conversaciones). Suite **447 OK**.
 - [~] **Fase 3** (pendiente): confirmación de tools destructivas antes de ejecutar, ajustes IA (proveedor/modelo) en Configuración, checkpoint automático antes de workflows.
 
 ---
