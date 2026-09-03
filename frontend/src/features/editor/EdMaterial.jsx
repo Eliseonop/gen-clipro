@@ -15,6 +15,7 @@ import AudioTab from '../audio/AudioTab'
 import ConfirmModal from '../../components/ConfirmModal'
 import AnchoredMenu from '../../components/AnchoredMenu'
 import { canDeleteMaterial, materialIdent, materialMenuItems, materialDeleteTitle, materialLabel } from './materialMenu'
+import { clipCopyText } from './editorModel'
 import JobStatusBar from '../../components/JobStatusBar'
 import FlipPopover from '../../components/FlipPopover'
 import Toast from '../../components/Toast'
@@ -395,6 +396,17 @@ export default function EdMaterial({
       saved: item.scope === 'library' || !!item.is_saved,
     })
     setImgPaneMenu(null)
+  }
+
+  async function copyAudioDescription(audio) {
+    const text = clipCopyText(audio)
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setMatToast({ type: 'success', message: 'Descripción copiada.' })
+    } catch {
+      setMatToast({ type: 'error', message: 'No se pudo copiar.' })
+    }
   }
 
   async function confirmDeleteMaterial() {
@@ -988,6 +1000,7 @@ export default function EdMaterial({
                 onPlay={onPlayMedia}
                 di={di}
                 onMenu={(e) => openMatMenu(e, 'audios', a)}
+                onCopyDesc={() => copyAudioDescription(a)}
               />
             )))}
         </div>
@@ -1148,8 +1161,9 @@ function SfxCard({ sfx, onAdd, onPlay, di, favOn, onToggleFav, onEdit }) {
   )
 }
 
-function AudioCard({ audio, onAdd, onPlay, di, onMenu }) {
+function AudioCard({ audio, onAdd, onPlay, di, onMenu, onCopyDesc }) {
   const { ref, playing, toggle, setPlaying } = useToggle(onPlay)
+  const hasDesc = !!clipCopyText(audio)
   return (
     <div className="ed-card audio row"
       draggable
@@ -1163,6 +1177,18 @@ function AudioCard({ audio, onAdd, onPlay, di, onMenu }) {
       </button>
       <span className="ed-card-name" title={audio.filename}>{audio.label || audio.filename}</span>
       <span className="ed-card-dur">{fmt(audio.duration || 0)}</span>
+      {onCopyDesc && (
+        <button
+          type="button"
+          className="ed-add-btn"
+          disabled={!hasDesc}
+          title={hasDesc ? 'Copiar descripción' : 'Sin descripción'}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onCopyDesc() }}
+        >
+          <Icon name="content_copy" size={15} />
+        </button>
+      )}
       {onMenu && <MaterialMenuBtn className="ed-add-btn" onOpen={onMenu} />}
       <button className="ed-add-btn" onClick={onAdd} title="Agregar al proyecto"><Icon name="add" size={15} /></button>
     </div>

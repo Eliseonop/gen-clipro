@@ -13,9 +13,11 @@ import {
   duplicateClipOntoTrack, dupCount, lineageRoot, syncMaterialInstances,
   applyFaceTrack, isEditingExistingClip, clipSaveIndex,
   trackContextItems, linkedPartnerName, linkTrackPair, unlinkTrackPair,
+  clipCopyText,
   applyAudioSpeedToLinkedText, makeShapeClip, isGeneratedDurationClip,
   matchClipsToFirstDuration, durationPatchToMatch,
   clipLayerInfo, moveClipLayer, canLayerClip,
+  trackTextContent,
 } from './editorModel.js'
 
 const vFast = { kind: 'video', start: 10, in_point: 2, out_point: 6, speed: 2 }
@@ -472,9 +474,28 @@ assert.equal(kept.keyframes[0].cx, 0.2)
 console.log('duplicate + sync + face-track ok')
 
 assert.deepEqual(
-  trackContextItems({ kind: 'text' }, { linked: false, canLink: true }).map((i) => i.id),
-  ['delete'],
+  trackContextItems({ kind: 'text' }, { linked: false, canLink: true, hasText: true }).map((i) => i.id),
+  ['copy-text', 'delete'],
 )
+assert.equal(trackContextItems({ kind: 'text' }, { hasText: false }).find((i) => i.id === 'copy-text').disabled, true)
+assert.equal(
+  trackTextContent([
+    { id: 'b', track_id: 'T1', kind: 'text', start: 1, text: 'mundo' },
+    { id: 'a', track_id: 'T1', kind: 'text', start: 0, text: 'Hola' },
+    { id: 'v', track_id: 'V1', kind: 'video', start: 0, text: 'no' },
+  ], 'T1'),
+  'Hola mundo',
+)
+assert.equal(clipCopyText({ description: 'gancho TTS' }), 'gancho TTS')
+assert.equal(clipCopyText({ text: '  guion  ' }), 'guion')
+assert.equal(clipCopyText({ description: 'desc', text: 'guion' }), 'desc')
+assert.equal(clipCopyText({}), '')
+assert.equal(clipCopyText({ kind: 'audio', filename: 'n.wav' }, [{ filename: 'n.wav', text: 'hola' }]), 'hola')
+assert.equal(clipCopyText({ kind: 'audio', asset_id: 'a9' }, [{ id: 'a9', description: 'desc' }]), 'desc')
+assert.equal(clipCopyText({ kind: 'video', filename: 'n.wav' }, [{ filename: 'n.wav', text: 'hola' }]), '')
+const ttsClip = makeClip('audios', { id: 'a9', filename: 'n.wav', text: 'hola mundo', duration: 2 }, 'A1', 0, 2)
+assert.equal(ttsClip.description, 'hola mundo')
+assert.equal(clipCopyText(ttsClip), 'hola mundo')
 assert.deepEqual(
   trackContextItems({ kind: 'audio' }, { linked: false, canLink: true }).map((i) => i.label),
   ['Relacionar', 'Eliminar'],
