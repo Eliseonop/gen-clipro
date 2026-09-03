@@ -10,6 +10,7 @@ import ImageAddModal from './ImageAddModal'
 import EdSettings from './EdSettings'
 import EdEffects from './EdEffects'
 import EdShapes from './EdShapes'
+import EdChat from './EdChat'
 import AudioTab from '../audio/AudioTab'
 import ConfirmModal from '../../components/ConfirmModal'
 import AnchoredMenu from '../../components/AnchoredMenu'
@@ -246,6 +247,7 @@ const MAT_NAV = [
   { id: 'text', icon: 'title', label: 'Texto', empty: true },
   { id: 'transitions', icon: 'animation', label: 'Transiciones', empty: true },
   { id: 'settings', icon: 'settings', label: 'Configuración', sep: true },
+  { id: 'chat', icon: 'forum', label: 'Chat IA' },
 ]
 
 export default function EdMaterial({
@@ -254,6 +256,7 @@ export default function EdMaterial({
   matTab, onMatTab,
   playhead, onPose, onChangeFrame, selKfId, onInterpKf,
   fps = 30, onExportFps,
+  aiContext, onReloadTimeline,
 }) {
   const [tabState, setTabState] = useState('video')
   const tab = matTab ?? tabState
@@ -1010,6 +1013,9 @@ export default function EdMaterial({
         />
       )}
       {tab === 'settings' && <EdSettings onExportFps={onExportFps} />}
+      {tab === 'chat' && (
+        <EdChat project={project} context={aiContext} onReload={onReloadTimeline} />
+      )}
       {navItem?.empty && (
         <div className="ed-mat-list">
           <div className="ed-mat-empty">

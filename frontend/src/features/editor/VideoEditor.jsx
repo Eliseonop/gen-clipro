@@ -252,6 +252,35 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     return () => clearTimeout(id)
   }, [timelinePayload, loaded, project.id])
 
+  // Recarga el timeline desde el servidor (tras ediciones de la IA por el MCP).
+  // Reutiliza el MISMO mapeo que la carga inicial → no hay segundo estado.
+  const reloadTimeline = useCallback(async () => {
+    try {
+      const tl = await getTimeline(project.id)
+      if (!tl) return
+      setTracks(tl.tracks || [])
+      setClips((tl.clips || []).map((c) => ({
+        ...c,
+        reframe: isVisualClip(c) ? withKfIds(c.reframe || newReframe()) : null,
+        appear: c.appear || 'none',
+        exit: c.exit || 'none',
+        look: c.look || 'none',
+        effects: c.effects && typeof c.effects === 'object' ? c.effects : {},
+        audio_fx: c.audio_fx && typeof c.audio_fx === 'object' ? c.audio_fx : {},
+        muted: !!c.muted,
+        speed: c.speed,
+        keep_pitch: c.keep_pitch !== false,
+        reverse: !!c.reverse,
+        speed_curve: c.speed_curve || null,
+        frame: c.frame || (c.layout === 'overlay' ? 'free' : 'full'),
+        ...(c.kind === 'text' ? { text_role: textRole(c) } : {}),
+      })))
+      if (tl.width) setOutW(tl.width)
+      if (tl.height) setOutH(tl.height)
+      if (tl.fps) setFps(normalizeFps(tl.fps))
+    } catch { /* si falla, deja el estado actual */ }
+  }, [project.id])
+
   // --- Selección de capa / clip superior ---
   const layerOf = useCallback((trackId) => {
     const vids = tracksRef.current.filter((t) => t.kind === 'video')
@@ -1436,6 +1465,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           playhead={playhead}
           fps={fps}
           onExportFps={setFps}
+          aiContext={{ project_id: project.id, selected_clip_id: selClipId || null, selected_track_id: selTrackId || null, current_time: Math.round((playhead || 0) * 100) / 100 }}
+          onReloadTimeline={reloadTimeline}
           onPose={(patch) => selectedClip && commitPose(selectedClip.id, patch)}
           onChangeFrame={(slot) => applyClipFrame(selectedClip, slot)}
           selKfId={selKfId}

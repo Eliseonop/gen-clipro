@@ -107,6 +107,42 @@ export const getTimeline = (pid) => get(`/api/projects/${pid}/timeline`)
 export const saveTimeline = (pid, timeline) => put(`/api/projects/${pid}/timeline`, timeline)
 export const exportTimeline = (pid, timeline) => post(`/api/projects/${pid}/export`, { timeline })
 
+// --- Chat IA (agente sobre el MCP) ---
+export const getAiConfig = () => get('/api/ai/config')
+
+// Streaming SSE: llama onEvent(ev) por cada evento del agente.
+export async function aiChat({ projectId, message, conversationId, context, signal }, onEvent) {
+  const res = await fetch('/api/ai/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project_id: projectId, message, conversation_id: conversationId, context }),
+    signal,
+  })
+  if (!res.ok || !res.body) {
+    const err = await res.json().catch(() => ({}))
+    const d = err.detail
+    throw new Error((d && (d.message || d)) || `Error ${res.status}`)
+  }
+  const reader = res.body.getReader()
+  const dec = new TextDecoder()
+  let buf = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += dec.decode(value, { stream: true })
+    let idx
+    while ((idx = buf.indexOf('\n\n')) >= 0) {
+      const chunk = buf.slice(0, idx)
+      buf = buf.slice(idx + 2)
+      const line = chunk.split('\n').find((l) => l.startsWith('data:'))
+      if (!line) continue
+      const payload = line.slice(5).trim()
+      if (!payload) continue
+      try { onEvent(JSON.parse(payload)) } catch { /* evento no-JSON: ignorar */ }
+    }
+  }
+}
+
 // --- Sound Effects ---
 export const listSfx = (q = '', category = '') =>
   get(`/api/sfx?q=${encodeURIComponent(q)}&category=${encodeURIComponent(category)}`)

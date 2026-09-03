@@ -9,10 +9,29 @@ puedan aislarla (patch de ``config.DATA_DIR`` a un tmpdir).
 """
 from __future__ import annotations
 
+import contextvars
 import json
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from .. import config
+
+# Origen de la acción (p.ej. "ai_chat"). Se propaga por contextvar para que
+# quede registrado sin cambiar la firma de cada tool. Los tools corren en un
+# worker thread que copia el contexto, así que el tag se conserva.
+_source_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "mcp_audit_source", default=None
+)
+
+
+@contextmanager
+def source(name: str | None):
+    """Marca el origen de las acciones auditadas dentro del bloque."""
+    token = _source_var.set(name)
+    try:
+        yield
+    finally:
+        _source_var.reset(token)
 
 
 def _audit_path():
@@ -42,6 +61,9 @@ def log(
         entry["ms"] = round(ms, 1)
     if error:
         entry["error"] = str(error)[:300]
+    src = _source_var.get()
+    if src:
+        entry["source"] = src
 
     path = _audit_path()
     path.parent.mkdir(parents=True, exist_ok=True)
