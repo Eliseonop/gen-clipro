@@ -175,10 +175,11 @@ compose); runners en `jobs.py`; tools en `tools_workflow.py`.
 
 ---
 
-## ETAPA 9 — Integración con IA + pruebas
+## ETAPA 9 — Integración con IA + pruebas 🔧 (docs listas; E2E real manual)
 
-- [ ] Config del cliente MCP + documentación de uso
-- [ ] Pruebas E2E de los 3 flujos objetivo
+- [x] Config del cliente MCP + documentación de uso → **`docs/MCP_USO.md`** (arranque, config Claude Code/Desktop apuntando a `http://127.0.0.1:8000/mcp`, catálogo de 44 tools, los 3 flujos, notas GPU/gemini/auditoría, checklist E2E)
+- [x] Conexión validada en vivo: cliente MCP real por HTTP → **44 tools listadas** + `search_sfx` ejecutada OK
+- [~] Pruebas E2E de los 3 flujos objetivo — la **orquestación** está unit-tested (`test_shorts` con servicios mockeados); el **E2E real** (red+ffmpeg+whisper, abrir el `export_url`) es **manual** (checklist en `MCP_USO.md`), lo corre Edu en su entorno
 
 ---
 
@@ -193,4 +194,4 @@ Tools mínimas (~14): `get_project_context`, `get_timeline`, `analyze_youtube`,
 
 ---
 
-_Última actualización: 2026-09-02 — **ETAPA 4.5 COMPLETA** (puesta al día de la edición con el editor nuevo de Edu: 12 tools nuevas — efectos/opacidad/speed/transiciones/keyframes/text_role/shapes/duplicar/link + fetch_image; 44 tools MCP: 9 lectura + 32 escritura + 3 destructivas; 433 tests). Fase 0/1 NO necesitan rehacerse (schema aditivo v2→v4 con migraciones). Siguiente: Etapa 9 (config del cliente MCP + E2E). `render_frame`/`render_preview` pospuestas._
+_Última actualización: 2026-09-02 — **ETAPA 9 (docs) COMPLETA** (`docs/MCP_USO.md`: config del cliente + catálogo + 3 flujos; conexión HTTP validada, 44 tools). MCP funcionalmente COMPLETO (Etapas 1-9 + 4.5); solo queda el E2E real manual en el entorno de Edu. 439 tests. Pendiente opcional: `render_frame`/`render_preview`, persistencia de jobs, paridad JS de las ops de Etapa 4.5._
