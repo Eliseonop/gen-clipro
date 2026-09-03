@@ -74,6 +74,13 @@ def _compact_context(data: dict | None) -> str:
         f"material: {media.get('clips', 0)} clips, {media.get('audios', 0)} audios, {media.get('images', 0)} imágenes",
         f"undo={hist.get('can_undo')} redo={hist.get('can_redo')}",
     ]
+    # Etiquetas del material para poder referirse a los clips por su nombre.
+    clip_labels = [f"[{c.get('index')}] {c.get('label')}" for c in (media.get("clip_list") or [])[:12] if c.get("label")]
+    if clip_labels:
+        parts.append("clips por etiqueta: " + "; ".join(clip_labels))
+    audio_labels = [a.get("label") for a in (media.get("audio_list") or [])[:8] if a.get("label")]
+    if audio_labels:
+        parts.append("audios: " + "; ".join(str(a) for a in audio_labels))
     return " · ".join(str(p) for p in parts)
 
 

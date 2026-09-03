@@ -165,18 +165,27 @@ class ConversationsStoreTest(unittest.TestCase):
         self.assertEqual(conversations.list_conversations("p1")[0]["id"], c1)
 
 
+class _Err(Exception):
+    def __init__(self, msg, code):
+        super().__init__(msg)
+        self.status_code = code
+
+
 class RetryableTest(unittest.TestCase):
-    def test_only_overload_is_retryable(self):
+    def test_only_5xx_is_retryable(self):
         from app.ai import providers
-        self.assertTrue(providers._retryable(Exception("503 UNAVAILABLE high demand")))
-        self.assertFalse(providers._retryable(Exception("429 RESOURCE_EXHAUSTED")))  # cuota: no reintentar
-        self.assertFalse(providers._retryable(Exception("400 INVALID_ARGUMENT")))
+        self.assertTrue(providers._retryable(_Err("overloaded", 503)))
+        self.assertTrue(providers._retryable(Exception("high demand, try again later")))  # sin código
+        self.assertFalse(providers._retryable(_Err("rate limit", 429)))       # cuota
+        self.assertFalse(providers._retryable(_Err("unavailable for free", 404)))  # modelo no free
+        self.assertFalse(providers._retryable(Exception("This model is unavailable for free")))
 
     def test_friendly_error_messages(self):
         from app.ai import providers
-        self.assertIn("cuota", providers._friendly_error(Exception("429 RESOURCE_EXHAUSTED quota")).lower())
-        self.assertIn("saturado", providers._friendly_error(Exception("503 UNAVAILABLE")).lower())
-        self.assertIn("api key", providers._friendly_error(Exception("403 permission denied API key")).lower())
+        self.assertIn("cuota", providers._friendly_error(_Err("quota", 429)).lower())
+        self.assertIn("no está disponible", providers._friendly_error(_Err("unavailable for free", 404)).lower())
+        self.assertIn("saturado", providers._friendly_error(_Err("overloaded", 503)).lower())
+        self.assertIn("api key", providers._friendly_error(_Err("unauthorized", 401)).lower())
 
 
 class McpClientTest(unittest.TestCase):
