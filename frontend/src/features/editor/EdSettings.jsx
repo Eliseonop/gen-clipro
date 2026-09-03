@@ -2,24 +2,25 @@ import { useEffect, useMemo, useState } from 'react'
 import Icon from '../../components/Icon'
 import Toast from '../../components/Toast'
 import { FPS_CHOICES, normalizeFps } from '../../lib/projectFps'
-import { getSettings, putSettings } from '../../services/api'
+import { getSettings, putSettings, getAiConfig } from '../../services/api'
 
 const API_PROVIDERS = [
-  { id: 'gemini', label: 'Google Gemini', hint: 'Narración TTS, guion e imágenes' },
-  { id: 'openai', label: 'OpenAI', hint: 'GPT, Whisper e imágenes' },
-  { id: 'anthropic', label: 'Anthropic', hint: 'Claude para guiones' },
-  { id: 'elevenlabs', label: 'ElevenLabs', hint: 'Voces TTS' },
-  { id: 'openrouter', label: 'OpenRouter', hint: 'Varios modelos con una sola clave' },
-  { id: 'pexels', label: 'Pexels', hint: 'Vídeo e imágenes de stock' },
-  { id: 'pixabay', label: 'Pixabay', hint: 'Stock libre' },
-  { id: 'unsplash', label: 'Unsplash', hint: 'Fotos de stock' },
-  { id: 'youtube', label: 'YouTube Data', hint: 'Metadatos y búsqueda' },
-  { id: 'replicate', label: 'Replicate', hint: 'Modelos de imagen y vídeo' },
-  { id: 'fal', label: 'Fal.ai', hint: 'Generación rápida' },
-  { id: 'huggingface', label: 'Hugging Face', hint: 'Modelos abiertos' },
-  { id: 'assemblyai', label: 'AssemblyAI', hint: 'Transcripción' },
-  { id: 'removebg', label: 'Remove.bg', hint: 'Quitar fondo' },
-  { id: 'stability', label: 'Stability AI', hint: 'Imagen y vídeo' },
+  { id: 'gemini', label: 'Google Gemini', hint: 'Narración TTS, guion e imágenes', keys: 'https://aistudio.google.com/apikey' },
+  { id: 'openai', label: 'OpenAI', hint: 'GPT, Whisper e imágenes', keys: 'https://platform.openai.com/api-keys' },
+  { id: 'anthropic', label: 'Anthropic', hint: 'Claude para guiones', keys: 'https://console.anthropic.com/settings/keys' },
+  { id: 'elevenlabs', label: 'ElevenLabs', hint: 'Voces TTS', keys: 'https://elevenlabs.io/app/settings/api-keys' },
+  { id: 'openrouter', label: 'OpenRouter', hint: 'Varios modelos con una sola clave', keys: 'https://openrouter.ai/keys' },
+  { id: 'pexels', label: 'Pexels', hint: 'Vídeo e imágenes de stock', keys: 'https://www.pexels.com/api/' },
+  { id: 'giphy', label: 'GIPHY', hint: 'GIFs animados', keys: 'https://developers.giphy.com/dashboard/' },
+  { id: 'pixabay', label: 'Pixabay', hint: 'Stock libre', keys: 'https://pixabay.com/api/docs/' },
+  { id: 'unsplash', label: 'Unsplash', hint: 'Fotos de stock', keys: 'https://unsplash.com/oauth/applications' },
+  { id: 'youtube', label: 'YouTube Data', hint: 'Metadatos y búsqueda', keys: 'https://console.cloud.google.com/apis/credentials' },
+  { id: 'replicate', label: 'Replicate', hint: 'Modelos de imagen y vídeo', keys: 'https://replicate.com/account/api-tokens' },
+  { id: 'fal', label: 'Fal.ai', hint: 'Generación rápida', keys: 'https://fal.ai/dashboard/keys' },
+  { id: 'huggingface', label: 'Hugging Face', hint: 'Modelos abiertos', keys: 'https://huggingface.co/settings/tokens' },
+  { id: 'assemblyai', label: 'AssemblyAI', hint: 'Transcripción', keys: 'https://www.assemblyai.com/app/account' },
+  { id: 'removebg', label: 'Remove.bg', hint: 'Quitar fondo', keys: 'https://www.remove.bg/dashboard#api-key' },
+  { id: 'stability', label: 'Stability AI', hint: 'Imagen y vídeo', keys: 'https://platform.stability.ai/account/keys' },
 ]
 
 function providerLabel(id) {
@@ -28,6 +29,10 @@ function providerLabel(id) {
 
 function providerHint(id) {
   return API_PROVIDERS.find((p) => p.id === id)?.hint || ''
+}
+
+function providerKeysUrl(id) {
+  return API_PROVIDERS.find((p) => p.id === id)?.keys || ''
 }
 
 const FPS_OPTS = FPS_CHOICES
@@ -77,6 +82,10 @@ export default function EdSettings({ onExportFps }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [toast, setToast] = useState(null)
+  const [aiCfg, setAiCfg] = useState(null)
+  const [aiProv, setAiProv] = useState('')
+  const [aiModel, setAiModel] = useState('')
+  const [aiEdit, setAiEdit] = useState(false)
 
   const savedIds = useMemo(
     () => API_PROVIDERS.map((p) => p.id).filter((id) => setKeys[id]),
@@ -105,8 +114,31 @@ export default function EdSettings({ onExportFps }) {
     setTxDraft(model)
   }
 
+  async function reloadAi() {
+    const c = await getAiConfig()
+    setAiCfg(c)
+    setAiProv(c.provider)
+    setAiModel(c.model)
+  }
+
+  async function saveAi() {
+    setBusy(true)
+    setErr('')
+    try {
+      await putSettings({ ai: { provider: aiProv, model: aiModel.trim() } })
+      await reloadAi()
+      setAiEdit(false)
+      setToast({ type: 'success', message: 'Proveedor de IA guardado.' })
+    } catch (e) {
+      setErr(e.message || 'No se pudo guardar.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   useEffect(() => {
     reload().catch(() => {})
+    reloadAi().catch(() => {})
   }, [])
 
   function openAdd() {
@@ -281,6 +313,63 @@ export default function EdSettings({ onExportFps }) {
               )}
             </div>
           </div>
+
+          <div className="ed-key-row">
+            <div className="ed-key-row-head">
+              <span className="ed-key-name">Chat IA</span>
+              {!aiEdit && aiCfg && (
+                <span className={`ed-key-set ${aiCfg.available ? '' : 'off'}`}>{aiProv} · {aiModel}</span>
+              )}
+              {!aiEdit && (
+                <div className="ed-key-actions">
+                  <button type="button" className="ghost small" onClick={() => setAiEdit(true)} disabled={busy}>Editar</button>
+                </div>
+              )}
+            </div>
+            <div className="ed-key-form">
+              <label className="field">
+                <span>Proveedor</span>
+                <select
+                  className="select"
+                  value={aiProv}
+                  disabled={!aiEdit || busy}
+                  onChange={(e) => {
+                    const id = e.target.value
+                    setAiProv(id)
+                    const pv = (aiCfg?.providers || []).find((x) => x.id === id)
+                    if (pv) setAiModel(pv.default_model)
+                  }}
+                >
+                  {(aiCfg?.providers || []).map((p) => (
+                    <option key={p.id} value={p.id} disabled={!p.has_key}>
+                      {p.label}{p.has_key ? '' : ' (sin key)'}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Modelo</span>
+                <input
+                  className="ed-cfg-input"
+                  value={aiModel}
+                  disabled={!aiEdit || busy}
+                  onChange={(e) => setAiModel(e.target.value)}
+                  placeholder="modelo"
+                />
+              </label>
+              {!aiEdit && aiCfg && !aiCfg.available && <p className="ed-key-hint">{aiCfg.reason}</p>}
+              {aiProv === 'openrouter' && aiEdit && (
+                <p className="ed-key-hint">Con <b>openrouter/free</b> elige solo un modelo gratis disponible (recomendado). O escribe uno concreto, p. ej. <b>nvidia/nemotron-3-super-120b-a12b:free</b>.</p>
+              )}
+              {aiEdit && (
+                <div className="ed-key-actions">
+                  <button type="button" className="ghost small" onClick={() => { setAiEdit(false); if (aiCfg) { setAiProv(aiCfg.provider); setAiModel(aiCfg.model) } }} disabled={busy}>Cancelar</button>
+                  <button type="button" className="primary small" onClick={saveAi} disabled={busy}>{busy ? 'Guardando…' : 'Guardar'}</button>
+                </div>
+              )}
+            </div>
+          </div>
+
           {err && <div className="ed-mat-err">{err}</div>}
         </div>
       )}
@@ -412,18 +501,31 @@ function KeyForm({
         </select>
       </label>
       {hint ? <p className="ed-key-hint">{hint}</p> : null}
-      <label className="field">
+      <div className="field">
         <span>API key</span>
-        <input
-          className="ed-yt-url"
-          type="password"
-          autoComplete="off"
-          placeholder="Pega la clave…"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && !busy && onSave()}
-        />
-      </label>
+        <div className="ed-key-input-row">
+          <input
+            className="ed-yt-url"
+            type="password"
+            autoComplete="off"
+            placeholder="Pega la clave…"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && !busy && onSave()}
+          />
+          {providerKeysUrl(selectId) && (
+            <a
+              className="ghost small ed-key-go"
+              href={providerKeysUrl(selectId)}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`Obtener API key de ${providerLabel(selectId)}`}
+            >
+              <Icon name="open_in_new" size={14} /> Ir
+            </a>
+          )}
+        </div>
+      </div>
       <div className="ed-key-actions">
         <button type="button" className="ghost small" onClick={onCancel} disabled={busy}>Cancelar</button>
         <button type="button" className="primary small" onClick={onSave} disabled={busy || !value.trim()}>

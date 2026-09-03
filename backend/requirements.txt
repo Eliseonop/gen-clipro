@@ -8,3 +8,5 @@ kokoro-onnx
 soundfile
 google-genai
 mcp>=2,<3
+google-genai
+openai

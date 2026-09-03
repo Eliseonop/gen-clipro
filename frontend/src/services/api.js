@@ -102,6 +102,12 @@ export const putManifest = (pid, data) => put(`/api/projects/${pid}/manifest`, d
 export const transcribeClip = (pid, index, model) =>
   post(`/api/projects/${pid}/clips/${index}/transcribe`, model ? { model } : {})
 
+export const searchExplore = ({ q, page = 1, media = 'all', provider = 'all' } = {}) =>
+  get(`/api/explore/search?q=${encodeURIComponent(q || '')}&page=${page}&media=${encodeURIComponent(media)}&provider=${encodeURIComponent(provider)}`)
+export const suggestExploreKeywords = (pid, text) =>
+  post('/api/explore/keywords', { project_id: pid || '', text: text || '' })
+export const importExplore = (pid, item) => post(`/api/projects/${pid}/explore/import`, item)
+
 // --- Editor de vídeo (timeline) ---
 export const getTimeline = (pid) => get(`/api/projects/${pid}/timeline`)
 export const saveTimeline = (pid, timeline) => put(`/api/projects/${pid}/timeline`, timeline)

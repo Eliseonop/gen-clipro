@@ -25,6 +25,8 @@ from .schemas import (
     ClipTranscribeRequest,
     ExportRequest,
     ImageFetchRequest,
+    ExploreItem,
+    ExploreSearchRequest,
     ReframePrepareRequest,
     SaveLibraryRequest,
     SetFolderRequest,
@@ -251,6 +253,50 @@ async def upload_audio(project_id: str, file: UploadFile = File(...)) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"No se pudo importar el audio: {exc}")
     return {"audio": info.model_dump()}
+
+
+@app.get("/api/explore/search")
+def explore_search(
+    q: str = "",
+    page: int = 1,
+    media: str = "all",
+    provider: str = "all",
+) -> dict:
+    """Busca fotos, vídeos y GIFs en Pexels y GIPHY (pestaña Explorar)."""
+    from .media_search import media_search
+    try:
+        req = ExploreSearchRequest(query=q, page=page, media=media, provider=provider)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Parámetros de búsqueda no válidos.") from None
+    return media_search.search(req.query, req.page, req.media, req.provider)
+
+
+@app.post("/api/explore/keywords")
+def explore_keywords(body: dict = Body(default=None)) -> dict:
+    """Palabras clave de stock a partir del guion / descripciones de audio."""
+    from .explore_keywords import gather_theme_text, suggest_keywords
+
+    payload = body if isinstance(body, dict) else {}
+    text = str(payload.get("text") or "").strip()
+    pid = str(payload.get("project_id") or "").strip()
+    if not text and pid:
+        proj = projects.get_project(pid)
+        if proj is None:
+            raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+        text = gather_theme_text(proj)
+    return suggest_keywords(text)
+
+
+@app.post("/api/projects/{project_id}/explore/import")
+def explore_import(project_id: str, item: ExploreItem) -> dict:
+    """Descarga un resultado de Explorar y lo registra como material del proyecto."""
+    from .asset_import import asset_import
+    try:
+        return asset_import.import_item(project_id, item)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 @app.post("/api/projects/{project_id}/materials/clips/{index}/auto-describe")
@@ -723,15 +769,24 @@ def put_settings(data: dict) -> dict:
 
 @app.get("/api/ai/config")
 def ai_config() -> dict:
-    """Estado del proveedor de IA (sin exponer la API key)."""
+    """Estado del proveedor de IA + proveedores disponibles (sin exponer keys)."""
+    from . import gemini_tts
     cfg = ai_providers.ai_config()
     reason = None
     try:
         reason = ai_providers.get_provider().unavailable_reason()
     except Exception as exc:  # noqa: BLE001
         reason = str(exc)
+    labels = {"openai": "OpenAI", "openrouter": "OpenRouter (modelos gratis)"}
+    providers = [{"id": "gemini", "label": "Google Gemini",
+                  "has_key": bool(gemini_tts.api_key()),
+                  "default_model": ai_providers.DEFAULT_MODEL}]
+    for pid, spec in ai_providers.OPENAI_COMPATIBLE.items():
+        providers.append({"id": pid, "label": labels.get(pid, pid),
+                          "has_key": ai_providers._has_key(spec["key"]),
+                          "default_model": spec["default_model"]})
     return {"provider": cfg["provider"], "model": cfg["model"],
-            "available": reason is None, "reason": reason}
+            "available": reason is None, "reason": reason, "providers": providers}
 
 
 @app.post("/api/ai/chat")

@@ -195,6 +195,12 @@
 .ed-key-hint { margin: 0; font-size: 11px; color: var(--muted); line-height: 1.35; }
 .ed-key-actions { display: flex; align-items: center; gap: 6px; justify-content: flex-end; flex-shrink: 0; }
 .ed-key-add { align-self: flex-start; }
+.ed-key-input-row { display: flex; align-items: stretch; gap: 6px; }
+.ed-key-input-row input { flex: 1; min-width: 0; }
+.ed-key-go {
+  display: inline-flex; align-items: center; justify-content: center; gap: 3px;
+  flex-shrink: 0; padding: 0 10px; white-space: nowrap;
+}
 .ed-fx { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 4px; }
 .ed-text-fx {
   display: flex; flex-direction: column; gap: 8px;
@@ -1297,3 +1303,70 @@
 .ed-chat-bar { height: 6px; border-radius: 4px; background: rgba(127,127,127,0.2); overflow: hidden; }
 .ed-chat-bar-fill { height: 100%; background: var(--accent, #3b82f6); transition: width 0.3s ease; }
 .ed-chat-bar-fill.err { background: #ef4444; }
+
+/* Explorar (Pexels / GIPHY) */
+.ed-mat-list.pinned { overflow: hidden; min-height: 0; }
+.ed-explore-slot { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.ed-explore { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.ed-explore-head { flex-shrink: 0; display: flex; flex-direction: column; gap: 6px; }
+.ed-explore-head .ed-sfx-search { gap: 6px; }
+.ed-explore-head .ed-sfx-search .ghost { flex-shrink: 0; }
+.ed-explore-head .ed-scope-filter { padding: 0; }
+.ed-explore-head .ed-tab { font-size: 10.5px; padding: 5px 3px; }
+.ed-explore-results { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: 2px; }
+.ed-explore-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 7px;
+  align-content: start;
+}
+.ed-explore-card { cursor: pointer; }
+.ed-explore-card:active { cursor: pointer; }
+.ed-explore-card .ed-card-name,
+.ed-explore-card .ed-card-desc { font-size: 10px; padding: 0 4px 2px; }
+.ed-explore-actions {
+  position: absolute; inset: 0; pointer-events: none;
+  opacity: 0; transition: opacity 0.15s ease;
+}
+.ed-explore-card:hover .ed-explore-actions,
+.ed-explore-card:focus-within .ed-explore-actions { opacity: 1; }
+.ed-explore-actions button { pointer-events: auto; }
+.ed-explore-badge {
+  position: absolute; left: 4px; bottom: 4px; z-index: 2;
+  background: rgba(0,0,0,0.7); color: #fff; font-size: 9px; font-weight: 800;
+  letter-spacing: 0.04em; border-radius: 4px; padding: 1px 5px;
+}
+.ed-explore-warn {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--muted); padding: 2px 2px 0;
+}
+.ed-explore-empty { padding: 18px 8px; }
+.ed-explore-empty strong { color: var(--text); font-size: 13px; }
+.ed-explore-hint {
+  margin: 8px 0 0; font-size: 10.5px; font-weight: 700;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+}
+.ed-explore-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; }
+.ed-explore-more { align-self: center; margin: 8px auto 4px; display: flex; }
+.ed-explore-skel .ed-card-media {
+  background: linear-gradient(90deg, var(--card-3), var(--card-2), var(--card-3));
+  background-size: 200% 100%;
+  animation: ed-skel 1.2s ease-in-out infinite;
+}
+.ed-explore-skel .ed-card-name { height: 10px; margin: 4px; border-radius: 4px; background: var(--card-3); }
+@keyframes ed-skel {
+  0%, 100% { background-position: 0% 50%; opacity: 0.45; }
+  50% { background-position: 100% 50%; opacity: 0.85; }
+}
+.ed-explore-preview { width: min(420px, 96vw); max-height: 88vh; overflow: auto; }
+.ed-explore-preview-media {
+  background: #000; border-radius: var(--radius-sm); overflow: hidden;
+  display: flex; align-items: center; justify-content: center; max-height: 52vh;
+}
+.ed-explore-preview-media img,
+.ed-explore-preview-media video { max-width: 100%; max-height: 52vh; display: block; object-fit: contain; }
+.ed-explore-preview-meta { margin: 8px 0 0; font-size: 11.5px; }
+
+/* Selector de proveedor IA en Configuración */
+.ed-cfg-input { width: 100%; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--border, #333); background: transparent; color: inherit; font-size: 13px; }
+.ed-key-set.off { color: #f59e0b; }
