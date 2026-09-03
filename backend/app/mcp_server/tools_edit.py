@@ -44,6 +44,23 @@ def _apply(project_id: str, op: str, params: dict) -> dict:
 
 # --- Material → timeline -------------------------------------------------
 
+def _probe_duration(path) -> float:
+    """Duración (s) de un archivo de audio vía ffprobe. Fallback 3.0 si falla."""
+    import shutil
+    import subprocess
+    exe = shutil.which("ffprobe")
+    if not exe:
+        return 3.0
+    try:
+        r = subprocess.run(
+            [exe, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nk=1:nw=1", str(path)],
+            capture_output=True, text=True, timeout=10)
+        return round(float((r.stdout or "").strip()), 3) or 3.0
+    except Exception:  # noqa: BLE001
+        return 3.0
+
+
 def _resolve_asset(proj, asset_kind: str, asset_id: str) -> dict:
     """Resuelve un asset del proyecto a los campos que necesita un clip."""
     if asset_kind == "clips":
@@ -66,18 +83,29 @@ def _resolve_asset(proj, asset_kind: str, asset_id: str) -> dict:
                         "source_duration": IMAGE_DEFAULT_DUR,
                         "name": im.label or im.filename}
         raise ValueError(f"Imagen no encontrada en el proyecto: {asset_id}")
-    raise ValueError(f"asset_kind inválido: {asset_kind} (usa clips|audios|images)")
+    if asset_kind == "sfx":
+        from pathlib import Path
+
+        from .. import sfx as sfx_lib
+        path = sfx_lib.resolve(asset_id)
+        if path is None:
+            raise ValueError(f"SFX no encontrado: {asset_id} (usa un id de search_sfx)")
+        return {"kind": "audio", "filename": asset_id,
+                "source_duration": _probe_duration(path), "name": Path(asset_id).stem}
+    raise ValueError(f"asset_kind inválido: {asset_kind} (usa clips|audios|images|sfx)")
 
 
 def add_to_timeline(project_id: str, asset_kind: str, asset_id: str,
                     track_id: str | None = None, start: float = 0.0,
                     in_point: float | None = None, out_point: float | None = None) -> dict:
-    """Coloca un material del proyecto (clip, audio o imagen) en la timeline.
+    """Coloca un material en la timeline: un clip/audio/imagen del proyecto, o un
+    efecto de sonido (SFX) de la biblioteca.
 
-    Resuelve el asset por ``asset_kind`` (``clips``/``audios``/``images``) + ``asset_id``
-    (index del clip o id del audio/imagen) para rellenar filename/duración. Si no hay
-    pista del tipo adecuado, crea una. Por defecto usa el material completo
-    (``in_point=0``, ``out_point=duración``).
+    ``asset_kind`` = ``clips``/``audios``/``images``/``sfx`` + ``asset_id`` (index
+    del clip, id del audio/imagen, o **id de SFX devuelto por search_sfx**). Un SFX
+    entra como clip de audio (crea/usa una pista de audio; pasa ``track_id`` para
+    una pista concreta y ``start`` para colocarlo en un instante). Si no hay pista
+    del tipo adecuado, crea una. Por defecto usa el material completo.
     """
     proj = _project_or_raise(project_id)
     info = _resolve_asset(proj, asset_kind, asset_id)

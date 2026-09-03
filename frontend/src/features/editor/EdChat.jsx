@@ -113,6 +113,7 @@ export default function EdChat({ project, context, onReload }) {
           return { ...m, tools }
         })
         else if (ev.type === 'job') patchLast((m) => ({ ...m, jobs: { ...(m.jobs || {}), [ev.job_id]: { tool: ev.tool, status: ev.status, progress: ev.progress, message: ev.message } } }))
+        else if (ev.type === 'status') patchLast((m) => ({ ...m, status: ev.message }))
         else if (ev.type === 'reload') onReload?.()
         else if (ev.type === 'error') patchLast((m) => ({ ...m, error: ev.message, done: true }))
       })
@@ -173,8 +174,9 @@ export default function EdChat({ project, context, onReload }) {
                 </div>
               )
             })}
+            {m.status && !m.done && <div className="ed-chat-tool run"><Icon name="hourglass_top" size={14} /> <span>{m.status}</span></div>}
             {m.error && <div className="ed-chat-tool err"><Icon name="error" size={14} /> <span>{m.error}</span></div>}
-            {m.role === 'assistant' && !m.done && !m.text && (m.tools || []).length === 0 && (
+            {m.role === 'assistant' && !m.done && !m.text && (m.tools || []).length === 0 && !m.status && (
               <div className="ed-chat-tool run"><Icon name="progress_activity" size={14} /> <span>Pensando…</span></div>
             )}
           </div>
