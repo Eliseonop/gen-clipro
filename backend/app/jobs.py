@@ -164,9 +164,10 @@ def _run_transcribe(job_id: str, req: TranscribeRequest, title: str) -> None:
         job.message = message
 
     try:
-        from . import storage, transcribe   # import perezoso (faster-whisper)
+        from . import storage, transcribe, transcribe_settings   # import perezoso (faster-whisper)
 
-        result = transcribe.run(req.url, req.model, req.language, on_progress)
+        model = transcribe_settings.resolve(req.model)
+        result = transcribe.run(req.url, model, req.language, on_progress)
         segments = [TranscriptSegment(**s) for s in result["segments"]]
 
         # Guardar el guion en disco, con el título del vídeo como prefijo.
@@ -182,7 +183,7 @@ def _run_transcribe(job_id: str, req: TranscribeRequest, title: str) -> None:
             id=uuid.uuid4().hex[:8],
             source_url=req.url,
             title=title,
-            model=req.model,
+            model=model,
             language=result["language"],
             duration=result["duration"],
             created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -216,7 +217,7 @@ def _run_clip_transcribe(job_id: str, pid: str, index: str, model: str, language
         job.message = message
 
     try:
-        from . import storage, transcribe
+        from . import storage, transcribe, transcribe_settings
 
         project = projects.get_project(pid)
         clip = next((c for c in project.clips if str(c.index) == str(index)), None)
@@ -226,6 +227,7 @@ def _run_clip_transcribe(job_id: str, pid: str, index: str, model: str, language
         if path is None or not path.exists():
             raise RuntimeError("No se encuentra el archivo del clip.")
 
+        model = transcribe_settings.resolve(model)
         result = transcribe.run_file(str(path), model, language, on_progress)
         segs = [TranscriptSegment(**s) for s in result["segments"]]
         tr = Transcript(
@@ -555,7 +557,7 @@ def _run_subtitles(job_id: str, pid: str, filename: str, asset_kind: str, model:
         job.message = message
 
     try:
-        from . import sfx, storage, transcribe
+        from . import sfx, storage, transcribe, transcribe_settings
 
         project = projects.get_project(pid)
         if project is None:
@@ -569,6 +571,7 @@ def _run_subtitles(job_id: str, pid: str, filename: str, asset_kind: str, model:
         if path is None or not path.exists():
             raise RuntimeError("No se encuentra el archivo de audio.")
 
+        model = transcribe_settings.resolve(model)
         result = transcribe.run_file(str(path), model, language, on_progress)
         segs = [TranscriptSegment(**s) for s in result["segments"]]
         tr = Transcript(

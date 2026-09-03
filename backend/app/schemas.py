@@ -202,7 +202,7 @@ class Transcript(BaseModel):
 class TranscribeRequest(BaseModel):
     url: str
     project_id: str
-    model: str = "base"           # tiny | base | small | medium | large-v3
+    model: Optional[str] = None   # tiny | base | small | medium | large-v3 (None = ajustes)
     language: Optional[str] = None  # None = autodetectar
 
 
@@ -278,7 +278,7 @@ class ImageFetchRequest(BaseModel):
 
 
 class ClipTranscribeRequest(BaseModel):
-    model: str = "base"
+    model: Optional[str] = None   # None = modelo de ajustes
     language: Optional[str] = None
 
 

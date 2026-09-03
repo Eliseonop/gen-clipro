@@ -2,8 +2,9 @@
 // `t` es tiempo LOCAL del clip (0 = inicio de la barra).
 
 import { frameAt } from './panning.js'
+import { DEFAULT_FPS, kfSnap, snapToFrame } from './projectFps.js'
 
-export const KF_SNAP = 0.06
+export const KF_SNAP = kfSnap(DEFAULT_FPS)
 export const KF_INTERPS = [
   { id: 'linear', label: 'Linear' },
   { id: 'ease-in', label: 'Ease In' },
@@ -165,7 +166,7 @@ export function enableKeyframes(clip, localT, srcTime) {
   if (!items.length) {
     items.push({
       id: kfId(),
-      t: +num(localT, 0).toFixed(3),
+      t: +snapToFrame(localT, undefined).toFixed(6),
       interpolation: 'linear',
       props: snapshotProps(clip, localT, srcTime),
     })
@@ -178,11 +179,12 @@ export function disableKeyframes(clip) {
   return { ...clip, keyframes: { ...prev, enabled: false, items: normalizeItems(prev.items) } }
 }
 
-export function upsertKeyframeAt(clip, localT, propPatch = {}, interpolation) {
-  const t = +num(localT, 0).toFixed(3)
+export function upsertKeyframeAt(clip, localT, propPatch = {}, interpolation, fps) {
+  const t = +snapToFrame(localT, fps).toFixed(6)
+  const snap = kfSnap(fps)
   const enabledClip = { ...clip, keyframes: { ...(clip.keyframes || {}), enabled: true } }
   const items = normalizeItems(clip.keyframes?.items)
-  const j = items.findIndex((k) => Math.abs(k.t - t) < KF_SNAP)
+  const j = items.findIndex((k) => Math.abs(k.t - t) < snap)
   const current = clipPropsAt({ ...enabledClip, keyframes: { enabled: true, items } }, t)
   const props = mergeProps(current, propPatch)
   if (j >= 0) {
@@ -204,12 +206,21 @@ export function upsertKeyframeAt(clip, localT, propPatch = {}, interpolation) {
   return { ...clip, keyframes: { enabled: true, items } }
 }
 
-export function patchKeyframe(clip, kfIdOrT, patch) {
+export function keyframeIdAt(clip, localT, fps) {
+  const t = +snapToFrame(localT, fps).toFixed(6)
+  const snap = kfSnap(fps)
+  const item = normalizeItems(clip?.keyframes?.items).find((k) => Math.abs(k.t - t) < snap)
+  if (item) return item.id
+  const rf = (clip?.reframe?.keyframes || []).find((k) => Math.abs(k.t - t) < snap)
+  return rf?.id || null
+}
+
+export function patchKeyframe(clip, kfIdOrT, patch, fps) {
   const items = normalizeItems(clip.keyframes?.items).map((k) => {
     if (k.id !== kfIdOrT && k.t !== kfIdOrT) return k
     return {
       ...k,
-      ...(patch.t != null ? { t: +num(patch.t, k.t).toFixed(3) } : {}),
+      ...(patch.t != null ? { t: +snapToFrame(patch.t, fps).toFixed(6) } : {}),
       ...(patch.interpolation ? { interpolation: normalizeInterp(patch.interpolation) } : {}),
       props: mergeProps(k.props, patch.props),
     }
@@ -252,11 +263,11 @@ export function flattenPatch(patch, kind) {
 }
 
 /** Keyframe cuya interpolación describe cómo se llega a ese encuadre. */
-export function targetInterpItem(clip, selKfId, localT) {
+export function targetInterpItem(clip, selKfId, localT, fps) {
   const items = normalizeItems(clip?.keyframes?.items)
   if (!items.length) return null
   const sel = selKfId ? items.find((k) => k.id === selKfId) : null
   if (sel) return sel
   const t = num(localT, 0)
-  return items.find((k) => k.t > t + KF_SNAP / 2) || items[items.length - 1]
+  return items.find((k) => k.t > t + kfSnap(fps) / 2) || items[items.length - 1]
 }

@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app import clipper
@@ -18,6 +19,22 @@ class ReframeFilterLengthTest(unittest.TestCase):
         ]
         filt = clipper._single_reframe_filter(Path("x.mp4"), 1.0, kfs, "smooth", 720, 1280)
         self.assertLess(len(filt), 4000, f"filtro demasiado largo ({len(filt)} chars)")
+
+    def test_download_source_uses_local_file_not_ytdlp(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            (tmp / "video").mkdir()
+            src = tmp / "video" / "Ver pelicula.mp4"
+            src.write_bytes(b"fake-mp4")
+            proj = SimpleNamespace(id="p1", folder=str(tmp))
+            url = "/api/media/p1/video/Ver%20pelicula.mp4"
+            msgs = []
+            with patch("app.projects.get_project", return_value=proj), \
+                 patch("app.clipper.ytdlp.call") as ydl:
+                got = clipper._download_source(url, tmp, lambda f, m: msgs.append(m))
+            self.assertEqual(got.resolve(), src.resolve())
+            ydl.assert_not_called()
+            self.assertTrue(any("local" in m.lower() for m in msgs))
 
     def test_long_filter_goes_to_script_file(self):
         with tempfile.TemporaryDirectory() as d:

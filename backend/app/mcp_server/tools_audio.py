@@ -27,10 +27,11 @@ def _video_title(url: str) -> str:
 
 
 def transcribe(project_id: str, source: str | None = None, clip_index: str | None = None,
-               model: str = "base", language: str | None = None) -> dict:
+               model: str | None = None, language: str | None = None) -> dict:
     """Transcribe (genera guion con words[] reales). Pasa **o** ``source`` (URL de
     YouTube → guion del proyecto) **o** ``clip_index`` (transcribe ese clip del
-    material). ``model``: tiny|base|small|medium|large-v3. Devuelve el job.
+    material). ``model``: tiny|base|small|medium|large-v3. Si se omite, usa el
+    modelo de Ajustes. Devuelve el job.
     """
     proj = _project_or_raise(project_id)
     has_source = bool(source)
@@ -50,7 +51,7 @@ def transcribe(project_id: str, source: str | None = None, clip_index: str | Non
 
 
 def generate_subtitles(project_id: str, filename: str, asset_kind: str = "audios",
-                       model: str = "base", language: str | None = None,
+                       model: str | None = None, language: str | None = None,
                        asset_scope: str = "project") -> dict:
     """Transcribe un audio de la timeline y crea la pista de subtítulos (texto).
 

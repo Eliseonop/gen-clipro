@@ -19,7 +19,7 @@ def _project_or_raise(project_id: str):
 
 
 def create_short_from_youtube(project_id: str, url: str, crop_mode: str = "smart_face",
-                              count: int = 1, model: str = "base", language: str | None = None,
+                              count: int = 1, model: str | None = None, language: str | None = None,
                               subtitles: bool = True, export: bool = True,
                               min_score: float = 0.40, max_duration: int = 60,
                               padding: int = 10) -> dict:
@@ -43,7 +43,7 @@ def create_short_from_youtube(project_id: str, url: str, crop_mode: str = "smart
 
 
 def make_short_from_library(project_id: str, asset_id: str, asset_kind: str = "clips",
-                            model: str = "base", language: str | None = None,
+                            model: str | None = None, language: str | None = None,
                             subtitles: bool = True, export: bool = True) -> dict:
     """Crea un short desde un clip que YA está en el proyecto (sin descargar).
 

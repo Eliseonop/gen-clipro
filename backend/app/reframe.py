@@ -78,22 +78,8 @@ def _download_proxy(url: str, start: float, end: float, key: str, on_progress: P
 
 
 def _local_media_path(url: str) -> Path | None:
-    from urllib.parse import unquote
-
-    from . import projects, storage
-    from .compose_clip import _MEDIA_RE
-
-    m = _MEDIA_RE.search(url or "")
-    if not m:
-        return None
-    pid, kind, filename = m.group(1), m.group(2), unquote(m.group(3))
-    proj = projects.get_project(pid)
-    if proj is None:
-        return None
-    path = storage.resolve_media(proj, kind, filename)
-    if path is None or not path.exists():
-        return None
-    return path
+    from . import storage
+    return storage.try_local_media(url)
 
 
 def _ffmpeg_proxy(src: Path, start: float, end: float, key: str, on_progress: ProgressCb) -> Path:

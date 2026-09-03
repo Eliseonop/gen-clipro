@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import quote
 
-from . import compose, heatmap, projects, storage, timeline_store, transcribe
+from . import compose, heatmap, projects, storage, timeline_store, transcribe, transcribe_settings
 from .schemas import CropMode, Timeline
 
 ProgressCb = Callable[[float, str], None]
@@ -75,7 +75,7 @@ def _subtitle_clip(pid: str, clip_id: str, clip_filename: str, model: str,
     path = storage.resolve_media(project, "video", clip_filename)
     if path is None or not path.exists():
         raise RuntimeError("No se encuentra el archivo del clip para transcribir.")
-    result = transcribe.run_file(str(path), model, language, on_progress)
+    result = transcribe.run_file(str(path), transcribe_settings.resolve(model), language, on_progress)
     segments = result.get("segments", [])
     timeline_store.apply_op(pid, "add_subtitles",
                             {"source_clip_id": clip_id, "segments": segments})

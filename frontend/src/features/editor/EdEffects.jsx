@@ -25,9 +25,9 @@ function tabLabel(id) {
   return 'Audio'
 }
 
-function KfTransitionSelect({ clip, selKfId, playhead, onInterp }) {
+function KfTransitionSelect({ clip, selKfId, playhead, onInterp, fps }) {
   const localT = Math.max(0, (playhead ?? 0) - (clip?.start || 0))
-  const target = targetInterpItem(clip, selKfId, localT)
+  const target = targetInterpItem(clip, selKfId, localT, fps)
   if (!target) return null
   return (
     <>
@@ -46,7 +46,7 @@ function KfTransitionSelect({ clip, selKfId, playhead, onInterp }) {
 
 export default function EdEffects({
   clip, onChangeFx, textStyle, textMode, onChangeTextStyle, onApplyTextPreset,
-  playhead, onPose, onChangeFrame, selKfId, onInterpKf, textEditor,
+  playhead, onPose, onChangeFrame, selKfId, onInterpKf, textEditor, fps = 30,
 }) {
   const tabs = fxTabs(clip, textMode)
   const isTextFx = tabs[0] === 'text'
@@ -83,7 +83,7 @@ export default function EdEffects({
       <div className="ed-fx">
         <div className="ed-fx-body">
           {kfBlock}
-          <KfTransitionSelect clip={clip} selKfId={selKfId} playhead={playhead} onInterp={onInterpKf} />
+          <KfTransitionSelect clip={clip} selKfId={selKfId} playhead={playhead} onInterp={onInterpKf} fps={fps} />
         </div>
       </div>
     )
@@ -141,7 +141,7 @@ export default function EdEffects({
           {activeTab === 'transitions' && (
             <>
               {kfBlock}
-              <KfTransitionSelect clip={clip} selKfId={selKfId} playhead={playhead} onInterp={onInterpKf} />
+              <KfTransitionSelect clip={clip} selKfId={selKfId} playhead={playhead} onInterp={onInterpKf} fps={fps} />
               <TextFxPanel
                 section="appear"
                 style={st}
@@ -250,7 +250,7 @@ export default function EdEffects({
         {activeTab === 'transitions' && (
           <>
             {kfBlock}
-            <KfTransitionSelect clip={clip} selKfId={selKfId} playhead={playhead} onInterp={onInterpKf} />
+            <KfTransitionSelect clip={clip} selKfId={selKfId} playhead={playhead} onInterp={onInterpKf} fps={fps} />
             <label className="ed-prop">
               Aparición
               <FlipSelect

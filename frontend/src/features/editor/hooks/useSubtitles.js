@@ -1,6 +1,6 @@
 // Generación de subtítulos: lanza el job, lo sondea y construye los clips de texto.
 import { useState, useEffect } from 'react'
-import { getJob, generateSubtitles, transcribeClip } from '../../../services/api'
+import { getJob, generateSubtitles, transcribeClip, getSettings } from '../../../services/api'
 import { subtitleStyle } from '../../../lib/textstyles'
 import { canCaptionClip, textClipsFromTranscript } from '../editorModel'
 
@@ -10,12 +10,19 @@ export function useSubtitles(projectId, { tracksRef, ensureTextTrack, setClips, 
   function requestSubtitles(clip) {
     setCtxMenu(null)
     if (!canCaptionClip(clip)) return
-    const start = clip.kind === 'video'
-      ? transcribeClip(projectId, clip.asset_id || clip.index, 'base')
-      : generateSubtitles(projectId, {
-        filename: clip.filename, asset_kind: clip.asset_kind, model: 'base',
-        asset_scope: clip.asset_scope || 'project',
-      })
+    const start = getSettings()
+      .then((s) => s?.transcribe?.model)
+      .catch(() => null)
+      .then((model) => (
+        clip.kind === 'video'
+          ? transcribeClip(projectId, clip.asset_id || clip.index, model)
+          : generateSubtitles(projectId, {
+            filename: clip.filename,
+            asset_kind: clip.asset_kind,
+            ...(model ? { model } : {}),
+            asset_scope: clip.asset_scope || 'project',
+          })
+      ))
     start
       .then((job) => setSubJob({ ...job, srcClip: clip }))
       .catch((e) => setSubJob({ status: 'error', error: e.message }))

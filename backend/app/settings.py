@@ -18,6 +18,7 @@ DEFAULTS = {
     "yt_history": [],
     "api_keys": {},
     "export": {"fps": 30, "quality": "standard"},
+    "transcribe": {"model": "base"},
 }
 
 _KEY_MASKS = {"", "true", "false", "********", "••••", "••••••••"}
@@ -66,6 +67,7 @@ def load() -> dict:
             "yt_history": [],
             "api_keys": {},
             "export": dict(DEFAULTS["export"]),
+            "transcribe": dict(DEFAULTS["transcribe"]),
         }
     try:
         data = json.loads(_FILE.read_text(encoding="utf-8"))
@@ -110,6 +112,13 @@ def save(data: dict) -> dict:
                 **(incoming.get("export") or {}),
             })
 
+        if "transcribe" in incoming:
+            from .transcribe_settings import normalize as _tx_norm
+            incoming["transcribe"] = _tx_norm({
+                **(current.get("transcribe") or {}),
+                **(incoming.get("transcribe") or {}),
+            })
+
         current.update(incoming)
         current["api_keys"] = merged
         if merged.get("gemini"):
@@ -130,5 +139,7 @@ def public() -> dict:
     data["gemini_api_key_set"] = bool(keys.get("gemini"))
     data["api_keys"] = {k: True for k in keys}
     from .export_settings import normalize as _export_norm
+    from .transcribe_settings import public_view as _tx_public
     data["export"] = _export_norm(data.get("export"))
+    data["transcribe"] = _tx_public(data.get("transcribe"))
     return data

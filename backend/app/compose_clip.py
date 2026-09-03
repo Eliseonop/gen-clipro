@@ -2,33 +2,23 @@
 from __future__ import annotations
 
 import hashlib
-import re
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Callable
-from urllib.parse import quote, unquote
+from urllib.parse import quote
 
-from . import clipper, config, gpu, projects, storage
+from . import clipper, config, gpu, storage
 from .compose_layout import slot_pixels
 from .schemas import ClipInfo, CompLayer, Keyframe
 
 ProgressCb = Callable[[float, str], None]
 
-_MEDIA_RE = re.compile(r"/api/media/([^/]+)/(video|audio)/(.+)$")
-
 
 def resolve_local_media(url: str) -> Path:
-    m = _MEDIA_RE.search(url or "")
-    if not m:
-        raise RuntimeError(f"URL de material no reconocida: {url}")
-    pid, kind, filename = m.group(1), m.group(2), unquote(m.group(3))
-    proj = projects.get_project(pid)
-    if proj is None:
-        raise RuntimeError("Proyecto no encontrado para el material.")
-    path = storage.resolve_media(proj, kind, filename)
-    if path is None or not path.exists():
-        raise RuntimeError(f"No se encontró el archivo {filename}.")
+    path = storage.try_local_media(url)
+    if path is None:
+        raise RuntimeError(f"URL de material no reconocida o archivo ausente: {url}")
     return path
 
 

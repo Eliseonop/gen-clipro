@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
 import Icon from '../../components/Icon'
 import ConfirmModal from '../../components/ConfirmModal'
 import Toast from '../../components/Toast'
 import { fmt } from '../../lib/utils'
-import { getTimeline, saveTimeline, prepareReframe, getJob, createClipJob } from '../../services/api'
+import { getTimeline, saveTimeline, prepareReframe, getJob, createClipJob, getSettings } from '../../services/api'
 import { clamp } from '../../lib/panning'
 import { defaultTextStyle, subtitleStyle, wrappedText, ensureEditorFonts, selectedSubtitleThemeId, clearTextTheme, effectiveTextStyle } from '../../lib/textstyles'
 import { applyThemeToStyle, wordsPerBoxOptions, activeWordsPerBox, splitCaptionWords } from '../../lib/textKaraoke'
@@ -25,8 +25,8 @@ import { textRole } from '../../lib/textRole'
 import { SHAPE_DEFAULT_DUR } from '../../lib/shapes'
 import { applyFrame, disableOverlay, enableOverlay, isOverlay, mediaSize, newTransform, videosAt } from '../../lib/clipLayout'
 import {
-  canKeyframe, deleteKeyframeItem, flattenPatch,
-  KF_SNAP, normalizeItems, patchKeyframe, upsertKeyframeAt,
+  canKeyframe, deleteKeyframeItem, flattenPatch, keyframeIdAt,
+  normalizeItems, patchKeyframe, upsertKeyframeAt,
 } from '../../lib/clipKeyframes'
 import { drawComposite, drawMainView } from './render/canvas'
 import { useExportJob } from './hooks/useExportJob'
@@ -34,6 +34,8 @@ import { useSubtitles } from './hooks/useSubtitles'
 import { useFavorites } from './hooks/useFavorites'
 import { snapshotTextStyle } from '../../lib/favorites'
 import { createMainDownHandler, createResultDownHandler } from './interactions'
+import { kfSnap, normalizeFps, snapToFrame } from '../../lib/projectFps'
+import { fmtRuler, tickStep } from './timelineScale'
 import EdMaterial from './EdMaterial'
 import EdTimeline from './EdTimeline'
 import EdCrops from './EdCrops'
@@ -80,6 +82,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [loaded, setLoaded] = useState(false)
 
   const [pps, setPps] = useState(60)
+  const [fps, setFps] = useState(30)
   const [playhead, setPlayhead] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [selClipId, setSelClipId] = useState(null)
@@ -126,11 +129,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const playheadRef = useRef(0); playheadRef.current = playhead
   const playingRef = useRef(false); playingRef.current = playing
   const durationRef = useRef(0)
+  const fpsRef = useRef(30); fpsRef.current = fps
   const clipsRef = useRef(clips); clipsRef.current = clips
   const tracksRef = useRef(tracks); tracksRef.current = tracks
   const selRef = useRef(selClipId); selRef.current = selClipId
   const selIdsRef = useRef(selClipIds); selIdsRef.current = selClipIds
   const selKfRef = useRef(selKfId); selKfRef.current = selKfId
+  const pendingKfSel = useRef(null)
   const hiddenKfRef = useRef(hiddenKf); hiddenKfRef.current = hiddenKf
   const outRef = useRef({ w: outW, h: outH }); outRef.current = { w: outW, h: outH }
   const framingModeRef = useRef(null); framingModeRef.current = framingMode
@@ -150,6 +155,21 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const selectedClip = clips.find((c) => c.id === selClipId) || null
   const layerInfo = selectedClip && canLayerClip(selectedClip) ? clipLayerInfo(clips, selectedClip.id) : null
   const outAspect = outW / outH
+
+  function markKf(clip, t) {
+    const id = keyframeIdAt(clip, t, fpsRef.current)
+    if (id) pendingKfSel.current = id
+  }
+  function upsertKf(clip, t, patch, interpolation) {
+    return upsertKeyframeAt(clip, t, patch, interpolation, fpsRef.current)
+  }
+
+  useLayoutEffect(() => {
+    const id = pendingKfSel.current
+    if (id == null) return
+    pendingKfSel.current = null
+    if (selKfRef.current !== id) setSelKfId(id)
+  }, [clips])
 
   // Ajusta el buffer del canvas de Resultado al formato elegido (sin deformar).
   useEffect(() => {
@@ -192,6 +212,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         if (tl?.width) setOutW(tl.width)
         if (tl?.height) setOutH(tl.height)
         if (tl?.audio_target_db != null) setAudioDb(tl.audio_target_db)
+        if (tl?.fps) setFps(normalizeFps(tl.fps))
+        try {
+          const s = await getSettings()
+          if (alive) setFps(normalizeFps(s?.export?.fps ?? tl?.fps))
+        } catch { /* deja el fps del timeline */ }
       } catch { /* vacía */ } finally {
         if (alive) setLoaded(true)
       }
@@ -211,8 +236,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
 
   // --- Autoguardado ---
   const timelinePayload = useCallback(() => ({
-    version: 1, fps: 30, width: outW, height: outH, audio_target_db: audioDb, tracks, clips,
-  }), [outW, outH, audioDb, tracks, clips])
+    version: 1, fps, width: outW, height: outH, audio_target_db: audioDb, tracks, clips,
+  }), [fps, outW, outH, audioDb, tracks, clips])
 
   function setListenVolume(v) {
     const n = parsePreviewVolume(v)
@@ -664,8 +689,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setTracks((prev) => prev.map((t) => (t.id === id ? { ...t, [prop]: !t[prop] } : t)))
   }
 
-  // Compactar pista: junta los clips uno tras otro (sin huecos ni solapes),
-  // manteniendo su orden y la posición del primero.
+  // Compactar pista: pega los clips al inicio de la timeline y los junta
+  // uno tras otro (sin huecos ni solapes), manteniendo su orden.
   function compactTrack(trackId) {
     setClips((prev) => {
       const track = tracksRef.current.find((t) => t.id === trackId)
@@ -673,9 +698,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       const ordered = prev
         .filter((c) => c.track_id === trackId)
         .sort((a, b) => a.start - b.start)
-      if (ordered.length < 2) return prev
+      if (!ordered.length) return prev
       const nextStart = {}
-      let cursor = ordered[0].start
+      let cursor = 0
       for (const c of ordered) {
         nextStart[c.id] = +cursor.toFixed(3)
         cursor += clipDur(c)
@@ -829,7 +854,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setClips((prev) => prev.map((c) => {
       if (!ids.has(c.id) || !canKeyframe(c)) return c
       let next = applyStaticPose(c, patch)
-      next = upsertKeyframeAt(next, localTOf(next), patch)
+      const t = localTOf(next)
+      next = upsertKf(next, t, patch)
+      if (c.id === id) markKf(next, t)
       return next
     }))
   }
@@ -855,7 +882,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setClips((prev) => prev.map((c) => {
       if (c.id !== id) return c
       let next = { ...c, frame: 'free', transform: { ...newTransform(), ...c.transform, ...patch } }
-      next = upsertKeyframeAt(next, localTOf(next), flattenPatch(patch, 'transform'))
+      const t = localTOf(next)
+      next = upsertKf(next, t, flattenPatch(patch, 'transform'))
+      markKf(next, t)
       return next
     }))
   }
@@ -878,7 +907,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         transform: patch.transform,
         reframe: { ...(c.reframe || newReframe()), ...patch.reframe },
       }
-      next = upsertKeyframeAt(next, clipT, flattenPatch({ ...(patch.transform || {}) }, 'transform'))
+      next = upsertKf(next, clipT, flattenPatch({ ...(patch.transform || {}) }, 'transform'))
+      if (c.id === clip.id) markKf(next, clipT)
       return next
     }))
   }
@@ -903,14 +933,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     } : c)))
   }
   function upsertKeyframe(clip, localT, cx, cy, extra = {}) {
-    let newId = null
     setClips((prev) => prev.map((c) => {
       if (c.id !== clip.id) return c
       if (c.reframe?.dual_crop) {
         const rf = { ...(c.reframe || newReframe()) }
         const kfs = [...(rf.keyframes || [])]
-        const t = +clamp(localT, c.in_point, c.out_point).toFixed(3)
-        const j = kfs.findIndex((k) => Math.abs(k.t - t) < KF_SNAP)
+        const t = +snapToFrame(clamp(localT, c.in_point, c.out_point), fpsRef.current).toFixed(6)
+        const j = kfs.findIndex((k) => Math.abs(k.t - t) < kfSnap(fpsRef.current))
+        let newId = null
         if (j >= 0) {
           kfs[j] = {
             ...kfs[j],
@@ -931,29 +961,30 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         }
         kfs.sort((a, b) => a.t - b.t)
         rf.keyframes = kfs
+        if (newId) pendingKfSel.current = newId
         return { ...c, reframe: rf }
       }
-      const next = upsertKeyframeAt(c, localTOf(c), {
+      const t = localTOf(c)
+      const next = upsertKf(c, t, {
         cx: +cx.toFixed(4),
         cy: +cy.toFixed(4),
         ...(extra.zoom != null ? { zoom: extra.zoom } : {}),
       })
-      newId = (next.keyframes.items || []).find((k) => Math.abs(k.t - localTOf(c)) < KF_SNAP)?.id
-      return applyStaticPose(next, { cx, cy, ...(extra.zoom != null ? { zoom: extra.zoom } : {}) })
+      const posed = applyStaticPose(next, { cx, cy, ...(extra.zoom != null ? { zoom: extra.zoom } : {}) })
+      markKf(posed, t)
+      return posed
     }))
-    if (newId) setSelKfId(newId)
   }
   function addKeyframeAtPlayhead() {
     const clip = selectedClip
     if (!clip || !canKeyframe(clip)) return
-    let newId = null
     setClips((prev) => prev.map((c) => {
       if (c.id !== clip.id) return c
-      const next = upsertKeyframeAt(c, localTOf(c), {})
-      newId = (next.keyframes.items || []).find((k) => Math.abs(k.t - localTOf(c)) < KF_SNAP)?.id
+      const t = localTOf(c)
+      const next = upsertKf(c, t, {})
+      markKf(next, t)
       return next
     }))
-    if (newId) setSelKfId(newId)
   }
   function patchKeyframePan(clip, kf, mode) {
     if (!clip || !kf) return
@@ -997,7 +1028,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   function moveKeyframe(clipId, kfId, newT) {
     setClips((prev) => prev.map((c) => {
       if (c.id !== clipId) return c
-      if (c.keyframes?.enabled) return patchKeyframe(c, kfId, { t: newT })
+      if (c.keyframes?.enabled) return patchKeyframe(c, kfId, { t: newT }, fpsRef.current)
       if (!c.reframe) return c
       const kfs = (c.reframe.keyframes || []).map((k) => (k.id === kfId ? { ...k, t: newT } : k))
       return { ...c, reframe: { ...c.reframe, keyframes: kfs } }
@@ -1058,7 +1089,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setClips((prev) => patchClipsStyle(prev, ids, patch).map((c) => {
       if (!ids.includes(c.id)) return c
       const pose = flattenPatch(patch, 'text')
-      return Object.keys(pose).length ? upsertKeyframeAt(c, localTOf(c), pose) : c
+      if (!Object.keys(pose).length) return c
+      const t = localTOf(c)
+      const next = upsertKf(c, t, pose)
+      if (c.id === id) markKf(next, t)
+      return next
     }))
   }
   function changeShape(id, patch) {
@@ -1067,7 +1102,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       if (!(ids.has(c.id) && c.kind === 'shape')) return c
       let next = { ...c, shape: { ...(c.shape || {}), ...patch } }
       const pose = flattenPatch(patch, 'shape')
-      if (Object.keys(pose).length) next = upsertKeyframeAt(next, localTOf(next), pose)
+      if (Object.keys(pose).length) {
+        const t = localTOf(next)
+        next = upsertKf(next, t, pose)
+        if (c.id === id) markKf(next, t)
+      }
       return next
     }))
   }
@@ -1192,7 +1231,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       const style = effectiveTextStyle(track?.style, c.style)
       return { ...c, style, text: wrappedText(octx, { ...c, style }, outW, outH) }
     })
-    return { version: 1, fps: 30, width: outW, height: outH, audio_target_db: audioDb, tracks, clips: outClips }
+    return { version: 1, fps, width: outW, height: outH, audio_target_db: audioDb, tracks, clips: outClips }
   }
   const { exportJob, setExportJob, doExport, exporting } = useExportJob(project.id, { timelinePayload, exportPayload })
   const clipSaving = clipSaveJob && (clipSaveJob.status === 'pending' || clipSaveJob.status === 'running')
@@ -1229,12 +1268,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       })
       projectTlRef.current = { ...snap, clips: nextClips }
       saveTimeline(project.id, {
-        version: 1, fps: 30, width: outW, height: outH, audio_target_db: audioDb,
+        version: 1, fps, width: outW, height: outH, audio_target_db: audioDb,
         tracks: snap.tracks, clips: nextClips,
       }).catch(() => {})
     }
     setClipToast({ type: 'success', message: existing ? 'Clip actualizado' : 'Guardado exitosamente' })
-  }, [clipSaveJob?.id, clipSaveJob?.status, onChange, project.id, outW, outH, audioDb])
+  }, [clipSaveJob?.id, clipSaveJob?.status, onChange, project.id, outW, outH, audioDb, fps])
 
   useEffect(() => {
     if (!faceJob || faceJob.status === 'done' || faceJob.status === 'error') return
@@ -1395,6 +1434,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           matTab={matTab}
           onMatTab={setMatTab}
           playhead={playhead}
+          fps={fps}
+          onExportFps={setFps}
           onPose={(patch) => selectedClip && commitPose(selectedClip.id, patch)}
           onChangeFrame={(slot) => applyClipFrame(selectedClip, slot)}
           selKfId={selKfId}
@@ -1599,7 +1640,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               <div className="ed-scrub-fill" style={{ width: `${duration ? (playhead / duration) * 100 : 0}%` }} />
               <div className="ed-scrub-knob" style={{ left: `${duration ? (playhead / duration) * 100 : 0}%` }} />
             </div>
-            <span className="ed-time">{fmt(playhead)} / {fmt(duration)}</span>
+            <span className="ed-time">{fmtRuler(playhead, { step: tickStep(pps, fps), fps, long: duration >= 3600 })} / {fmt(duration)}</span>
             <label className="ed-audio-db" title="Nivel de audio objetivo del render (LUFS). No cambia la vista previa.">
               <Icon name="volume_up" size={14} />
               <select
@@ -1624,7 +1665,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       {/* ===== PARTE INFERIOR: Timeline + Encuadres/Texto ===== */}
       <div className={`veditor-bottom${mainColTab === 'clip' ? ' clip-mode' : ''}`}>
         <EdTimeline
-          tracks={tracks} clips={clips} pps={pps} setPps={setPps}
+          tracks={tracks} clips={clips} pps={pps} setPps={setPps} fps={fps}
           duration={duration} playhead={playhead} rowH={rowH} setRowH={setRowH}
           selectedClipId={selClipId} selectedClipIds={selClipIds} selectedTrackId={selTrackId}
           selectedClip={selectedClip} selKfId={selKfId} dragInfo={dragInfo}
@@ -1697,6 +1738,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           <EdCrops
             clip={selectedClip}
             selKfId={selKfId}
+            fps={fps}
             layer={layerInfo}
             onMoveLayer={(action) => moveLayer(selectedClip.id, action)}
             onChangeFx={patchClipFx}

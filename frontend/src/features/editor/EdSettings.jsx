@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import Icon from '../../components/Icon'
 import Toast from '../../components/Toast'
+import { FPS_CHOICES, normalizeFps } from '../../lib/projectFps'
 import { getSettings, putSettings } from '../../services/api'
 
-export const API_PROVIDERS = [
+const API_PROVIDERS = [
   { id: 'gemini', label: 'Google Gemini', hint: 'Narración TTS, guion e imágenes' },
   { id: 'openai', label: 'OpenAI', hint: 'GPT, Whisper e imágenes' },
   { id: 'anthropic', label: 'Anthropic', hint: 'Claude para guiones' },
@@ -29,17 +30,48 @@ function providerHint(id) {
   return API_PROVIDERS.find((p) => p.id === id)?.hint || ''
 }
 
-const FPS_OPTS = [24, 25, 30, 60]
+const FPS_OPTS = FPS_CHOICES
 const QUALITY_OPTS = [
   { id: 'draft', label: 'Borrador', hint: 'Más rápido, más compresión' },
   { id: 'standard', label: 'Estándar', hint: 'Equilibrio calidad / tamaño' },
   { id: 'high', label: 'Alta', hint: 'Mejor calidad, export más lento' },
 ]
 
-export default function EdSettings() {
-  const [cfgTab, setCfgTab] = useState('keys')
+const TX_FALLBACK = [
+  { id: 'tiny', label: 'Tiny', hint: 'Más rápido, menos preciso (~75 MB)' },
+  { id: 'base', label: 'Base', hint: 'Equilibrio velocidad / calidad (~140 MB)' },
+  { id: 'small', label: 'Small', hint: 'Mejor precisión, un poco más lento (~460 MB)' },
+  { id: 'medium', label: 'Medium', hint: 'Alta precisión, más lento (~1.5 GB)' },
+  { id: 'large-v3', label: 'Large v3', hint: 'Máxima precisión (~3 GB)' },
+]
+
+function txModelsFrom(raw) {
+  const list = Array.isArray(raw) ? raw : []
+  const mapped = list.map((m) => {
+    if (typeof m === 'string') {
+      const hit = TX_FALLBACK.find((x) => x.id === m)
+      return hit || { id: m, label: m, hint: '' }
+    }
+    const id = m?.id
+    if (!id) return null
+    const hit = TX_FALLBACK.find((x) => x.id === id)
+    return { id, label: m.label || hit?.label || id, hint: m.hint || hit?.hint || '' }
+  }).filter(Boolean)
+  return mapped.length ? mapped : TX_FALLBACK
+}
+
+function txMeta(models, id) {
+  return models.find((m) => m.id === id) || { id, label: id, hint: '' }
+}
+
+export default function EdSettings({ onExportFps }) {
+  const [cfgTab, setCfgTab] = useState('config')
   const [setKeys, setSetKeys] = useState({})
   const [exportCfg, setExportCfg] = useState({ fps: 30, quality: 'standard' })
+  const [txCfg, setTxCfg] = useState({ model: 'base' })
+  const [txModels, setTxModels] = useState(TX_FALLBACK)
+  const [txEdit, setTxEdit] = useState(false)
+  const [txDraft, setTxDraft] = useState('base')
   const [form, setForm] = useState(null)
   const [value, setValue] = useState('')
   const [busy, setBusy] = useState(false)
@@ -62,9 +94,15 @@ export default function EdSettings() {
     setSetKeys(s.api_keys && typeof s.api_keys === 'object' ? s.api_keys : {})
     const ex = s.export && typeof s.export === 'object' ? s.export : {}
     setExportCfg({
-      fps: [24, 25, 30, 60].includes(Number(ex.fps)) ? Number(ex.fps) : 30,
+      fps: normalizeFps(ex.fps),
       quality: ['draft', 'standard', 'high'].includes(ex.quality) ? ex.quality : 'standard',
     })
+    const tx = s.transcribe && typeof s.transcribe === 'object' ? s.transcribe : {}
+    const models = txModelsFrom(tx.models)
+    setTxModels(models)
+    const model = models.some((m) => m.id === tx.model) ? tx.model : (models[0]?.id || 'base')
+    setTxCfg({ model })
+    setTxDraft(model)
   }
 
   useEffect(() => {
@@ -131,6 +169,7 @@ export default function EdSettings() {
     setErr('')
     try {
       await putSettings({ export: next })
+      onExportFps?.(normalizeFps(next.fps))
       setToast({ type: 'success', message: 'Ajustes de export guardados.' })
     } catch (e) {
       setErr(e.message || 'No se pudo guardar.')
@@ -139,26 +178,112 @@ export default function EdSettings() {
     setBusy(false)
   }
 
+  function openTxEdit() {
+    setErr('')
+    setTxDraft(txCfg.model)
+    setTxEdit(true)
+  }
+
+  function cancelTxEdit() {
+    setErr('')
+    setTxDraft(txCfg.model)
+    setTxEdit(false)
+  }
+
+  async function saveTx() {
+    const model = txModels.some((m) => m.id === txDraft) ? txDraft : txCfg.model
+    setBusy(true)
+    setErr('')
+    try {
+      await putSettings({ transcribe: { model } })
+      setTxEdit(false)
+      await reload()
+      setToast({ type: 'success', message: 'Modelo de transcripción guardado.' })
+    } catch (e) {
+      setErr(e.message || 'No se pudo guardar.')
+    }
+    setBusy(false)
+  }
+
   const rows = [...savedIds, ...extraIds]
+  const txShown = txEdit ? txDraft : txCfg.model
+  const txInfo = txMeta(txModels, txShown)
 
   return (
     <div className="ed-cfg">
       <div className="ed-scope-filter">
         <button
           type="button"
+          className={`ed-tab ${cfgTab === 'config' ? 'on' : ''}`}
+          onClick={() => { setCfgTab('config'); setErr('') }}
+        >
+          Configuración
+        </button>
+        <button
+          type="button"
           className={`ed-tab ${cfgTab === 'keys' ? 'on' : ''}`}
-          onClick={() => setCfgTab('keys')}
+          onClick={() => { setCfgTab('keys'); setErr('') }}
         >
           API-KEYS
         </button>
         <button
           type="button"
           className={`ed-tab ${cfgTab === 'export' ? 'on' : ''}`}
-          onClick={() => setCfgTab('export')}
+          onClick={() => { setCfgTab('export'); setErr('') }}
         >
           Exportar
         </button>
       </div>
+
+      {cfgTab === 'config' && (
+        <div className="ed-cfg-keys">
+          <div className="ed-key-row">
+            <div className="ed-key-row-head">
+              <span className="ed-key-name">Transcripción</span>
+              {!txEdit && <span className="ed-key-set">{txInfo.label}</span>}
+              {!txEdit && (
+                <div className="ed-key-actions">
+                  <button type="button" className="ghost small" onClick={openTxEdit} disabled={busy}>
+                    Editar
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="ed-key-form">
+              <label className="field">
+                <span>Modelo Whisper</span>
+                <select
+                  className="select"
+                  value={txShown}
+                  disabled={!txEdit || busy}
+                  onChange={(e) => setTxDraft(e.target.value)}
+                >
+                  {txModels.map((m) => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </select>
+              </label>
+              {txInfo.hint ? <p className="ed-key-hint">{txInfo.hint}</p> : null}
+              {txEdit && (
+                <div className="ed-key-actions">
+                  <button type="button" className="ghost small" onClick={cancelTxEdit} disabled={busy}>
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    className="primary small"
+                    onClick={saveTx}
+                    disabled={busy || txDraft === txCfg.model}
+                  >
+                    {busy ? 'Guardando…' : 'Guardar'}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+          {err && <div className="ed-mat-err">{err}</div>}
+        </div>
+      )}
 
       {cfgTab === 'keys' && (
         <div className="ed-cfg-keys">
