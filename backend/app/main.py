@@ -777,15 +777,18 @@ def ai_config() -> dict:
         reason = ai_providers.get_provider().unavailable_reason()
     except Exception as exc:  # noqa: BLE001
         reason = str(exc)
-    labels = {"openai": "OpenAI", "openrouter": "OpenRouter (modelos gratis)"}
+    labels = {"openai": "OpenAI", "openrouter": "OpenRouter (modelos gratis)",
+              "lmstudio": "LM Studio (local)"}
     providers = [{"id": "gemini", "label": "Google Gemini",
-                  "has_key": bool(gemini_tts.api_key()),
+                  "has_key": bool(gemini_tts.api_key()), "local": False,
                   "default_model": ai_providers.DEFAULT_MODEL}]
     for pid, spec in ai_providers.OPENAI_COMPATIBLE.items():
+        local = spec["key"] is None
         providers.append({"id": pid, "label": labels.get(pid, pid),
-                          "has_key": ai_providers._has_key(spec["key"]),
-                          "default_model": spec["default_model"]})
-    return {"provider": cfg["provider"], "model": cfg["model"],
+                          # Los locales no necesitan key.
+                          "has_key": True if local else ai_providers._has_key(spec["key"]),
+                          "local": local, "default_model": spec["default_model"]})
+    return {"provider": cfg["provider"], "model": cfg["model"], "base_url": cfg.get("base_url"),
             "available": reason is None, "reason": reason, "providers": providers}
 
 

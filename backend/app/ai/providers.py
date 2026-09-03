@@ -62,12 +62,16 @@ def _friendly_error(exc: Exception) -> str:
 
 
 # Proveedores OpenAI-compatibles (misma clase, distinto base_url/key).
+# ``key=None`` → servidor local sin API key (LM Studio / Ollama).
 OPENAI_COMPATIBLE = {
     "openai": {"base_url": None, "key": "openai", "default_model": "gpt-4o-mini"},
     "openrouter": {"base_url": "https://openrouter.ai/api/v1", "key": "openrouter",
                    # Auto-router GRATIS de OpenRouter: elige solo un modelo free
                    # disponible con function-calling (resiliente a rate-limits).
                    "default_model": "openrouter/free"},
+    # LM Studio local (OpenAI-compatible). El modelo es el que tengas cargado.
+    "lmstudio": {"base_url": "http://localhost:1234/v1", "key": None,
+                 "default_model": "qwen2.5-7b-instruct"},
 }
 
 
@@ -104,7 +108,8 @@ def ai_config() -> dict:
     data = raw if isinstance(raw, dict) else {}
     provider = (data.get("provider") or "").strip().lower() or _auto_provider()
     model = (data.get("model") or "").strip() or _default_model(provider)
-    return {"provider": provider, "model": model}
+    base_url = (data.get("base_url") or "").strip() or None  # override para local/custom
+    return {"provider": provider, "model": model, "base_url": base_url}
 
 
 class AIProvider:
@@ -224,18 +229,20 @@ class OpenAICompatibleProvider(AIProvider):
     """OpenAI y OpenRouter (API compatible): streaming + tool-calling. Un mismo
     código, distinto ``base_url``/key. OpenRouter da modelos GRATIS con tools."""
 
-    def __init__(self, provider: str, model: str):
+    def __init__(self, provider: str, model: str, base_url: str | None = None):
         self.name = provider
         self._model = model
         spec = OPENAI_COMPATIBLE[provider]
-        self._base_url = spec["base_url"]
-        self._key_name = spec["key"]
+        self._base_url = base_url or spec["base_url"]
+        self._key_name = spec["key"]   # None → local sin key
 
     def _key(self) -> str:
+        if self._key_name is None:
+            return "lm-studio"   # los servidores locales ignoran la key
         return str(_api_keys().get(self._key_name) or "").strip()
 
     def unavailable_reason(self) -> str | None:
-        if not self._key():
+        if self._key_name is not None and not str(_api_keys().get(self._key_name) or "").strip():
             return f"Falta la API key de {self.name}. Añádela en Configuración."
         try:
             import openai  # noqa: F401
@@ -340,5 +347,5 @@ def get_provider() -> AIProvider:
     if provider == "gemini":
         return GeminiProvider(cfg["model"])
     if provider in OPENAI_COMPATIBLE:
-        return OpenAICompatibleProvider(provider, cfg["model"])
+        return OpenAICompatibleProvider(provider, cfg["model"], cfg.get("base_url"))
     raise ValueError(f"Proveedor de IA no soportado: {provider}")
