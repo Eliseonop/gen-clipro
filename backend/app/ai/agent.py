@@ -50,6 +50,9 @@ def _system_prompt(context_summary: str | None, context: dict | None) -> str:
         "pop, pulse). NO escribas set_clip_keyframes a mano. Si debe seguir un "
         "SFX o whoosh, pasa follow_audio_id del clip de audio. reframe_clip es "
         "solo encuadre de fuente, no una animación de aparición.",
+        "Para editar POR CONTENIDO ('corta donde dice X', 'quita la intro'), usa "
+        "search_transcript para localizar el texto y sus tiempos, y luego "
+        "split_clip/remove_clip o el layout según corresponda.",
         "Para ENTENDER de qué va un clip del material, usa get_frame (te devuelve "
         "un fotograma que puedes VER) y/o su transcripción; al analizar/etiquetar "
         "material, guarda tu descripción con set_clip_ai_description (va a un campo "
