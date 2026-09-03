@@ -109,6 +109,9 @@ export const exportTimeline = (pid, timeline) => post(`/api/projects/${pid}/expo
 
 // --- Chat IA (agente sobre el MCP) ---
 export const getAiConfig = () => get('/api/ai/config')
+export const getConversations = (pid) => get(`/api/ai/conversations?project_id=${encodeURIComponent(pid)}`)
+export const getConversation = (pid, cid) => get(`/api/ai/conversations/${pid}/${cid}`)
+export const deleteConversation = (pid, cid) => del(`/api/ai/conversations/${pid}/${cid}`)
 
 // Streaming SSE: llama onEvent(ev) por cada evento del agente.
 export async function aiChat({ projectId, message, conversationId, context, signal }, onEvent) {

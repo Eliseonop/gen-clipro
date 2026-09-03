@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import Icon from '../../components/Icon'
-import { aiChat, getAiConfig } from '../../services/api'
+import { aiChat, getAiConfig, getConversations, getConversation } from '../../services/api'
 
 // Etiquetas amigables: el usuario NO ve nombres técnicos de tools.
 const TOOL_LABELS = {
@@ -47,11 +47,12 @@ const EXAMPLES = [
   'Deshaz lo último.',
 ]
 
-export default function EdChat({ project, context, onReload, debug = false }) {
+export default function EdChat({ project, context, onReload }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [cfg, setCfg] = useState(null)
+  const [debug, setDebug] = useState(false)
   const convRef = useRef(null)
   const ctxRef = useRef(context)
   const scrollRef = useRef(null)
@@ -59,6 +60,26 @@ export default function EdChat({ project, context, onReload, debug = false }) {
   useEffect(() => { ctxRef.current = context }, [context])
   useEffect(() => { getAiConfig().then(setCfg).catch(() => setCfg({ available: false, reason: 'No se pudo consultar el proveedor.' })) }, [])
   useEffect(() => { scrollRef.current?.scrollTo({ top: 9e9, behavior: 'smooth' }) }, [messages])
+
+  // Cargar el último chat guardado del proyecto.
+  useEffect(() => {
+    let alive = true
+    convRef.current = null
+    setMessages([])
+    if (!project?.id) return
+    ;(async () => {
+      try {
+        const { conversations } = await getConversations(project.id)
+        if (!alive || !conversations?.length) return
+        const last = conversations[0]
+        const { messages: msgs } = await getConversation(project.id, last.id)
+        if (!alive) return
+        convRef.current = last.id
+        setMessages((msgs || []).map((m) => ({ role: m.role, text: m.text, tools: [], jobs: {}, done: true })))
+      } catch { /* sin historial */ }
+    })()
+    return () => { alive = false }
+  }, [project?.id])
 
   function patchLast(fn) {
     setMessages((prev) => {
@@ -69,12 +90,18 @@ export default function EdChat({ project, context, onReload, debug = false }) {
     })
   }
 
+  function newChat() {
+    if (busy) return
+    convRef.current = null
+    setMessages([])
+  }
+
   async function send(text) {
     const msg = (text ?? input).trim()
     if (!msg || busy || !project?.id) return
     setInput('')
     setBusy(true)
-    setMessages((prev) => [...prev, { role: 'user', text: msg }, { role: 'assistant', text: '', tools: [], done: false }])
+    setMessages((prev) => [...prev, { role: 'user', text: msg }, { role: 'assistant', text: '', tools: [], jobs: {}, done: false }])
     try {
       await aiChat({ projectId: project.id, message: msg, conversationId: convRef.current, context: ctxRef.current }, (ev) => {
         if (ev.type === 'start') convRef.current = ev.conversation_id
@@ -85,6 +112,7 @@ export default function EdChat({ project, context, onReload, debug = false }) {
           for (let i = tools.length - 1; i >= 0; i--) if (tools[i].tool === ev.tool && tools[i].status === 'run') { tools[i] = { ...tools[i], status: ev.ok ? 'ok' : 'err' }; break }
           return { ...m, tools }
         })
+        else if (ev.type === 'job') patchLast((m) => ({ ...m, jobs: { ...(m.jobs || {}), [ev.job_id]: { tool: ev.tool, status: ev.status, progress: ev.progress, message: ev.message } } }))
         else if (ev.type === 'reload') onReload?.()
         else if (ev.type === 'error') patchLast((m) => ({ ...m, error: ev.message, done: true }))
       })
@@ -100,6 +128,15 @@ export default function EdChat({ project, context, onReload, debug = false }) {
 
   return (
     <div className="ed-chat">
+      <div className="ed-chat-head">
+        <button type="button" className="ed-chat-newbtn" onClick={newChat} disabled={busy} title="Nuevo chat">
+          <Icon name="add" size={16} /> Nuevo chat
+        </button>
+        <button type="button" className={`icon-btn ${debug ? 'on' : ''}`} onClick={() => setDebug((v) => !v)} title="Modo debug (nombres de tools)">
+          <Icon name="bug_report" size={16} />
+        </button>
+      </div>
+
       <div className="ed-chat-log" ref={scrollRef}>
         {messages.length === 0 && (
           <div className="ed-chat-empty">
@@ -122,6 +159,20 @@ export default function EdChat({ project, context, onReload, debug = false }) {
                 <span>{debug ? `${t.tool} · ${t.status}` : toolLabel(t.tool)}</span>
               </div>
             ))}
+            {Object.entries(m.jobs || {}).map(([jid, jb]) => {
+              const pct = Math.round((jb.progress || 0) * 100)
+              const done = jb.status === 'done'
+              const err = jb.status === 'error' || jb.status === 'cancelled'
+              return (
+                <div key={jid} className="ed-chat-job">
+                  <div className="ed-chat-job-row">
+                    <span>{debug ? `${jb.tool} · ${jb.status}` : (jb.message || toolLabel(jb.tool))}</span>
+                    <span className="ed-chat-job-pct">{done ? '100%' : err ? '—' : `${pct}%`}</span>
+                  </div>
+                  <div className="ed-chat-bar"><div className={`ed-chat-bar-fill ${err ? 'err' : ''}`} style={{ width: `${done ? 100 : pct}%` }} /></div>
+                </div>
+              )
+            })}
             {m.error && <div className="ed-chat-tool err"><Icon name="error" size={14} /> <span>{m.error}</span></div>}
             {m.role === 'assistant' && !m.done && !m.text && (m.tools || []).length === 0 && (
               <div className="ed-chat-tool run"><Icon name="progress_activity" size={14} /> <span>Pensando…</span></div>

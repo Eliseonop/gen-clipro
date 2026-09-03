@@ -750,6 +750,26 @@ async def ai_chat(body: dict = Body(...)) -> StreamingResponse:
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+@app.get("/api/ai/conversations")
+def ai_conversations(project_id: str) -> dict:
+    """Lista las conversaciones guardadas de un proyecto (sin mensajes)."""
+    from .ai import conversations as convo
+    return {"conversations": convo.list_conversations(project_id)}
+
+
+@app.get("/api/ai/conversations/{project_id}/{conversation_id}")
+def ai_conversation(project_id: str, conversation_id: str) -> dict:
+    """Mensajes de una conversación concreta."""
+    from .ai import conversations as convo
+    return {"id": conversation_id, "messages": convo.get_messages(project_id, conversation_id)}
+
+
+@app.delete("/api/ai/conversations/{project_id}/{conversation_id}")
+def ai_conversation_delete(project_id: str, conversation_id: str) -> dict:
+    from .ai import conversations as convo
+    return {"deleted": convo.delete(project_id, conversation_id)}
+
+
 @app.get("/api/job/{job_id}", response_model=Job)
 def job_status(job_id: str) -> Job:
     job = jobs.get_job(job_id)

@@ -1,12 +1,13 @@
 """Agente del Chat IA: orquesta proveedor ↔ tools MCP y emite eventos.
 
-Es un generador asíncrono de eventos (para SSE). No implementa ninguna operación
-del editor: solo decide contexto, ejecuta las tools del MCP existente y traduce
-el stream del proveedor a eventos de UI. La fuente de verdad sigue siendo
+Generador asíncrono de eventos (para SSE). No implementa operaciones del editor:
+decide contexto, ejecuta tools del MCP existente (auto-esperando jobs con
+progreso) y traduce el stream del proveedor a eventos de UI. Fuente de verdad:
 ``timeline_store``/``timeline_ops``.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import AsyncIterator
 
@@ -16,6 +17,8 @@ from .mcp_client import McpToolset
 from .providers import get_provider
 
 MAX_ITERS = 8
+JOB_POLL_SECONDS = 1.0
+JOB_MAX_POLLS = 600  # ~10 min de techo por job
 
 
 def _access(tool: str) -> str:
@@ -38,8 +41,8 @@ def _system_prompt(context_summary: str | None, context: dict | None) -> str:
         "seleccionado o el contexto de la conversación; si hay ambigüedad real, "
         "pregunta en vez de adivinar.",
         "Para tareas largas (crear un short) puedes usar los workflows de alto "
-        "nivel si encajan, o encadenar tools. Los trabajos (jobs) se esperan con "
-        "wait_for_job. No expliques nombres técnicos de tools al usuario.",
+        "nivel si encajan, o encadenar tools. No expliques nombres técnicos de "
+        "tools al usuario.",
     ]
     hint = []
     if ctx.get("project_id"):
@@ -58,7 +61,6 @@ def _system_prompt(context_summary: str | None, context: dict | None) -> str:
 
 
 def _compact_context(data: dict | None) -> str:
-    """Resumen mínimo (tokens) del get_project_context para el system prompt."""
     if not isinstance(data, dict):
         return ""
     fmt = data.get("format") or {}
@@ -75,11 +77,34 @@ def _compact_context(data: dict | None) -> str:
     return " · ".join(str(p) for p in parts)
 
 
+def _is_job(data) -> bool:
+    return (isinstance(data, dict) and "id" in data
+            and data.get("status") in ("pending", "running", "done", "error", "cancelled"))
+
+
+async def _wait_job(tools: McpToolset, tool_name: str, data: dict, emit) -> dict:
+    """Sondea get_job emitiendo progreso hasta que termina. Devuelve el estado final."""
+    job_id = data["id"]
+    for _ in range(JOB_MAX_POLLS):
+        await emit({"type": "job", "tool": tool_name, "job_id": job_id,
+                    "status": data.get("status"), "progress": data.get("progress", 0),
+                    "message": data.get("message", "")})
+        if data.get("status") in ("done", "error", "cancelled"):
+            break
+        await asyncio.sleep(JOB_POLL_SECONDS)
+        jr = await tools.call("get_job", {"job_id": job_id})
+        if not jr.get("ok") or not isinstance(jr.get("data"), dict):
+            break
+        data = jr["data"]
+    ok = data.get("status") != "error"
+    return {"ok": ok, "data": data, "text": json.dumps(data, ensure_ascii=False)}
+
+
 async def run_chat(project_id: str, message: str, *, context: dict | None = None,
                    conversation_id: str | None = None,
                    max_iters: int = MAX_ITERS) -> AsyncIterator[dict]:
-    """Corre un turno de chat. Emite eventos: start/text/tool_start/tool_result/
-    reload/final/done/error."""
+    """Corre un turno de chat. Emite: start/text/tool_start/tool_result/job/
+    reload/final/error/done."""
     if not (project_id or "").strip():
         yield {"type": "error", "message": "Falta project_id."}
         return
@@ -93,49 +118,64 @@ async def run_chat(project_id: str, message: str, *, context: dict | None = None
         yield {"type": "error", "message": reason}
         return
 
-    cid, conv = conversations.get_or_create(conversation_id, project_id)
+    cid = conversations.get_or_create(conversation_id, project_id)
     ctx = {**(context or {}), "project_id": project_id}
-    yield {"type": "start", "conversation_id": cid}
 
-    touched = False
-    final_text = ""
-    try:
-        async with McpToolset.open() as tools:
-            specs = await tools.tool_specs()
+    queue: asyncio.Queue = asyncio.Queue()
+    state = {"touched": False, "final": ""}
 
-            # Contexto compacto del proyecto (una lectura in-process, auditada).
-            summary = ""
-            with audit.source("ai_chat"):
-                try:
-                    ctxres = await tools.call("get_project_context", {"project_id": project_id})
-                    summary = _compact_context(ctxres.get("data"))
-                except Exception:  # noqa: BLE001
-                    summary = ""
+    async def emit(ev: dict) -> None:
+        if ev.get("type") == "tool_result" and ev.get("ok") and _is_mutating(ev.get("tool", "")):
+            state["touched"] = True
+        if ev.get("type") == "final":
+            state["final"] = ev.get("text", "")
+        await queue.put(ev)
 
-            system = _system_prompt(summary, ctx)
-
-            async def call_tool(name: str, args: dict) -> dict:
+    async def worker() -> None:
+        try:
+            async with McpToolset.open() as tools:
+                specs = await tools.tool_specs()
+                summary = ""
                 with audit.source("ai_chat"):
-                    return await tools.call(name, args)
+                    try:
+                        ctxres = await tools.call("get_project_context", {"project_id": project_id})
+                        summary = _compact_context(ctxres.get("data"))
+                    except Exception:  # noqa: BLE001
+                        summary = ""
+                system = _system_prompt(summary, ctx)
 
-            async for ev in provider.stream(
-                system=system, history=conversations.history(conv),
-                user_message=message, tools=specs, call_tool=call_tool,
-                max_iters=max_iters,
-            ):
-                if ev.get("type") == "tool_result" and ev.get("ok") and _is_mutating(ev.get("tool", "")):
-                    touched = True
-                if ev.get("type") == "final":
-                    final_text = ev.get("text", "")
-                yield ev
-    except Exception as exc:  # noqa: BLE001
-        yield {"type": "error", "message": f"Error del agente: {exc}"}
-        return
+                async def call_tool(name: str, args: dict) -> dict:
+                    with audit.source("ai_chat"):
+                        res = await tools.call(name, args)
+                    if _is_job(res.get("data")) and res.get("data", {}).get("status") in ("pending", "running"):
+                        res = await _wait_job(tools, name, res["data"], emit)
+                    return res
 
-    conversations.append(conv, "user", message)
-    if final_text:
-        conversations.append(conv, "assistant", final_text)
-    if touched:
+                await provider.run(
+                    system=system, history=conversations.history(project_id, cid),
+                    user_message=message, tools=specs, call_tool=call_tool,
+                    emit=emit, max_iters=max_iters,
+                )
+        except Exception as exc:  # noqa: BLE001
+            await emit({"type": "error", "message": f"Error del agente: {exc}"})
+        finally:
+            await queue.put(None)
+
+    await emit({"type": "start", "conversation_id": cid})
+    task = asyncio.create_task(worker())
+    try:
+        while True:
+            ev = await queue.get()
+            if ev is None:
+                break
+            yield ev
+    finally:
+        await task
+
+    conversations.append(project_id, cid, "user", message)
+    if state["final"]:
+        conversations.append(project_id, cid, "assistant", state["final"])
+    if state["touched"]:
         yield {"type": "reload"}
     yield {"type": "done"}
 

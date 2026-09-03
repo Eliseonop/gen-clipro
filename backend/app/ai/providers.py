@@ -1,24 +1,24 @@
 """Proveedores de IA. Interfaz común + Gemini (primera implementación).
 
 El MCP permanece igual: el proveedor solo decide QUÉ tool llamar; la ejecución la
-hace el agente vía el cliente MCP. Cada proveedor produce una secuencia de
-eventos comunes: ``text`` / ``tool_start`` / ``tool_result`` / ``final`` /
-``error``.
+hace el agente (``call_tool``). El proveedor **emite** eventos comunes vía
+``emit`` (async): ``text`` (por tokens) / ``tool_start`` / ``tool_result`` /
+``final`` / ``error``. Los eventos de progreso de jobs los inyecta el agente por
+el mismo ``emit``.
 """
 from __future__ import annotations
 
-from typing import AsyncIterator, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from .. import settings
 
-# call_tool(name, args) -> {"ok","data","text"}
-CallTool = Callable[[str, dict], Awaitable[dict]]
+CallTool = Callable[[str, dict], Awaitable[dict]]  # (name, args) -> {ok,data,text}
+Emit = Callable[[dict], Awaitable[None]]
 
 DEFAULT_MODEL = "gemini-3.6-flash"
 
 
 def ai_config() -> dict:
-    """Config de IA desde ajustes: {provider, model}. Sin exponer secretos."""
     raw = (settings.load() or {}).get("ai")
     data = raw if isinstance(raw, dict) else {}
     return {
@@ -28,18 +28,16 @@ def ai_config() -> dict:
 
 
 class AIProvider:
-    """Interfaz. Un proveedor corre el loop de tool-calling y emite eventos."""
-
     name = "base"
 
     def unavailable_reason(self) -> str | None:
         raise NotImplementedError
 
-    async def stream(self, *, system: str, history: list, user_message: str,
-                     tools: list[dict], call_tool: CallTool,
-                     max_iters: int) -> AsyncIterator[dict]:
+    async def run(self, *, system: str, history: list, user_message: str,
+                  tools: list[dict], call_tool: CallTool, emit: Emit,
+                  max_iters: int) -> str:
+        """Corre el loop de tool-calling, emitiendo eventos. Devuelve el texto final."""
         raise NotImplementedError
-        yield  # pragma: no cover
 
 
 class GeminiProvider(AIProvider):
@@ -56,7 +54,7 @@ class GeminiProvider(AIProvider):
         from .. import gemini_tts
         return gemini_tts.api_key()
 
-    async def stream(self, *, system, history, user_message, tools, call_tool, max_iters):
+    async def run(self, *, system, history, user_message, tools, call_tool, emit, max_iters):
         from google import genai
         from google.genai import types
 
@@ -74,7 +72,6 @@ class GeminiProvider(AIProvider):
             temperature=0.3,
         )
 
-        # Historia previa (solo texto) + el mensaje del usuario.
         convo: list = []
         for m in history or []:
             role = "model" if m.get("role") == "assistant" else "user"
@@ -83,36 +80,43 @@ class GeminiProvider(AIProvider):
 
         final_text = ""
         for _ in range(max_iters):
+            turn_text = ""
+            calls = []
+            turn_parts = []   # parts CRUDOS del modelo (conservan thought_signature)
             try:
-                resp = await client.aio.models.generate_content(
+                stream = await client.aio.models.generate_content_stream(
                     model=self._model, contents=convo, config=cfg)
+                async for chunk in stream:
+                    cand = (chunk.candidates or [None])[0]
+                    parts = (cand.content.parts if cand and cand.content else []) or []
+                    for p in parts:
+                        turn_parts.append(p)
+                        if getattr(p, "text", None):
+                            turn_text += p.text
+                            await emit({"type": "text", "delta": p.text})
+                        if getattr(p, "function_call", None):
+                            calls.append(p.function_call)
             except Exception as exc:  # noqa: BLE001
-                yield {"type": "error", "message": f"Gemini: {exc}"}
-                return
+                await emit({"type": "error", "message": f"Gemini: {exc}"})
+                return final_text
 
-            cand = (resp.candidates or [None])[0]
-            parts = (cand.content.parts if cand and cand.content else []) or []
-            calls = [p.function_call for p in parts if getattr(p, "function_call", None)]
-            texts = [p.text for p in parts if getattr(p, "text", None)]
-            if texts:
-                chunk = "".join(texts)
-                final_text = chunk
-                yield {"type": "text", "delta": chunk}
-
-            if cand and cand.content:
-                convo.append(cand.content)
+            if turn_text:
+                final_text = turn_text
+            # Reusar los parts originales: Gemini 3.x exige el thought_signature
+            # de cada functionCall al devolverlo en el historial.
+            convo.append(types.Content(role="model", parts=turn_parts or [types.Part.from_text(text="")]))
 
             if not calls:
-                yield {"type": "final", "text": final_text}
-                return
+                await emit({"type": "final", "text": final_text})
+                return final_text
 
             resp_parts = []
             for fc in calls:
                 args = dict(fc.args or {})
-                yield {"type": "tool_start", "tool": fc.name, "args": args}
+                await emit({"type": "tool_start", "tool": fc.name, "args": args})
                 result = await call_tool(fc.name, args)
-                yield {"type": "tool_result", "tool": fc.name,
-                       "ok": result.get("ok", False), "result": result}
+                await emit({"type": "tool_result", "tool": fc.name,
+                            "ok": result.get("ok", False), "result": result})
                 payload = (result.get("data") if result.get("ok")
                            else {"error": result.get("text") or "falló"})
                 if not isinstance(payload, dict):
@@ -120,13 +124,12 @@ class GeminiProvider(AIProvider):
                 resp_parts.append(types.Part.from_function_response(name=fc.name, response=payload))
             convo.append(types.Content(role="user", parts=resp_parts))
 
-        yield {"type": "error", "message": "Se alcanzó el límite de pasos del agente."}
+        await emit({"type": "error", "message": "Se alcanzó el límite de pasos del agente."})
+        return final_text
 
 
 def get_provider() -> AIProvider:
-    """Selecciona el proveedor según ajustes (hoy: Gemini)."""
     cfg = ai_config()
     if cfg["provider"] == "gemini":
         return GeminiProvider(cfg["model"])
-    # OpenAIProvider / ClaudeProvider quedan preparados arquitectónicamente.
     raise ValueError(f"Proveedor de IA no soportado todavía: {cfg['provider']}")
