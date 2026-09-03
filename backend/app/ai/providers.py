@@ -208,18 +208,25 @@ class GeminiProvider(AIProvider):
                 return final_text
 
             resp_parts = []
+            images: list[tuple[str, str]] = []
             for fc in calls:
                 args = dict(fc.args or {})
                 await emit({"type": "tool_start", "tool": fc.name, "args": args})
                 result = await call_tool(fc.name, args)
                 await emit({"type": "tool_result", "tool": fc.name,
-                            "ok": result.get("ok", False), "result": result})
-                payload = (result.get("data") if result.get("ok")
-                           else {"error": result.get("text") or "falló"})
-                if not isinstance(payload, dict):
-                    payload = {"result": payload}
-                resp_parts.append(types.Part.from_function_response(name=fc.name, response=payload))
+                            "ok": result.get("ok", False), "result": _strip_img(result)})
+                resp_parts.append(types.Part.from_function_response(
+                    name=fc.name, response=_payload_no_image(result)))
+                img = _tool_image(result)
+                if img:
+                    images.append(img)
             convo.append(types.Content(role="user", parts=resp_parts))
+            if images:
+                import base64 as _b64
+                convo.append(types.Content(role="user", parts=[
+                    types.Part.from_bytes(data=_b64.b64decode(b64), mime_type=mime)
+                    for b64, mime in images
+                ]))
 
         await emit({"type": "error", "message": "Se alcanzó el límite de pasos del agente."})
         return final_text
@@ -324,6 +331,7 @@ class OpenAICompatibleProvider(AIProvider):
                 await emit({"type": "final", "text": final_text})
                 return final_text
 
+            tool_images: list[tuple[str, str]] = []
             for i, c in enumerate(calls):
                 try:
                     args = _json.loads(c["args"] or "{}")
@@ -332,13 +340,46 @@ class OpenAICompatibleProvider(AIProvider):
                 await emit({"type": "tool_start", "tool": c["name"], "args": args})
                 result = await call_tool(c["name"], args)
                 await emit({"type": "tool_result", "tool": c["name"],
-                            "ok": result.get("ok", False), "result": result})
-                payload = result.get("data") if result.get("ok") else {"error": result.get("text") or "falló"}
+                            "ok": result.get("ok", False), "result": _strip_img(result)})
                 messages.append({"role": "tool", "tool_call_id": asst["tool_calls"][i]["id"],
-                                 "content": _json.dumps(payload, ensure_ascii=False)})
+                                 "content": _json.dumps(_payload_no_image(result), ensure_ascii=False)})
+                img = _tool_image(result)
+                if img:
+                    tool_images.append(img)
+            if tool_images:
+                content = [{"type": "text", "text": "Fotograma(s) solicitado(s):"}]
+                for b64, mime in tool_images:
+                    content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+                messages.append({"role": "user", "content": content})
 
         await emit({"type": "error", "message": "Se alcanzó el límite de pasos del agente."})
         return final_text
+
+
+def _tool_image(result: dict) -> tuple[str, str] | None:
+    """(base64, mime) si el resultado de una tool trae una imagen para VER."""
+    data = result.get("data")
+    if isinstance(data, dict) and data.get("image_b64"):
+        return data["image_b64"], data.get("mime") or "image/jpeg"
+    return None
+
+
+def _strip_img(result: dict) -> dict:
+    """Copia del resultado sin el base64 (para el evento SSE al frontend)."""
+    data = result.get("data")
+    if isinstance(data, dict) and "image_b64" in data:
+        return {**result, "data": {k: v for k, v in data.items() if k != "image_b64"}}
+    return result
+
+
+def _payload_no_image(result: dict):
+    """Payload JSON para el modelo, sin el base64 (evita gastar tokens en texto)."""
+    if not result.get("ok"):
+        return {"error": result.get("text") or "falló"}
+    data = result.get("data")
+    if isinstance(data, dict):
+        return {k: v for k, v in data.items() if k != "image_b64"}
+    return {"result": data}
 
 
 def get_provider() -> AIProvider:

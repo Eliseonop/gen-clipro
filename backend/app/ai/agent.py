@@ -50,6 +50,10 @@ def _system_prompt(context_summary: str | None, context: dict | None) -> str:
         "pop, pulse). NO escribas set_clip_keyframes a mano. Si debe seguir un "
         "SFX o whoosh, pasa follow_audio_id del clip de audio. reframe_clip es "
         "solo encuadre de fuente, no una animación de aparición.",
+        "Para ENTENDER de qué va un clip del material, usa get_frame (te devuelve "
+        "un fotograma que puedes VER) y/o su transcripción; al analizar/etiquetar "
+        "material, guarda tu descripción con set_clip_ai_description (va a un campo "
+        "aparte, NO pisa la descripción del usuario).",
         "Para tareas largas (crear un short) puedes usar los workflows de alto "
         "nivel si encajan, o encadenar tools. No expliques nombres técnicos de "
         "tools al usuario.",
