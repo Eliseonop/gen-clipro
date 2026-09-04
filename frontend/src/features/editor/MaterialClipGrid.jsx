@@ -4,6 +4,18 @@ import { fmt } from '../../lib/utils'
 import './editor.css'
 import { IMAGE_DEFAULT_DUR } from './editorModel.js'
 
+// Al regenerar un clip el archivo se reescribe con la MISMA URL, así que el
+// navegador serviría el vídeo cacheado (viejo encuadre). Añadimos un token de
+// versión (created_at, que add_clips actualiza en cada guardado) para forzar la
+// recarga del render nuevo en las cards. No toca la URL que se usa en el corte.
+export function bustUrl(url, item) {
+  if (!url) return url
+  const token = item?.created_at || item?.updated_at
+  if (!token) return url
+  const v = encodeURIComponent(token)
+  return url.includes('?') ? `${url}&v=${v}` : `${url}?v=${v}`
+}
+
 export function dragPayload(assetKind, item) {
   const fromLibrary = item?.scope === 'library' || String(item?.id || '').startsWith('lib_')
   const isImage = assetKind === 'images'
@@ -22,6 +34,7 @@ export function dragPayload(assetKind, item) {
     reframe: item.reframe || null,
     scope: fromLibrary ? 'library' : 'project',
     description: item.description || item.text || null,
+    media_version: item.created_at || item.media_version || null,
   })
 }
 
@@ -80,6 +93,14 @@ export function VideoCard({
   const title = clip.label || (clip.scope === 'library' ? (clip.filename || 'Guardado') : `Clip #${clip.index}`)
   const desc = (clip.description || '').trim()
   const dur = (clip.end != null && clip.start != null) ? (clip.end - clip.start) : (clip.duration || 0)
+  // El card adopta el aspecto real del clip compuesto (9:16, 16:9, 1:1…) para
+  // identificar de un vistazo cómo está montado. Se lee de los metadatos del vídeo.
+  const [ar, setAr] = useState(null)
+
+  function onMeta(e) {
+    const v = e.currentTarget
+    if (v.videoWidth && v.videoHeight) setAr(`${v.videoWidth} / ${v.videoHeight}`)
+  }
 
   function onPlayClick(e) {
     e?.stopPropagation()
@@ -97,8 +118,9 @@ export function VideoCard({
       } : undefined}
       onDragEnd={draggable ? () => di?.(null) : undefined}
     >
-      <div className="ed-card-media">
-        <video ref={ref} src={clip.url} preload="metadata" playsInline muted
+      <div className="ed-card-media" style={ar ? { aspectRatio: ar } : undefined}>
+        <video ref={ref} src={bustUrl(clip.url, clip)} preload="metadata" playsInline muted
+          onLoadedMetadata={onMeta}
           onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} />
         <button className="ed-play-ov" onClick={onPlayClick} title={playing ? 'Pausa' : 'Reproducir'}>
           <Icon name={playing ? 'pause' : 'play_arrow'} size={20} />
@@ -175,7 +197,7 @@ export function ImageCard({
       onDragEnd={draggable ? () => di?.(null) : undefined}
     >
       <div className="ed-card-media">
-        <img src={image.url} alt="" draggable={false} />
+        <img src={bustUrl(image.url, image)} alt="" draggable={false} />
         <button className="ed-add-corner" onClick={(e) => { e.stopPropagation(); onAdd() }} title={addTitle}>
           <Icon name="add" size={16} />
         </button>

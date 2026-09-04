@@ -95,5 +95,19 @@ class PublicSettingsTest(unittest.TestCase):
         self.assertNotIn("secreto-largo", str(pub.get("gemini_api_key") or ""))
 
 
+class VoicesListTest(unittest.TestCase):
+    def test_cada_voz_indica_hombre_o_mujer(self):
+        self.assertGreaterEqual(len(gemini_tts.VOICES), 1)
+        for v in gemini_tts.VOICES:
+            self.assertIn(v["gender"], ("male", "female"), v["id"])
+            word = "mujer" if v["gender"] == "female" else "hombre"
+            self.assertIn(word, v["label"], v["id"])
+
+    def test_kore_es_mujer_y_charon_hombre(self):
+        by_id = {v["id"]: v for v in gemini_tts.VOICES}
+        self.assertEqual(by_id["Kore"]["gender"], "female")
+        self.assertEqual(by_id["Charon"]["gender"], "male")
+
+
 if __name__ == "__main__":
     unittest.main()

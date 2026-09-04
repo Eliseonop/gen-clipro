@@ -112,6 +112,18 @@ class FfmpegStillInputTest(unittest.TestCase):
         )
         self.assertEqual(ffmpeg_trim_window(clip), (1.0, 4.0))
 
+    def test_video_trim_no_pide_eof(self):
+        from app.clip_kind import ffmpeg_trim_window
+        clip = TimelineClip(
+            id="c1", track_id="V1", kind="video", asset_kind="clips",
+            asset_id="0", filename="a.mp4", in_point=0.0, out_point=4.0,
+            source_duration=4.0,
+        )
+        tin, tout = ffmpeg_trim_window(clip, 30)
+        self.assertEqual(tin, 0.0)
+        self.assertLess(tout, 4.0)
+        self.assertGreater(tout, 3.9)
+
     def test_video_input_is_plain(self):
         from app.clip_kind import ffmpeg_input_args
         clip = TimelineClip(

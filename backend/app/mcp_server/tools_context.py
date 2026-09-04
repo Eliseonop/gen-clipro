@@ -16,13 +16,7 @@ def _history_summary(pid: str) -> dict:
 
 
 def get_project_context(project_id: str) -> dict:
-    """Resumen semántico y eficiente de un proyecto del editor.
-
-    Devuelve formato de salida, inventario de material (clips/audios/
-    transcripciones con listas breves), estado de la timeline, historial
-    (undo/redo/checkpoints) y las ``capabilities`` que el editor soporta. Es el
-    primer paso recomendado para orientarse antes de editar.
-    """
+    """Resumen del proyecto (formato, material, timeline, historial). Primer paso."""
     proj = projects.get_project(project_id)
     if proj is None:
         raise ValueError(f"Proyecto no encontrado: {project_id}")

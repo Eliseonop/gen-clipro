@@ -9,7 +9,10 @@ el mismo ``emit``.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Awaitable, Callable
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from .. import settings
 
@@ -110,6 +113,66 @@ def ai_config() -> dict:
     model = (data.get("model") or "").strip() or _default_model(provider)
     base_url = (data.get("base_url") or "").strip() or None  # override para local/custom
     return {"provider": provider, "model": model, "base_url": base_url}
+
+
+LMSTUDIO_OFF = (
+    "Enciende LM Studio y arranca su servidor (Developer → Start Server)."
+)
+
+
+def lmstudio_models_url(base_url: str | None = None) -> str:
+    """``http://localhost:1234/v1`` → ``http://localhost:1234/api/v1/models``."""
+    raw = (base_url or "").strip() or OPENAI_COMPATIBLE["lmstudio"]["base_url"]
+    origin = raw.rstrip("/")
+    for suffix in ("/api/v1", "/v1"):
+        if origin.endswith(suffix):
+            origin = origin[: -len(suffix)]
+            break
+    return origin.rstrip("/") + "/api/v1/models"
+
+
+def list_lmstudio_models(base_url: str | None = None) -> dict:
+    """Lista LLMs de LM Studio (GET /api/v1/models). Si el servidor no responde, ``ok`` es False."""
+    url = lmstudio_models_url(base_url)
+    token = str(_api_keys().get("lmstudio") or "").strip() or "lm-studio"
+    req = Request(url, headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    })
+    try:
+        with urlopen(req, timeout=4) as res:
+            payload = json.loads(res.read().decode("utf-8") or "{}")
+    except HTTPError as exc:
+        if exc.code in (401, 403):
+            return {"ok": False, "models": [],
+                    "reason": "LM Studio pide un token. Añádelo en API-KEYS como lmstudio."}
+        return {"ok": False, "models": [], "reason": LMSTUDIO_OFF}
+    except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+        return {"ok": False, "models": [], "reason": LMSTUDIO_OFF}
+
+    raw = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(raw, list):
+        return {"ok": False, "models": [], "reason": LMSTUDIO_OFF}
+
+    models = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") not in (None, "llm"):
+            continue
+        key = str(item.get("key") or "").strip()
+        if not key:
+            continue
+        caps = item.get("capabilities") if isinstance(item.get("capabilities"), dict) else {}
+        loaded = bool(item.get("loaded_instances"))
+        models.append({
+            "id": key,
+            "label": str(item.get("display_name") or key).strip() or key,
+            "loaded": loaded,
+            "tool_use": bool(caps.get("trained_for_tool_use")),
+        })
+    models.sort(key=lambda m: (not m["loaded"], not m["tool_use"], m["label"].lower()))
+    return {"ok": True, "models": models, "reason": None}
 
 
 class AIProvider:

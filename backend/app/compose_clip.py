@@ -67,7 +67,7 @@ def _filter_graph(layers: list[CompLayer], sources: list[Path], out_dur: float) 
         layer_dur = max(0.1, layer.end - layer.start)
         delay = max(0.0, float(layer.delay or 0))
         enable = f":enable='between(t,{delay:.3f},{delay + layer_dur:.3f})'"
-        parts.append(f"[{last}][v{i}]overlay={x}:{y}:eof_action=pass{enable}[{nxt}]")
+        parts.append(f"[{last}][v{i}]overlay={x}:{y}:eof_action=repeat{enable}[{nxt}]")
         last = nxt
     return ";".join(parts)
 

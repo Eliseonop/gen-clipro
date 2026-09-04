@@ -19,6 +19,7 @@ class ComposeFilterTest(unittest.TestCase):
         self.assertIn("[v2]", g)
         self.assertIn("between(t,2.500,5.500)", g)
         self.assertIn("tpad=start_mode=add:start_duration=2.500", g)
+        self.assertIn("eof_action=repeat", g)
 
     def test_rejects_empty(self):
         from app.compose_clip import generate_composition

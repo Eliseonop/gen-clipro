@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from mcp.server.mcpserver import MCPServer
 
@@ -20,6 +21,7 @@ class RegistryTest(unittest.TestCase):
         self._saved = dict(registry._registry)
         registry._registry.clear()
         self.mcp = MCPServer("test")
+        audit.reset_runtime()
 
     def tearDown(self):
         registry._registry.clear()
@@ -84,6 +86,25 @@ class RegistryTest(unittest.TestCase):
         raw = (config.DATA_DIR / "mcp_audit.jsonl").read_text(encoding="utf-8")
         self.assertNotIn("SECRETO-NO-LOGUEAR", raw)   # el valor no se registra
         self.assertIn("text", raw)                    # la clave sí
+        self.assertNotIn("text", audit.read_all()[-1].get("meta") or {})
+
+    def test_wrapper_records_model_and_tracks_job(self):
+        from app import jobs
+
+        @registry.tool(self.mcp, access="write")
+        def generate_subtitles(project_id: str, filename: str, model: str | None = None) -> dict:
+            job = jobs.create_job()
+            return {"id": job.id, "status": "pending", "progress": 0.0, "message": "En cola…"}
+
+        with patch("app.transcribe_settings.resolve", return_value="base"):
+            out = generate_subtitles(project_id="p1", filename="v.wav")
+        e = audit.read_all()[-1]
+        self.assertEqual(e["meta"]["model"], "base")
+        self.assertEqual(e["meta"]["filename"], "v.wav")
+        self.assertEqual(e["meta"]["job_id"], out["id"])
+        live = audit.active("p1")
+        self.assertEqual(len(live), 1)
+        self.assertEqual(live[0]["job_id"], out["id"])
 
     def test_introspection_preserved(self):
         @registry.tool(self.mcp, access="read")

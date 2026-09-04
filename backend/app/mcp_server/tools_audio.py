@@ -28,11 +28,7 @@ def _video_title(url: str) -> str:
 
 def transcribe(project_id: str, source: str | None = None, clip_index: str | None = None,
                model: str | None = None, language: str | None = None) -> dict:
-    """Transcribe (genera guion con words[] reales). Pasa **o** ``source`` (URL de
-    YouTube → guion del proyecto) **o** ``clip_index`` (transcribe ese clip del
-    material). ``model``: tiny|base|small|medium|large-v3. Si se omite, usa el
-    modelo de Ajustes. Devuelve el job.
-    """
+    """Transcribe (words[] reales). Pasa O source (URL) O clip_index. model tiny|base|small|medium|large-v3. Devuelve job."""
     proj = _project_or_raise(project_id)
     has_source = bool(source)
     has_clip = clip_index is not None
@@ -52,25 +48,21 @@ def transcribe(project_id: str, source: str | None = None, clip_index: str | Non
 
 def generate_subtitles(project_id: str, filename: str, asset_kind: str = "audios",
                        model: str | None = None, language: str | None = None,
-                       asset_scope: str = "project") -> dict:
-    """Transcribe un audio de la timeline y crea la pista de subtítulos (texto).
-
-    ``filename`` es el archivo del audio; ``asset_kind`` clips|audios;
-    ``asset_scope`` project|library. Devuelve el job.
-    """
+                       asset_scope: str = "project", source_clip_id: str | None = None) -> dict:
+    """Transcribe un audio y CREA la pista de subtítulos en la timeline (un paso). filename del audio; asset_kind clips|audios. Devuelve job."""
     _project_or_raise(project_id)
     if not filename:
         raise ValueError("Falta 'filename' del audio a subtitular.")
     job = jobs.create_job()
-    jobs.start_subtitles_job(job, project_id, filename, asset_kind, model, language, asset_scope)
+    jobs.start_subtitles_job(job, project_id, filename, asset_kind, model, language,
+                             asset_scope, source_clip_id)
     return dto.job_dto(job)
 
 
 def generate_voice(project_id: str, text: str, engine: str = "kokoro", voice: str = "ef_dora",
                    voice2: str | None = None, blend: float = 0.5, speed: float = 1.0,
                    pause: float = 0.4, name: str | None = None, style: str | None = None) -> dict:
-    """Genera un audio de narrador (TTS) y lo añade al proyecto. ``engine``:
-    kokoro|piper|gemini. Devuelve el job."""
+    """Genera un audio de narrador (TTS) y lo añade al proyecto. engine kokoro|piper|gemini. Devuelve job."""
     _project_or_raise(project_id)
     if not (text or "").strip():
         raise ValueError("El texto está vacío.")

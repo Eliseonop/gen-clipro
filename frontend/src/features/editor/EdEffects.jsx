@@ -51,7 +51,7 @@ function KfTransitionSelect({ clip, selKfId, playhead, onInterp, fps }) {
   )
 }
 
-function VolumePanel({ clip, playhead, onChangeFx, onPose, onAddKf, onFade, trackMode }) {
+export function VolumePanel({ clip, playhead, onChangeFx, onPose, onAddKf, onFade, trackMode }) {
   const localT = Math.max(0, (playhead ?? 0) - (clip.start || 0))
   const keyed = !trackMode && keyframesEnabled(clip)
   const vol = keyed ? clipVolumeAt(clip, localT) : clampVolume(clip?.volume ?? 1)
@@ -304,6 +304,19 @@ export default function EdEffects({
     )
   }
 
+  const showVolume = trackMode || clip?.kind === 'video' || clip?.kind === 'audio'
+  const volumeBlock = showVolume ? (
+    <VolumePanel
+      clip={clip}
+      playhead={playhead}
+      onChangeFx={onChangeFx}
+      onPose={onPose}
+      onAddKf={onAddKf}
+      onFade={onFade}
+      trackMode={trackMode}
+    />
+  ) : null
+
   const effects = clip?.effects && typeof clip.effects === 'object' ? clip.effects : {}
 
   function patchEffects(next) {
@@ -325,15 +338,6 @@ export default function EdEffects({
           Se aplica a todos los clips de esta pista{trackLabel ? ` (${trackLabel})` : ''}.
         </p>
       )}
-      <VolumePanel
-        clip={clip}
-        playhead={playhead}
-        onChangeFx={onChangeFx}
-        onPose={onPose}
-        onAddKf={onAddKf}
-        onFade={onFade}
-        trackMode={trackMode}
-      />
       <div className="ed-fx-label">Efectos</div>
       <AudioFxGrid
         clip={clip}
@@ -364,6 +368,7 @@ export default function EdEffects({
       </div>
 
       <div className="ed-fx-body">
+        {volumeBlock}
         {activeTab === 'video' && (
           <>
             <div className="ed-fx-label">Estilo</div>

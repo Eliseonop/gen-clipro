@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import Icon from '../../components/Icon'
-import { aiChat, getAiConfig, getConversations, getConversation } from '../../services/api'
+import { aiChat, getAiConfig, getConversations, getConversation, getMcpAudit } from '../../services/api'
 
 // Etiquetas amigables: el usuario NO ve nombres técnicos de tools.
 const TOOL_LABELS = {
@@ -45,6 +45,38 @@ const TOOL_LABELS = {
   auto_reframe: 'Reencuadrando (cara)…',
 }
 const toolLabel = (t) => TOOL_LABELS[t] || 'Trabajando…'
+const ACCESS_LABEL = { read: 'leer', write: 'escribir', destructive: 'borrar' }
+
+function fmtAuditTime(iso) {
+  try {
+    return new Date(iso).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+  } catch {
+    return ''
+  }
+}
+
+function fmtMeta(meta, clips) {
+  if (!meta) return ''
+  const parts = []
+  if (meta.model) {
+    parts.push(`modelo ${meta.model}${meta.model_source === 'ajustes' ? ' (ajustes)' : ''}`)
+  }
+  const clipId = meta.clip_id || meta.source_clip_id
+  if (clipId) {
+    const c = (clips || []).find((x) => x.id === clipId)
+    parts.push(c?.name ? `${c.name} (${clipId})` : `clip ${clipId}`)
+  } else if (meta.clip_index != null && meta.clip_index !== '') {
+    parts.push(`material ${meta.clip_index}`)
+  }
+  if (meta.filename) parts.push(meta.filename)
+  if (meta.engine) parts.push(`motor ${meta.engine}`)
+  if (meta.voice) parts.push(`voz ${meta.voice}`)
+  if (meta.language) parts.push(`idioma ${meta.language}`)
+  if (meta.track_id) parts.push(`pista ${meta.track_id}`)
+  if (meta.job_id) parts.push(`job ${meta.job_id}`)
+  if (meta.aspect) parts.push(String(meta.aspect))
+  return parts.join(' · ')
+}
 
 const EXAMPLES = [
   'Pon el proyecto en 9:16.',
@@ -53,12 +85,14 @@ const EXAMPLES = [
   'Deshaz lo último.',
 ]
 
-export default function EdChat({ project, context, onReload, onBusy }) {
+export default function EdChat({ project, context, onReload, onBusy, clips, onMcpAudit }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [cfg, setCfg] = useState(null)
   const [debug, setDebug] = useState(false)
+  const [audit, setAudit] = useState([])
+  const [live, setLive] = useState([])
   const convRef = useRef(null)
   const ctxRef = useRef(context)
   const scrollRef = useRef(null)
@@ -70,6 +104,29 @@ export default function EdChat({ project, context, onReload, onBusy }) {
   }, [busy, onBusy])
   useEffect(() => { getAiConfig().then(setCfg).catch(() => setCfg({ available: false, reason: 'No se pudo consultar el proveedor.' })) }, [])
   useEffect(() => { scrollRef.current?.scrollTo({ top: 9e9, behavior: 'smooth' }) }, [messages])
+
+  useEffect(() => {
+    if (!project?.id) {
+      setAudit([])
+      setLive([])
+      onMcpAudit?.({ entries: [], active: [] })
+      return
+    }
+    let alive = true
+    const load = async () => {
+      if (document.hidden) return
+      try {
+        const { entries, active } = await getMcpAudit(project.id)
+        if (!alive) return
+        setAudit(entries || [])
+        setLive(active || [])
+        onMcpAudit?.({ entries: entries || [], active: active || [] })
+      } catch { /* el panel de log no debe romper el chat */ }
+    }
+    load()
+    const id = setInterval(load, 1000)
+    return () => { alive = false; clearInterval(id) }
+  }, [project?.id, onMcpAudit])
 
   // Cargar el último chat guardado del proyecto.
   useEffect(() => {
@@ -197,6 +254,8 @@ export default function EdChat({ project, context, onReload, onBusy }) {
         <div className="ed-chat-warn"><Icon name="key" size={14} /> {cfg.reason || 'Configura la API key en Configuración.'}</div>
       )}
 
+      <McpAuditLog entries={audit} live={live} clips={clips} cfg={cfg} />
+
       <form className="ed-chat-input" onSubmit={(e) => { e.preventDefault(); send() }}>
         <input
           value={input}
@@ -209,5 +268,68 @@ export default function EdChat({ project, context, onReload, onBusy }) {
         </button>
       </form>
     </div>
+  )
+}
+
+function McpAuditLog({ entries, live, clips, cfg }) {
+  const rows = [...(entries || [])].reverse()
+  const running = live || []
+  const last = running[0] || rows[0]
+  const llm = [cfg?.provider, cfg?.model].filter(Boolean).join(' · ')
+  return (
+    <details className={`ed-mcp-log${running.length ? ' live' : ''}`} defaultOpen>
+      <summary>
+        {running.length
+          ? <span className="ed-mcp-spin"><Icon name="progress_activity" size={15} /></span>
+          : <Icon name="terminal" size={15} />}
+        <span>Actividad MCP</span>
+        {llm && <span className="ed-mcp-cfg" title="Modelo del chat interno">{llm}</span>}
+        {last && <em title={last.tool}>{running.length ? 'en curso' : last.tool}</em>}
+      </summary>
+      <div className="ed-mcp-log-body">
+        {running.map((a, i) => {
+          const pct = a.progress != null ? Math.round(a.progress * 100) : null
+          const info = fmtMeta(a.meta, clips)
+          return (
+            <div key={`live-${a.job_id || a.token || i}`} className="ed-mcp-row run">
+              <div className="ed-mcp-row-main">
+                <span className="ed-mcp-spin"><Icon name="progress_activity" size={13} /></span>
+                <code>{a.tool}</code>
+                <span className="ed-mcp-st">en curso</span>
+                {pct != null && <span className="ed-mcp-ms">{pct}%</span>}
+              </div>
+              <div className="ed-mcp-row-sub">
+                {a.message || toolLabel(a.tool).replace(/…$/, '')}
+                {info ? ` · ${info}` : ''}
+              </div>
+            </div>
+          )
+        })}
+        {rows.length === 0 && running.length === 0 ? (
+          <p>Cuando Cursor u otra IA llame al MCP, verás aquí la tool, el modelo, el clip y si falló.</p>
+        ) : rows.map((e, i) => {
+          const ok = e.status !== 'error'
+          const info = fmtMeta(e.meta, clips)
+          const keys = info ? '' : (e.param_keys || []).join(', ')
+          return (
+            <div key={`${e.ts}-${e.tool}-${i}`} className={`ed-mcp-row ${ok ? 'ok' : 'err'}`}>
+              <div className="ed-mcp-row-main">
+                <time>{fmtAuditTime(e.ts)}</time>
+                <span className="ed-mcp-src">{e.source === 'ai_chat' ? 'Chat' : 'MCP'}</span>
+                <code>{e.tool}</code>
+                <span className="ed-mcp-acc">{ACCESS_LABEL[e.access] || e.access}</span>
+                <span className="ed-mcp-st">{ok ? 'ok' : 'error'}</span>
+                {e.ms != null && <span className="ed-mcp-ms">{e.ms} ms</span>}
+              </div>
+              <div className="ed-mcp-row-sub">
+                {TOOL_LABELS[e.tool] ? `${toolLabel(e.tool).replace(/…$/, '')}${info || keys ? ' · ' : ''}` : ''}
+                {info || keys}
+              </div>
+              {e.error && <div className="ed-mcp-err">{e.error}</div>}
+            </div>
+          )
+        })}
+      </div>
+    </details>
   )
 }

@@ -14,18 +14,13 @@ def _project_or_raise(project_id: str):
 
 
 def get_timeline(project_id: str) -> dict:
-    """Timeline del proyecto en detalle escaneable.
-
-    Formato de salida, pistas y clips con sus propiedades (posición, duración,
-    frame/layout/look/speed…). NO incluye datos pesados (``words``, keyframes de
-    reframe): para eso usa ``inspect_clip`` sobre un clip concreto.
-    """
+    """Timeline: pistas y clips con sus propiedades (sin words/keyframes)."""
     proj = _project_or_raise(project_id)
     return dto.timeline_detail(proj.timeline)
 
 
 def inspect_clip(project_id: str, clip_id: str) -> dict:
-    """Un clip de la timeline en detalle COMPLETO (reframe/keyframes, words, transform)."""
+    """Un clip COMPLETO (reframe/keyframes, words, transform). Solo el que vas a tocar."""
     proj = _project_or_raise(project_id)
     clips = proj.timeline.clips if proj.timeline else []
     for c in clips:
@@ -41,12 +36,7 @@ def list_media(project_id: str) -> dict:
 
 
 def search_transcript(project_id: str, query: str, limit: int = 20) -> dict:
-    """Busca texto en las transcripciones del proyecto y devuelve dónde se dice,
-    con marcas de tiempo. Sirve para editar POR CONTENIDO ('corta donde dice X').
-
-    Cada coincidencia trae: ``scope`` (project/clip), ``clip_index`` o
-    ``transcript_id``, ``start``/``end`` (segundos) y el ``text``.
-    """
+    """Busca texto en las transcripciones (con tiempos) para editar POR CONTENIDO."""
     proj = _project_or_raise(project_id)
     q = (query or "").strip().lower()
     if not q:

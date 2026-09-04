@@ -90,6 +90,9 @@ def _run(job_id: str, req: ClipRequest, title: str) -> None:
             video_dir=base / "video",
             on_progress=on_progress,
             reframe=req.reframe,
+            volume=req.volume,
+            muted=req.muted,
+            audio_keyframes=req.audio_keyframes,
         )
         projects.add_clips(req.project_id, clips)   # persistir en el proyecto
         job.clips = clips
@@ -546,7 +549,20 @@ def start_short_library_job(job: Job, pid: str, params: dict) -> None:
     thread.start()
 
 
-def _run_subtitles(job_id: str, pid: str, filename: str, asset_kind: str, model: str, language, asset_scope: str = "project") -> None:
+def _find_timeline_clip_by_filename(pid: str, filename: str) -> str | None:
+    """Id del clip de la timeline (audio/vídeo) cuyo archivo coincide con ``filename``."""
+    proj = projects.get_project(pid)
+    tl = getattr(proj, "timeline", None)
+    if tl is None:
+        return None
+    for c in (tl.clips or []):
+        if c.filename == filename and c.kind in ("audio", "video"):
+            return c.id
+    return None
+
+
+def _run_subtitles(job_id: str, pid: str, filename: str, asset_kind: str, model: str, language,
+                   asset_scope: str = "project", source_clip_id: str | None = None) -> None:
     job = _jobs[job_id]
     job.status = JobStatus.running
 
@@ -557,7 +573,7 @@ def _run_subtitles(job_id: str, pid: str, filename: str, asset_kind: str, model:
         job.message = message
 
     try:
-        from . import sfx, storage, transcribe, transcribe_settings
+        from . import sfx, storage, timeline_store, transcribe, transcribe_settings
 
         project = projects.get_project(pid)
         if project is None:
@@ -584,8 +600,24 @@ def _run_subtitles(job_id: str, pid: str, filename: str, asset_kind: str, model:
             segments=segs,
         )
         job.transcript = tr
+
+        # Escribir la pista de subtítulos en la timeline (lo que el usuario espera):
+        # sin esto el job quedaba "done" con la transcripción SOLO en el job y nada
+        # aparecía en la timeline. Alineamos al clip fuente (por id o por filename).
+        src_id = source_clip_id or _find_timeline_clip_by_filename(pid, filename)
+        if src_id:
+            res = timeline_store.apply_op(pid, "add_subtitles", {
+                "source_clip_id": src_id,
+                "segments": [s.model_dump() for s in segs],
+                "transcript_id": tr.id,
+            })
+            n_clips = len(res.get("changed") or [])
+            job.message = f"Subtítulos añadidos a la timeline ({len(segs)} líneas, {n_clips} clips)."
+        else:
+            job.message = (f"Transcripción lista ({len(segs)} líneas), pero el audio no está en la "
+                           f"timeline: no se creó la pista. Añade el audio a una pista y reintenta.")
+
         job.progress = 1.0
-        job.message = f"Subtítulos listos ({len(segs)} líneas)."
         job.status = JobStatus.done
     except Exception as exc:  # noqa: BLE001
         job.status = JobStatus.error
@@ -593,6 +625,11 @@ def _run_subtitles(job_id: str, pid: str, filename: str, asset_kind: str, model:
         job.message = "Error generando subtítulos."
 
 
-def start_subtitles_job(job: Job, pid: str, filename: str, asset_kind: str, model: str, language, asset_scope: str = "project") -> None:
-    thread = threading.Thread(target=_run_subtitles, args=(job.id, pid, filename, asset_kind, model, language, asset_scope), daemon=True)
+def start_subtitles_job(job: Job, pid: str, filename: str, asset_kind: str, model: str, language,
+                        asset_scope: str = "project", source_clip_id: str | None = None) -> None:
+    thread = threading.Thread(
+        target=_run_subtitles,
+        args=(job.id, pid, filename, asset_kind, model, language, asset_scope, source_clip_id),
+        daemon=True,
+    )
     thread.start()

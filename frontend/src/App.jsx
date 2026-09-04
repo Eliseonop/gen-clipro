@@ -5,16 +5,35 @@ import ProjectView from './features/projects/ProjectView'
 import ConfirmModal from './components/ConfirmModal'
 import './styles/App.css'
 
+// Proyecto abierto <-> URL: leemos el id del hash (#/<id>) para poder
+// compartir enlaces directos y que atrás/adelante del navegador funcionen.
+function readHash() {
+  const id = window.location.hash.replace(/^#\/?/, '').trim()
+  return id || null
+}
+
 export default function App() {
   const [projects, setProjects] = useState([])
-  const [openId, setOpenId] = useState(null)
+  const [openId, setOpenId] = useState(readHash)
   const [deleteTarget, setDeleteTarget] = useState(null)
+
+  // Navegar = cambiar el hash; el estado se actualiza vía 'hashchange'.
+  function navigate(id) {
+    window.location.hash = id ? `#/${id}` : '#/'
+  }
 
   async function refresh() {
     try { setProjects(await listProjects()) } catch { /* backend no listo */ }
   }
 
   useEffect(() => { refresh() }, [])
+
+  // Sincroniza el estado con la URL (deep-link, atrás/adelante, edición manual).
+  useEffect(() => {
+    const onHash = () => setOpenId(readHash())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
 
   async function onCreate(name) {
     const p = await createProject(name)
@@ -26,7 +45,7 @@ export default function App() {
     if (!deleteTarget) return
     try {
       await deleteProject(deleteTarget.id)
-      if (openId === deleteTarget.id) setOpenId(null)
+      if (openId === deleteTarget.id) navigate(null)
       await refresh()
     } catch { /* error silencioso */ }
     setDeleteTarget(null)
@@ -38,15 +57,15 @@ export default function App() {
     <div className="app">
       {!openProject && (
         <header>
-          <h1 className="brand" onClick={() => setOpenId(null)}>🎬 material</h1>
+          <h1 className="brand" onClick={() => navigate(null)}>🎬 material</h1>
           <p className="sub">Tu material de vídeo y audio, en un solo sitio</p>
         </header>
       )}
 
       {openProject ? (
-        <ProjectView project={openProject} onBack={() => setOpenId(null)} onRefresh={refresh} />
+        <ProjectView project={openProject} onBack={() => navigate(null)} onRefresh={refresh} />
       ) : (
-        <Home projects={projects} onOpen={setOpenId} onCreate={onCreate} onDelete={(p) => setDeleteTarget(p)} />
+        <Home projects={projects} onOpen={navigate} onCreate={onCreate} onDelete={(p) => setDeleteTarget(p)} />
       )}
 
       <ConfirmModal

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Icon from '../../components/Icon'
 import Toast from '../../components/Toast'
 import { FPS_CHOICES, normalizeFps } from '../../lib/projectFps'
-import { getSettings, putSettings, getAiConfig } from '../../services/api'
+import { getSettings, putSettings, getAiConfig, getLmStudioModels } from '../../services/api'
 
 const API_PROVIDERS = [
   { id: 'gemini', label: 'Google Gemini', hint: 'Narración TTS, guion e imágenes', keys: 'https://aistudio.google.com/apikey' },
@@ -87,6 +87,10 @@ export default function EdSettings({ onExportFps }) {
   const [aiModel, setAiModel] = useState('')
   const [aiBaseUrl, setAiBaseUrl] = useState('')
   const [aiEdit, setAiEdit] = useState(false)
+  const [lmModels, setLmModels] = useState([])
+  const [lmStatus, setLmStatus] = useState('idle')
+  const [lmReason, setLmReason] = useState('')
+  const [lmTick, setLmTick] = useState(0)
 
   const savedIds = useMemo(
     () => API_PROVIDERS.map((p) => p.id).filter((id) => setKeys[id]),
@@ -142,6 +146,46 @@ export default function EdSettings({ onExportFps }) {
     reload().catch(() => {})
     reloadAi().catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (aiProv !== 'lmstudio') {
+      setLmModels([])
+      setLmStatus('idle')
+      setLmReason('')
+      return
+    }
+    let cancelled = false
+    setLmStatus('loading')
+    const t = setTimeout(() => {
+      getLmStudioModels(aiBaseUrl)
+        .then((r) => {
+          if (cancelled) return
+          if (r.ok) {
+            setLmModels(Array.isArray(r.models) ? r.models : [])
+            setLmStatus('ok')
+            setLmReason('')
+          } else {
+            setLmModels([])
+            setLmStatus('off')
+            setLmReason(r.reason || 'Enciende LM Studio y arranca su servidor (Developer → Start Server).')
+          }
+        })
+        .catch(() => {
+          if (cancelled) return
+          setLmModels([])
+          setLmStatus('off')
+          setLmReason('Enciende LM Studio y arranca su servidor (Developer → Start Server).')
+        })
+    }, 350)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [aiProv, aiBaseUrl, lmTick])
+
+  useEffect(() => {
+    if (aiProv !== 'lmstudio' || lmStatus !== 'ok' || !aiEdit || !lmModels.length) return
+    if (lmModels.some((m) => m.id === aiModel)) return
+    const pick = lmModels.find((m) => m.loaded) || lmModels.find((m) => m.tool_use) || lmModels[0]
+    if (pick) setAiModel(pick.id)
+  }, [aiProv, lmStatus, lmModels, aiEdit, aiModel])
 
   function openAdd() {
     const first = unused[0]
@@ -351,13 +395,36 @@ export default function EdSettings({ onExportFps }) {
               </label>
               <label className="field">
                 <span>Modelo</span>
-                <input
-                  className="ed-cfg-input"
-                  value={aiModel}
-                  disabled={!aiEdit || busy}
-                  onChange={(e) => setAiModel(e.target.value)}
-                  placeholder="modelo"
-                />
+                {aiProv === 'lmstudio' ? (
+                  <select
+                    className="select"
+                    value={aiModel}
+                    disabled={!aiEdit || busy || lmStatus === 'loading'}
+                    onChange={(e) => setAiModel(e.target.value)}
+                  >
+                    {!lmModels.length && (
+                      <option value={aiModel}>
+                        {lmStatus === 'loading' ? 'Consultando modelos…' : (aiModel || '—')}
+                      </option>
+                    )}
+                    {lmModels.length > 0 && aiModel && !lmModels.some((m) => m.id === aiModel) && (
+                      <option value={aiModel}>{aiModel}</option>
+                    )}
+                    {lmModels.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}{m.loaded ? ' · cargado' : ''}{m.tool_use ? ' · tools' : ''}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className="ed-cfg-input"
+                    value={aiModel}
+                    disabled={!aiEdit || busy}
+                    onChange={(e) => setAiModel(e.target.value)}
+                    placeholder="modelo"
+                  />
+                )}
               </label>
               {(aiCfg?.providers || []).find((p) => p.id === aiProv)?.local && (
                 <label className="field">
@@ -375,8 +442,27 @@ export default function EdSettings({ onExportFps }) {
               {aiProv === 'openrouter' && aiEdit && (
                 <p className="ed-key-hint">Con <b>openrouter/free</b> elige solo un modelo gratis disponible (recomendado). O escribe uno concreto, p. ej. <b>nvidia/nemotron-3-super-120b-a12b:free</b>.</p>
               )}
-              {aiProv === 'lmstudio' && aiEdit && (
-                <p className="ed-key-hint">Local con <b>LM Studio</b>: arranca su servidor (Developer → Start Server, :1234) y carga un modelo con <b>tool use</b> (p. ej. Qwen2.5-7B/14B-Instruct). El "Modelo" debe coincidir con el id cargado.</p>
+              {aiProv === 'lmstudio' && lmStatus === 'loading' && (
+                <p className="ed-key-hint">Consultando modelos en LM Studio…</p>
+              )}
+              {aiProv === 'lmstudio' && lmStatus === 'off' && (
+                <div className="ed-lm-status">
+                  <p className="ed-key-hint warn">{lmReason}</p>
+                  <button type="button" className="ghost small" onClick={() => setLmTick((n) => n + 1)} disabled={busy}>
+                    Reintentar
+                  </button>
+                </div>
+              )}
+              {aiProv === 'lmstudio' && lmStatus === 'ok' && !lmModels.length && (
+                <div className="ed-lm-status">
+                  <p className="ed-key-hint warn">No hay modelos LLM en LM Studio. Descarga uno y pulsa Reintentar.</p>
+                  <button type="button" className="ghost small" onClick={() => setLmTick((n) => n + 1)} disabled={busy}>
+                    Reintentar
+                  </button>
+                </div>
+              )}
+              {aiProv === 'lmstudio' && lmStatus === 'ok' && lmModels.length > 0 && aiEdit && (
+                <p className="ed-key-hint">Elige un modelo con <b>tools</b> si quieres que el chat use herramientas. Los marcados como <b>cargado</b> ya están en memoria.</p>
               )}
               {aiEdit && (
                 <div className="ed-key-actions">

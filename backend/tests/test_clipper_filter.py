@@ -44,5 +44,21 @@ class ReframeFilterLengthTest(unittest.TestCase):
             self.assertGreater(Path(args[1]).stat().st_size, 8000)
 
 
+class CutAudioArgsTest(unittest.TestCase):
+    def test_unity_volume_skips_filter(self):
+        self.assertEqual(clipper._cut_audio_args(None), ([], False))
+        self.assertEqual(clipper._cut_audio_args({"kind": "video", "volume": 1}), ([], False))
+
+    def test_lower_volume(self):
+        af, strip = clipper._cut_audio_args({"kind": "video", "volume": 0.25})
+        self.assertEqual(af, ["-af", "volume=0.250"])
+        self.assertFalse(strip)
+
+    def test_muted_strips_audio(self):
+        af, strip = clipper._cut_audio_args({"kind": "video", "volume": 1, "muted": True})
+        self.assertEqual(af, [])
+        self.assertTrue(strip)
+
+
 if __name__ == "__main__":
     unittest.main()

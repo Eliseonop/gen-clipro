@@ -3,6 +3,7 @@ import Icon from '../../components/Icon'
 import { kfColor } from '../../lib/panning'
 import { SPEED_MAX, SPEED_MIN, SPEED_PRESETS, clipKeepPitch, clipSpeed, isVisualClip } from './editorModel'
 import EdLayer from './EdLayer'
+import { VolumePanel } from './EdEffects'
 import {
   canKeyframe, clampVolume, hasVolumeControls, keyframesEnabled, normalizeItems,
 } from '../../lib/clipKeyframes'
@@ -31,6 +32,7 @@ function kfTime(clip, k, snapshots) {
 export default function EdCrops({
   clip, selKfId, onChangeFx, layer, onMoveLayer,
   onSelectKf, onDeleteKf, fps = 30, onAddKf,
+  playhead, onPose, onFade,
 }) {
   const [tab, setTab] = useState('kf')
   const isVideo = isVisualClip(clip)
@@ -42,7 +44,7 @@ export default function EdCrops({
   const items = kfList(clip)
   const propsTab = isText ? 'Capas' : 'Clip'
   const kfEmpty = isAudio
-    ? 'Ajusta el volumen en Efectos o pulsa Agregar keyframe en el cabezal.'
+    ? 'Ajusta el volumen o pulsa Agregar keyframe en el cabezal.'
     : isText
       ? 'Mueve el texto en el Main para crear un keyframe en el cabezal.'
       : 'Mueve el encuadre para crear un keyframe en el cabezal.'
@@ -123,6 +125,16 @@ export default function EdCrops({
                 </button>
               </div>
             </div>
+            )}
+            {hasVolumeControls(clip) && (
+              <VolumePanel
+                clip={clip}
+                playhead={playhead}
+                onChangeFx={onChangeFx}
+                onPose={onPose}
+                onAddKf={onAddKf}
+                onFade={onFade}
+              />
             )}
           </div>
         )

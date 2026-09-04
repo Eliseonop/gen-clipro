@@ -115,6 +115,9 @@ class ClipRequest(BaseModel):
     segments: list[Segment]
     crop_mode: CropMode = CropMode.center
     reframe: Optional[Reframe] = None   # solo si un único segmento y modo smart_face
+    volume: float = Field(default=1.0, ge=0.0, le=2.0)
+    muted: bool = False
+    audio_keyframes: Optional[dict] = None
 
 
 class CompLayer(BaseModel):
@@ -351,6 +354,7 @@ class TimelineClip(BaseModel):
     out_point: float = 0.0
     source_duration: float = 0.0
     volume: float = 1.0
+    media_version: Optional[str] = None   # created_at del material: cache-busting del <video> tras regenerar
     reframe: Optional[Reframe] = None
     text: Optional[str] = None            # contenido (clips de tipo "text")
     style: Optional[dict] = None          # estilo del texto (fuente, color, borde…)

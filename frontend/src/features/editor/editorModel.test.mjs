@@ -7,9 +7,10 @@ import {
   clipPlaybackMuted, makeClip, mediaUrl, newReframe,
   shouldConfirmTrackDelete, removeTrack,
   canCaptionClip, textClipsFromTranscript, makeTextClip, resizeGeneratedClip, trimClipPatch, trimPreviewHead,
+  previewHead, safeMediaTime, LAST_FRAME_PULL,
   splitClipByMaxWords, splitTrackTextByMaxWords, extraClipsAfterSplit, extraClipsAfterOneSplit, splitOneTextClip,
   nextClipSelection, rangeSelectOnTrack, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
-  previewElementVolume, parsePreviewVolume, laneKindForAsset, trackKindForClip,
+  previewElementVolume, parsePreviewVolume, laneKindForAsset, trackKindForClip, syncPreviewMedia,
   duplicateClipOntoTrack, dupCount, lineageRoot, syncMaterialInstances,
   applyFaceTrack, isEditingExistingClip, clipSaveIndex,
   trackContextItems, linkedPartnerName, linkTrackPair, unlinkTrackPair,
@@ -18,6 +19,7 @@ import {
   matchClipsToFirstDuration, durationPatchToMatch,
   clipLayerInfo, moveClipLayer, canLayerClip,
   trackTextContent,
+  mcpBusyClipIds, MCP_BUSY_MS,
 } from './editorModel.js'
 
 const vFast = { kind: 'video', start: 10, in_point: 2, out_point: 6, speed: 2 }
@@ -324,6 +326,29 @@ assert.equal(parsePreviewVolume('nope'), 1)
 assert.equal(parsePreviewVolume('2'), 1)
 assert.equal(parsePreviewVolume(null), 1)
 
+const fakeEl = { muted: false, volume: 1, playbackRate: 1 }
+syncPreviewMedia(fakeEl, { muted: false, volume: 1, playbackRate: 1 })
+assert.equal(fakeEl.muted, false)
+assert.equal(fakeEl.volume, 1)
+assert.equal(fakeEl.playbackRate, 1)
+let rateWrites = 0
+const el2 = {
+  muted: false,
+  volume: 1,
+  _rate: 1,
+  get playbackRate() { return this._rate },
+  set playbackRate(v) { rateWrites += 1; this._rate = v },
+}
+syncPreviewMedia(el2, { playbackRate: 1 })
+syncPreviewMedia(el2, { playbackRate: 1 })
+assert.equal(rateWrites, 0)
+syncPreviewMedia(el2, { playbackRate: 1.5 })
+assert.equal(rateWrites, 1)
+assert.equal(el2.playbackRate, 1.5)
+syncPreviewMedia(el2, { muted: true, volume: 0.4 })
+assert.equal(el2.muted, true)
+assert.equal(el2.volume, 0.4)
+
 console.log('preview volume ok')
 
 const madeFree = makeTextClip('T2', 1, 3, 'Marca', { font: 'Arial' })
@@ -374,7 +399,14 @@ const videoTrim = { kind: 'video', start: 5, in_point: 1, out_point: 5, source_d
 assert.deepEqual(trimClipPatch(videoTrim, 'trim-left', 1), { in_point: 2, start: 6 })
 assert.equal(trimPreviewHead(videoTrim, 'trim-left', 1), 6)
 assert.equal(trimClipPatch(videoTrim, 'trim-right', 2).out_point, 7)
-assert.ok(Math.abs(trimPreviewHead(videoTrim, 'trim-right', 2) - (5 + 6 - 0.04)) < 1e-9)
+assert.ok(Math.abs(trimPreviewHead(videoTrim, 'trim-right', 2) - (5 + 6 - LAST_FRAME_PULL)) < 1e-9)
+
+assert.equal(previewHead(5, 10, 30), 5)
+assert.ok(previewHead(10, 10, 30) < 10)
+assert.ok(previewHead(10, 10, 30) >= 10 - LAST_FRAME_PULL - 1e-9)
+assert.equal(safeMediaTime({ duration: 8 }, 3, 30), 3)
+assert.ok(safeMediaTime({ duration: 8 }, 8, 30) < 8)
+assert.equal(safeMediaTime({}, 2, 30), 2)
 
 const freeLong = {
   id: 'w1', track_id: 'T1', kind: 'text', text_role: 'free',
@@ -547,4 +579,26 @@ assert.equal(sped.find((c) => c.id === 't2').start, 12)
 assert.equal(applyAudioSpeedToLinkedText([audio, capIn], [{ id: 'A1', kind: 'audio' }], audio, 2).find((c) => c.id === 't1').start, 2)
 
 console.log('track link + caption speed ok')
+
+const clipsBusy = [
+  { id: 'c1', filename: 'a.wav', name: 'Voz' },
+  { id: 'c2', filename: 'b.mp4', name: 'Clip' },
+]
+assert.deepEqual(
+  mcpBusyClipIds([{ meta: { clip_id: 'c2' } }], [], clipsBusy),
+  ['c2'],
+)
+assert.deepEqual(
+  mcpBusyClipIds([], [{ access: 'write', ts: new Date().toISOString(), meta: { filename: 'a.wav' } }], clipsBusy),
+  ['c1'],
+)
+assert.deepEqual(
+  mcpBusyClipIds([], [{ access: 'read', ts: new Date().toISOString(), meta: { clip_id: 'c2' } }], clipsBusy),
+  [],
+)
+assert.deepEqual(
+  mcpBusyClipIds([], [{ access: 'write', ts: new Date(Date.now() - MCP_BUSY_MS - 50).toISOString(), meta: { clip_id: 'c2' } }], clipsBusy),
+  [],
+)
+console.log('mcp busy clip ids ok')
 

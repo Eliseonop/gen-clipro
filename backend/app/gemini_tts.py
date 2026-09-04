@@ -19,16 +19,16 @@ MODEL = "gemini-3.1-flash-tts-preview"
 SAMPLE_RATE = 24000
 
 VOICES = [
-    {"id": "Kore", "label": "Kore — firme"},
-    {"id": "Charon", "label": "Charon — informativo"},
-    {"id": "Puck", "label": "Puck — animado"},
-    {"id": "Fenrir", "label": "Fenrir — expresivo"},
-    {"id": "Aoede", "label": "Aoede — ligera"},
-    {"id": "Gacrux", "label": "Gacrux — maduro"},
-    {"id": "Sulafat", "label": "Sulafat — cálida"},
-    {"id": "Achird", "label": "Achird — amistoso"},
-    {"id": "Enceladus", "label": "Enceladus — susurrada"},
-    {"id": "Alnilam", "label": "Alnilam — firme"},
+    {"id": "Kore", "label": "Kore — mujer, firme", "gender": "female"},
+    {"id": "Charon", "label": "Charon — hombre, informativo", "gender": "male"},
+    {"id": "Puck", "label": "Puck — hombre, animado", "gender": "male"},
+    {"id": "Fenrir", "label": "Fenrir — hombre, expresivo", "gender": "male"},
+    {"id": "Aoede", "label": "Aoede — mujer, ligera", "gender": "female"},
+    {"id": "Gacrux", "label": "Gacrux — mujer, madura", "gender": "female"},
+    {"id": "Sulafat", "label": "Sulafat — mujer, cálida", "gender": "female"},
+    {"id": "Achird", "label": "Achird — hombre, amistoso", "gender": "male"},
+    {"id": "Enceladus", "label": "Enceladus — hombre, susurrado", "gender": "male"},
+    {"id": "Alnilam", "label": "Alnilam — hombre, firme", "gender": "male"},
 ]
 
 

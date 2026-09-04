@@ -20,12 +20,7 @@ def _project_or_raise(project_id: str):
 
 
 def export_project(project_id: str, timeline: dict | None = None) -> dict:
-    """Renderiza el vídeo final componiendo toda la timeline (job en segundo plano).
-
-    Por defecto usa la timeline guardada del proyecto (la que dejaron las tools de
-    edición); pásale ``timeline`` solo si quieres exportar una distinta. Espera
-    con ``wait_for_job`` y recoge ``result.export_url``.
-    """
+    """Renderiza el vídeo final componiendo la timeline (job). Espera con wait_for_job → result.export_url."""
     proj = _project_or_raise(project_id)
     tl = Timeline(**migrations.migrate_timeline(timeline)) if timeline else proj.timeline
     if tl is None or not tl.clips:
@@ -41,11 +36,7 @@ def list_jobs() -> dict:
 
 
 def cancel_job(job_id: str) -> dict:
-    """Pide cancelar un job (cooperativo, best-effort).
-
-    Aborta en el siguiente tick de progreso; un FFmpeg ya en marcha no se
-    interrumpe hasta ese punto. Falla si el job no existe o ya terminó.
-    """
+    """Cancela un job (cooperativo, best-effort; aborta en el siguiente tick)."""
     job = jobs.get_job(job_id)
     if job is None:
         raise ValueError(f"Job no encontrado: {job_id}")
