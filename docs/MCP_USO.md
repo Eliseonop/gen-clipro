@@ -46,16 +46,34 @@ puente. En `claude_desktop_config.json`:
 
 Reinicia Claude Desktop tras editar el archivo.
 
-## 3. Qué puede hacer la IA — catálogo de tools (44)
+## 3. Qué puede hacer la IA — catálogo de tools (54)
+
+Total: **14 read / 37 write / 3 destructive**.
 
 Toda tool declara un nivel de política (`read` / `write` / `destructive`) y queda
 **auditada** en `backend/data/mcp_audit.jsonl` (tool, nivel, proyecto, claves de
-params —nunca valores—, estado y ms).
+params —nunca valores—, estado y ms). Cada tool lleva además `meta.domain` y
+`annotations` (read-only / destructive hints).
+
+**Descubrimiento (empieza aquí si no conoces el editor o el proyecto)**
+- `describe_capabilities(domain?)` — sin `domain`, mapa de dominios + verbos +
+  defaults; con `domain` (transcription/audio/clips/media/…), los **valores
+  válidos** (modelos, voces disponibles, motions, crop_modes…) y la guía.
+- `list_projects()` — proyectos del editor (id, nombre, formato, duración).
+- `resolve_project(query)` — resuelve por id/prefijo o nombre → `{project_id}` o
+  `candidates[]` si es ambiguo. El `project_id` es obligatorio en el resto.
+
+**Resources (estado de solo lectura, para clientes que los leen)**
+- `capabilities://index` · `config://runtime` · `help://<domain>`
+- `project://<pid>` · `project://<pid>/timeline` · `project://<pid>/clip/<cid>` ·
+  `project://<pid>/media`
 
 **Lectura / orientación**
 - `get_project_context(project_id)` — resumen: formato, material, timeline,
-  historial y `capabilities[]` (verbos disponibles). **Empieza siempre por aquí.**
+  historial. **Primer paso para orientarte en un proyecto.**
 - `get_timeline` · `inspect_clip` (un clip completo) · `list_media`
+- `get_frame(clip_id, at)` — extrae un frame para que el modelo lo *mire* (ojos de la IA)
+- `search_transcript(query)` — busca en el guion para editar por contenido
 - `get_job` · `wait_for_job(job_id, timeout_s)` · `list_jobs`
 
 **Media / ingesta**
@@ -70,6 +88,7 @@ params —nunca valores—, estado y ms).
 - `set_clip_layout` (top/bottom/full) · `reframe_clip` (center/manual) ·
   `set_project_format` (9:16…)
 - `add_track` · `remove_track` *(destructive)* · `add_shape` · `duplicate_clip`
+- `rename_track` (nombrar líneas: A1 / SFX / Voz)
 - `link_tracks` / `unlink_track`
 - `add_subtitles(source_clip_id, segments)`
 
@@ -79,6 +98,14 @@ params —nunca valores—, estado y ms).
 - `set_clip_effects` (blur/grayscale/sepia/brightness…) · `set_clip_audio_fx`
   (eq/compressor/reverb)
 - `set_text_role` (caption/free) · `set_clip_keyframes` (x/y/scale/rotation/opacity)
+- `set_clip_ai_description` — describe el material con IA (para búsqueda/orientación)
+
+**Audio**
+- `set_clip_volume` (0–2, mute, fade in/out) · `set_track_audio` (toda una pista)
+
+**Animación**
+- `animate_clip` (zoom / giro / slide / aparecer con un SFX) — vía recomendada;
+  **no** escribas keyframes a mano
 
 **Transcripción / audio**
 - `transcribe(project_id, source|clip_index, model?)` · `generate_subtitles`

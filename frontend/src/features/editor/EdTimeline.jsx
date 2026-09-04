@@ -5,7 +5,7 @@ import { fmt } from '../../lib/utils'
 import { pseudoWaveform, clamp, kfColor } from '../../lib/panning'
 import { clipCopyText, clipDur, clipSourceDur, clipSpeed, displayTracks, isVisualClip, laneKindForAsset, linkedPartnerName, trackKindForClip, trimClipPatch, trimPreviewHead } from './editorModel'
 import { alignOthers, alignThresholdSec, asAlignClip, snapClipGroup, snapClipMove, snapClipTrim, timelineAlignHits } from './timelineAlign'
-import { keyframesEnabled, normalizeItems, clipVolumeAt, clampVolume, sampleVolumeCurve, VOL_MAX } from '../../lib/clipKeyframes'
+import { keyframesEnabled, normalizeItems, clipVolumeAt, clampVolume, sampleVolumeCurve, VOL_MAX, hasVolumeControls } from '../../lib/clipKeyframes'
 import { snapToFrame } from '../../lib/projectFps'
 import { stackViewForTrack } from './clipStack.js'
 import { headerScrollPad, timelineWheelAction } from './timelineWheel'
@@ -130,6 +130,7 @@ export default function EdTimeline({
   onDropAsset, onTrackToggle, onTrackCompact, onAddTrack, onAddTextTrack, onRenameTrack, onMoveKeyframe, onSelectKf, onAddKf, onDeleteKf, onContextClip, onContextTrack,
   onFaceTrack, faceTrackBusy, faceTrackDisabled,
   linkPick, onPickLinkTrack, onCancelLinkPick, onCopyDesc, audioMaterials,
+  mcpBusyIds,
 }) {
   const lanesRef = useRef(null)
   const bodyRef = useRef(null)
@@ -343,7 +344,7 @@ export default function EdTimeline({
     const startX = e.clientX
     const startY = e.clientY
     const orig = kf.t
-    const origVol = clip.kind === 'audio'
+    const origVol = hasVolumeControls(clip) && (clip.kind === 'audio' || clip.keyframes?.enabled)
       ? clampVolume(kf.props?.volume ?? clipVolumeAt(clip, kf.t))
       : null
     const hostH = e.currentTarget.parentElement?.clientHeight || 28
@@ -515,6 +516,7 @@ export default function EdTimeline({
                     return (
                       <ClipBlock key={c.id} clip={c} pps={pps} layout={lay} fps={fps}
                         selected={selectedIds.includes(c.id)} selKfId={selKfId}
+                        mcpBusy={mcpBusyIds?.includes(c.id)}
                         onDown={(e, mode) => startClipDrag(e, c, mode)}
                         onKfDown={(e, kf, idx) => startKfDrag(e, c, kf, idx)}
                         onContext={(e) => onContextClip?.(e, c)}
@@ -571,7 +573,7 @@ function VolumeCurve({ clip, width, height }) {
   )
 }
 
-function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onContext, onDouble, onCopyDesc, audioMaterials, fps = 30 }) {
+function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onContext, onDouble, onCopyDesc, audioMaterials, fps = 30, mcpBusy }) {
   const dur = clipDur(clip)
   const srcDur = clipSourceDur(clip)
   const sp = clipSpeed(clip)
@@ -588,7 +590,7 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
   const audioDesc = clip.kind === 'audio' ? clipCopyText(clip, audioMaterials) : ''
 
   return (
-    <div className={`ed-clip ${clip.kind} ${layout.variant !== 'solo' ? layout.variant : ''} ${selected ? 'sel' : ''} ${clip.muted ? 'muted' : ''}`}
+    <div className={`ed-clip ${clip.kind} ${layout.variant !== 'solo' ? layout.variant : ''} ${selected ? 'sel' : ''} ${clip.muted ? 'muted' : ''} ${mcpBusy ? 'mcp-busy' : ''}`}
       style={{ left, width: w, top: layout.top, height: layout.height, zIndex: layout.z }}
       title={clip.name}
       data-cluster-id={layout.clusterId || undefined}
@@ -618,7 +620,7 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
           )}
         </div>
       )}
-      {clip.kind === 'audio' && <VolumeCurve clip={clip} width={w} height={layout.height} />}
+      {hasVolumeControls(clip) && <VolumeCurve clip={clip} width={w} height={layout.height} />}
 
       {selected && kfs.map((k, i) => {
         const kl = animKfs
@@ -626,7 +628,9 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
           : ((k.t - clip.in_point) / (srcDur || 1)) * w
         if (kl < -3 || kl > w + 3) return null
         const hold = (k.interpolation === 'hold' || k.pan_mode === 'direct')
-        const vol = clip.kind === 'audio' ? clampVolume(k.props?.volume ?? clipVolumeAt(clip, k.t)) : null
+        const vol = hasVolumeControls(clip) && (clip.kind === 'audio' || animKfs)
+          ? clampVolume(k.props?.volume ?? clipVolumeAt(clip, k.t))
+          : null
         const top = vol == null ? undefined : `${(1 - vol / VOL_MAX) * 100}%`
         const volHint = vol == null ? '' : ` · ${Math.round(vol * 100)}%`
         return (

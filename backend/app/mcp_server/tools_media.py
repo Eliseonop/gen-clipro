@@ -42,11 +42,7 @@ def _segment(s: dict) -> Segment:
 
 def analyze_youtube(url: str, min_score: float = 0.40, max_clips: int = 10,
                     max_duration: int = 60, padding: int = 10) -> dict:
-    """Analiza un vídeo de YouTube por su heatmap y devuelve los tramos más vistos.
-
-    Es síncrono (no crea job). Los ``segments`` devueltos se pasan tal cual a
-    ``create_clips_from_segments`` para recortarlos.
-    """
+    """Analiza el heatmap de un vídeo de YouTube y devuelve los tramos más vistos (segments). Síncrono."""
     resp = heatmap.analyze(url=url, min_score=min_score, max_clips=max_clips,
                            max_duration=max_duration, padding=padding)
     return dto.analyze_dto(resp)
@@ -54,12 +50,7 @@ def analyze_youtube(url: str, min_score: float = 0.40, max_clips: int = 10,
 
 def create_clips_from_segments(project_id: str, url: str, segments: list,
                                crop_mode: str = "center") -> dict:
-    """Lanza un job que recorta los ``segments`` del vídeo a clips del proyecto.
-
-    Devuelve el job (``id`` + estado); usa ``wait_for_job`` para esperar y
-    ``list_media`` para ver los clips creados. ``crop_mode``:
-    center/smart_face/split_left/split_right.
-    """
+    """Job que recorta los segments a clips del proyecto. crop_mode: center|smart_face|split_left|split_right."""
     _project_or_raise(project_id)
     if not segments:
         raise ValueError("No hay segments que recortar.")
@@ -75,10 +66,7 @@ def create_clips_from_segments(project_id: str, url: str, segments: list,
 
 
 def delete_media(project_id: str, kind: str, ident: str) -> dict:
-    """Elimina un material del proyecto (clip, audio o imagen) y borra su archivo.
-
-    ``kind`` = clips|audios|images; ``ident`` = index del clip o id del audio/imagen.
-    """
+    """Elimina material Y su archivo (NO deshacible). kind clips|audios|images; ident index/id."""
     if kind not in _MEDIA_KIND:
         raise ValueError(f"kind inválido: {kind} (usa clips|audios|images)")
     proj = _project_or_raise(project_id)
@@ -97,11 +85,7 @@ def delete_media(project_id: str, kind: str, ident: str) -> dict:
 
 
 def fetch_image(project_id: str, url: str, label: str | None = None) -> dict:
-    """Descarga una imagen desde una URL y la añade al proyecto.
-
-    Devuelve la imagen creada (``id`` para colocarla luego con
-    ``add_to_timeline(asset_kind="images")``).
-    """
+    """Descarga una imagen desde una URL y la añade al proyecto (devuelve id para add_to_timeline)."""
     from .. import images
     proj = _project_or_raise(project_id)
     if not (url or "").strip():

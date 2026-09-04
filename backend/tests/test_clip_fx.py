@@ -11,6 +11,13 @@ class ClipFxAtTest(unittest.TestCase):
         self.assertEqual(fx["scale"], 1)
         self.assertEqual(fx["tx"], 0)
         self.assertEqual(fx["ty"], 0)
+        self.assertEqual(fx["wipe"], 1)
+
+    def test_wipe_in_starts_hidden(self):
+        clip = {"appear": "wipe", "exit": "none"}
+        self.assertEqual(clip_fx_at(clip, 0, 4)["wipe"], 0)
+        self.assertEqual(clip_fx_at(clip, FX_DUR, 4)["wipe"], 1)
+        self.assertEqual(clip_fx_at(clip, 0, 4)["opacity"], 1)
 
     def test_fade_in_starts_transparent(self):
         clip = {"appear": "fade", "exit": "none"}
@@ -113,6 +120,18 @@ class ClipEffectsTest(unittest.TestCase):
         chain = video_fx_chain({"appear": "zoom"}, 4, 720, 1280, motion=False)
         self.assertNotIn("scale=w=", chain)
         self.assertNotIn("eval=frame", chain)
+
+    def test_wipe_uses_alpha_mask_not_animated_crop(self):
+        chain = video_fx_chain({"appear": "wipe"}, 4, 1280, 720)
+        self.assertIn("geq=", chain)
+        self.assertIn("format=gbrap", chain)
+        self.assertNotIn("crop=w='max", chain)
+
+    def test_wipe_landscape_canvas_same_as_portrait(self):
+        a = video_fx_chain({"appear": "wipe"}, 4, 1280, 720)
+        b = video_fx_chain({"appear": "wipe"}, 4, 720, 1280)
+        self.assertIn("geq=", a)
+        self.assertIn("geq=", b)
 
 
 if __name__ == "__main__":

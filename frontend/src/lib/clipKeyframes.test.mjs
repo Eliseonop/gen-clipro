@@ -73,6 +73,7 @@ assert.equal(opensEffectsOnSelect({ kind: 'video' }), true)
 assert.equal(opensEffectsOnSelect({ kind: 'shape' }), true)
 
 assert.equal(clipVolumeAt({ kind: 'audio', volume: 0.5 }, 0), 0.5)
+assert.equal(clipVolumeAt({ kind: 'video', volume: 0.4 }, 0), 0.4)
 
 const volClip = {
   kind: 'audio',

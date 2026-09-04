@@ -18,7 +18,9 @@ from contextlib import asynccontextmanager
 from mcp.server.mcpserver import MCPServer
 
 from . import (
+    resources,
     tools_audio,
+    tools_capabilities,
     tools_context,
     tools_edit,
     tools_jobs,
@@ -30,19 +32,17 @@ from . import (
 )
 
 INSTRUCTIONS = (
-    "Editor de vídeo (YouTube → clips verticales 9:16 → timeline → subtítulos → "
-    "export). Empieza por get_project_context(project_id) para orientarte: te da "
-    "formato, material, timeline, historial y las capabilities disponibles. "
-    "Audio: set_clip_volume (0–2, mute, fade in/out), set_clip_audio_fx, "
-    "set_track_audio para toda una pista, rename_track para nombrar líneas "
-    "(A1/SFX/Voz). Los keyframes pueden animar volume y los fx de audio. "
-    "Para animar un clip (zoom, giro, slide, aparecer con un SFX) usa "
-    "animate_clip; no escribas keyframes a mano."
+    "Editor de vídeo: YouTube → clips 9:16 → timeline → subtítulos → export. "
+    "Empieza por get_project_context(project_id) para ver formato, material, "
+    "timeline e historial. Para animar un clip usa animate_clip (no escribas "
+    "keyframes a mano); para audio, set_clip_volume / set_clip_audio_fx / "
+    "set_track_audio. Toda edición de timeline es deshacible con undo."
 )
 
 mcp = MCPServer(name="video-yt", instructions=INSTRUCTIONS)
 
 # Registro de tools.
+tools_capabilities.register(mcp)  # Fase 2: describe_capabilities, list_projects, resolve_project
 tools_context.register(mcp)   # Etapa 2: get_project_context
 tools_read.register(mcp)      # Etapa 3: get_timeline, inspect_clip, list_media
 tools_jobs.register(mcp)      # Etapa 3: get_job, wait_for_job
@@ -52,6 +52,9 @@ tools_audio.register(mcp)     # Etapa 6: transcribe, generate_subtitles, generat
 tools_render.register(mcp)    # Etapa 7: export_project, list_jobs, cancel_job
 tools_workflow.register(mcp)  # Etapa 8: create_short_from_youtube, make_short_from_library
 tools_vision.register(mcp)    # Visión: get_frame (ojos) + set_clip_ai_description
+
+# Registro de resources (Fase 2): descubrimiento + estado de solo lectura.
+resources.register(mcp)
 
 # Sub-app ASGI para montar en /mcp. El path interno es "/" porque el mount ya
 # aporta el prefijo /mcp.

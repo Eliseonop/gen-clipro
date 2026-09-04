@@ -7,6 +7,7 @@ class ClipVolumeKeyframesTest(unittest.TestCase):
     def test_static_volume(self):
         self.assertAlmostEqual(clip_volume_at({"kind": "audio", "volume": 0.5}, 0), 0.5)
         self.assertEqual(volume_filter({"kind": "audio", "volume": 0.5}), "volume=0.500")
+        self.assertEqual(volume_filter({"kind": "video", "volume": 0.4}), "volume=0.400")
 
     def test_interpolates_volume_envelope(self):
         clip = {

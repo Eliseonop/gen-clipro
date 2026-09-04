@@ -62,16 +62,27 @@ def _in_out(clip) -> tuple[float, float]:
     return inp, out
 
 
-def ffmpeg_trim_window(clip) -> tuple[float, float]:
+_LAST_FRAME_PULL = 0.04
+
+
+def ffmpeg_trim_window(clip, fps: int = 30) -> tuple[float, float]:
     """Ventana de ``trim`` sobre el input de ffmpeg.
 
     El still se genera con ``-loop`` y timestamps desde 0, de duración
     ``out - in``. Recortar con in/out de fuente dejaría el stream vacío
     tras un split.
+
+    En vídeo, pedir exactamente EOF (out == source_duration) deja un
+    fotograma negro al final; recortamos un pelín antes.
     """
     inp, out = _in_out(clip)
     if is_still_clip(clip):
         return 0.0, max(out - inp, 0.1)
+    src = float(clip.get("source_duration") if isinstance(clip, dict) else getattr(clip, "source_duration", 0) or 0)
+    if src > 0 and out >= src - 1e-4:
+        frame = 1.0 / max(1, int(fps) or 30)
+        pull = max(_LAST_FRAME_PULL, frame)
+        out = max(inp + 1e-3, src - pull)
     return inp, out
 
 

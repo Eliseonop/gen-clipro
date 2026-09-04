@@ -55,6 +55,27 @@ export const clipSourceDur = (c) => Math.max(0, (c?.out_point ?? 0) - (c?.in_poi
 export const clipDur = (c) => clipSourceDur(c) / clipSpeed(c)
 export const clipEnd = (c) => c.start + clipDur(c)
 
+/** Un poco antes de EOF: el <video> y FFmpeg pintan negro en duration exacta. */
+export const LAST_FRAME_PULL = 0.04
+
+export function previewHead(head, duration, fps = 30) {
+  const d = Math.max(0, Number(duration) || 0)
+  const h = Math.max(0, Number(head) || 0)
+  if (d <= 0) return 0
+  const n = Number(fps)
+  const dt = Math.max(LAST_FRAME_PULL, 1 / (Number.isFinite(n) && n > 0 ? n : 30))
+  return h >= d - 1e-6 ? Math.max(0, d - dt) : h
+}
+
+export function safeMediaTime(el, t, fps = 30) {
+  const want = Math.max(0, Number(t) || 0)
+  const dur = Number(el?.duration)
+  if (!Number.isFinite(dur) || dur <= 0) return want
+  const n = Number(fps)
+  const dt = Math.max(LAST_FRAME_PULL, 1 / (Number.isFinite(n) && n > 0 ? n : 30))
+  return Math.min(want, Math.max(0, dur - dt))
+}
+
 export function timelineToSource(c, t) {
   const local = (t - c.start) * clipSpeed(c)
   if (c.reverse) return c.out_point - local
@@ -88,6 +109,23 @@ export function previewElementVolume(clipVolume, monitorGain, muted) {
   const clip = clipVolume == null || !Number.isFinite(Number(clipVolume)) ? 1 : Number(clipVolume)
   const gain = monitorGain == null || !Number.isFinite(Number(monitorGain)) ? 1 : Number(monitorGain)
   return Math.min(1, Math.max(0, clip * gain))
+}
+
+/** Solo escribe muted/volume/rate si cambian. Reasignarlos cada frame acelera o distorsiona el audio. */
+export function syncPreviewMedia(el, { muted, volume, playbackRate }) {
+  if (!el) return
+  if (typeof muted === 'boolean' && el.muted !== muted) el.muted = muted
+  if (volume != null && Number.isFinite(Number(volume))) {
+    const v = Math.min(1, Math.max(0, Number(volume)))
+    if (Math.abs((Number(el.volume) || 0) - v) > 0.008) {
+      try { el.volume = v } catch { /* fuera de rango */ }
+    }
+  }
+  if (playbackRate != null && Number.isFinite(Number(playbackRate)) && playbackRate > 0) {
+    if (Math.abs((Number(el.playbackRate) || 1) - playbackRate) > 1e-3) {
+      try { el.playbackRate = playbackRate } catch { /* noop */ }
+    }
+  }
 }
 
 export const PREVIEW_VOL_KEY = 'vy:preview-volume'
@@ -415,7 +453,7 @@ export function trimPreviewHead(orig, mode, deltaT) {
   if (!patch) return null
   const next = { ...orig, ...patch }
   if (mode === 'trim-left') return next.start
-  return Math.max(next.start, clipEnd(next) - 0.04)
+  return Math.max(next.start, clipEnd(next) - LAST_FRAME_PULL)
 }
 
 /** Recorta o alarga un clip para que dure `targetDur` en la timeline. Vídeo/audio no pasan de la fuente. */
@@ -551,6 +589,16 @@ export const FORMATS = [
   { id: '4:3', w: 960, h: 720 },
 ]
 
+// Al regenerar un clip su archivo se reescribe con la MISMA URL; sin esto el
+// navegador serviría el render viejo cacheado (mismo encuadre). media_version
+// (created_at del material, que cambia en cada guardado) fuerza recargar el nuevo.
+function withMediaVersion(url, clip) {
+  const v = clip?.media_version
+  if (!v) return url
+  const q = encodeURIComponent(v)
+  return url.includes('?') ? `${url}&v=${q}` : `${url}?v=${q}`
+}
+
 // URL del medio de un clip (vídeo/audio/sfx) para el elemento <video>/<audio>.
 export function mediaUrl(pid, clip) {
   if (clip.media_url) return clip.media_url
@@ -559,9 +607,9 @@ export function mediaUrl(pid, clip) {
     : (clip.asset_kind === 'images' || clip.kind === 'image') ? 'image'
       : 'video'
   if ((clip.asset_scope || 'project') === 'library') {
-    return `/api/library/media/${kind}/${encodeURIComponent(clip.filename)}`
+    return withMediaVersion(`/api/library/media/${kind}/${encodeURIComponent(clip.filename)}`, clip)
   }
-  return `/api/media/${pid}/${kind}/${encodeURIComponent(clip.filename)}`
+  return withMediaVersion(`/api/media/${pid}/${kind}/${encodeURIComponent(clip.filename)}`, clip)
 }
 
 // Pistas por defecto de un proyecto nuevo.
@@ -617,6 +665,7 @@ export function makeClip(assetKind, item, trackId, start, dur) {
     keep_pitch: true,
     reverse: false,
     speed_curve: null,
+    media_version: item.created_at || item.media_version || null,
     reframe: visual
       ? (fromLib ? withKfIds({ ...newReframe(), ...item.reframe }) : newReframe())
       : null,
@@ -728,6 +777,7 @@ export function syncMaterialInstances(clips, patch) {
     if (patch.name != null) next.name = patch.name
     if (patch.description !== undefined) next.description = patch.description
     if (patch.reframe) next.reframe = patch.reframe
+    if (patch.media_version) next.media_version = patch.media_version
     if (hasDur) {
       next.source_duration = dur
       next.out_point = Math.min(next.out_point ?? dur, dur)
@@ -857,4 +907,31 @@ export function applyAudioSpeedToLinkedText(clips, tracks, audioClip, newSpeed) 
     if (end <= a0 + 1e-3 || c.start >= a1 - 1e-3) return c
     return scaleTextClipFromAnchor(c, a0, scale)
   })
+}
+
+/** Tiempo que un clip sigue resaltado en la timeline tras un write del MCP. */
+export const MCP_BUSY_MS = 2800
+
+/** Ids de clips que el MCP está tocando (jobs en curso o writes recientes). */
+export function mcpBusyClipIds(active = [], entries = [], clips = [], now = Date.now()) {
+  const ids = new Set()
+  const add = (meta) => {
+    if (!meta) return
+    if (meta.clip_id) ids.add(String(meta.clip_id))
+    if (meta.source_clip_id) ids.add(String(meta.source_clip_id))
+    const fn = meta.filename
+    if (fn) {
+      for (const c of clips) {
+        if (c.filename === fn || c.asset_id === fn) ids.add(c.id)
+      }
+    }
+  }
+  for (const a of active) add(a.meta)
+  for (const e of entries) {
+    if (e.access === 'read') continue
+    const t = Date.parse(e.ts)
+    if (!Number.isFinite(t) || now - t > MCP_BUSY_MS) continue
+    add(e.meta)
+  }
+  return [...ids]
 }

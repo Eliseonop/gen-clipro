@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react'
 import Icon from '../../components/Icon'
 import ConfirmModal from '../../components/ConfirmModal'
 import Toast from '../../components/Toast'
@@ -13,7 +13,7 @@ import {
   canCaptionClip, removeTrack, shouldConfirmTrackDelete,
   extraClipsAfterSplit, extraClipsAfterOneSplit, splitTrackTextByMaxWords, splitOneTextClip,
   nextClipSelection, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
-  previewElementVolume, parsePreviewVolume, PREVIEW_VOL_KEY,
+  previewElementVolume, parsePreviewVolume, PREVIEW_VOL_KEY, syncPreviewMedia,
   isVisualClip, trackKindForClip, IMAGE_DEFAULT_DUR,
   duplicateClipOntoTrack, syncMaterialInstances, applyFaceTrack,
   isEditingExistingClip, clipSaveIndex,
@@ -21,12 +21,13 @@ import {
   applyAudioSpeedToLinkedText, matchClipsToFirstDuration,
   clipLayerInfo, moveClipLayer, canLayerClip,
   trackTextContent, clipCopyText,
+  previewHead, safeMediaTime, mcpBusyClipIds,
 } from './editorModel'
 import { textRole } from '../../lib/textRole'
 import { SHAPE_DEFAULT_DUR } from '../../lib/shapes'
 import { applyFrame, disableOverlay, enableOverlay, isOverlay, mediaSize, newTransform, videosAt } from '../../lib/clipLayout'
 import {
-  AUDIO_FX_KEYS, applyVolumeFade, canKeyframe, clipVolumeAt, clampVolume, deleteKeyframeItem, flattenPatch, keyframeIdAt,
+  AUDIO_FX_KEYS, applyVolumeFade, canKeyframe, clipPropsAt, clipVolumeAt, clampVolume, deleteKeyframeItem, flattenPatch, keyframeIdAt,
   normalizeItems, opensEffectsOnSelect, patchKeyframe, upsertKeyframeAt,
 } from '../../lib/clipKeyframes'
 import { drawComposite, drawMainView } from './render/canvas'
@@ -49,6 +50,21 @@ const AUDIO_DB_PRESETS = [-24, -18, -16, -14, -12, -10, -8]
 
 function clipWorkspaceTracks() {
   return [{ id: 'V1', kind: 'video', name: 'V1', hidden: false, muted: false, locked: false }]
+}
+
+function HiddenMedia({ clip, src, mediaEls, onLoadedMetadata }) {
+  const id = clip.id
+  const ref = useCallback((el) => {
+    if (el) mediaEls.current.set(id, el)
+    else mediaEls.current.delete(id)
+  }, [id, mediaEls])
+  if (clip.kind === 'image') {
+    return <img alt="" loading="eager" decoding="async" src={src} ref={ref} />
+  }
+  const mediaProps = { src, ref, preload: 'auto', onLoadedMetadata }
+  return clip.kind === 'video'
+    ? <video {...mediaProps} playsInline />
+    : <audio {...mediaProps} />
 }
 
 function shiftKfs(kfs, t0, t1) {
@@ -77,6 +93,33 @@ function reframeForCut(reframe, t0, t1) {
   }
 }
 
+// El recorte guardado (cx/cy/zoom) se hornea desde la MISMA fuente de verdad que
+// el preview y el export: `clipPropsAt`. Sirva o no con pose-keyframes (si no hay,
+// devuelve el encuadre de reframe), así "Guardar clip" siempre coincide con lo que
+// se ve en pantalla. Muestrea en tiempo LOCAL (0 = inicio del corte = t de FFmpeg
+// tras -ss); los tiempos NO se vuelven a desplazar.
+function bakedReframeForCut(clip, dur) {
+  const d = Math.max(0.1, dur)
+  const times = new Set([0, +d.toFixed(4)])
+  for (const it of normalizeItems(clip.keyframes?.items)) {
+    times.add(+clamp(it.t, 0, d).toFixed(4))
+  }
+  const keyframes = [...times].sort((a, b) => a - b).map((t) => {
+    const p = clipPropsAt(clip, t)
+    return {
+      id: uid('k'),
+      t,
+      cx: +Number(p.cx ?? 0.5).toFixed(4),
+      cy: +Number(p.cy ?? 0.5).toFixed(4),
+      zoom: +Number(p.zoom ?? 1).toFixed(4),
+      pan_mode: 'smooth',
+    }
+  })
+  const rf = { ...(clip.reframe || {}), keyframes }
+  delete rf.keyframes2
+  return rf
+}
+
 export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [tracks, setTracks] = useState(defaultTracks())
   const [clips, setClips] = useState([])
@@ -92,6 +135,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [selKfId, setSelKfId] = useState(null)
   const [hiddenKf, setHiddenKf] = useState(() => new Set())
   const [matTab, setMatTab] = useState('video')
+  const [mcpAudit, setMcpAudit] = useState({ entries: [], active: [] })
 
   const [outW, setOutW] = useState(720)
   const [outH, setOutH] = useState(1280)
@@ -154,6 +198,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const duration = clips.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
   durationRef.current = duration
   const selectedClip = clips.find((c) => c.id === selClipId) || null
+  const mcpBusyIds = useMemo(
+    () => mcpBusyClipIds(mcpAudit.active, mcpAudit.entries, clips),
+    [mcpAudit, clips],
+  )
   const layerInfo = selectedClip && canLayerClip(selectedClip) ? clipLayerInfo(clips, selectedClip.id) : null
   const outAspect = outW / outH
 
@@ -307,7 +355,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     const env = {
       clipsRef, tracksRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
       playingRef, framingModeRef, mainCanvasRef, mainTextBox, topVideoAt, alignGuidesRef,
-      clipModeRef, croppingRef,
+      clipModeRef, croppingRef, fpsRef,
     }
     const tick = () => {
       const total = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
@@ -318,31 +366,49 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         playheadRef.current = head
         setPlayhead(head)
       }
+      const fpsNow = fpsRef.current
+      const drawHead = previewHead(head, total, fpsNow)
 
       for (const c of clipsRef.current) {
         const el = mediaEls.current.get(c.id)
         if (!el || c.kind === 'image' || typeof el.play !== 'function') continue
         const track = tracksRef.current.find((t) => t.id === c.track_id)
         const cd = clipDur(c)
-        const active = head >= c.start - 0.02 && head < c.start + cd
-        const expected = clamp(timelineToSource(c, head), c.in_point, c.out_point)
-        if (active && playingRef.current) {
-          el.muted = clipPlaybackMuted(c, track)
-          el.volume = previewElementVolume(clipVolumeAt(c, Math.max(0, head - (c.start || 0))), previewVolRef.current, clipPlaybackMuted(c, track))
+        const active = drawHead >= c.start - 0.02 && drawHead < c.start + cd
+        const expected = safeMediaTime(
+          el,
+          clamp(timelineToSource(c, drawHead), c.in_point, c.out_point),
+          fpsNow,
+        )
+        const holdLast = Number.isFinite(el.duration) && el.duration > 0
+          && expected >= el.duration - 0.04 - 1e-4
+        const mutedNow = !active || clipPlaybackMuted(c, track)
+        syncPreviewMedia(el, {
+          muted: mutedNow,
+          volume: previewElementVolume(
+            clipVolumeAt(c, Math.max(0, drawHead - (c.start || 0))),
+            previewVolRef.current,
+            mutedNow,
+          ),
+        })
+        if (active && playingRef.current && !holdLast) {
           if (c.reverse) {
             if (!el.paused) el.pause()
             if (Math.abs(el.currentTime - expected) > 0.04) { try { el.currentTime = expected } catch { /* noop */ } }
           } else {
-            try { el.playbackRate = clipSpeed(c) } catch { /* noop */ }
+            syncPreviewMedia(el, { playbackRate: clipSpeed(c) })
             try {
               const keep = clipKeepPitch(c)
-              if ('preservesPitch' in el) el.preservesPitch = keep
-              else if ('mozPreservesPitch' in el) el.mozPreservesPitch = keep
-              else if ('webkitPreservesPitch' in el) el.webkitPreservesPitch = keep
+              if ('preservesPitch' in el && el.preservesPitch !== keep) el.preservesPitch = keep
+              else if ('mozPreservesPitch' in el && el.mozPreservesPitch !== keep) el.mozPreservesPitch = keep
+              else if ('webkitPreservesPitch' in el && el.webkitPreservesPitch !== keep) el.webkitPreservesPitch = keep
             } catch { /* noop */ }
             if (el.paused) { try { el.currentTime = expected } catch { /* noop */ }; el.play().catch(() => {}) }
             else if (Math.abs(el.currentTime - expected) > 0.35) { try { el.currentTime = expected } catch { /* noop */ } }
           }
+        } else if (active) {
+          if (!el.paused) el.pause()
+          if (Math.abs(el.currentTime - expected) > 0.04) { try { el.currentTime = expected } catch { /* noop */ } }
         } else if (!el.paused) {
           el.pause()
         }
@@ -350,11 +416,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
 
       // Sincronizar fotogramas de todos los vídeos activos (fill + overlays)
       if (!playingRef.current) {
-        for (const c of videosAt(head, clipsRef.current, tracksRef.current)) {
+        for (const c of videosAt(drawHead, clipsRef.current, tracksRef.current)) {
           if (c.kind === 'image') continue
           const el = mediaEls.current.get(c.id)
           if (el && el.videoWidth) {
-            const expected = clamp(timelineToSource(c, head), c.in_point, c.out_point)
+            const expected = safeMediaTime(
+              el,
+              clamp(timelineToSource(c, drawHead), c.in_point, c.out_point),
+              fpsNow,
+            )
             if (Math.abs(el.currentTime - expected) > 0.06) { try { el.currentTime = expected } catch { /* noop */ } }
           }
         }
@@ -362,10 +432,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
 
       if (resultCtx) {
         const sel = clipsRef.current.find((c) => c.id === selRef.current)
-        drawComposite(resultCtx, head, (sel && isOverlay(sel)) ? sel.id : null, env)
+        drawComposite(resultCtx, drawHead, (sel && isOverlay(sel)) ? sel.id : null, env)
       }
 
-      drawMainView(head, env)
+      drawMainView(drawHead, env)
       rafRef.current = requestAnimationFrame(tick)
     }
     rafRef.current = requestAnimationFrame(tick)
@@ -544,7 +614,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     const fallback = 100000 + (Date.now() % 900000)
     const index = clipSaveIndex(clipMeta, fallback)
     const label = clipMeta.title.trim() || `Clip #${index}`
-    const cutRf = reframeForCut(video.reframe, video.in_point || 0, video.out_point || (end - start))
+    // El doble encuadre guarda cx/cy directo en reframe.keyframes; el resto hornea
+    // el encuadre desde clipPropsAt (misma fuente que el preview y compose.py).
+    const cutRf = video.reframe?.dual_crop
+      ? reframeForCut(video.reframe, video.in_point || 0, video.out_point || (end - start))
+      : bakedReframeForCut(video, end - start)
     clipSaveCtxRef.current = {
       existingIndex: clipMeta.existingIndex,
       description: (clipMeta.description || '').trim() || null,
@@ -566,6 +640,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         }],
         crop_mode: 'smart_face',
         reframe: cutRf,
+        volume: video.volume ?? 1,
+        muted: !!video.muted,
+        ...(video.keyframes?.enabled ? { audio_keyframes: video.keyframes } : {}),
       }))
     } catch (e) {
       setClipSaveJob({ status: 'error', error: e.message })
@@ -671,6 +748,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       reframe: payload.reframe,
       scope: payload.scope,
       description: payload.description,
+      media_version: payload.media_version,
     }, trackId, startTime, payload.duration)
     setClips((prev) => [...prev, clip])
     setSelClipId(clip.id)
@@ -1357,6 +1435,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         name: saved?.label || ctx.title,
         description: ctx.description !== undefined ? ctx.description : saved?.description,
         reframe: saved?.reframe || ctx.reframe,
+        media_version: saved?.created_at || String(Date.now()),
       })
       projectTlRef.current = { ...snap, clips: nextClips }
       saveTimeline(project.id, {
@@ -1458,23 +1537,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const curFormat = FORMATS.find((f) => f.w === outW && f.h === outH)?.id || 'custom'
 
   // Elementos multimedia ocultos (el texto no tiene medio)
-  const mediaPool = clips.filter((c) => c.kind !== 'text' && c.kind !== 'shape').map((c) => {
-    const common = {
-      src: mediaUrl(project.id, c),
-      ref: (el) => { if (el) mediaEls.current.set(c.id, el); else mediaEls.current.delete(c.id) },
-    }
-    if (c.kind === 'image') {
-      return <img key={c.id} alt="" loading="eager" decoding="async" {...common} />
-    }
-    const mediaProps = {
-      ...common,
-      preload: 'auto',
-      onLoadedMetadata: (e) => registerMediaMeta(c, e.target),
-    }
-    return c.kind === 'video'
-      ? <video key={c.id} {...mediaProps} muted playsInline />
-      : <audio key={c.id} {...mediaProps} />
-  })
+  const mediaPool = clips.filter((c) => c.kind !== 'text' && c.kind !== 'shape').map((c) => (
+    <HiddenMedia
+      key={c.id}
+      clip={c}
+      src={mediaUrl(project.id, c)}
+      mediaEls={mediaEls}
+      onLoadedMetadata={(e) => registerMediaMeta(c, e.target)}
+    />
+  ))
 
   const canEditFrame = isVisualClip(selectedClip)
   const overlayOn = isOverlay(selectedClip)
@@ -1540,6 +1611,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onExportFps={setFps}
           aiContext={{ project_id: project.id, selected_clip_id: selClipId || null, selected_track_id: selTrackId || null, current_time: Math.round((playhead || 0) * 100) / 100 }}
           onReloadTimeline={reloadTimeline}
+          onMcpAudit={setMcpAudit}
           onPose={(patch) => !isAudioTrackSel && selectedClip && commitPose(selectedClip.id, patch)}
           onChangeFrame={(slot) => applyClipFrame(selectedClip, slot)}
           selKfId={selKfId}
@@ -1773,6 +1845,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           duration={duration} playhead={playhead} rowH={rowH} setRowH={setRowH}
           selectedClipId={selClipId} selectedClipIds={selClipIds} selectedTrackId={selTrackId}
           selectedClip={selectedClip} selKfId={selKfId} dragInfo={dragInfo}
+          mcpBusyIds={mcpBusyIds}
           onSeek={seek}
           onScrub={scrub}
           onSelectClip={handleSelectClip}
@@ -1846,9 +1919,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             clip={selectedClip}
             selKfId={selKfId}
             fps={fps}
+            playhead={playhead}
             layer={layerInfo}
             onMoveLayer={(action) => moveLayer(selectedClip.id, action)}
             onChangeFx={patchClipFx}
+            onPose={(patch) => selectedClip && commitPose(selectedClip.id, patch)}
+            onFade={applySelectedFade}
             onAddKf={addKeyframeAtPlayhead}
             onSelectKf={(k) => k && selectTimelineKf(k.id)}
             onDeleteKf={deleteAnimKf}

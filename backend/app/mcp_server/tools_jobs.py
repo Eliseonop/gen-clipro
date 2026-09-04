@@ -32,11 +32,7 @@ def get_job(job_id: str) -> dict:
 
 
 def wait_for_job(job_id: str, timeout_s: float = 60.0, poll_interval: float = 0.5) -> dict:
-    """Espera a que el job termine (``done``/``error``) o venza ``timeout_s``.
-
-    Bloquea en el threadpool del server (no tapa el event loop). Si vence el
-    tiempo, devuelve el estado actual con ``timed_out: true``.
-    """
+    """Espera a que el job termine o venza timeout_s (devuelve timed_out:true). Prefiérelo al polling."""
     timeout_s = min(max(float(timeout_s), 0.0), 600.0)
     poll_interval = min(max(float(poll_interval), 0.05), 5.0)
     job = _job_or_raise(job_id)

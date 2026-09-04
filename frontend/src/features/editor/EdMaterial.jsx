@@ -264,7 +264,7 @@ export default function EdMaterial({
   matTab, onMatTab,
   playhead, onPose, onChangeFrame, selKfId, onInterpKf,
   fps = 30, onExportFps,
-  aiContext, onReloadTimeline, timelineClips,
+  aiContext, onReloadTimeline, timelineClips, onMcpAudit,
   audioMode, trackLabel, trackEmpty, onAddKf, onFade,
 }) {
   const [tabState, setTabState] = useState('video')
@@ -1101,7 +1101,7 @@ export default function EdMaterial({
         className={tab === 'chat' ? 'ed-mat-list pinned' : 'ed-hidden-panel'}
         aria-hidden={tab !== 'chat'}
       >
-        <EdChat project={project} context={aiContext} onReload={onReloadTimeline} onBusy={setChatBusy} />
+        <EdChat project={project} context={aiContext} clips={timelineClips} onReload={onReloadTimeline} onBusy={setChatBusy} onMcpAudit={onMcpAudit} />
       </div>
       {navItem?.empty && (
         <div className="ed-mat-list">

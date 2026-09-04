@@ -43,11 +43,7 @@ def _clip_file(proj, clip) -> Path:
 
 
 def get_frame(project_id: str, clip_index: str, at_time: float | None = None) -> dict:
-    """Devuelve un fotograma (imagen) de un clip del material para que lo VEAS.
-
-    ``at_time`` es el segundo dentro del clip (por defecto, el centro). Úsalo para
-    entender/describir de qué va un clip antes de editarlo o etiquetarlo.
-    """
+    """Devuelve un fotograma (imagen) de un clip del material para que lo VEAS. at_time = segundo dentro del clip."""
     proj = _project_or_raise(project_id)
     clip = _clip_or_raise(proj, clip_index)
     path = _clip_file(proj, clip)
@@ -83,8 +79,7 @@ def get_frame(project_id: str, clip_index: str, at_time: float | None = None) ->
 
 
 def set_clip_ai_description(project_id: str, clip_index: str, description: str) -> dict:
-    """Guarda una descripción generada por la IA para un clip, en un campo APARTE
-    (``description_ai``). NO toca la descripción manual del usuario."""
+    """Guarda tu descripción de un clip en un campo APARTE (description_ai); NO pisa la del usuario."""
     _project_or_raise(project_id)
     item = projects.update_material(project_id, "clips", str(clip_index),
                                     {"description_ai": (description or "").strip()})

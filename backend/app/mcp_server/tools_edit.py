@@ -98,15 +98,7 @@ def _resolve_asset(proj, asset_kind: str, asset_id: str) -> dict:
 def add_to_timeline(project_id: str, asset_kind: str, asset_id: str,
                     track_id: str | None = None, start: float = 0.0,
                     in_point: float | None = None, out_point: float | None = None) -> dict:
-    """Coloca un material en la timeline: un clip/audio/imagen del proyecto, o un
-    efecto de sonido (SFX) de la biblioteca.
-
-    ``asset_kind`` = ``clips``/``audios``/``images``/``sfx`` + ``asset_id`` (index
-    del clip, id del audio/imagen, o **id de SFX devuelto por search_sfx**). Un SFX
-    entra como clip de audio (crea/usa una pista de audio; pasa ``track_id`` para
-    una pista concreta y ``start`` para colocarlo en un instante). Si no hay pista
-    del tipo adecuado, crea una. Por defecto usa el material completo.
-    """
+    """Coloca material en la timeline. asset_kind clips|audios|images|sfx + asset_id (index/id o id de search_sfx)."""
     proj = _project_or_raise(project_id)
     info = _resolve_asset(proj, asset_kind, asset_id)
     src_dur = float(info["source_duration"] or 0.0)
@@ -169,8 +161,7 @@ def set_clip_layout(project_id: str, clip_id: str, position: str | None = None,
 
 def reframe_clip(project_id: str, clip_id: str, mode: str = "center", zoom: float | None = None,
                  pan_from: dict | None = None, pan_to: dict | None = None) -> dict:
-    """Encuadra un clip de vídeo: ``center`` (zoom), o ``manual`` (zoom + paneo
-    estático en ``pan_from`` o animado ``pan_from → pan_to``, cada uno {cx,cy})."""
+    """Encuadre de FUENTE de un clip: mode center (zoom) o manual (zoom + paneo {cx,cy}). No es animación."""
     return _apply(project_id, "reframe_clip",
                   {"clip_id": clip_id, "mode": mode, "zoom": zoom, "pan_from": pan_from, "pan_to": pan_to})
 
@@ -178,8 +169,7 @@ def reframe_clip(project_id: str, clip_id: str, mode: str = "center", zoom: floa
 def add_subtitles(project_id: str, source_clip_id: str, segments: list,
                   track_id: str | None = None, transcript_id: str | None = None,
                   style: dict | None = None) -> dict:
-    """Genera subtítulos (clips de texto con words[] reales) desde ``segments`` de
-    una transcripción, alineados al clip fuente. Crea la pista de texto si falta."""
+    """Crea clips de subtítulos (words[] reales) desde segments, alineados al clip fuente."""
     return _apply(project_id, "add_subtitles",
                   {"source_clip_id": source_clip_id, "segments": segments,
                    "track_id": track_id, "transcript_id": transcript_id, "style": style})
@@ -201,16 +191,14 @@ def set_clip_opacity(project_id: str, clip_id: str, opacity: float) -> dict:
 
 def set_clip_speed(project_id: str, clip_id: str, speed: float | None = None,
                    keep_pitch: bool | None = None, reverse: bool | None = None) -> dict:
-    """Velocidad del clip (0.1–10; no aplica a texto/imagen/figura). ``keep_pitch``
-    mantiene el tono; ``reverse`` invierte."""
+    """Velocidad del clip (0.1–10; no aplica a texto/imagen). keep_pitch mantiene el tono; reverse invierte."""
     return _apply(project_id, "set_clip_speed",
                   {"clip_id": clip_id, "speed": speed, "keep_pitch": keep_pitch, "reverse": reverse})
 
 
 def set_clip_transition(project_id: str, clip_id: str, appear: str | None = None,
                         exit: str | None = None) -> dict:
-    """Transición de entrada (``appear``) y salida (``exit``): none/fade/dissolve/
-    wipe/zoom/slide_*/pop."""
+    """Transición de entrada (appear) y salida (exit): none|fade|dissolve|wipe|zoom|slide_*|pop."""
     return _apply(project_id, "set_clip_transition",
                   {"clip_id": clip_id, "appear": appear, "exit": exit})
 
@@ -221,15 +209,13 @@ def set_text_role(project_id: str, clip_id: str, role: str) -> dict:
 
 
 def set_clip_effects(project_id: str, clip_id: str, effects: dict, replace: bool = False) -> dict:
-    """Efectos visuales (blur/grayscale/sepia/brightness…). MERGE por defecto; solo
-    clips visuales (vídeo/imagen)."""
+    """Efectos visuales: blur|grayscale|sepia|brightness|contrast|saturation. MERGE por defecto; solo visuales."""
     return _apply(project_id, "set_clip_effects",
                   {"clip_id": clip_id, "effects": effects, "replace": replace})
 
 
 def set_clip_audio_fx(project_id: str, clip_id: str, audio_fx: dict, replace: bool = False) -> dict:
-    """Efectos de audio: eq, compressor, reverb, echo, denoise, distortion (0–1).
-    MERGE por defecto; solo clips de vídeo o audio."""
+    """Efectos de audio: eq|compressor|reverb|echo|denoise|distortion (0–1). MERGE por defecto; solo vídeo/audio."""
     return _apply(project_id, "set_clip_audio_fx",
                   {"clip_id": clip_id, "audio_fx": audio_fx, "replace": replace})
 
@@ -237,8 +223,7 @@ def set_clip_audio_fx(project_id: str, clip_id: str, audio_fx: dict, replace: bo
 def set_clip_volume(project_id: str, clip_id: str, volume: float | None = None,
                     muted: bool | None = None, fade: str | None = None,
                     fade_dur: float = 0.5) -> dict:
-    """Volumen del clip (0–2; 1 = 100%, máximo 200%), ``muted`` y fade ``in``/``out``
-    (crea keyframes de volumen, no recorta el audio)."""
+    """Volumen del clip (0–2; 1=100%), muted y fade in|out (crea keyframes, no recorta el audio)."""
     return _apply(project_id, "set_clip_volume",
                   {"clip_id": clip_id, "volume": volume, "muted": muted,
                    "fade": fade, "fade_dur": fade_dur})
@@ -247,19 +232,14 @@ def set_clip_volume(project_id: str, clip_id: str, volume: float | None = None,
 def set_track_audio(project_id: str, track_id: str, volume: float | None = None,
                     muted: bool | None = None, audio_fx: dict | None = None,
                     fade: str | None = None, fade_dur: float = 0.5) -> dict:
-    """Aplica volumen/mute/fx/fade a TODOS los clips de una pista de audio (o vídeo
-    con audio). Úsalo cuando el usuario hable de 'esa línea' / 'esa pista'."""
+    """Volumen/mute/fx/fade a TODOS los clips de una pista. Úsalo para 'esa línea'/'esa pista'."""
     return _apply(project_id, "set_track_audio",
                   {"track_id": track_id, "volume": volume, "muted": muted,
                    "audio_fx": audio_fx, "fade": fade, "fade_dur": fade_dur})
 
 
 def set_clip_keyframes(project_id: str, clip_id: str, keyframes: dict | None) -> dict:
-    """Animación por keyframes: ``{enabled, items:[{id,t,interpolation,props}]}`` (o
-    None para borrarla). ``props``: x/y/scale/rotation/opacity y también volume
-    (0–2) y fx de audio (eq/compressor/reverb/echo/denoise/distortion).
-    Casi nunca la uses a mano: para zoom/giro/slide/aparecer con un SFX usa
-    ``animate_clip``."""
+    """Keyframes {enabled, items:[{id,t,interpolation,props}]} o None. Escape hatch experto: prefiere animate_clip."""
     return _apply(project_id, "set_clip_keyframes", {"clip_id": clip_id, "keyframes": keyframes})
 
 
@@ -303,21 +283,7 @@ def _follow_audio_envelope(project_id: str, clip_id: str, follow_audio_id: str):
 def animate_clip(project_id: str, clip_id: str, motion: str, duration: float | None = None,
                  follow_audio_id: str | None = None, intensity: float = 1.0,
                  turns: float = 1.0) -> dict:
-    """Anima un clip visual (vídeo/imagen/texto/figura). El servidor genera los
-    keyframes; NO los inventes.
-
-    ``motion``: zoom_in, zoom_out, spin, spin_in, slide_left, slide_right,
-    slide_up, slide_down, fade_in, fade_out, pop, pulse.
-
-    ``duration`` ventana de la intro (s); por defecto ~0.45. ``spin`` gira todo
-    el clip. ``turns`` vueltas (spin/spin_in).
-
-    ``follow_audio_id``: id de un clip de audio/SFX en la timeline. La animación
-    sigue su volumen (aparece / gira / entra de un lado con los golpes). Si el
-    usuario dice «con el whoosh», «siguiendo el sfx», usa esto.
-
-    Ejemplos: «haz zoom» → zoom_in; «que entre girando» → spin_in; «que aparezca
-    de la izquierda con el sfx» → slide_left + follow_audio_id."""
+    """Anima un clip (el servidor genera los keyframes). motion: zoom_in|zoom_out|spin|spin_in|slide_left|slide_right|slide_up|slide_down|fade_in|fade_out|pop|pulse. follow_audio_id: sigue el volumen de un clip de audio/SFX."""
     envelope = None
     extra_warn: list[str] = []
     if follow_audio_id:
@@ -340,8 +306,7 @@ def duplicate_clip(project_id: str, clip_id: str, start: float | None = None) ->
 
 def add_shape(project_id: str, shape: dict | None = None, track_id: str | None = None,
               start: float = 0.0, duration: float | None = None) -> dict:
-    """Añade una figura vectorial (rect/línea/flecha/estrella/corazón…) a una pista
-    de vídeo (la crea si falta). ``shape`` = {type, fill, stroke, …}."""
+    """Añade una figura vectorial (rect/línea/flecha/estrella…) a una pista de vídeo. shape = {type, fill, stroke, …}."""
     return _apply(project_id, "add_shape",
                   {"shape": shape, "track_id": track_id, "start": start, "duration": duration})
 
@@ -349,8 +314,7 @@ def add_shape(project_id: str, shape: dict | None = None, track_id: str | None =
 # --- Pistas --------------------------------------------------------------
 
 def add_track(project_id: str, kind: str, name: str | None = None) -> dict:
-    """Añade una pista (``kind`` = video/audio/text). ``name`` opcional (p. ej. SFX, Voz);
-    si se omite se usa A1/A2/V1…"""
+    """Añade una pista (kind video|audio|text). name opcional (SFX, Voz…); por defecto A1/A2/V1…"""
     return _apply(project_id, "add_track", {"kind": kind, "name": name})
 
 

@@ -53,7 +53,7 @@ class ProjectAudioTest(unittest.TestCase):
     def test_generate_subtitles_starts_job(self):
         cap = {}
         with patch("app.jobs.start_subtitles_job",
-                   side_effect=lambda job, pid, filename, ak, model, lang, scope: cap.update(fn=filename, ak=ak)):
+                   side_effect=lambda job, pid, filename, ak, model, lang, scope, src=None: cap.update(fn=filename, ak=ak)):
             out = tools_audio.generate_subtitles(self.pid, filename="v.m4a", asset_kind="audios")
         self.assertEqual(out["status"], "pending")
         self.assertEqual(cap["fn"], "v.m4a")

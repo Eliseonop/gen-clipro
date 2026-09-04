@@ -1,4 +1,11 @@
 // Controles de síntesis de voz: motor, voz, estilo Gemini, mezcla Kokoro y ajustes.
+function voiceOptionLabel(v) {
+  const g = v.gender === 'male' ? 'hombre' : v.gender === 'female' ? 'mujer' : ''
+  if (!g) return v.label
+  if ((v.label || '').includes(g)) return v.label
+  return `${v.label} — ${g}`
+}
+
 export default function TtsControls({
   engines, engine, setEngine, voices, voice, setVoice, voice2, setVoice2, isKokoro, isGemini,
   style, setStyle, blend, setBlend, speed, setSpeed, pause, setPause, name, setName,
@@ -16,7 +23,7 @@ export default function TtsControls({
       </label>
       <label className="field"><span>Voz</span>
         <select className="select" value={voice} onChange={(e) => setVoice(e.target.value)}>
-          {voices.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+          {voices.map((v) => <option key={v.id} value={v.id}>{voiceOptionLabel(v)}</option>)}
         </select>
       </label>
       {isGemini && (
@@ -34,7 +41,7 @@ export default function TtsControls({
             <label className="field"><span>Mezclar con (voz 2)</span>
               <select className="select" value={voice2} onChange={(e) => setVoice2(e.target.value)}>
                 <option value="">— sin mezcla —</option>
-                {voices.filter((v) => v.id !== voice).map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+                {voices.filter((v) => v.id !== voice).map((v) => <option key={v.id} value={v.id}>{voiceOptionLabel(v)}</option>)}
               </select>
             </label>
           )}

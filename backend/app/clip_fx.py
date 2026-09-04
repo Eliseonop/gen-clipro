@@ -80,7 +80,16 @@ def clip_fx_at(clip: Any, local_t: float, duration: float) -> dict:
     if exit_ == "slide_down":
         ty += _lerp(0.0, 1.0, 1.0 - ep)
 
-    return {"opacity": opacity, "scale": scale, "tx": tx, "ty": ty, "look": _field(clip, "look")}
+    wipe = 1.0
+    if appear == "wipe":
+        wipe = min(wipe, ap)
+    if exit_ == "wipe":
+        wipe = min(wipe, ep)
+
+    return {
+        "opacity": opacity, "scale": scale, "tx": tx, "ty": ty,
+        "look": _field(clip, "look"), "wipe": wipe,
+    }
 
 
 def _effects_map(clip: Any) -> dict:
@@ -246,6 +255,26 @@ def _scale_expr(clip: Any, dur: float, ad: float, ed: float) -> str | None:
     return "*".join(terms)
 
 
+def _wipe_alpha_filter(appear: str, exit_: str, dur: float, ad: float, ed: float) -> str | None:
+    """Máscara tipo preview: revela de izquierda a derecha sin cambiar el tamaño del frame.
+
+    No usamos ``crop`` animado: FFmpeg 9 puede cerrarse si w/h cambian por fotograma.
+    """
+    terms: list[str] = []
+    if appear == "wipe" and ad > 0:
+        terms.append(f"min(1\\,max(0\\,T/{ad:.3f}))")
+    if exit_ == "wipe" and ed > 0:
+        terms.append(f"(1-min(1\\,max(0\\,(T-{max(0.0, dur - ed):.3f})/{ed:.3f})))")
+    if not terms:
+        return None
+    vis = "*".join(terms)
+    return (
+        "format=gbrap,"
+        f"geq=r='r(X\\,Y)':g='g(X\\,Y)':b='b(X\\,Y)':"
+        f"a='if(lt(X\\,W*({vis}))\\,alpha(X\\,Y)\\,0)'"
+    )
+
+
 def video_fx_chain(
     clip: Any, dur: float, W: int, H: int, fit_canvas: bool = True, motion: bool = True,
 ) -> str:
@@ -284,5 +313,9 @@ def video_fx_chain(
                 f"crop={W}:{H}:(in_w-{W})/2:(in_h-{H})/2"
             )
         parts.append(scale_f)
+
+    wipe_f = _wipe_alpha_filter(appear, exit_, dur, ad, ed)
+    if wipe_f:
+        parts.append(wipe_f)
 
     return ",".join(parts)

@@ -336,5 +336,4 @@ def project_context(proj: Project, *, history: dict | None = None) -> dict:
             "can_redo": bool(hist.get("can_redo", False)),
             "checkpoints": list(hist.get("checkpoints", [])),
         },
-        "capabilities": capabilities(),
     }

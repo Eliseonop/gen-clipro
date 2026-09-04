@@ -381,8 +381,52 @@ def _reframe_cropscale(path: Path, reframe: Reframe, in_point: float, dur: float
 
 
 def _plain_scale(W: int, H: int) -> str:
-    """Escalado a WxH con letterbox (para clips sin reframe)."""
+    """Escalado a WxH con letterbox (solo Entero / fit=contain)."""
     return contain_scale_filter(W, H)
+
+
+def _pose_crop_keyframes(clip: TimelineClip) -> list[Keyframe]:
+    """cx/cy/zoom de pose (misma fuente que reframeForDraw / cropWindow del preview)."""
+    dur = clip_timeline_duration(clip)
+    by_t: dict[float, dict[str, float]] = {}
+    for prop in ("cx", "cy", "zoom"):
+        for t, v in _pose_prop_points(clip, prop, dur):
+            by_t.setdefault(t, {})[prop] = v
+    out: list[Keyframe] = []
+    for t in sorted(by_t):
+        p = by_t[t]
+        z = p.get("zoom", 1.0)
+        if z is None or z <= 0:
+            z = 1.0
+        z = max(0.1, min(1.0, float(z)))
+        out.append(Keyframe(
+            t=t,
+            cx=float(p.get("cx", 0.5)),
+            cy=float(p.get("cy", 0.5)),
+            zoom=z,
+            pan_mode="smooth",
+        ))
+    return out
+
+
+def _fill_base_cropscale(path: Path, clip: TimelineClip, W: int, H: int) -> str:
+    """Crop+scale de un clip fill: cover como el preview, no letterbox.
+
+    El editor recorta con pose (cx/cy/zoom) o con reframe.zoom aunque no haya
+    keyframes en ``reframe.keyframes``. El letterbox (``_plain_scale``) solo
+    aplica si todos los kfs son fit=contain.
+    """
+    src_dur = clip_source_duration(clip)
+    rf = clip.reframe
+    dual = bool(rf and rf.dual_crop)
+    if keyframes_enabled(clip) and not dual:
+        kfs = _pose_crop_keyframes(clip)
+        zoom = (rf.zoom if rf else None) or 1.0
+        pan = (rf.pan_mode if rf else None) or "smooth"
+        return _track_cropscale(path, zoom, kfs, pan, W, H)
+    if rf:
+        return _reframe_cropscale(path, rf, clip.in_point, src_dur, W, H)
+    return clipper._single_reframe_filter(path, 1.0, [], "smooth", W, H)
 
 
 # Fuentes del sistema (Windows) + fuentes embebidas del proyecto.
@@ -618,16 +662,11 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
             cropscale, overlay_xy = _overlay_video_filter(
                 path, c, W, H, src_dur, start, fx=(fx if animated_ov else ""))
         elif fill_pose:
-            if c.reframe and (c.reframe.keyframes or c.reframe.dual_crop):
-                base_cs = _reframe_cropscale(path, c.reframe, c.in_point, src_dur, W, H)
-            else:
-                base_cs = _plain_scale(W, H)
+            base_cs = _fill_base_cropscale(path, c, W, H)
             cropscale, overlay_xy = _fill_pose_filter(
                 c, W, H, start, base_cs, fx=(fx if fill_pose else ""))
-        elif c.reframe and (c.reframe.keyframes or c.reframe.dual_crop):
-            cropscale = _reframe_cropscale(path, c.reframe, c.in_point, src_dur, W, H)
         else:
-            cropscale = _plain_scale(W, H)
+            cropscale = _fill_base_cropscale(path, c, W, H)
         if is_still_clip(c) or is_overlay(c) or fill_pose:
             cropscale = f"{cropscale},format=gbrap"
         fx_part = "" if (animated_ov or fill_pose) else (f",{fx}" if fx else "")
@@ -635,7 +674,7 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         spd_part = f",{spd}" if spd else ""
         overlay_xy = overlay_xy_for_fx(overlay_xy, c, start, dur, W, H)
         vlabel = f"v{n}"
-        tin, tout = ffmpeg_trim_window(c)
+        tin, tout = ffmpeg_trim_window(c, fps)
         filt.append(
             f"[{k}:v]trim={tin:.3f}:{tout:.3f},setpts=PTS-STARTPTS,"
             f"{cropscale},fps={fps}{spd_part}{fx_part},setpts=PTS-STARTPTS+{start:.3f}/TB[{vlabel}]"
@@ -643,7 +682,7 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         out_label = f"ov{n}"
         ov_fmt = ":format=auto" if (fx or is_still_clip(c) or fill_pose) else ""
         filt.append(
-            f"[{last_label}][{vlabel}]overlay={overlay_xy}:eof_action=pass"
+            f"[{last_label}][{vlabel}]overlay={overlay_xy}:eof_action=repeat"
             f"{ov_fmt}:enable='between(t,{start:.3f},{end:.3f})'[{out_label}]"
         )
         last_label = out_label

@@ -255,8 +255,23 @@ def _vf_args(filt_str: str, tmp_dir: Path, complex_graph: bool) -> list[str]:
     return [script_flag, str(path)]
 
 
+def _cut_audio_args(audio: dict | None) -> tuple[list[str], bool]:
+    """Filtro ``-af`` del recorte, o silenciar el MP4 si el clip va muteado."""
+    if not audio:
+        return [], False
+    if audio.get("muted"):
+        return [], True
+    from .clip_keyframes import clip_volume_at, ffmpeg_envelope, volume_filter
+    env = ffmpeg_envelope(audio, "volume", 1.0)
+    vol = clip_volume_at(audio, 0.0)
+    if not env and abs(vol - 1.0) < 1e-6:
+        return [], False
+    return ["-af", volume_filter(audio)], False
+
+
 def _run_ffmpeg_cut(base: list[str], filt: list[str], maps_a: list[str], maps_an: list[str],
-                    out_path: Path, seg_index: int) -> None:
+                    out_path: Path, seg_index: int, af_args: list[str] | None = None,
+                    strip_audio: bool = False) -> None:
     encode_a = [
         *gpu.video_encoder_args(),
         "-c:a", "aac",
@@ -264,8 +279,15 @@ def _run_ffmpeg_cut(base: list[str], filt: list[str], maps_a: list[str], maps_an
         str(out_path),
     ]
     encode_an = [*gpu.video_encoder_args(), "-an", str(out_path)]
+    extra_a = list(af_args or [])
+    if strip_audio:
+        proc2 = subprocess.run(base + filt + maps_an + encode_an, capture_output=True, text=True)
+        if proc2.returncode != 0:
+            err = (proc2.stderr or "")[-800:]
+            raise RuntimeError(f"FFmpeg falló en el clip {seg_index}:\n{err}")
+        return
     try:
-        proc = subprocess.run(base + filt + maps_a + encode_a, capture_output=True, text=True)
+        proc = subprocess.run(base + filt + maps_a + extra_a + encode_a, capture_output=True, text=True)
     except OSError as exc:
         code = getattr(exc, "winerror", None) or getattr(exc, "errno", None)
         if code == 206:
@@ -283,7 +305,8 @@ def _run_ffmpeg_cut(base: list[str], filt: list[str], maps_a: list[str], maps_an
 
 
 def _cut_clip(source: Path, seg: Segment, mode: CropMode, out_path: Path,
-              reframe: Reframe | None = None, tmp_dir: Path | None = None) -> None:
+              reframe: Reframe | None = None, tmp_dir: Path | None = None,
+              audio: dict | None = None) -> None:
     """Corta un tramo del vídeo fuente aplicando el filtro del modo elegido."""
     base = [
         "ffmpeg", "-y",
@@ -312,9 +335,11 @@ def _cut_clip(source: Path, seg: Segment, mode: CropMode, out_path: Path,
         maps_a = ["-map", "[v]", "-map", "0:a?"]
         maps_an = ["-map", "[v]"]
 
+    af_args, strip_audio = _cut_audio_args(audio)
     dur = max(0.0, float(seg.end) - float(seg.start))
     with timed("corte de clip (FFmpeg)", log, idx=seg.index, mode=mode.value, dur=f"{dur:.1f}s"):
-        _run_ffmpeg_cut(base, filt, maps_a, maps_an, out_path, seg.index)
+        _run_ffmpeg_cut(base, filt, maps_a, maps_an, out_path, seg.index,
+                        af_args=af_args, strip_audio=strip_audio)
 
 
 def generate_clips(
@@ -326,6 +351,9 @@ def generate_clips(
     video_dir: Path,
     on_progress: ProgressCb,
     reframe: Reframe | None = None,
+    volume: float = 1.0,
+    muted: bool = False,
+    audio_keyframes: dict | None = None,
 ) -> list[ClipInfo]:
     """Genera todos los clips en ``video_dir`` y los devuelve.
 
@@ -338,6 +366,9 @@ def generate_clips(
     clips: list[ClipInfo] = []
     video_dir.mkdir(parents=True, exist_ok=True)
     prefix = storage.safe_name(title)
+    audio = {"kind": "video", "volume": volume, "muted": muted}
+    if audio_keyframes:
+        audio["keyframes"] = audio_keyframes
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
@@ -351,7 +382,8 @@ def generate_clips(
         for i, seg in enumerate(segments):
             filename = f"{prefix}_{seg.index}.mp4"
             out_path = video_dir / filename
-            _cut_clip(source, seg, mode, out_path, reframe=clip_reframe, tmp_dir=tmp_dir)
+            _cut_clip(source, seg, mode, out_path, reframe=clip_reframe, tmp_dir=tmp_dir,
+                      audio=audio)
 
             clips.append(
                 ClipInfo(

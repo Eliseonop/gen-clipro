@@ -8,7 +8,7 @@ import { drawReframe, kfColor, cropCornerNorms, clamp } from '../../../lib/panni
 import { drawTextClip } from '../../../lib/textstyles'
 import { drawShapeClip } from '../../../lib/shapes'
 import { drawAlignGuides } from '../../../lib/alignGuides'
-import { clipDur, clipEnd, isVisualClip, newReframe, timelineToSource } from '../editorModel'
+import { clipDur, clipEnd, isVisualClip, newReframe, timelineToSource, safeMediaTime } from '../editorModel'
 import { applyCanvasFx, clipFxAt } from '../../../lib/clipFx'
 import { posedTransform, clipPose } from '../../../lib/clipAnim'
 import { keyframesOn, normalizeItems } from '../../../lib/clipKeyframes'
@@ -242,7 +242,8 @@ export function drawMainView(head, env) {
     const clampedHead = clamp(head, clip.start, clipEnd(clip))
     const srcTime = clamp(timelineToSource(clip, clampedHead), clip.in_point, clip.out_point)
     if (!(playingRef.current && active) && clip.kind !== 'image') {
-      if (Math.abs(el.currentTime - srcTime) > 0.06) { try { el.currentTime = srcTime } catch { /* noop */ } }
+      const seekT = safeMediaTime(el, srcTime, env.fpsRef?.current)
+      if (Math.abs(el.currentTime - seekT) > 0.06) { try { el.currentTime = seekT } catch { /* noop */ } }
     }
     ctx.clearRect(0, 0, cw2, ch2)
     try { ctx.drawImage(el, 0, 0, cw2, ch2) } catch { /* noop */ }

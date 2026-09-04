@@ -69,9 +69,14 @@ class ProjectContextTest(unittest.TestCase):
         # c1 termina en 10; c2 en 10 + 4 = 14; t1 en 5 → máx 14
         self.assertEqual(ctx["timeline"]["duration"], 14.0)
 
-    def test_capabilities_present(self):
+    def test_capabilities_not_in_context(self):
+        # Fase 1: el contexto ya no incluye capabilities (baja tokens por llamada);
+        # la lista de verbos sigue disponible en dto.capabilities().
         ctx = dto.project_context(_make_project())
-        caps = ctx["capabilities"]
+        self.assertNotIn("capabilities", ctx)
+
+    def test_capabilities_function(self):
+        caps = dto.capabilities()
         self.assertIn("clip.speed:0.1-10|keep_pitch|reverse", caps)
         self.assertIn("clip.volume:0-2|mute|fade_in|fade_out", caps)
         self.assertIn("tracks.rename", caps)

@@ -1,8 +1,12 @@
 """Selección de proveedor de IA (Gemini / OpenAI / OpenRouter)."""
+import io
+import json
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+from urllib.error import HTTPError, URLError
 
 from app import config, settings
 from app.ai import providers
@@ -51,6 +55,93 @@ class ProviderSelectionTest(unittest.TestCase):
         p = providers.get_provider()
         self.assertIsNone(p.unavailable_reason())   # sin key, disponible (openai instalado)
         self.assertEqual(p._base_url, "http://localhost:4321/v1")   # override respetado
+
+    def test_lmstudio_models_url_from_openai_base(self):
+        self.assertEqual(
+            providers.lmstudio_models_url("http://localhost:1234/v1"),
+            "http://localhost:1234/api/v1/models",
+        )
+        self.assertEqual(
+            providers.lmstudio_models_url("http://127.0.0.1:4321/v1/"),
+            "http://127.0.0.1:4321/api/v1/models",
+        )
+        self.assertEqual(
+            providers.lmstudio_models_url(None),
+            "http://localhost:1234/api/v1/models",
+        )
+
+    def test_list_lmstudio_models_ok(self):
+        payload = {
+            "models": [
+                {
+                    "type": "embedding",
+                    "key": "nomic-embed",
+                    "display_name": "Nomic",
+                    "loaded_instances": [],
+                },
+                {
+                    "type": "llm",
+                    "key": "deepseek-r1",
+                    "display_name": "DeepSeek R1",
+                    "loaded_instances": [],
+                    "capabilities": {"trained_for_tool_use": True},
+                },
+                {
+                    "type": "llm",
+                    "key": "google/gemma-4",
+                    "display_name": "Gemma 4",
+                    "loaded_instances": [{"id": "google/gemma-4"}],
+                    "capabilities": {"trained_for_tool_use": True},
+                },
+            ]
+        }
+
+        class FakeResp:
+            def read(self):
+                return json.dumps(payload).encode()
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        with patch("app.ai.providers.urlopen", return_value=FakeResp()):
+            out = providers.list_lmstudio_models()
+        self.assertTrue(out["ok"])
+        ids = [m["id"] for m in out["models"]]
+        self.assertEqual(ids, ["google/gemma-4", "deepseek-r1"])
+        self.assertTrue(out["models"][0]["loaded"])
+        self.assertTrue(out["models"][0]["tool_use"])
+        self.assertNotIn("nomic-embed", ids)
+
+    def test_list_lmstudio_models_off(self):
+        with patch("app.ai.providers.urlopen", side_effect=URLError("Connection refused")):
+            out = providers.list_lmstudio_models()
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["models"], [])
+        self.assertIn("Enciende LM Studio", out["reason"])
+
+    def test_list_lmstudio_models_needs_token(self):
+        err = HTTPError("http://localhost:1234/api/v1/models", 401, "Unauthorized", {}, io.BytesIO(b""))
+        with patch("app.ai.providers.urlopen", side_effect=err):
+            out = providers.list_lmstudio_models()
+        self.assertFalse(out["ok"])
+        self.assertIn("token", out["reason"].lower())
+
+
+class LmStudioModelsApiTest(unittest.TestCase):
+    def test_endpoint_lista_o_indica_apagado(self):
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        from app.main import app
+
+        payload = {"ok": True, "models": [
+            {"id": "qwen2.5-7b-instruct", "label": "Qwen2.5 7B", "loaded": True, "tool_use": True},
+        ], "reason": None}
+        with patch("app.ai.providers.list_lmstudio_models", return_value=payload):
+            client = TestClient(app)
+            res = client.get("/api/ai/lmstudio/models")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["models"][0]["id"], "qwen2.5-7b-instruct")
 
 
 if __name__ == "__main__":

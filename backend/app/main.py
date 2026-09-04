@@ -792,6 +792,12 @@ def ai_config() -> dict:
             "available": reason is None, "reason": reason, "providers": providers}
 
 
+@app.get("/api/ai/lmstudio/models")
+def ai_lmstudio_models(base_url: str | None = None) -> dict:
+    """Modelos LLM de LM Studio via GET /api/v1/models. Si está apagado, ok=false."""
+    return ai_providers.list_lmstudio_models(base_url)
+
+
 @app.post("/api/ai/chat")
 async def ai_chat(body: dict = Body(...)) -> StreamingResponse:
     """Turno de chat con la IA. Devuelve eventos SSE (text/tool/reload/done/error).
@@ -826,6 +832,16 @@ def ai_conversation(project_id: str, conversation_id: str) -> dict:
 def ai_conversation_delete(project_id: str, conversation_id: str) -> dict:
     from .ai import conversations as convo
     return {"deleted": convo.delete(project_id, conversation_id)}
+
+
+@app.get("/api/mcp/audit")
+def mcp_audit(project_id: str | None = None, limit: int = 80) -> dict:
+    """Últimas llamadas a tools del MCP (chat interno o IA externa). Sin valores de params."""
+    from .mcp_server import audit
+    return {
+        "entries": audit.read_recent(limit=limit, project_id=project_id),
+        "active": audit.active(project_id),
+    }
 
 
 @app.get("/api/job/{job_id}", response_model=Job)

@@ -42,7 +42,8 @@ class ContextToolTest(unittest.TestCase):
         ctx = tools_context.get_project_context(proj.id)
         self.assertEqual(ctx["project"]["name"], "Demo MCP")
         self.assertFalse(ctx["timeline"]["present"])
-        self.assertIn("capabilities", ctx)
+        # Fase 1: capabilities ya no viaja en el contexto (irá a describe_capabilities).
+        self.assertNotIn("capabilities", ctx)
 
     def test_unknown_project_raises(self):
         with self.assertRaises(ValueError):

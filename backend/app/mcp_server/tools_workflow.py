@@ -23,12 +23,7 @@ def create_short_from_youtube(project_id: str, url: str, crop_mode: str = "smart
                               subtitles: bool = True, export: bool = True,
                               min_score: float = 0.40, max_duration: int = 60,
                               padding: int = 10) -> dict:
-    """Crea un short vertical de punta a punta desde un vídeo de YouTube.
-
-    Pipeline (un solo job): analiza el heatmap → recorta el mejor tramo a vertical
-    (``crop_mode``) → timeline 9:16 → transcribe → subtítulos → export. Espera con
-    ``wait_for_job``; el resultado trae ``export_url``.
-    """
+    """Short vertical de punta a punta desde YouTube (un job): heatmap→recorte→9:16→transcribe→subtítulos→export."""
     _project_or_raise(project_id)
     if not (url or "").strip():
         raise ValueError("Falta la URL de YouTube.")
@@ -45,11 +40,7 @@ def create_short_from_youtube(project_id: str, url: str, crop_mode: str = "smart
 def make_short_from_library(project_id: str, asset_id: str, asset_kind: str = "clips",
                             model: str | None = None, language: str | None = None,
                             subtitles: bool = True, export: bool = True) -> dict:
-    """Crea un short desde un clip que YA está en el proyecto (sin descargar).
-
-    Pipeline (un solo job): timeline 9:16 con el clip → transcribe → subtítulos →
-    export. ``asset_id`` es el index del clip. Espera con ``wait_for_job``.
-    """
+    """Short desde un clip ya en el proyecto (un job, sin descargar). asset_id = index del clip."""
     proj = _project_or_raise(project_id)
     if not any(str(c.index) == str(asset_id) for c in proj.clips):
         raise ValueError(f"Clip no encontrado en el proyecto: {asset_id}")
