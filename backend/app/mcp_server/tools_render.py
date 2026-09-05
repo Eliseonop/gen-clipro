@@ -9,7 +9,7 @@ from __future__ import annotations
 from .. import jobs, migrations, projects
 from ..schemas import Timeline
 from . import dto
-from .registry import tool
+from .registry import MCPError, tool
 
 
 def _project_or_raise(project_id: str):
@@ -41,7 +41,8 @@ def cancel_job(job_id: str) -> dict:
     if job is None:
         raise ValueError(f"Job no encontrado: {job_id}")
     if not jobs.request_cancel(job_id):
-        raise ValueError(f"El job {job_id} ya terminó; no se puede cancelar.")
+        raise MCPError("operation_not_allowed",
+                       f"El job {job_id} ya terminó; no se puede cancelar.")
     return dto.job_dto(job)
 
 

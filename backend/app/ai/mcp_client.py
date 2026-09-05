@@ -40,7 +40,12 @@ def _clean_schema(schema) -> dict:
 
 
 def _result_data(res) -> dict:
-    """Normaliza el CallToolResult a ``{ok, data, text}``."""
+    """Normaliza el CallToolResult a ``{ok, data, text}``.
+
+    En error, el SDK prefija el texto con ``Error executing tool <name>: `` antes
+    del JSON estructurado ``{"error":{code,…}}``; se extrae ese JSON a ``data``
+    para que el agente pueda leer el código/hint/retryable.
+    """
     texts = []
     for block in res.content or []:
         t = getattr(block, "text", None)
@@ -53,6 +58,13 @@ def _result_data(res) -> dict:
             data = json.loads(text)
         except (ValueError, TypeError):
             data = None
+        if data is None and res.is_error:
+            brace = text.find("{")
+            if brace != -1:
+                try:
+                    data = json.loads(text[brace:])
+                except (ValueError, TypeError):
+                    data = None
     return {"ok": not res.is_error, "data": data, "text": text}
 
 

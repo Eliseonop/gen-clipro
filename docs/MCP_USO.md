@@ -46,14 +46,19 @@ puente. En `claude_desktop_config.json`:
 
 Reinicia Claude Desktop tras editar el archivo.
 
-## 3. Qué puede hacer la IA — catálogo de tools (54)
+## 3. Qué puede hacer la IA — catálogo de tools (50)
 
-Total: **14 read / 37 write / 3 destructive**.
+Total: **14 read / 33 write / 3 destructive**.
 
 Toda tool declara un nivel de política (`read` / `write` / `destructive`) y queda
 **auditada** en `backend/data/mcp_audit.jsonl` (tool, nivel, proyecto, claves de
 params —nunca valores—, estado y ms). Cada tool lleva además `meta.domain` y
 `annotations` (read-only / destructive hints).
+
+**Errores estructurados:** un fallo devuelve `is_error` con JSON
+`{"error":{code,message,retryable,param?,hint?}}`. Códigos: `invalid_parameter`,
+`resource_not_found`, `operation_not_allowed`, `configuration_error`,
+`dependency_error`, `processing_error`, `temporary_error`, `job_running`.
 
 **Descubrimiento (empieza aquí si no conoces el editor o el proyecto)**
 - `describe_capabilities(domain?)` — sin `domain`, mapa de dominios + verbos +
@@ -85,19 +90,19 @@ params —nunca valores—, estado y ms). Cada tool lleva además `meta.domain` 
 **Edición estructural**
 - `add_to_timeline` (clip/audio/imagen) · `move_clip` · `split_clip` ·
   `remove_clip` *(destructive)*
-- `set_clip_layout` (top/bottom/full) · `reframe_clip` (center/manual) ·
-  `set_project_format` (9:16…)
+- `reframe_clip` (center/manual) · `set_project_format` (9:16…)
 - `add_track` · `remove_track` *(destructive)* · `add_shape` · `duplicate_clip`
 - `rename_track` (nombrar líneas: A1 / SFX / Voz)
 - `link_tracks` / `unlink_track`
 - `add_subtitles(source_clip_id, segments)`
 
 **Propiedades por-clip**
-- `set_clip_opacity` · `set_clip_speed` (speed/keep_pitch/reverse)
-- `set_clip_transition` (fade/dissolve/wipe/zoom/slide/pop)
+- `update_clip(clip_id, patch)` — escalares en una operación (un solo undo):
+  `patch` = opacity, speed/keep_pitch/reverse, appear/exit, position/start/duration,
+  role (caption/free)
 - `set_clip_effects` (blur/grayscale/sepia/brightness…) · `set_clip_audio_fx`
   (eq/compressor/reverb)
-- `set_text_role` (caption/free) · `set_clip_keyframes` (x/y/scale/rotation/opacity)
+- `set_clip_keyframes` (x/y/scale/rotation/opacity)
 - `set_clip_ai_description` — describe el material con IA (para búsqueda/orientación)
 
 **Audio**

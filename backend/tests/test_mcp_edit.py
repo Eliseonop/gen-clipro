@@ -83,15 +83,15 @@ class EditToolsTest(unittest.TestCase):
         res = tools_edit.split_clip(self.pid, cid, at_time=4.0)
         self.assertEqual(len(res["timeline"]["clips"]), 2)
 
-    def test_set_clip_layout_position(self):
+    def test_update_clip_position(self):
         _, cid = self._add_clip0()
-        res = tools_edit.set_clip_layout(self.pid, cid, position="top")
+        res = tools_edit.update_clip(self.pid, cid, {"position": "top"})
         self.assertEqual(res["timeline"]["clips"][0]["frame"], "top")
 
-    def test_set_clip_layout_invalid_position_raises(self):
+    def test_update_clip_invalid_position_raises(self):
         _, cid = self._add_clip0()
         with self.assertRaises(ValueError):
-            tools_edit.set_clip_layout(self.pid, cid, position="diagonal")
+            tools_edit.update_clip(self.pid, cid, {"position": "diagonal"})
 
     def test_reframe_clip_manual(self):
         _, cid = self._add_clip0()

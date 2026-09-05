@@ -9,7 +9,7 @@ from __future__ import annotations
 from .. import heatmap, jobs, projects, storage
 from ..schemas import ClipRequest, CropMode, Segment
 from . import dto
-from .registry import tool
+from .registry import MCPError, tool
 
 _MEDIA_KIND = {"clips": "video", "audios": "audio", "images": "image"}
 
@@ -57,7 +57,9 @@ def create_clips_from_segments(project_id: str, url: str, segments: list,
     try:
         mode = CropMode(crop_mode)
     except ValueError:
-        raise ValueError(f"crop_mode inválido: {crop_mode} (usa {[m.value for m in CropMode]})")
+        raise MCPError("invalid_parameter",
+                       f"crop_mode inválido: {crop_mode} (usa {[m.value for m in CropMode]})",
+                       param="crop_mode", retryable=True)
     segs = [_segment(s) for s in segments]
     req = ClipRequest(url=url, project_id=project_id, segments=segs, crop_mode=mode)
     job = jobs.create_job()
@@ -68,7 +70,8 @@ def create_clips_from_segments(project_id: str, url: str, segments: list,
 def delete_media(project_id: str, kind: str, ident: str) -> dict:
     """Elimina material Y su archivo (NO deshacible). kind clips|audios|images; ident index/id."""
     if kind not in _MEDIA_KIND:
-        raise ValueError(f"kind inválido: {kind} (usa clips|audios|images)")
+        raise MCPError("invalid_parameter", f"kind inválido: {kind} (usa clips|audios|images)",
+                       param="kind", retryable=True)
     proj = _project_or_raise(project_id)
     removed = projects.remove_material(project_id, kind, ident)
     if removed is None:
