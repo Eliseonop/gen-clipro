@@ -486,6 +486,49 @@ def set_text_role(tl: Timeline, clip_id: str, role: str) -> EditResult:
     return EditResult(out, changed=[clip_id])
 
 
+# Claves aceptadas por update_clip → sub-op que las aplica (orden de aplicación).
+_UPDATE_CLIP_KEYS = ("opacity", "speed", "keep_pitch", "reverse", "appear", "exit",
+                     "position", "start", "duration", "role")
+
+
+def update_clip(tl: Timeline, clip_id: str, patch: dict | None = None) -> EditResult:
+    """Actualiza varias propiedades escalares de un clip en UNA sola operación.
+
+    Consolida los setters escalares (opacity, speed/keep_pitch/reverse,
+    appear/exit, position/start/duration, role) encadenando las sub-ops puras →
+    un único snapshot de undo. Los grupos ausentes no se tocan; cada sub-op valida
+    su rango y lanza ``ValueError`` como siempre.
+    """
+    patch = patch or {}
+    unknown = [k for k in patch if k not in _UPDATE_CLIP_KEYS]
+    if unknown:
+        raise ValueError(f"patch: claves no válidas {unknown} (usa {list(_UPDATE_CLIP_KEYS)})")
+    if not any(k in patch for k in _UPDATE_CLIP_KEYS):
+        raise ValueError("patch vacío: indica al menos una propiedad a cambiar")
+
+    cur = tl
+    warnings: list[str] = []
+    if "opacity" in patch:
+        r = set_clip_opacity(cur, clip_id, patch["opacity"])
+        cur, warnings = r.timeline, warnings + r.warnings
+    if any(k in patch for k in ("speed", "keep_pitch", "reverse")):
+        r = set_clip_speed(cur, clip_id, speed=patch.get("speed"),
+                           keep_pitch=patch.get("keep_pitch"), reverse=patch.get("reverse"))
+        cur, warnings = r.timeline, warnings + r.warnings
+    if any(k in patch for k in ("appear", "exit")):
+        r = set_clip_transition(cur, clip_id, appear=patch.get("appear"), exit=patch.get("exit"))
+        cur, warnings = r.timeline, warnings + r.warnings
+    if any(k in patch for k in ("position", "start", "duration")):
+        r = set_clip_layout(cur, clip_id, position=patch.get("position"),
+                            start=patch.get("start"), duration=patch.get("duration"))
+        cur, warnings = r.timeline, warnings + r.warnings
+    if "role" in patch:
+        r = set_text_role(cur, clip_id, patch["role"])
+        cur, warnings = r.timeline, warnings + r.warnings
+
+    return EditResult(cur, changed=[clip_id], warnings=warnings)
+
+
 def set_clip_effects(tl: Timeline, clip_id: str, effects: dict, replace: bool = False) -> EditResult:
     """Efectos visuales del clip (blur/grayscale/sepia/brightness…). Por defecto
     MERGE sobre los existentes; ``replace=True`` los sustituye. Solo clips visuales."""

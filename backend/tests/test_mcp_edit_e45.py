@@ -36,10 +36,24 @@ class EditE45Test(unittest.TestCase):
     def _clip(self, cid="v"):
         return next(c for c in projects.get_project(self.pid).timeline.clips if c.id == cid)
 
-    def test_set_clip_opacity_persists(self):
-        res = tools_edit.set_clip_opacity(self.pid, "v", 0.5)
+    def test_update_clip_opacity_persists(self):
+        res = tools_edit.update_clip(self.pid, "v", {"opacity": 0.5})
         self.assertTrue(res["ok"])
         self.assertEqual(self._clip().opacity, 0.5)
+
+    def test_update_clip_multi_prop_one_undo(self):
+        # Varias propiedades en un patch → una sola entrada de historial.
+        res = tools_edit.update_clip(self.pid, "v", {"opacity": 0.8, "position": "top"})
+        self.assertTrue(res["ok"])
+        self.assertEqual(self._clip().opacity, 0.8)
+        self.assertEqual(self._clip().frame, "top")
+        tools_edit.undo(self.pid)
+        self.assertIsNone(self._clip().opacity)
+        self.assertNotEqual(self._clip().frame, "top")
+
+    def test_update_clip_unknown_key_raises(self):
+        with self.assertRaises(ValueError):
+            tools_edit.update_clip(self.pid, "v", {"kolor": "rojo"})
 
     def test_set_clip_effects_persists(self):
         tools_edit.set_clip_effects(self.pid, "v", {"blur": 4})
@@ -87,7 +101,7 @@ class EditE45Test(unittest.TestCase):
         self.assertTrue(any(c.dup_of == "v" for c in clips))
 
     def test_undo_reverts_new_op(self):
-        tools_edit.set_clip_opacity(self.pid, "v", 0.3)
+        tools_edit.update_clip(self.pid, "v", {"opacity": 0.3})
         tools_edit.undo(self.pid)
         self.assertIsNone(self._clip().opacity)
 
@@ -143,8 +157,7 @@ class FetchImageTest(unittest.TestCase):
 class RegistrationTest(unittest.TestCase):
     def test_new_tools_registered_as_write(self):
         specs = registry.registered()
-        for name in ("set_clip_opacity", "set_clip_speed", "set_clip_transition",
-                     "set_text_role", "set_clip_effects", "set_clip_audio_fx",
+        for name in ("update_clip", "set_clip_effects", "set_clip_audio_fx",
                      "set_clip_volume", "set_track_audio", "rename_track",
                      "set_clip_keyframes", "animate_clip", "duplicate_clip", "add_shape",
                      "link_tracks", "unlink_track", "fetch_image"):

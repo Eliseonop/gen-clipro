@@ -663,7 +663,7 @@ de tokens y el "el usuario no elige la tool" se pueden implementar de verdad.
 
 Orden por **beneficio/coste**. Cada fase es autónoma y no rompe clientes previos.
 
-> **Estado:** ✅ Fase 1 · ✅ Fase 2 · ⬜ Fases 3–6.
+> **Estado:** ✅ Fase 1 · ✅ Fase 2 · ✅ Fase 3 · ✅ Fase 4 · ⬜ Fases 5–6.
 
 ### ✅ Fase 1 — Quick wins de tokens (riesgo BAJO) — HECHA (2026-09-04)
 - **Archivos:** `mcp_server/server.py` (recortar `INSTRUCTIONS`), todos los
@@ -706,21 +706,53 @@ Orden por **beneficio/coste**. Cada fase es autónoma y no rompe clientes previo
 - [x] `help_content`: nuevo dominio `discovery`. Tests: `test_mcp_capabilities.py`
   (15). **138 MCP + 10 IA OK.**
 
-### Fase 3 — Errores estructurados (riesgo MEDIO)
+### ✅ Fase 3 — Errores estructurados (riesgo MEDIO) — HECHA (2026-09-04)
 - **Archivos:** `mcp_server/registry.py` (clase `MCPError` + serialización en
-  `_wrap`), sustituir `ValueError` por `MCPError` en `tools_*`.
+  `_wrap`), sustituir `ValueError` por `MCPError` en `tools_*`,
+  `ai/mcp_client.py` (parseo), tests.
 - **Cambios:** enum de códigos §J; mantener retrocompat (texto sigue presente en
   `message`). **Dependencias:** ninguna. **Resultado:** recuperación fiable del
   agente; base para `retryable`.
+- [x] `MCPError(ValueError)` con `{code,message,hint,retryable,param}` + enum
+  `ERROR_CODES` (8 códigos). Subclase de `ValueError` → los tests de llamada
+  directa siguen viendo `ValueError`.
+- [x] **Seam clave:** `register()` deja el nombre del módulo SIN envolver, así que
+  solo el camino MCP pasa por `_wrap`. `_wrap` serializa a un `ToolError` del SDK
+  (`is_error=True` + JSON `{"error":{…}}`); un crash inesperado (no ValueError) se
+  re-lanza tal cual → el SDK lo oculta y registra la traza.
+- [x] Heurística `_classify_value_error` mapea los `ValueError` "sueltos" (p. ej.
+  de `timeline_ops`) a `resource_not_found`/`invalid_parameter`/`processing_error`
+  sin tocar esos módulos.
+- [x] Migrados a códigos explícitos los casos donde la heurística fallaba o donde
+  `param`/`hint` aportan: TTS (dependency/configuration/invalid), `cancel_job`
+  terminado (operation_not_allowed), enums `crop_mode`/`kind`/`asset_kind`/`engine`
+  (invalid_parameter con `param`), `transcribe` source⊕clip_index.
+- [x] `mcp_client._result_data` extrae el JSON tras el prefijo del SDK → el agente
+  lee `data.error.code/hint/retryable`.
+- [x] Tests: `test_mcp_errors.py` (5) + registry actualizado. **Suite backend 564 OK.**
 
-### Fase 4 — Consolidación quirúrgica (riesgo MEDIO)
-- **Archivos:** `tools_edit.py` (nueva `update_clip`; los 5 setters escalares
-  pasan a llamar internamente al mismo `apply_op`, se deprecan o se eliminan),
-  `dto.py` si cambia el resumen. Actualizar `docs/MCP_USO.md` y tests
-  (`test_mcp_*`).
+### ✅ Fase 4 — Consolidación quirúrgica (riesgo MEDIO) — HECHA (2026-09-04)
+- **Archivos:** `timeline_ops.py` (op compuesta `update_clip`), `timeline_store.py`
+  (OPS), `tools_edit.py` (tool `update_clip`, −5 setters), `help_content.py`
+  (dominios+guías), `docs/MCP_USO.md`, tests.
 - **Cambios:** `update_clip(clip_id, patch)`; **mantener** effects/audio_fx/
   volume/keyframes/track_audio separados (justificado §D).
-- **Dependencias:** Fase 3 (errores por-clave). **Resultado:** 51→~34 tools.
+- **Dependencias:** Fase 3 (errores por-clave). **Resultado:** 54 → **50 tools**.
+- [x] `timeline_ops.update_clip(tl, clip_id, patch)`: op compuesta que **encadena
+  las 5 sub-ops puras** (opacity, speed/keep_pitch/reverse, appear/exit,
+  position/start/duration, role) → **un solo snapshot de undo**. Valida claves
+  desconocidas y patch vacío.
+- [x] Tool MCP `update_clip` (write) vía `apply_op("update_clip", …)`; eliminadas
+  `set_clip_opacity/_speed/_transition/set_clip_layout/set_text_role` del MCP.
+  Las funciones puras de `timeline_ops` se **conservan** (las usan HTTP + la
+  compuesta).
+- [x] Errores de rango de las sub-ops → `ValueError` → heurística Fase 3
+  (`invalid_parameter`), sin acoplar `timeline_ops` al MCP.
+- [x] `help_content`/`describe_capabilities` reflejan `update_clip` (los 5 fuera).
+  Tests: `test_timeline_ops_e45` (+3), `test_mcp_edit`/`_e45` migrados. **Suite
+  backend 569 OK.**
+- Nota: el objetivo global "~34 tools" del plan se alcanza combinando esta fase
+  con la Fase 5 (router del agente, donde el ahorro es por-turno, no por-catálogo).
 
 ### Fase 5 — Router de intención + entrada-por-proyecto en el agente (riesgo MEDIO)
 - **Archivos:** `ai/agent.py`, `ai/mcp_client.py`.

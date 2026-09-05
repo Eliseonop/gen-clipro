@@ -9,7 +9,7 @@ from __future__ import annotations
 from .. import heatmap, jobs, projects, sfx
 from ..schemas import TTSRequest, TranscribeRequest
 from . import dto
-from .registry import tool
+from .registry import MCPError, tool
 
 
 def _project_or_raise(project_id: str):
@@ -33,7 +33,9 @@ def transcribe(project_id: str, source: str | None = None, clip_index: str | Non
     has_source = bool(source)
     has_clip = clip_index is not None
     if has_source == has_clip:
-        raise ValueError("Pasa 'source' (URL) O 'clip_index', no ambos ni ninguno.")
+        raise MCPError("invalid_parameter",
+                       "Pasa 'source' (URL) O 'clip_index', no ambos ni ninguno.",
+                       param="source", retryable=True)
 
     job = jobs.create_job()
     if has_source:
@@ -70,15 +72,18 @@ def generate_voice(project_id: str, text: str, engine: str = "kokoro", voice: st
     if engine == "gemini":
         reason = gemini_tts.unavailable_reason()
         if reason:
-            raise ValueError(reason)
+            code = "dependency_error" if "paquete" in reason.lower() else "configuration_error"
+            raise MCPError(code, reason)
     elif engine == "piper":
         if not piper_tts.available():
-            raise ValueError("Piper no está instalado (ejecuta 'python get_piper.py' en backend/).")
+            raise MCPError("dependency_error",
+                           "Piper no está instalado (ejecuta 'python get_piper.py' en backend/).")
     elif engine == "kokoro":
         if not tts.available():
-            raise ValueError("Faltan los modelos de Kokoro (ver README).")
+            raise MCPError("dependency_error", "Faltan los modelos de Kokoro (ver README).")
     else:
-        raise ValueError("Motor TTS no válido.")
+        raise MCPError("invalid_parameter", "Motor TTS no válido (usa kokoro|piper|gemini).",
+                       param="engine", retryable=True)
 
     req = TTSRequest(project_id=project_id, text=text, engine=engine, voice=voice,
                      voice2=voice2, blend=blend, speed=speed, pause=pause, name=name,

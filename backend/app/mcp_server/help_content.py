@@ -44,18 +44,14 @@ TOOL_DOMAINS: dict[str, str] = {
     "split_clip": "clips",
     "remove_clip": "clips",
     "duplicate_clip": "clips",
-    "set_clip_layout": "clips",
+    "update_clip": "clips",
     "reframe_clip": "clips",
-    "set_clip_opacity": "clips",
-    "set_clip_speed": "clips",
-    "set_clip_transition": "clips",
     "set_clip_effects": "clips",
     "set_clip_keyframes": "clips",
     "animate_clip": "clips",
     "add_shape": "clips",
     # text / subtitles
     "add_subtitles": "text",
-    "set_text_role": "text",
     # audio
     "generate_voice": "audio",
     "search_sfx": "audio",
@@ -120,7 +116,7 @@ HELP: dict[str, str] = {
         "- add_subtitles(source_clip_id, segments, track_id?, transcript_id?, "
         "style?): crea clips de texto con words[] reales desde los segments de una "
         "transcripción, alineados al clip fuente. Crea la pista de texto si falta.\n"
-        "- set_text_role(clip_id, role): caption (subtítulo) o free (texto libre)."
+        "- Rol de un clip de texto: update_clip(clip_id, {role: caption|free})."
     ),
     "jobs": (
         "Operaciones largas (transcribe, subtitles, tts, create_clips, export, "
@@ -171,16 +167,17 @@ HELP: dict[str, str] = {
         "index del clip / id del audio o imagen / id de SFX de search_sfx. Un SFX "
         "entra como clip de audio (crea pista si falta). Por defecto usa el "
         "material completo; si el asset no tiene duración conocida, pasa out_point.\n"
-        "- Layout: set_clip_layout(clip_id, position?, start?, duration?). "
-        "position full|top|bottom|free.\n"
+        "- Propiedades escalares (UNA operación): update_clip(clip_id, patch). "
+        "patch admite: opacity (0–1); speed (0.1–10) + keep_pitch/reverse [no en "
+        "texto/imagen/figura]; appear/exit (none|fade|dissolve|wipe|zoom|slide_*|"
+        "pop); position (full|top|bottom|free) + start + duration; role "
+        "(caption|free, solo texto). Ej.: update_clip(id, {\"position\":\"top\", "
+        "\"opacity\":0.8}).\n"
         "- Encuadre de FUENTE (no es animación): reframe_clip(clip_id, mode, zoom?, "
         "pan_from?, pan_to?). mode center (zoom) | manual (zoom + paneo estático "
         "en pan_from, o animado pan_from→pan_to; cada uno {cx,cy}).\n"
-        "- Propiedades: set_clip_opacity(0–1); set_clip_speed(speed 0.1–10, "
-        "keep_pitch?, reverse?) [no aplica a texto/imagen/figura]; "
-        "set_clip_transition(appear?, exit?) none|fade|dissolve|wipe|zoom|slide_*|"
-        "pop; set_clip_effects(effects, replace=False) blur|grayscale|sepia|"
-        "brightness|contrast|saturation (MERGE por defecto, solo visuales).\n"
+        "- Efectos visuales: set_clip_effects(effects, replace=False) blur|grayscale|"
+        "sepia|brightness|contrast|saturation (MERGE por defecto, solo visuales).\n"
         "- Animación de aparición: usa animate_clip, NO set_clip_keyframes a mano. "
         "animate_clip(clip_id, motion, duration?, follow_audio_id?, intensity=1, "
         "turns=1). motion: zoom_in, zoom_out, spin, spin_in, slide_left, "

@@ -18,15 +18,89 @@ from __future__ import annotations
 
 import functools
 import inspect
+import json
 import time
 from dataclasses import dataclass
 from typing import Callable
 
+from mcp.server.mcpserver.exceptions import ToolError as _SdkToolError
 from mcp_types import ToolAnnotations
 
 from . import audit, help_content
 
 ACCESS_LEVELS = ("read", "write", "destructive")
+
+# Códigos de error estructurados (§J del rediseño). Cerrado y corto: el agente
+# distingue "corregir y reintentar" de "replantear" de "avisar al humano".
+ERROR_CODES = (
+    "invalid_parameter",     # valor/forma mal → corregir el param (retryable)
+    "resource_not_found",    # clip/track/asset/job inexistente → releer estado
+    "operation_not_allowed",  # p. ej. velocidad en texto → usar otra tool
+    "configuration_error",   # falta API key / modelo → avisar al humano
+    "dependency_error",      # binario/modelo ausente (ffmpeg/whisper/piper) → avisar
+    "processing_error",      # fallo interno del job/ffmpeg
+    "temporary_error",       # red/timeout → reintentar con backoff
+    "job_running",           # acción en curso → wait_for_job y reintentar
+)
+
+
+class MCPError(ValueError):
+    """Error de tool con código estructurado (§J).
+
+    Subclase de ``ValueError`` a propósito: las tools se llaman también
+    directamente (fuera del MCP) y los tests esperan ``ValueError``. En el camino
+    MCP, el wrapper la serializa a un ``ToolError`` del SDK cuyo contenido es el
+    JSON ``{"error": {...}}`` (llega al modelo como resultado ``is_error``).
+
+    OJO: no confundir con ``mcp.shared.exceptions.MCPError`` (error de PROTOCOLO
+    JSON-RPC). Esta es de dominio y viaja como resultado de tool, no como error de
+    protocolo, para que el agente pueda leerla y recuperarse.
+    """
+
+    def __init__(self, code: str, message: str, *, hint: str | None = None,
+                 retryable: bool = False, param: str | None = None):
+        self.code = code
+        self.message = message
+        self.hint = hint
+        self.retryable = retryable
+        self.param = param
+        super().__init__(message)
+
+    def payload(self) -> dict:
+        err: dict = {"code": self.code, "message": self.message, "retryable": self.retryable}
+        if self.hint:
+            err["hint"] = self.hint
+        if self.param:
+            err["param"] = self.param
+        return {"error": err}
+
+
+def _classify_value_error(msg: str) -> tuple[str, bool]:
+    """Mapea un ValueError "suelto" (p. ej. de timeline_ops) a un código + retryable."""
+    m = (msg or "").lower()
+    if any(k in m for k in ("no encontrad", "not found", "inexistente", "no existe",
+                            "no se encuentra", "ningún", "ninguna", "no se encontr")):
+        return "resource_not_found", False
+    if any(k in m for k in ("inválid", "invalid", "no válid", "debe ser", "vacío",
+                            "vacía", "falta", "desconocid", "no hay")):
+        return "invalid_parameter", True
+    return "processing_error", False
+
+
+def _to_tool_error(exc: Exception):
+    """Traduce una excepción a un ToolError del SDK con payload estructurado.
+
+    Devuelve ``None`` para un crash inesperado (no ValueError): así el SDK lo
+    oculta al cliente y registra la traza en el servidor (comportamiento por
+    defecto para bugs reales)."""
+    if isinstance(exc, MCPError):
+        payload = exc.payload()
+    elif isinstance(exc, ValueError):
+        code, retryable = _classify_value_error(str(exc))
+        payload = {"error": {"code": code, "message": str(exc), "retryable": retryable}}
+    else:
+        return None
+    return _SdkToolError(json.dumps(payload, ensure_ascii=False))
 
 
 @dataclass
@@ -91,7 +165,13 @@ def _wrap(name: str, access: str, fn: Callable) -> Callable:
                 error=f"{type(exc).__name__}: {exc}",
                 param_keys=param_keys,
             )
-            raise
+            # Camino MCP: serializa el error a un ToolError estructurado (is_error
+            # con JSON {"error":{code,…}}). Un crash inesperado (None) se re-lanza
+            # tal cual → el SDK lo oculta y registra la traza.
+            tool_err = _to_tool_error(exc)
+            if tool_err is None:
+                raise
+            raise tool_err from exc
         extra = {}
         if _is_job_dto(result):
             extra["job_id"] = result["id"]

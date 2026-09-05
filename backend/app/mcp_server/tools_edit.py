@@ -15,7 +15,7 @@ from .. import projects, timeline_store
 from ..clip_kind import IMAGE_DEFAULT_DUR, track_kind_for_clip
 from ..schemas import Timeline
 from . import dto
-from .registry import tool
+from .registry import MCPError, tool
 
 
 def _project_or_raise(project_id: str):
@@ -92,7 +92,9 @@ def _resolve_asset(proj, asset_kind: str, asset_id: str) -> dict:
             raise ValueError(f"SFX no encontrado: {asset_id} (usa un id de search_sfx)")
         return {"kind": "audio", "filename": asset_id,
                 "source_duration": _probe_duration(path), "name": Path(asset_id).stem}
-    raise ValueError(f"asset_kind inválido: {asset_kind} (usa clips|audios|images|sfx)")
+    raise MCPError("invalid_parameter",
+                   f"asset_kind inválido: {asset_kind} (usa clips|audios|images|sfx)",
+                   param="asset_kind", retryable=True)
 
 
 def add_to_timeline(project_id: str, asset_kind: str, asset_id: str,
@@ -152,11 +154,11 @@ def remove_clip(project_id: str, clip_id: str) -> dict:
     return _apply(project_id, "remove_clip", {"clip_id": clip_id})
 
 
-def set_clip_layout(project_id: str, clip_id: str, position: str | None = None,
-                    start: float | None = None, duration: float | None = None) -> dict:
-    """Coloca un clip: ``position`` (full/top/bottom/free) y opcionalmente timing."""
-    return _apply(project_id, "set_clip_layout",
-                  {"clip_id": clip_id, "position": position, "start": start, "duration": duration})
+def update_clip(project_id: str, clip_id: str, patch: dict) -> dict:
+    """Actualiza propiedades escalares de un clip en UNA operación. patch: opacity(0–1),
+    speed(0.1–10)/keep_pitch/reverse, appear/exit, position(full|top|bottom|free)/start/duration,
+    role(caption|free). Para efectos/audio_fx/volumen/keyframes usa sus tools propias."""
+    return _apply(project_id, "update_clip", {"clip_id": clip_id, "patch": patch})
 
 
 def reframe_clip(project_id: str, clip_id: str, mode: str = "center", zoom: float | None = None,
@@ -183,30 +185,6 @@ def set_project_format(project_id: str, aspect: str | None = None, width: int | 
 
 
 # --- Propiedades por-clip (Etapa 4.5) ------------------------------------
-
-def set_clip_opacity(project_id: str, clip_id: str, opacity: float) -> dict:
-    """Opacidad estática del clip (0 = transparente, 1 = opaco)."""
-    return _apply(project_id, "set_clip_opacity", {"clip_id": clip_id, "opacity": opacity})
-
-
-def set_clip_speed(project_id: str, clip_id: str, speed: float | None = None,
-                   keep_pitch: bool | None = None, reverse: bool | None = None) -> dict:
-    """Velocidad del clip (0.1–10; no aplica a texto/imagen). keep_pitch mantiene el tono; reverse invierte."""
-    return _apply(project_id, "set_clip_speed",
-                  {"clip_id": clip_id, "speed": speed, "keep_pitch": keep_pitch, "reverse": reverse})
-
-
-def set_clip_transition(project_id: str, clip_id: str, appear: str | None = None,
-                        exit: str | None = None) -> dict:
-    """Transición de entrada (appear) y salida (exit): none|fade|dissolve|wipe|zoom|slide_*|pop."""
-    return _apply(project_id, "set_clip_transition",
-                  {"clip_id": clip_id, "appear": appear, "exit": exit})
-
-
-def set_text_role(project_id: str, clip_id: str, role: str) -> dict:
-    """Rol de un clip de texto: ``caption`` (subtítulo) o ``free`` (texto libre)."""
-    return _apply(project_id, "set_text_role", {"clip_id": clip_id, "role": role})
-
 
 def set_clip_effects(project_id: str, clip_id: str, effects: dict, replace: bool = False) -> dict:
     """Efectos visuales: blur|grayscale|sepia|brightness|contrast|saturation. MERGE por defecto; solo visuales."""
@@ -365,15 +343,11 @@ def register(mcp) -> None:
     tool(mcp, access="write")(move_clip)
     tool(mcp, access="write")(split_clip)
     tool(mcp, access="destructive")(remove_clip)
-    tool(mcp, access="write")(set_clip_layout)
+    tool(mcp, access="write")(update_clip)
     tool(mcp, access="write")(reframe_clip)
     tool(mcp, access="write")(add_subtitles)
     tool(mcp, access="write")(set_project_format)
     # Etapa 4.5 — propiedades por-clip + figuras.
-    tool(mcp, access="write")(set_clip_opacity)
-    tool(mcp, access="write")(set_clip_speed)
-    tool(mcp, access="write")(set_clip_transition)
-    tool(mcp, access="write")(set_text_role)
     tool(mcp, access="write")(set_clip_effects)
     tool(mcp, access="write")(set_clip_audio_fx)
     tool(mcp, access="write")(set_clip_volume)

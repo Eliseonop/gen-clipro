@@ -24,6 +24,7 @@ OPS = {
     "remove_clip": timeline_ops.remove_clip,
     "split_clip": timeline_ops.split_clip,
     "set_clip_layout": timeline_ops.set_clip_layout,
+    "update_clip": timeline_ops.update_clip,
     "reframe_clip": timeline_ops.reframe_clip,
     "add_subtitles": timeline_ops.add_subtitles,
     "set_project_format": timeline_ops.set_project_format,

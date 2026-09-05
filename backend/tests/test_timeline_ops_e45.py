@@ -60,6 +60,28 @@ class PropertyOpsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ops.set_text_role(_tl(), "t", "otro")
 
+    def test_update_clip_composes_multiple_props(self):
+        r = ops.update_clip(_tl(), "v", {"opacity": 0.6, "speed": 1.5,
+                                         "appear": "fade", "position": "bottom"})
+        c = _clip(r, "v")
+        self.assertEqual(c.opacity, 0.6)
+        self.assertEqual(c.speed, 1.5)
+        self.assertEqual(c.appear, "fade")
+        self.assertEqual(c.frame, "bottom")
+        self.assertEqual(r.changed, ["v"])
+
+    def test_update_clip_role_on_text(self):
+        r = ops.update_clip(_tl(), "t", {"role": "free"})
+        self.assertEqual(_clip(r, "t").text_role, "free")
+
+    def test_update_clip_validates(self):
+        with self.assertRaises(ValueError):
+            ops.update_clip(_tl(), "v", {})                    # patch vacío
+        with self.assertRaises(ValueError):
+            ops.update_clip(_tl(), "v", {"nope": 1})           # clave desconocida
+        with self.assertRaises(ValueError):
+            ops.update_clip(_tl(), "v", {"opacity": 5})        # rango inválido (sub-op)
+
     def test_effects_merge(self):
         tl = _tl()
         r1 = ops.set_clip_effects(tl, "v", {"blur": 3})

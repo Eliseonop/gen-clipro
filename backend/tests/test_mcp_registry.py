@@ -1,5 +1,6 @@
 """Registro de tools del MCP: política (access), auditoría, introspección."""
 import asyncio
+import json
 import shutil
 import tempfile
 import unittest
@@ -66,16 +67,34 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual(e["project_id"], "pX")
         self.assertIn("ms", e)
 
-    def test_wrapper_audits_error_and_reraises(self):
+    def test_wrapper_audits_error_and_serializes(self):
+        from mcp.server.mcpserver.exceptions import ToolError
+
         @registry.tool(self.mcp, access="write")
         def boom(project_id: str) -> dict:
             raise ValueError("kaboom")
 
-        with self.assertRaises(ValueError):
+        # Camino MCP: el wrapper audita y re-lanza un ToolError con JSON estructurado.
+        with self.assertRaises(ToolError) as cm:
             boom(project_id="pE")
+        payload = json.loads(str(cm.exception)[str(cm.exception).find("{"):])
+        self.assertEqual(payload["error"]["code"], "processing_error")
+        self.assertIn("kaboom", payload["error"]["message"])
         e = audit.read_all()[-1]
         self.assertEqual(e["status"], "error")
         self.assertIn("kaboom", e["error"])
+
+    def test_wrapper_serializes_mcp_error_code(self):
+        @registry.tool(self.mcp, access="read")
+        def missing(project_id: str) -> dict:
+            raise registry.MCPError("resource_not_found", "no está", hint="usa list_projects")
+
+        from mcp.server.mcpserver.exceptions import ToolError
+        with self.assertRaises(ToolError) as cm:
+            missing(project_id="pX")
+        payload = json.loads(str(cm.exception)[str(cm.exception).find("{"):])
+        self.assertEqual(payload["error"]["code"], "resource_not_found")
+        self.assertEqual(payload["error"]["hint"], "usa list_projects")
 
     def test_audit_records_keys_not_values(self):
         @registry.tool(self.mcp, access="write")
