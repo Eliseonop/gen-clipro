@@ -65,7 +65,7 @@ export function createMainDownHandler(ctx) {
     if (fm) {
       if (playingRef.current) stopPlayback()
       // El encuadre de texto se dibuja dentro del recuadro Main (workspace).
-      const frame = frameRectOf(canvas.width, canvas.height, viewZoomRef?.current ?? 1)
+      const frame = frameRectOf(canvas.width, canvas.height, viewZoomRef?.current ?? 1, outAspect)
       const dispW = frame.w * ptr0.scale, dispH = frame.h * ptr0.scale
       const px = ptr0.x, py = ptr0.y
       const local = framingRect(frame.w, frame.h, fm)
@@ -455,7 +455,7 @@ export function createCanvasDownHandler(ctx) {
 
     // Recuadro Main (área exportable) dentro del workspace; el hit-testing usa dests
     // ya en coordenadas de canvas, pero los arrastres normalizan respecto al frame.
-    const frame = frameRectOf(canvas.width, canvas.height, ctx.viewZoomRef?.current ?? 1)
+    const frame = frameRectOf(canvas.width, canvas.height, ctx.viewZoomRef?.current ?? 1, ctx.outAspect)
     const p0 = canvasPointer(e, canvas)
     const hits = hitListRef?.current || []
     const selId = selectedClip?.id

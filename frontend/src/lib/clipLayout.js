@@ -41,12 +41,18 @@ export const MAIN_FRAME_FRAC = 0.82
 export const CLIP_POS_MIN = -2
 export const CLIP_POS_MAX = 3
 
-export function frameRectOf(cw, ch, viewZoom = 1) {
+export function frameRectOf(cw, ch, viewZoom = 1, outAspect) {
   const z = Number(viewZoom)
   const zoom = Number.isFinite(z) && z > 0 ? z : 1
   const frac = MAIN_FRAME_FRAC * zoom
-  const w = cw * frac
-  const h = ch * frac
+  // El canvas ocupa todo el stage (puede ser más ancho que la salida); el cuadro
+  // conserva el aspecto de salida y se ajusta dentro de `frac` del canvas, centrado.
+  const a = Number(outAspect) > 0 ? Number(outAspect) : (cw / ch)
+  const maxW = cw * frac
+  const maxH = ch * frac
+  let h = maxH
+  let w = h * a
+  if (w > maxW) { w = maxW; h = w / a }
   return { x: (cw - w) / 2, y: (ch - h) / 2, w, h }
 }
 
