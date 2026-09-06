@@ -317,7 +317,7 @@ function drawCropRuler(ctx, bx, by, bw, bh) {
 export function drawMainView(head, env) {
   const {
     mainCanvasRef, clipsRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
-    playingRef, framingModeRef, mainTextBox, alignGuidesRef, cropModeRef, croppingRef,
+    playingRef, framingModeRef, mainTextBox, alignGuidesRef, croppingRef,
     viewZoomRef,
   } = env
   const canvas = mainCanvasRef.current
@@ -325,9 +325,11 @@ export function drawMainView(head, env) {
   const ctx = canvas.getContext('2d')
 
   const clip = clipsRef.current.find((c) => c.id === selRef.current)
-  // El Clip Editor usa el mismo workspace compuesto que el Main (marco naranja + zoom).
-  // La vista de recorte (fuente + recuadro) solo aparece con la herramienta Encuadre.
-  const cropEdit = !!(cropModeRef?.current && !playingRef.current)
+  // Modo por-clip: si el clip seleccionado está en "Fijar vídeo" (fill), se muestra la
+  // vista de recorte (fuente completa + recuadro naranja móvil, zonas fuera atenuadas).
+  // Si es overlay (transformar vídeo) se usa el compuesto (marco fijo). Estable en play
+  // para no parpadear al reproducir. Igual en Main y en Clip Editor.
+  const cropEdit = !!(clip && isVisualClip(clip) && !isOverlay(clip) && !framingModeRef.current)
 
   // Recorte (fuente + recuadro): Clip Editor, o herramienta Encuadre con un visual seleccionado.
   if (cropEdit && clip && isVisualClip(clip)) {
@@ -375,11 +377,11 @@ export function drawMainView(head, env) {
       ctx.lineWidth = k.id === selKfRef.current ? 3 : 1.5
       ctx.strokeRect(kx, ky, g.wf * cw2, g.hf * ch2)
     })
-    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2
+    ctx.strokeStyle = '#ff8c1a'; ctx.lineWidth = 2.5
     ctx.strokeRect(bx, by, bw, bh)
     if (croppingRef?.current) drawCropRuler(ctx, bx, by, bw, bh)
     const hs = 5
-    ctx.fillStyle = '#ff3b5c'
+    ctx.fillStyle = '#ff8c1a'
     ctx.strokeStyle = '#fff'
     ctx.lineWidth = 1.5
     cropCornerNorms(pcx, pcy, wf, hf).forEach(([nx, ny]) => {

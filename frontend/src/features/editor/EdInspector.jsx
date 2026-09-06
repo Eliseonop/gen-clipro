@@ -38,6 +38,8 @@ export default function EdInspector({
   selectedClip,
   textMode,
   audioMode,
+  fijarVideo,
+  onFijarVideo,
   effectsProps,
   shapeProps,
   clipMode,
@@ -98,6 +100,23 @@ export default function EdInspector({
           <div className="ed-insp-empty">
             <Icon name="tune" size={28} />
             <p>Selecciona un elemento para editar sus propiedades.</p>
+          </div>
+        )}
+
+        {hasTarget && activeNav === 'video' && sub === 'basic' && visual && onFijarVideo && (
+          <div className="ed-insp-tools">
+            <label
+              className={`ed-mode-toggle ${fijarVideo ? 'on' : ''}`}
+              title="Fijar vídeo: mueves solo el encuadre (recorte). Apagado: mueves y escalas el vídeo dentro del encuadre."
+            >
+              <input
+                type="checkbox"
+                checked={!!fijarVideo}
+                onChange={(e) => onFijarVideo(e.target.checked)}
+              />
+              <Icon name={fijarVideo ? 'lock' : 'open_with'} size={15} />
+              Fijar vídeo
+            </label>
           </div>
         )}
 

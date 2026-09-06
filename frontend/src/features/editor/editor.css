@@ -301,6 +301,14 @@
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   padding: 8px 10px; border-bottom: 1px solid var(--line);
 }
+.ed-mode-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--card-2); border: 1px solid var(--line); color: var(--text-secondary);
+  border-radius: 6px; padding: 5px 9px; font-size: 11px; cursor: pointer; user-select: none;
+}
+.ed-mode-toggle input { accent-color: var(--accent); margin: 0; }
+.ed-mode-toggle .material-icons { color: inherit; }
+.ed-mode-toggle.on { border-color: #fb923c; color: #fdba74; background: rgba(234, 88, 12, 0.14); }
 .ed-insp-tool {
   display: inline-flex; align-items: center; gap: 4px;
   background: var(--card-2); border: 1px solid var(--line); color: var(--text-secondary);

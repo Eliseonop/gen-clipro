@@ -325,6 +325,20 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     return () => clearTimeout(id)
   }, [timelinePayload, loaded, project.id])
 
+  // Aplica el ajuste base (objeto libre a altura del cuadro) a los clips marcados
+  // `_baseFit` en cuanto su medio tiene dimensiones. Cubre tanto clips recién
+  // añadidos como el toggle "Fijar vídeo → OFF", sin depender del evento de carga.
+  useEffect(() => {
+    if (!clips.some((c) => c._baseFit)) return
+    for (const c of clips) {
+      if (!c._baseFit) continue
+      const el = mediaEls.current.get(c.id)
+      if (mediaSize(el).h) applyBaseFit(c, el)
+    }
+    // applyBaseFit limpia _baseFit → no reentra en bucle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clips])
+
   // Recarga el timeline desde el servidor (tras ediciones de la IA por el MCP).
   // Reutiliza el MISMO mapeo que la carga inicial → no hay segundo estado.
   const reloadTimeline = useCallback(async () => {
@@ -1165,6 +1179,26 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       reframe: { ...(c.reframe || newReframe()), ...patch.reframe },
     } : c)))
   }
+  // Toggle por-clip "Fijar vídeo": ON = Modo 1 (fill, vídeo fijo + mover encuadre);
+  // OFF = Modo 2 (overlay, mover/escalar el vídeo dentro del encuadre, tipo CapCut).
+  // El estado vive en el clip (layout), no en el editor. Vale en Main y en Clip Editor.
+  function setFijarVideo(clip, fixed) {
+    if (!clip || !isVisualClip(clip)) return
+    setClips((prev) => prev.map((c) => {
+      if (c.id !== clip.id) return c
+      if (fixed) return { ...c, layout: 'fill', frame: 'full' }
+      // Overlay a altura completa; `applyBaseFit` fija la escala exacta (outH/srcH)
+      // cuando el medio tiene dimensiones (evita depender del timing de carga).
+      return {
+        ...c,
+        layout: 'overlay',
+        frame: 'free',
+        _baseFit: true,
+        reframe: { ...(c.reframe || newReframe()), crop_w: 1, crop_h: 1, dual_crop: false },
+        transform: { x: 0.5, y: 0.5, scale: c.transform?.scale ?? 1, rotation: 0 },
+      }
+    }))
+  }
   function upsertKeyframe(clip, localT, cx, cy, extra = {}) {
     setClips((prev) => prev.map((c) => {
       if (c.id !== clip.id) return c
@@ -1785,7 +1819,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               if (!raw) return
               try { dropAsset(JSON.parse(raw), selTrackId, playhead) } catch { /* noop */ }
             }}
-            style={{ cursor: (cropMode || mainColTab === 'clip' || framingMode) ? 'crosshair' : ((canEditFrame || isTextSel || isShapeSel) ? 'move' : 'default') }}
+            style={{ cursor: (framingMode || (canEditFrame && !overlayOn)) ? 'crosshair' : ((canEditFrame || isTextSel || isShapeSel) ? 'move' : 'default') }}
           >
             <canvas ref={mainCanvasRef} width={540} height={960} className="ed-main-canvas" />
             {mainColTab === 'clip' && clipMeta.preparing && (
@@ -1805,18 +1839,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                 <span>{(clipSaving ? clipSaveJob.message : exportJob.message) || (clipSaving ? 'Guardando…' : 'Exportando…')}</span>
               </div>
             )}
-            {cropMode && mainColTab === 'main' && canEditFrame && (
-              <div className="ed-stage-hint">Vídeo completo · arrastra el recuadro para otro plano · esquinas para zoom</div>
+            {canEditFrame && !overlayOn && (
+              <div className="ed-stage-hint">
+                Vídeo fijo · arrastra el recuadro naranja{mainColTab === 'clip' ? ' · Guardar clip lo deja en Materiales' : ' · esquinas para zoom'}
+              </div>
             )}
-            {mainColTab === 'clip' && canEditFrame && (
-              <div className="ed-stage-hint">Ajusta el recuadro · Guardar clip lo deja en Materiales</div>
-            )}
-            {!cropMode && mainColTab === 'main' && canEditFrame && overlayOn && (
-              <div className="ed-stage-hint">Arrastra para colocar · esquinas escala · punto rota</div>
-            )}
-            {!cropMode && mainColTab === 'main' && canEditFrame && !overlayOn && (
-              <div className="ed-stage-hint">Arrastra para panear el plano · esquinas zoom · punto rota</div>
-            )}
+
             {isTextSel && !cropMode && (
               <div className="ed-stage-hint">
                 {selClipIds.length > 1
@@ -1869,10 +1897,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           selectedClip={isAudioTrackSel ? (trackAudioClip || { kind: 'audio', volume: 1, muted: false, audio_fx: {}, start: 0 }) : selectedClip}
           textMode={isTextSel ? 'clip' : (isTextTrackSel ? 'track' : null)}
           audioMode={isAudioTrackSel ? 'track' : null}
-          cropMode={cropMode}
-          onCropMode={setCropMode}
-          overlayOn={overlayOn}
-          onToggleOverlay={(on) => selectedClip && toggleOverlay(selectedClip, on)}
+          fijarVideo={canEditFrame && !overlayOn}
+          onFijarVideo={(on) => selectedClip && setFijarVideo(selectedClip, on)}
           clipMode={mainColTab === 'clip'}
           effectsProps={{
             clip: isAudioTrackSel ? (trackAudioClip || { kind: 'audio', volume: 1, muted: false, audio_fx: {}, start: 0 }) : selectedClip,
