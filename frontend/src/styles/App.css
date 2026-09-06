@@ -52,6 +52,11 @@ body {
   padding: 20px;
   min-height: 100vh;
 }
+.app:has(.project-view.editor-mode) {
+  padding: 0;
+  max-width: none;
+  width: 100%;
+}
 
 /* Header */
 header {

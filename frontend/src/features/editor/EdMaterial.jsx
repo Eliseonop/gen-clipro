@@ -8,7 +8,7 @@ import MaterialClipGrid, { dragPayload, useToggle, useExclusiveMedia, Empty, Ima
 import SfxClassifyModal from './SfxClassifyModal'
 import ImageAddModal from './ImageAddModal'
 import EdSettings from './EdSettings'
-import EdEffects from './EdEffects'
+import EdFxLibrary from './EdFxLibrary'
 import EdShapes from './EdShapes'
 import EdChat from './EdChat'
 import EdExplore from './EdExplore'
@@ -252,25 +252,25 @@ const MAT_NAV = [
   { id: 'sfx', icon: 'graphic_eq', label: 'SFX' },
   { id: 'effects', icon: 'auto_awesome', label: 'Efectos' },
   { id: 'shapes', icon: 'category', label: 'Figuras' },
-  { id: 'text', icon: 'title', label: 'Texto', empty: true },
-  { id: 'transitions', icon: 'animation', label: 'Transiciones', empty: true },
+  { id: 'text', icon: 'title', label: 'Texto' },
+  { id: 'transitions', icon: 'animation', label: 'Transiciones' },
   { id: 'settings', icon: 'settings', label: 'Configuración', sep: true },
   { id: 'chat', icon: 'forum', label: 'Chat IA' },
 ]
 
 export default function EdMaterial({
-  project, onAdd, onDragInfo, onBack, onRefresh, fav, onEditYtClip, selectedClip, onChangeFx,
-  textStyle, textMode, onChangeTextStyle, onApplyTextPreset, textEditor,
+  project, onAdd, onDragInfo, onRefresh, fav, onEditYtClip,
+  selectedClip, onChangeFx,
+  onAddText, onApplyTextPreset,
   matTab, onMatTab,
-  playhead, onPose, onChangeFrame, selKfId, onInterpKf,
-  fps = 30, onExportFps,
+  onExportFps,
   aiContext, onReloadTimeline, timelineClips, onMcpAudit,
-  audioMode, trackLabel, trackEmpty, onAddKf, onFade,
 }) {
   const [tabState, setTabState] = useState('video')
   const tab = matTab ?? tabState
   const setTab = (id) => { if (onMatTab) onMatTab(id); else setTabState(id) }
   const [videoFilter, setVideoFilter] = useState('all')
+  const [videoQ, setVideoQ] = useState('')
   const [audioFilter, setAudioFilter] = useState('all')
   const [imageFilter, setImageFilter] = useState('all')
   const [library, setLibrary] = useState({ clips: [], audios: [], images: [] })
@@ -506,7 +506,13 @@ export default function EdMaterial({
   const projectClips = withProjectScope(clips, 'clip')
   const projectAudios = withProjectScope(audios, 'audio')
   const projectImages = withProjectScope(images, 'image')
-  const shownClips = videoFilter === 'saved' ? (library.clips || []) : [...projectClips, ...(library.clips || [])]
+  const shownClips = (videoFilter === 'saved' ? (library.clips || []) : [...projectClips, ...(library.clips || [])])
+    .filter((c) => {
+      const q = videoQ.trim().toLowerCase()
+      if (!q) return true
+      const name = `${c.label || ''} ${c.filename || ''} ${c.description || ''}`.toLowerCase()
+      return name.includes(q)
+    })
   const shownAudios = audioFilter === 'saved' ? (library.audios || []) : [...projectAudios, ...(library.audios || [])]
   const shownImages = imageFilter === 'saved' ? (library.images || []) : [...projectImages, ...(library.images || [])]
   const onCargarPane = tab === 'video' && videoFilter === 'cargar'
@@ -795,15 +801,6 @@ export default function EdMaterial({
       onDrop={onFileDrop}
     >
       <nav className="ed-mat-nav" aria-label="Materiales" onMouseLeave={closeNavTip}>
-        <button
-          className="ed-back"
-          onClick={onBack}
-          type="button"
-          aria-label="Volver a proyectos"
-          onMouseEnter={(e) => openNavTip(e, 'Volver a proyectos')}
-        >
-          <Icon name="arrow_back" size={20} />
-        </button>
         <div className="ed-mat-nav-scroll" onScroll={closeNavTip}>
           {MAT_NAV.map((item) => {
             const n = navCounts[item.id]
@@ -833,11 +830,23 @@ export default function EdMaterial({
         document.body,
       )}
       <div className="ed-mat-body">
+      {navItem && <div className="ed-mat-title">{navItem.label}</div>}
       {err && <div className="ed-mat-err">{err}</div>}
 
       {tab === 'video' && (
         <div className="ed-mat-list">
           <ScopeFilter value={videoFilter} onChange={setVideoFilter} includeLoad />
+          {videoFilter !== 'cargar' && (
+            <div className="ed-sfx-search">
+              <Icon name="search" size={16} />
+              <input
+                value={videoQ}
+                onChange={(e) => setVideoQ(e.target.value)}
+                placeholder="Buscar clips"
+                aria-label="Buscar clips"
+              />
+            </div>
+          )}
           {videoFilter === 'cargar' ? (
             <div className="ed-yt-form">
               <input
@@ -1075,25 +1084,26 @@ export default function EdMaterial({
       {tab === 'sfx' && <SfxTab onAdd={onAdd} onPlay={onPlayMedia} di={di} fav={fav} />}
       {tab === 'shapes' && <EdShapes onAdd={onAdd} onDragInfo={di} />}
       {tab === 'effects' && (
-        <EdEffects
+        <EdFxLibrary
+          mode="effects"
           clip={selectedClip}
           onChangeFx={onChangeFx}
-          textStyle={textStyle}
-          textMode={textMode}
-          onChangeTextStyle={onChangeTextStyle}
-          onApplyTextPreset={onApplyTextPreset}
-          playhead={playhead}
-          onPose={onPose}
-          onChangeFrame={onChangeFrame}
-          selKfId={selKfId}
-          onInterpKf={onInterpKf}
-          fps={fps}
-          textEditor={textEditor}
-          audioMode={audioMode}
-          trackLabel={trackLabel}
-          trackEmpty={trackEmpty}
-          onAddKf={onAddKf}
-          onFade={onFade}
+          onNeedClip={() => setMatToast({ type: 'error', message: 'Selecciona un clip en la timeline.' })}
+        />
+      )}
+      {tab === 'text' && (
+        <EdFxLibrary
+          mode="text"
+          clip={selectedClip}
+          onAddText={onAddText}
+          onApplyPreset={onApplyTextPreset}
+        />
+      )}
+      {tab === 'transitions' && (
+        <EdFxLibrary
+          mode="transitions"
+          clip={selectedClip}
+          onChangeFx={onChangeFx}
         />
       )}
       {tab === 'settings' && <EdSettings onExportFps={onExportFps} />}
@@ -1103,13 +1113,6 @@ export default function EdMaterial({
       >
         <EdChat project={project} context={aiContext} clips={timelineClips} onReload={onReloadTimeline} onBusy={setChatBusy} onMcpAudit={onMcpAudit} />
       </div>
-      {navItem?.empty && (
-        <div className="ed-mat-list">
-          <div className="ed-mat-empty">
-            <Icon name={navItem.icon} size={28} />
-          </div>
-        </div>
-      )}
       </div>
 
       {imgAddOpen && (

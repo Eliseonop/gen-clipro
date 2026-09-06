@@ -129,7 +129,7 @@ export function VideoCard({
           <button
             type="button"
             className="ed-edit-corner"
-            title="Editar en Clip Editor"
+            title="Preparar clip"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); onEdit() }}
           >

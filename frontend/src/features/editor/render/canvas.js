@@ -16,6 +16,64 @@ import {
   cropWindow, destRectOnCanvas, isOverlay, mediaSize, sourceCropPx, videosAt,
 } from '../../../lib/clipLayout'
 
+export function fillDestRect(cw, ch, clip, localT) {
+  const pose = clipPose(clip, localT)
+  const sc = pose.scale ?? 1
+  const dw = cw * sc
+  const dh = ch * sc
+  return {
+    dx: (pose.x ?? 0.5) * cw - dw / 2,
+    dy: (pose.y ?? 0.5) * ch - dh / 2,
+    dw,
+    dh,
+    rotation: pose.rotation || 0,
+  }
+}
+
+export function boxToDest(box, rotation = 0) {
+  if (!box) return null
+  if (box.dx != null) return { dx: box.dx, dy: box.dy, dw: box.dw, dh: box.dh, rotation: box.rotation || rotation }
+  return { dx: box.x, dy: box.y, dw: box.w, dh: box.h, rotation }
+}
+
+export function pointInDest(px, py, dest) {
+  if (!dest) return false
+  const { dx, dy, dw, dh, rotation = 0 } = dest
+  const cx = dx + dw / 2
+  const cy = dy + dh / 2
+  let x = px - cx
+  let y = py - cy
+  if (rotation) {
+    const rad = -rotation * Math.PI / 180
+    const c = Math.cos(rad)
+    const s = Math.sin(rad)
+    const nx = x * c - y * s
+    const ny = x * s + y * c
+    x = nx
+    y = ny
+  }
+  return x >= -dw / 2 && x <= dw / 2 && y >= -dh / 2 && y <= dh / 2
+}
+
+export function hitFrontmost(hits, px, py) {
+  if (!hits?.length) return null
+  for (let i = hits.length - 1; i >= 0; i--) {
+    if (pointInDest(px, py, hits[i].dest)) return hits[i]
+  }
+  return null
+}
+
+function sizeCanvasToOutput(canvas, outW, outH, long = 960) {
+  const a = outW / outH
+  const cw = a >= 1 ? long : Math.max(2, Math.round(long * a))
+  const ch = a >= 1 ? Math.max(2, Math.round(long / a)) : long
+  if (canvas.width !== cw || canvas.height !== ch) {
+    canvas.width = cw
+    canvas.height = ch
+  }
+  return { cw, ch }
+}
+
 // Geometría (en px del canvas) del encuadre de texto a partir de fm normalizado.
 export function framingRect(cw, ch, fm) {
   const boxW = (fm.w ?? 0.8) * cw
@@ -127,12 +185,15 @@ export function drawComposite(ctx, head, selClipIds, env) {
 
   let overlayDestSel = null
   let selRender = null
+  const hits = []
   for (const clip of videosAt(head, clipsRef.current, tracksRef.current)) {
     const localT = Math.max(0, head - (clip.start || 0))
     if (clip.kind === 'shape') {
       const isSel = selected.has(clip.id)
       const r = drawShapeClip(ctx, clip, cw, ch, { selected: isSel, time: localT })
       if (isSel) selRender = r
+      const dest = r?.box ? boxToDest(r.box, r.box.rotation || 0) : fillDestRect(cw, ch, clip, localT)
+      hits.push({ id: clip.id, kind: 'shape', dest, handles: r?.handles || null })
       continue
     }
     const el = mediaEls.current.get(clip.id)
@@ -144,6 +205,7 @@ export function drawComposite(ctx, head, selClipIds, env) {
     const fx = fxForClip(clip, head)
     if (isOverlay(clip)) {
       const dest = drawOverlayLayer(ctx, el, clip, srcTime, outW, outH, fx, localT)
+      hits.push({ id: clip.id, kind: clip.kind, dest, overlay: true })
       if (selected.has(clip.id)) overlayDestSel = dest
     } else {
       const pose = clipPose(clip, localT)
@@ -161,6 +223,9 @@ export function drawComposite(ctx, head, selClipIds, env) {
       }
       drawReframe(ctx, el, reframeForDraw(clip, localT, srcTime), srcTime, outW / outH, { clear: false })
       ctx.restore()
+      const dest = fillDestRect(cw, ch, clip, localT)
+      hits.push({ id: clip.id, kind: clip.kind, dest, overlay: false })
+      if (selected.has(clip.id) && !overlayDestSel) overlayDestSel = dest
     }
   }
 
@@ -173,8 +238,10 @@ export function drawComposite(ctx, head, selClipIds, env) {
     const isSel = selected.has(c.id)
     const r = drawTextClip(ctx, c, cw, ch, { selected: isSel, time: head, trackStyle: track?.style })
     if (isSel) selRender = r
+    if (r?.box) hits.push({ id: c.id, kind: 'text', dest: boxToDest(r.box), handles: r.handles || null })
   }
   if (overlayDestSel) drawTransformHandles(ctx, overlayDestSel)
+  if (env.hitListRef) env.hitListRef.current = hits
   return selRender
 }
 
@@ -209,25 +276,23 @@ function drawCropRuler(ctx, bx, by, bw, bh) {
   ctx.restore()
 }
 
-// Dibujo del Main: siempre muestra el compuesto según la posición del cabezal.
-// La selección de un clip sólo afecta al borde de resaltado, nunca a la visibilidad temporal.
+// Canvas principal: el compuesto (resultado) es la vista por defecto.
+// El recorte de fuente (vídeo completo + recuadro) aparece en Clip Editor
+// y en Encuadre (al seleccionar un fill, o al pulsar Encuadre).
 export function drawMainView(head, env) {
   const {
     mainCanvasRef, clipsRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
-    playingRef, framingModeRef, mainTextBox, alignGuidesRef, clipModeRef, croppingRef,
+    playingRef, framingModeRef, mainTextBox, alignGuidesRef, clipModeRef, cropModeRef, croppingRef,
   } = env
   const canvas = mainCanvasRef.current
   if (!canvas) return
   const ctx = canvas.getContext('2d')
 
   const clip = clipsRef.current.find((c) => c.id === selRef.current)
-  const clipActive = clip && isVisualClip(clip) && head >= clip.start - 0.02 && head < clipEnd(clip)
-  // Clip Editor: siempre fuente + recuadro (el 9:16 vive en Resultado).
-  // Main Editor: en play de ese clip pasa al compuesto para ver fx.
-  const playingThis = playingRef.current && clipActive && clip.kind !== 'image' && !clipModeRef?.current
+  const cropEdit = !!(clipModeRef?.current || (cropModeRef?.current && !playingRef.current))
 
-  // Recorte (fuente + recuadro) en pausa, y siempre en Clip Editor.
-  if (clip && isVisualClip(clip) && !playingThis) {
+  // Recorte (fuente + recuadro): Clip Editor, o herramienta Encuadre con un visual seleccionado.
+  if (cropEdit && clip && isVisualClip(clip)) {
     const el = mediaEls.current.get(clip.id)
     const { w: vw, h: vh } = mediaSize(el)
     if (!el || !vw) {
@@ -287,12 +352,7 @@ export function drawMainView(head, env) {
     return
   }
 
-  // Para texto, vacío, o sin selección: mostrar siempre el compuesto según el cabezal.
-  // drawComposite ya respeta la visibilidad temporal de cada texto.
-  const a = outRef.current.w / outRef.current.h
-  const cw = a >= 1 ? 520 : Math.round(520 * a)
-  const ch = a >= 1 ? Math.round(520 / a) : 520
-  if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch }
+  sizeCanvasToOutput(canvas, outRef.current.w, outRef.current.h)
   mainTextBox.current = drawComposite(ctx, head, selIdsRef?.current?.length ? selIdsRef.current : (clip?.id ? [clip.id] : []), env)
   if (framingModeRef.current) drawFramingOverlay(ctx, canvas.width, canvas.height, framingModeRef.current)
   drawAlignGuides(ctx, canvas.width, canvas.height, alignGuidesRef?.current)

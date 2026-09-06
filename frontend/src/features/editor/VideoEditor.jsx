@@ -28,25 +28,42 @@ import { SHAPE_DEFAULT_DUR } from '../../lib/shapes'
 import { applyFrame, disableOverlay, enableOverlay, isOverlay, mediaSize, newTransform, videosAt } from '../../lib/clipLayout'
 import {
   AUDIO_FX_KEYS, applyVolumeFade, canKeyframe, clipPropsAt, clipVolumeAt, clampVolume, deleteKeyframeItem, flattenPatch, keyframeIdAt,
-  normalizeItems, opensEffectsOnSelect, patchKeyframe, upsertKeyframeAt,
+  normalizeItems, patchKeyframe, upsertKeyframeAt,
 } from '../../lib/clipKeyframes'
-import { drawComposite, drawMainView } from './render/canvas'
+import { drawMainView } from './render/canvas'
 import { useExportJob } from './hooks/useExportJob'
 import { useSubtitles } from './hooks/useSubtitles'
 import { useFavorites } from './hooks/useFavorites'
 import { snapshotTextStyle } from '../../lib/favorites'
-import { createMainDownHandler, createResultDownHandler } from './interactions'
+import { createCanvasDownHandler } from './interactions'
 import { kfSnap, normalizeFps, snapToFrame } from '../../lib/projectFps'
 import { fmtRuler, tickStep } from './timelineScale'
 import EdMaterial from './EdMaterial'
 import EdTimeline from './EdTimeline'
+import EdTopBar from './EdTopBar'
+import EdInspector from './EdInspector'
 import EdCrops from './EdCrops'
 import EdShape from './EdShape'
 import AnchoredMenu from '../../components/AnchoredMenu'
 import JobStatusBar from '../../components/JobStatusBar'
+import { useEditorHistory } from './hooks/useEditorHistory'
+import { usePanelLayout } from './hooks/usePanelLayout'
 import './editor.css'
 
 const AUDIO_DB_PRESETS = [-24, -18, -16, -14, -12, -10, -8]
+
+function EdSplit({ axis, kind, onDown, label }) {
+  return (
+    <div
+      className={`ed-split ${axis}`}
+      role="separator"
+      aria-orientation={axis === 'x' ? 'vertical' : 'horizontal'}
+      aria-label={label}
+      data-kind={kind}
+      onPointerDown={onDown}
+    />
+  )
+}
 
 function clipWorkspaceTracks() {
   return [{ id: 'V1', kind: 'video', name: 'V1', hidden: false, muted: false, locked: false }]
@@ -145,6 +162,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     catch { return 1 }
   })
   const [rowH, setRowH] = useState(52)
+  const panels = usePanelLayout()
 
   const [ctxMenu, setCtxMenu] = useState(null)      // { x, y, clip }
   const [trackMenu, setTrackMenu] = useState(null)  // { x, y, track }
@@ -154,6 +172,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [dragInfo, setDragInfo] = useState(null)    // { kind, duration, name }
   const [framingMode, setFramingMode] = useState(null) // { trackId, x, y, w } o null
   const [mainColTab, setMainColTab] = useState('main')
+  const [cropMode, setCropMode] = useState(false)
+  const [savedLabel, setSavedLabel] = useState('')
   const [clipMeta, setClipMeta] = useState({
     title: '', description: '', url: '', segStart: 0, segEnd: 0, segIndex: null,
     existingIndex: null,
@@ -164,8 +184,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [clipToast, setClipToast] = useState(null)
 
   const mainCanvasRef = useRef(null)
-  const resultCanvasRef = useRef(null)
   const mainStageRef = useRef(null)
+  const hitListRef = useRef([])
   const mediaEls = useRef(new Map())
   const rafRef = useRef(0)
   const playRef = useRef({ perf: 0, head: 0 })
@@ -184,6 +204,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const hiddenKfRef = useRef(hiddenKf); hiddenKfRef.current = hiddenKf
   const outRef = useRef({ w: outW, h: outH }); outRef.current = { w: outW, h: outH }
   const framingModeRef = useRef(null); framingModeRef.current = framingMode
+  const cropModeRef = useRef(false); cropModeRef.current = cropMode
   const previewVolRef = useRef(previewVol); previewVolRef.current = previewVol
   const alignGuidesRef = useRef(null)
   const croppingRef = useRef(false)
@@ -198,6 +219,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const duration = clips.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
   durationRef.current = duration
   const selectedClip = clips.find((c) => c.id === selClipId) || null
+  const hist = useEditorHistory(tracks, clips, loaded)
+  const histRef = useRef(hist)
+  histRef.current = hist
   const mcpBusyIds = useMemo(
     () => mcpBusyClipIds(mcpAudit.active, mcpAudit.entries, clips),
     [mcpAudit, clips],
@@ -219,15 +243,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     pendingKfSel.current = null
     if (selKfRef.current !== id) setSelKfId(id)
   }, [clips])
-
-  // Ajusta el buffer del canvas de Resultado al formato elegido (sin deformar).
-  useEffect(() => {
-    const c = resultCanvasRef.current
-    if (!c) return
-    const a = outW / outH
-    if (a >= 1) { c.width = 640; c.height = Math.round(640 / a) }
-    else { c.height = 640; c.width = Math.round(640 * a) }
-  }, [outW, outH])
 
   useEffect(() => { ensureEditorFonts() }, [])
 
@@ -297,7 +312,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
 
   useEffect(() => {
     if (!loaded || clipModeRef.current) return
-    const id = setTimeout(() => { saveTimeline(project.id, timelinePayload()).catch(() => {}) }, 800)
+    const id = setTimeout(() => {
+      saveTimeline(project.id, timelinePayload()).catch(() => {})
+      setSavedLabel('Guardado')
+    }, 800)
     return () => clearTimeout(id)
   }, [timelinePayload, loaded, project.id])
 
@@ -349,13 +367,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     return best
   }, [layerOf])
 
-  // --- Motor rAF: Main + Resultado + reproducción ---
+  // --- Motor rAF: canvas compuesto + reproducción ---
   useEffect(() => {
-    const resultCtx = resultCanvasRef.current?.getContext('2d')
     const env = {
       clipsRef, tracksRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
       playingRef, framingModeRef, mainCanvasRef, mainTextBox, topVideoAt, alignGuidesRef,
-      clipModeRef, croppingRef, fpsRef,
+      clipModeRef, cropModeRef, croppingRef, fpsRef, hitListRef,
     }
     const tick = () => {
       const total = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
@@ -428,11 +445,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             if (Math.abs(el.currentTime - expected) > 0.06) { try { el.currentTime = expected } catch { /* noop */ } }
           }
         }
-      }
-
-      if (resultCtx) {
-        const sel = clipsRef.current.find((c) => c.id === selRef.current)
-        drawComposite(resultCtx, drawHead, (sel && isOverlay(sel)) ? sel.id : null, env)
       }
 
       drawMainView(drawHead, env)
@@ -510,6 +522,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     clipTlRef.current = snapshotTl()
     applyTl(projectTlRef.current)
     clipModeRef.current = false
+    setCropMode(false)
+    hist.reset()
     setLinkPick(null)
     setMainColTab('main')
   }
@@ -518,6 +532,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     stopPlayback()
     projectTlRef.current = snapshotTl()
     clipModeRef.current = true
+    setCropMode(false)
+    hist.reset()
     setLinkPick(null)
     setMainColTab('clip')
     if (clipTlRef.current) applyTl(clipTlRef.current)
@@ -581,6 +597,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (mainColTab === 'main') projectTlRef.current = snapshotTl()
     clipModeRef.current = true
     clipTlRef.current = null
+    setCropMode(false)
+    hist.reset()
     setClipSaveJob(null)
     setFaceJob(null)
     faceGen.current += 1
@@ -905,7 +923,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setSelKfId(null)
     setFramingMode(null)
     const t = tracksRef.current.find((x) => x.id === id)
-    if (t?.kind === 'text' || t?.kind === 'audio') setMatTab('effects')
+    if (t?.kind === 'text' || t?.kind === 'audio') setCropMode(false)
   }
   function renameTrack(id, name) {
     const n = String(name || '').trim().slice(0, 32)
@@ -942,9 +960,20 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     selRef.current = next.anchorId
     setSelKfId(null)
     if (clip.track_id) setSelTrackId(clip.track_id)
-    if (!keepGroup) setFramingMode(null)
-    if (opensEffectsOnSelect(clip)) setMatTab('effects')
+    if (!keepGroup) {
+      setFramingMode(null)
+      if (isVisualClip(clip) && !isOverlay(clip)) setCropMode(true)
+      else setCropMode(false)
+    }
     return next
+  }
+  function clearCanvasSelection() {
+    setSelClipId(null)
+    setSelClipIds([])
+    selIdsRef.current = []
+    selRef.current = null
+    setSelKfId(null)
+    setCropMode(false)
   }
   function matchSelectedDurations() {
     const ids = selIdsRef.current
@@ -1231,11 +1260,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (existing) return existing.id
     return addTrack('text', style)
   }
-  function addText() {
+  function addText(preset) {
     const tid = ensureTextTrack()
     const track = tracksRef.current.find((t) => t.id === tid)
     const fromTrack = track?.style || {}
-    const style = {
+    let style = {
       ...defaultTextStyle(),
       x: fromTrack.x ?? 0.5,
       y: fromTrack.y ?? 0.5,
@@ -1243,13 +1272,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       size: fromTrack.size ?? defaultTextStyle().size,
       opacity: fromTrack.opacity ?? 1,
     }
+    if (preset) style = applyThemeToStyle(style, preset)
     const end = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
     const dur = Math.max(3, +(end - playhead).toFixed(3))
-    const clip = makeTextClip(tid, playhead, dur, 'Texto', style)
+    const clip = makeTextClip(tid, playhead, dur, preset?.sample || 'Texto', style)
     setClips((prev) => [...prev, clip])
     setSelClipId(clip.id)
     setSelClipIds([clip.id])
     setSelKfId(null)
+    setMatTab('text')
   }
   function changeText(id, text) {
     setClips((prev) => prev.map((c) => (c.id === id ? { ...c, text, name: (text || 'Texto').slice(0, 22) } : c)))
@@ -1487,15 +1518,21 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   })
   const fav = useFavorites(project.id)
 
-  // --- Arrastrar en el Main: mover texto o reencuadrar ---
-  const onMainDown = createMainDownHandler({
+  function applyHistSnap(s) {
+    if (!s) return
+    setTracks(s.tracks || [])
+    setClips(s.clips || [])
+  }
+
+  // --- Arrastrar en el canvas: compuesto, o recorte en modo encuadre ---
+  const onCanvasDown = createCanvasDownHandler({
     mainCanvasRef, framingModeRef, playingRef, stopPlayback, setFramingMode,
     selectedClip, mainTextBox, changeStyle, changeShape, mediaEls, playhead, upsertKeyframe, outAspect,
     changeReframe, clipsRef, tracksRef, playheadRef, alignGuidesRef, seek: scrub, croppingRef,
-  })
-  const onResultDown = createResultDownHandler({
-    resultCanvasRef, selectedClip, playhead, mediaEls, outW, outH,
-    changeTransform, playingRef, stopPlayback,
+    clipModeRef, cropModeRef, hitListRef,
+    onSelectClip: handleSelectClip,
+    onClearSelection: clearCanvasSelection,
+    changeTransform, commitPose, upsertKeyframe, outW, outH,
   })
 
   // --- Teclado ---
@@ -1508,7 +1545,18 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     }
     function onKey(e) {
       if (typingTarget(document.activeElement) || typingTarget(e.target)) return
-      if (e.altKey || e.ctrlKey || e.metaKey) return
+      if (e.ctrlKey || e.metaKey) {
+        const k = e.key.toLowerCase()
+        if (k === 'z') {
+          e.preventDefault()
+          applyHistSnap(e.shiftKey ? histRef.current.redo() : histRef.current.undo())
+        } else if (k === 'y') {
+          e.preventDefault()
+          applyHistSnap(histRef.current.redo())
+        }
+        return
+      }
+      if (e.altKey) return
       if (e.code === 'Space') {
         if (e.repeat) { e.preventDefault(); return }
         e.preventDefault()
@@ -1573,32 +1621,56 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   }
 
   return (
-    <div className={`veditor${mainColTab === 'clip' ? ' clip-mode' : ''}${linkPick ? ' link-picking' : ''}`}>
+    <div
+      ref={panels.editorRef}
+      className={`veditor${mainColTab === 'clip' ? ' clip-mode' : ''}${linkPick ? ' link-picking' : ''}${panels.dragging ? ` is-resizing is-rs-${panels.dragging}` : ''}`}
+      style={panels.vars}
+    >
       <div className="ed-hidden-media">{mediaPool}</div>
 
-      {/* ===== PARTE SUPERIOR: 3 columnas ===== */}
-      <div className="veditor-top">
+      <EdTopBar
+        projectName={project.name}
+        savedLabel={savedLabel}
+        canUndo={hist.canUndo}
+        canRedo={hist.canRedo}
+        onBack={onBack}
+        onUndo={() => applyHistSnap(hist.undo())}
+        onRedo={() => applyHistSnap(hist.redo())}
+        onHelp={() => setClipToast({ type: 'success', message: 'Espacio: play · S: dividir · Supr: borrar · Ctrl+Z: deshacer' })}
+        onSettings={() => setMatTab('settings')}
+        onChat={() => setMatTab('chat')}
+        chatBusy={!!mcpAudit.active?.length}
+        formatId={curFormat}
+        onFormat={setFormat}
+        onOpenJson={onOpenJson}
+        clipMode={mainColTab === 'clip'}
+        onLeaveClip={goMainTab}
+        exporting={exporting}
+        exportPct={exportJob?.progress}
+        exportDone={exportJob?.status === 'done'}
+        exportUrl={exportJob?.export_url}
+        exportBusyDisabled={!clips.length}
+        onExport={doExport}
+        onClearExport={() => setExportJob(null)}
+        clipSaving={clipSaving}
+        clipSavePct={clipSaveJob?.progress}
+        clipSaveDisabled={!clipMeta.url || !clips.length || clipMeta.preparing}
+        onSaveClip={saveClip}
+        saveClipLabel={editingExisting ? 'Editar clip' : 'Guardar clip'}
+        formatCustomLabel={`${outW}×${outH}`}
+      />
+
+      <div className="veditor-workspace" ref={panels.workRef}>
         <EdMaterial
           project={project}
           onAdd={addAsset}
           onDragInfo={setDragInfo}
-          onBack={onBack}
           onRefresh={onChange}
           fav={fav}
           onEditYtClip={openClipEditor}
-          selectedClip={isAudioTrackSel ? (trackAudioClip || { kind: 'audio', volume: 1, muted: false, audio_fx: {}, start: 0 }) : selectedClip}
-          onChangeFx={isAudioTrackSel ? (patch) => patchTrackAudio(selTrackObj.id, patch) : patchClipFx}
-          audioMode={isAudioTrackSel ? 'track' : null}
-          trackLabel={isAudioTrackSel ? selTrackObj.name : null}
-          trackEmpty={isAudioTrackSel && !trackAudioClip}
-          onAddKf={isAudioTrackSel ? undefined : addKeyframeAtPlayhead}
-          onFade={isAudioTrackSel ? (side) => fadeTrackAudio(selTrackObj.id, side) : applySelectedFade}
-          textStyle={isTextSel ? effectiveTextStyle(selTrackObj?.style, selectedClip.style) : (isTextTrackSel ? selTrackObj.style : null)}
-          textMode={isTextSel ? 'clip' : (isTextTrackSel ? 'track' : null)}
-          onChangeTextStyle={(patch) => {
-            if (isTextSel) changeStyle(selectedClip.id, patch)
-            else if (isTextTrackSel) changeTrackStyle(selTrackObj.id, patch)
-          }}
+          selectedClip={selectedClip}
+          onChangeFx={patchClipFx}
+          onAddText={addText}
           onApplyTextPreset={(p) => {
             if (isTextSel) applyPreset(selectedClip.id, p)
             else if (isTextTrackSel) applyTrackPreset(selTrackObj.id, p)
@@ -1606,45 +1678,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           matTab={matTab}
           onMatTab={setMatTab}
           timelineClips={clips}
-          playhead={playhead}
-          fps={fps}
           onExportFps={setFps}
           aiContext={{ project_id: project.id, selected_clip_id: selClipId || null, selected_track_id: selTrackId || null, current_time: Math.round((playhead || 0) * 100) / 100 }}
           onReloadTimeline={reloadTimeline}
           onMcpAudit={setMcpAudit}
-          onPose={(patch) => !isAudioTrackSel && selectedClip && commitPose(selectedClip.id, patch)}
-          onChangeFrame={(slot) => applyClipFrame(selectedClip, slot)}
-          selKfId={selKfId}
-          onInterpKf={interpAnimKf}
-          textEditor={{
-            clip: isTextSel ? selectedClip : null,
-            selectionCount: selClipIds.length,
-            onChangeText: (v) => { if (isTextSel) changeText(selectedClip.id, v) },
-            onChangeDur: (d) => {
-              if (!isTextSel || !Number.isFinite(d) || d <= 0) return
-              const next = Math.max(0.15, d)
-              mutateClip(selectedClip.id, {
-                out_point: +(selectedClip.in_point + next).toFixed(3),
-                source_duration: +(selectedClip.in_point + next).toFixed(3),
-              })
-            },
-            onApplyAsGlobalTemplate: isTextSel ? () => applyGlobalTemplate(selectedClip) : undefined,
-            framing: !!(framingMode && selTrackObj && framingMode.trackId === selTrackObj.id),
-            onStartFraming: isTextTrackSel ? () => startFraming(selTrackObj) : undefined,
-            onSaveFraming: isTextTrackSel ? saveFraming : undefined,
-            onCancelFraming: isTextTrackSel ? cancelFraming : undefined,
-            textFavorites: fav.favs.textStyles,
-            onSaveFavorite: (st) => fav.saveTextStyle(st),
-            onApplyFavorite: applyTextFavorite,
-            onDeleteFavorite: (id) => fav.removeTextStyle(id),
-            onFragment: isTextTrackSel
-              ? () => requestFragmentTrack(selTrackObj.id)
-              : (isTextSel ? () => requestFragmentClip(selectedClip.id) : undefined),
-          }}
         />
+        <EdSplit axis="x" kind="materials" label="Redimensionar materiales" onDown={panels.begin('materials')} />
 
-        {/* MAIN / CLIP EDITOR */}
-        <div className="ed-col ed-col-main">
+        <div className="ed-canvas-col">
           <div className="ed-col-tabs">
             <button
               type="button"
@@ -1661,138 +1702,85 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               Clip Editor
             </button>
           </div>
-          <div className="ed-main-body">
-            <div className="ed-main-stage" ref={mainStageRef}
-              onPointerDown={onMainDown}
-              style={{ cursor: (canEditFrame || isTextSel || isShapeSel || framingMode) ? 'crosshair' : 'default' }}>
-              <canvas ref={mainCanvasRef} width={520} height={292} className="ed-main-canvas" />
-              {mainColTab === 'clip' && clipMeta.preparing && (
-                <div className="ed-stage-prep">
-                  <JobStatusBar
-                    progress={clipMeta.prepProgress}
-                    message={clipMeta.prepMsg}
-                  />
-                </div>
-              )}
-              {mainColTab === 'clip' && !clipMeta.preparing && !clips.length && (
-                <div className="ed-stage-empty">Pulsa Editar en un tramo recomendado</div>
-              )}
-              {mainColTab === 'main' && clips.length === 0 && !framingMode && <div className="ed-stage-empty">Agrega clips o texto al timeline</div>}
-              {canEditFrame && !overlayOn && <div className="ed-stage-hint">Arrastra el recuadro · esquinas para zoom</div>}
-              {canEditFrame && overlayOn && <div className="ed-stage-hint">Esquinas: encuadre de la fuente · el tamaño en Resultado no cambia</div>}
-              {isTextSel && (
-                <div className="ed-stage-hint">
-                  {selClipIds.length > 1
-                    ? `${selClipIds.length} textos · arrastra en el timeline para mover el grupo`
-                    : 'Arrastra el texto para moverlo · botón Global para aplicar a todos'}
-                </div>
-              )}
-              {isShapeSel && (
-                <div className="ed-stage-hint">Arrastra la figura para moverla · esquinas para tamaño · círculo para rotar</div>
-              )}
-              {framingMode && <div className="ed-stage-hint">Ajusta el recuadro amarillo y pulsa Guardar</div>}
-            </div>
-            <div className="ed-main-tools">
-              {mainColTab === 'main' ? (
-                <>
-                  <button className="primary alt small" onClick={addText} title="Añadir un texto a la composición">
-                    <Icon name="title" size={15} /> Agregar texto
-                  </button>
-                  {canEditFrame && (
-                    <label className="ed-chip" title="Colocar este clip encima del canvas sin rellenar el formato de salida">
-                      <input type="checkbox" checked={overlayOn}
-                        onChange={(e) => toggleOverlay(selectedClip, e.target.checked)} /> Superponer
-                    </label>
-                  )}
-                </>
-              ) : (
-                <div className="ed-clip-fields">
-                  <input
-                    className="ed-clip-title"
-                    placeholder="Título"
-                    value={clipMeta.title}
-                    onChange={(e) => setClipMeta((m) => ({ ...m, title: e.target.value }))}
-                  />
-                  <input
-                    className="ed-clip-desc"
-                    placeholder="Descripción"
-                    value={clipMeta.description}
-                    onChange={(e) => setClipMeta((m) => ({ ...m, description: e.target.value }))}
-                  />
-                  {clipMeta.err && <div className="ed-mat-err">{clipMeta.err}</div>}
-                  {faceBusy && (
-                    <div className="ed-clip-face-msg">
-                      Seguimiento de cara… {Math.round((faceJob.progress || 0.05) * 100)}%
-                    </div>
-                  )}
+          {mainColTab === 'clip' && (
+            <div className="ed-clip-banner">
+              <span className="ed-clip-banner-label">Preparar clip</span>
+              <input
+                className="ed-clip-title"
+                placeholder="Título"
+                value={clipMeta.title}
+                onChange={(e) => setClipMeta((m) => ({ ...m, title: e.target.value }))}
+              />
+              <input
+                className="ed-clip-desc"
+                placeholder="Descripción"
+                value={clipMeta.description}
+                onChange={(e) => setClipMeta((m) => ({ ...m, description: e.target.value }))}
+              />
+              {clipMeta.err && <div className="ed-mat-err">{clipMeta.err}</div>}
+              {faceBusy && (
+                <div className="ed-clip-face-msg">
+                  Seguimiento de cara… {Math.round((faceJob.progress || 0.05) * 100)}%
                 </div>
               )}
             </div>
-          </div>
-        </div>
-
-        {/* RESULTADO FINAL */}
-        <div className="ed-col ed-col-result">
-          <div className="ed-col-head">
-            <span> Resultado</span>
-            <div className="ed-col-head-tools">
-              <select className="select mini" value={curFormat} onChange={(e) => setFormat(e.target.value)} title="Dimensiones de salida">
-                {FORMATS.map((f) => <option key={f.id} value={f.id}>{f.id}</option>)}
-                {curFormat === 'custom' && <option value="custom">Personalizado</option>}
-              </select>
-              <button className="ghost small" onClick={onOpenJson} title="Ver / editar el JSON del proyecto">
-                <Icon name="data_object" size={15} /> JSON
-              </button>
-              {mainColTab === 'clip' ? (
-                clipSaving ? (
-                  <span className="ed-export-pct" title={clipSaveJob.message || (editingExisting ? 'Actualizando…' : 'Guardando…')}>
-                    {Math.round((clipSaveJob.progress || 0.05) * 100)}%
-                  </span>
-                ) : (
-                  <button
-                    className="primary small"
-                    onClick={saveClip}
-                    disabled={!clipMeta.url || !clips.length || clipMeta.preparing}
-                    title={editingExisting ? 'Sobrescribir este clip en el material' : 'Guardar este clip en el material'}
-                  >
-                    <Icon name={editingExisting ? 'movie_edit' : 'save'} size={15} />
-                    {editingExisting ? 'Editar clip' : 'Guardar clip'}
-                  </button>
-                )
-              ) : exporting ? (
-                <span className="ed-export-pct" title={exportJob.message || 'Exportando…'}>
-                  {Math.round((exportJob.progress || 0.05) * 100)}%
-                </span>
-              ) : exportJob?.status === 'done' ? (
-                <>
-                  <a className="primary small" href={exportJob.export_url} download>
-                    <Icon name="download" size={15} /> Descargar
-                  </a>
-                  <button className="ghost small" onClick={() => setExportJob(null)}>Editar</button>
-                </>
-              ) : (
-                <button className="primary small" onClick={doExport} disabled={!clips.length} title="Exportar el resultado">
-                  <Icon name="movie" size={15} /> Exportar
-                </button>
-              )}
-            </div>
-          </div>
-          <div className="ed-result-stage">
-            <canvas
-              ref={resultCanvasRef}
-              width={360}
-              height={640}
-              className="ed-result-canvas"
-              onPointerDown={onResultDown}
-              style={{ cursor: overlayOn ? 'move' : 'default' }}
-            />
-            {overlayOn && <div className="ed-stage-hint">Arrastra el recuadro para colocar · esquinas escala · punto rota</div>}
+          )}
+          <div
+            className="ed-canvas-stage"
+            ref={mainStageRef}
+            onPointerDown={onCanvasDown}
+            onDragOver={(e) => {
+              if ([...e.dataTransfer.types].includes('application/x-material')) e.preventDefault()
+            }}
+            onDrop={(e) => {
+              e.preventDefault()
+              const raw = e.dataTransfer.getData('application/x-material')
+              if (!raw) return
+              try { dropAsset(JSON.parse(raw), selTrackId, playhead) } catch { /* noop */ }
+            }}
+            style={{ cursor: (cropMode || mainColTab === 'clip' || framingMode) ? 'crosshair' : ((canEditFrame || isTextSel || isShapeSel) ? 'move' : 'default') }}
+          >
+            <canvas ref={mainCanvasRef} width={540} height={960} className="ed-main-canvas" />
+            {mainColTab === 'clip' && clipMeta.preparing && (
+              <div className="ed-stage-prep">
+                <JobStatusBar progress={clipMeta.prepProgress} message={clipMeta.prepMsg} />
+              </div>
+            )}
+            {mainColTab === 'clip' && !clipMeta.preparing && !clips.length && (
+              <div className="ed-stage-empty">Elige un tramo en Materiales para prepararlo</div>
+            )}
+            {mainColTab === 'main' && clips.length === 0 && !framingMode && (
+              <div className="ed-stage-empty">Arrastra un clip al timeline o al canvas</div>
+            )}
             {(exporting || clipSaving) && (
               <div className="ed-result-exporting">
                 <div className="progress"><span style={{ width: `${((clipSaving ? clipSaveJob.progress : exportJob.progress) || 0.05) * 100}%` }} /></div>
                 <span>{(clipSaving ? clipSaveJob.message : exportJob.message) || (clipSaving ? 'Guardando…' : 'Exportando…')}</span>
               </div>
             )}
+            {cropMode && mainColTab === 'main' && canEditFrame && (
+              <div className="ed-stage-hint">Vídeo completo · arrastra el recuadro para otro plano · esquinas para zoom</div>
+            )}
+            {mainColTab === 'clip' && canEditFrame && (
+              <div className="ed-stage-hint">Ajusta el recuadro · Guardar clip lo deja en Materiales</div>
+            )}
+            {!cropMode && mainColTab === 'main' && canEditFrame && overlayOn && (
+              <div className="ed-stage-hint">Arrastra para colocar · esquinas escala · punto rota</div>
+            )}
+            {!cropMode && mainColTab === 'main' && canEditFrame && !overlayOn && (
+              <div className="ed-stage-hint">Arrastra para panear el plano · esquinas zoom · punto rota</div>
+            )}
+            {isTextSel && !cropMode && (
+              <div className="ed-stage-hint">
+                {selClipIds.length > 1
+                  ? `${selClipIds.length} textos · arrastra en el timeline para mover el grupo`
+                  : 'Arrastra el texto · esquinas para tamaño'}
+              </div>
+            )}
+            {isShapeSel && !cropMode && (
+              <div className="ed-stage-hint">Arrastra la figura · esquinas para tamaño · círculo para rotar</div>
+            )}
+            {framingMode && <div className="ed-stage-hint">Ajusta el recuadro amarillo y pulsa Guardar</div>}
           </div>
           <div className="ed-transport">
             <button className="icon-btn" type="button" onClick={() => nudgePlayhead(-0.5)} title="Atrás 0,5s (←)">
@@ -1819,11 +1807,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             <span className="ed-time">{fmtRuler(playhead, { step: tickStep(pps, fps), fps, long: duration >= 3600 })} / {fmt(duration)}</span>
             <label className="ed-audio-db" title="Nivel de audio objetivo del render (LUFS). No cambia la vista previa.">
               <Icon name="volume_up" size={14} />
-              <select
-                className="select mini"
-                value={audioDb}
-                onChange={(e) => setAudioDb(Number(e.target.value))}
-              >
+              <select className="select mini" value={audioDb} onChange={(e) => setAudioDb(Number(e.target.value))}>
                 {(AUDIO_DB_PRESETS.includes(Number(audioDb))
                   ? AUDIO_DB_PRESETS
                   : [...AUDIO_DB_PRESETS, Number(audioDb)].sort((a, b) => a - b)
@@ -1836,10 +1820,88 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           {exportJob?.status === 'error' && <div className="error small">⚠️ {exportJob.error}</div>}
           {clipSaveJob?.status === 'error' && <div className="error small">⚠️ {clipSaveJob.error}</div>}
         </div>
+        <EdSplit axis="x" kind="inspector" label="Redimensionar inspector" onDown={panels.begin('inspector')} />
+
+        <EdInspector
+          selectedClip={isAudioTrackSel ? (trackAudioClip || { kind: 'audio', volume: 1, muted: false, audio_fx: {}, start: 0 }) : selectedClip}
+          textMode={isTextSel ? 'clip' : (isTextTrackSel ? 'track' : null)}
+          audioMode={isAudioTrackSel ? 'track' : null}
+          cropMode={cropMode}
+          onCropMode={setCropMode}
+          overlayOn={overlayOn}
+          onToggleOverlay={(on) => selectedClip && toggleOverlay(selectedClip, on)}
+          clipMode={mainColTab === 'clip'}
+          effectsProps={{
+            clip: isAudioTrackSel ? (trackAudioClip || { kind: 'audio', volume: 1, muted: false, audio_fx: {}, start: 0 }) : selectedClip,
+            onChangeFx: isAudioTrackSel ? (patch) => patchTrackAudio(selTrackObj.id, patch) : patchClipFx,
+            textStyle: isTextSel ? effectiveTextStyle(selTrackObj?.style, selectedClip.style) : (isTextTrackSel ? selTrackObj.style : null),
+            textMode: isTextSel ? 'clip' : (isTextTrackSel ? 'track' : null),
+            onChangeTextStyle: (patch) => {
+              if (isTextSel) changeStyle(selectedClip.id, patch)
+              else if (isTextTrackSel) changeTrackStyle(selTrackObj.id, patch)
+            },
+            onApplyTextPreset: (p) => {
+              if (isTextSel) applyPreset(selectedClip.id, p)
+              else if (isTextTrackSel) applyTrackPreset(selTrackObj.id, p)
+            },
+            playhead,
+            onPose: (patch) => !isAudioTrackSel && selectedClip && commitPose(selectedClip.id, patch),
+            onChangeFrame: (slot) => applyClipFrame(selectedClip, slot),
+            selKfId,
+            onInterpKf: interpAnimKf,
+            fps,
+            audioMode: isAudioTrackSel ? 'track' : null,
+            trackLabel: isAudioTrackSel ? selTrackObj.name : null,
+            trackEmpty: isAudioTrackSel && !trackAudioClip,
+            onAddKf: isAudioTrackSel ? undefined : addKeyframeAtPlayhead,
+            onFade: isAudioTrackSel ? (side) => fadeTrackAudio(selTrackObj.id, side) : applySelectedFade,
+            textEditor: {
+              clip: isTextSel ? selectedClip : null,
+              selectionCount: selClipIds.length,
+              onChangeText: (v) => { if (isTextSel) changeText(selectedClip.id, v) },
+              onChangeDur: (d) => {
+                if (!isTextSel || !Number.isFinite(d) || d <= 0) return
+                const next = Math.max(0.15, d)
+                mutateClip(selectedClip.id, {
+                  out_point: +(selectedClip.in_point + next).toFixed(3),
+                  source_duration: +(selectedClip.in_point + next).toFixed(3),
+                })
+              },
+              onApplyAsGlobalTemplate: isTextSel ? () => applyGlobalTemplate(selectedClip) : undefined,
+              framing: !!(framingMode && selTrackObj && framingMode.trackId === selTrackObj.id),
+              onStartFraming: isTextTrackSel ? () => startFraming(selTrackObj) : undefined,
+              onSaveFraming: isTextTrackSel ? saveFraming : undefined,
+              onCancelFraming: isTextTrackSel ? cancelFraming : undefined,
+              textFavorites: fav.favs.textStyles,
+              onSaveFavorite: (st) => fav.saveTextStyle(st),
+              onApplyFavorite: applyTextFavorite,
+              onDeleteFavorite: (id) => fav.removeTextStyle(id),
+              onFragment: isTextTrackSel
+                ? () => requestFragmentTrack(selTrackObj.id)
+                : (isTextSel ? () => requestFragmentClip(selectedClip.id) : undefined),
+            },
+          }}
+          shapeProps={isShapeSel ? {
+            clip: selectedClip,
+            layer: layerInfo,
+            onMoveLayer: (action) => moveLayer(selectedClip.id, action),
+            onChangeShape: (patch) => changeShape(selectedClip.id, patch),
+            onChangeDur: (d) => {
+              if (!Number.isFinite(d) || d <= 0) return
+              const next = Math.max(0.15, d)
+              mutateClip(selectedClip.id, {
+                out_point: +(selectedClip.in_point + next).toFixed(3),
+                source_duration: +(selectedClip.in_point + next).toFixed(3),
+              })
+            },
+          } : null}
+        />
       </div>
 
-      {/* ===== PARTE INFERIOR: Timeline + Encuadres/Texto ===== */}
-      <div className={`veditor-bottom${mainColTab === 'clip' ? ' clip-mode' : ''}`}>
+      <EdSplit axis="y" kind="bottom" label="Redimensionar timeline" onDown={panels.begin('bottom')} />
+
+      {/* ===== Timeline + keyframes ===== */}
+      <div className={`veditor-bottom${mainColTab === 'clip' ? ' clip-mode' : ''}`} ref={panels.bottomRef}>
         <EdTimeline
           tracks={tracks} clips={clips} pps={pps} setPps={setPps} fps={fps}
           duration={duration} playhead={playhead} rowH={rowH} setRowH={setRowH}
@@ -1899,37 +1961,22 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onCopyDesc={copyClipDescription}
           audioMaterials={project.audios}
         />
-        {isShapeSel ? (
-          <EdShape
-            clip={selectedClip}
-            layer={layerInfo}
-            onMoveLayer={(action) => moveLayer(selectedClip.id, action)}
-            onChangeShape={(patch) => changeShape(selectedClip.id, patch)}
-            onChangeDur={(d) => {
-              if (!Number.isFinite(d) || d <= 0) return
-              const next = Math.max(0.15, d)
-              mutateClip(selectedClip.id, {
-                out_point: +(selectedClip.in_point + next).toFixed(3),
-                source_duration: +(selectedClip.in_point + next).toFixed(3),
-              })
-            }}
-          />
-        ) : (
-          <EdCrops
-            clip={selectedClip}
-            selKfId={selKfId}
-            fps={fps}
-            playhead={playhead}
-            layer={layerInfo}
-            onMoveLayer={(action) => moveLayer(selectedClip.id, action)}
-            onChangeFx={patchClipFx}
-            onPose={(patch) => selectedClip && commitPose(selectedClip.id, patch)}
-            onFade={applySelectedFade}
-            onAddKf={addKeyframeAtPlayhead}
-            onSelectKf={(k) => k && selectTimelineKf(k.id)}
-            onDeleteKf={deleteAnimKf}
-          />
-        )}
+        <EdSplit axis="x" kind="crops" label="Redimensionar keyframes" onDown={panels.begin('crops')} />
+        <EdCrops
+          clip={selectedClip}
+          selKfId={selKfId}
+          fps={fps}
+          playhead={playhead}
+          hideVolume
+          layer={layerInfo}
+          onMoveLayer={(action) => selectedClip && moveLayer(selectedClip.id, action)}
+          onChangeFx={patchClipFx}
+          onPose={(patch) => selectedClip && commitPose(selectedClip.id, patch)}
+          onFade={applySelectedFade}
+          onAddKf={addKeyframeAtPlayhead}
+          onSelectKf={(k) => k && selectTimelineKf(k.id)}
+          onDeleteKf={deleteAnimKf}
+        />
       </div>
 
       {/* Menú contextual (click derecho en clip) */}
