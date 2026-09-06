@@ -1,5 +1,4 @@
 import Icon from '../../components/Icon'
-import { FORMATS } from './editorModel'
 
 export default function EdTopBar({
   projectName,
@@ -13,8 +12,6 @@ export default function EdTopBar({
   onSettings,
   onChat,
   chatBusy,
-  formatId,
-  onFormat,
   onOpenJson,
   clipMode,
   onLeaveClip,
@@ -30,7 +27,6 @@ export default function EdTopBar({
   clipSaveDisabled,
   onSaveClip,
   saveClipLabel,
-  formatCustomLabel,
 }) {
   return (
     <header className="ed-topbar">
@@ -67,15 +63,6 @@ export default function EdTopBar({
         <button className="icon-btn" type="button" onClick={onHelp} title="Atajos: Espacio reproduce, S divide, Supr elimina, Ctrl+Z deshace">
           <Icon name="help_outline" size={18} />
         </button>
-        <select
-          className="select mini ed-topbar-format"
-          value={formatId}
-          onChange={(e) => onFormat(e.target.value)}
-          title="Formato de salida"
-        >
-          {FORMATS.map((f) => <option key={f.id} value={f.id}>{f.id}</option>)}
-          {formatId === 'custom' && <option value="custom">{formatCustomLabel || 'Personalizado'}</option>}
-        </select>
         <button className="ghost small" type="button" onClick={onOpenJson} title="Ver / editar el JSON del proyecto">
           <Icon name="data_object" size={15} /> JSON
         </button>

@@ -169,11 +169,14 @@ export function drawReframe(ctx, video, reframe, srcTime, outAspect = OUT_RATIO,
   const vw = video.videoWidth || video.naturalWidth, vh = video.videoHeight || video.naturalHeight
   if (!vw || !vh) return
   const mode = reframe?.pan_mode || 'smooth'
+  // `dest` opcional: región de salida (px). Por defecto, todo el canvas. Permite
+  // dibujar el clip fill dentro del recuadro Main (workspace estilo CapCut).
+  const area = opts?.dest || { dx: 0, dy: 0, dw: c.width, dh: c.height }
   if (opts?.clear !== false) ctx.clearRect(0, 0, c.width, c.height)
 
   if (!reframe || !reframe.dual_crop) {
     const fr = frameAt(reframe?.keyframes, srcTime, reframe?.zoom ?? 1, mode)
-    blit(ctx, video, sourceDrawRect(fr, vw, vh, { dx: 0, dy: 0, dw: c.width, dh: c.height }, outAspect))
+    blit(ctx, video, sourceDrawRect(fr, vw, vh, area, outAspect))
     return
   }
 
@@ -186,14 +189,14 @@ export function drawReframe(ctx, video, reframe, srcTime, outAspect = OUT_RATIO,
     blit(ctx, video, sourceDrawRect(fr, vw, vh, dest, tAspect))
   }
   if (orient === 'vertical') {
-    draw(reframe.keyframes, z1, { dx: 0, dy: 0, dw: c.width, dh: c.height / 2 })
+    draw(reframe.keyframes, z1, { dx: area.dx, dy: area.dy, dw: area.dw, dh: area.dh / 2 })
     draw(reframe.keyframes2?.length ? reframe.keyframes2 : reframe.keyframes, z2, {
-      dx: 0, dy: c.height / 2, dw: c.width, dh: c.height / 2,
+      dx: area.dx, dy: area.dy + area.dh / 2, dw: area.dw, dh: area.dh / 2,
     })
   } else {
-    draw(reframe.keyframes, z1, { dx: 0, dy: 0, dw: c.width / 2, dh: c.height })
+    draw(reframe.keyframes, z1, { dx: area.dx, dy: area.dy, dw: area.dw / 2, dh: area.dh })
     draw(reframe.keyframes2?.length ? reframe.keyframes2 : reframe.keyframes, z2, {
-      dx: c.width / 2, dy: 0, dw: c.width / 2, dh: c.height,
+      dx: area.dx + area.dw / 2, dy: area.dy, dw: area.dw / 2, dh: area.dh,
     })
   }
 }

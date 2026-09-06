@@ -41,6 +41,7 @@ import { fmtRuler, tickStep } from './timelineScale'
 import EdMaterial from './EdMaterial'
 import EdTimeline from './EdTimeline'
 import EdTopBar from './EdTopBar'
+import EdViewerTools from './EdViewerTools'
 import EdInspector from './EdInspector'
 import EdCrops from './EdCrops'
 import EdShape from './EdShape'
@@ -49,8 +50,6 @@ import JobStatusBar from '../../components/JobStatusBar'
 import { useEditorHistory } from './hooks/useEditorHistory'
 import { usePanelLayout } from './hooks/usePanelLayout'
 import './editor.css'
-
-const AUDIO_DB_PRESETS = [-24, -18, -16, -14, -12, -10, -8]
 
 function EdSplit({ axis, kind, onDown, label }) {
   return (
@@ -76,7 +75,7 @@ function HiddenMedia({ clip, src, mediaEls, onLoadedMetadata }) {
     else mediaEls.current.delete(id)
   }, [id, mediaEls])
   if (clip.kind === 'image') {
-    return <img alt="" loading="eager" decoding="async" src={src} ref={ref} />
+    return <img alt="" loading="eager" decoding="async" src={src} ref={ref} onLoad={onLoadedMetadata} />
   }
   const mediaProps = { src, ref, preload: 'auto', onLoadedMetadata }
   return clip.kind === 'video'
@@ -173,6 +172,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [framingMode, setFramingMode] = useState(null) // { trackId, x, y, w } o null
   const [mainColTab, setMainColTab] = useState('main')
   const [cropMode, setCropMode] = useState(false)
+  // Zoom SOLO visual del canvas (aleja/acerca la vista para ver alrededor del encuadre).
+  // No toca el clip ni el export. Independiente por editor (Main vs Clip).
+  const [mainZoom, setMainZoom] = useState(1)
+  const [clipZoom, setClipZoom] = useState(1)
+  const viewZoom = mainColTab === 'clip' ? clipZoom : mainZoom
+  const setViewZoom = mainColTab === 'clip' ? setClipZoom : setMainZoom
   const [savedLabel, setSavedLabel] = useState('')
   const [clipMeta, setClipMeta] = useState({
     title: '', description: '', url: '', segStart: 0, segEnd: 0, segIndex: null,
@@ -205,6 +210,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const outRef = useRef({ w: outW, h: outH }); outRef.current = { w: outW, h: outH }
   const framingModeRef = useRef(null); framingModeRef.current = framingMode
   const cropModeRef = useRef(false); cropModeRef.current = cropMode
+  const viewZoomRef = useRef(1); viewZoomRef.current = viewZoom
   const previewVolRef = useRef(previewVol); previewVolRef.current = previewVol
   const alignGuidesRef = useRef(null)
   const croppingRef = useRef(false)
@@ -371,8 +377,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   useEffect(() => {
     const env = {
       clipsRef, tracksRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
-      playingRef, framingModeRef, mainCanvasRef, mainTextBox, topVideoAt, alignGuidesRef,
-      clipModeRef, cropModeRef, croppingRef, fpsRef, hitListRef,
+      playingRef, framingModeRef, mainCanvasRef, mainStageRef, mainTextBox, topVideoAt, alignGuidesRef,
+      clipModeRef, cropModeRef, croppingRef, fpsRef, hitListRef, viewZoomRef,
     }
     const tick = () => {
       const total = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
@@ -491,6 +497,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   function snapshotTl() {
     return {
       tracks, clips, playhead, selClipId, selClipIds, selTrackId, selKfId, pps,
+      outW, outH,  // formato de salida: independiente por editor (Main vs Clip)
     }
   }
   function applyTl(s) {
@@ -504,6 +511,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setSelTrackId(s.selTrackId)
     setSelKfId(s.selKfId)
     setPps(s.pps)
+    if (s.outW) setOutW(s.outW)
+    if (s.outH) setOutH(s.outH)
   }
   function applyEmptyClipTl() {
     setTracks(clipWorkspaceTracks())
@@ -720,6 +729,41 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     }))
   }
 
+  // Clips nuevos "planos" (sin recorte/paneo horneado) arrancan como objeto libre:
+  // Escala 100% = altura del clip = altura del cuadro naranja, centrado. Los clips
+  // preparados/guardados (con reframe) conservan su encuadre.
+  function wantsBaseFit(clip) {
+    if (!isVisualClip(clip)) return false
+    const rf = clip.reframe
+    if (!rf) return true
+    if (rf.keyframes?.length) return false
+    if (rf.crop_w != null || rf.crop_h != null) return false
+    if (rf.zoom != null && Math.abs(rf.zoom - 1) > 0.001) return false
+    return true
+  }
+  const flagBaseFit = (clip) => (wantsBaseFit(clip) ? { ...clip, _baseFit: true } : clip)
+
+  // Al cargar el medio, coloca el clip nuevo como objeto libre a altura completa del
+  // cuadro (overlay, crop completo, centrado, scale = outH/srcH). Reutiliza la tubería
+  // de overlay → el preview coincide con el export.
+  function applyBaseFit(clip, el) {
+    const { h } = mediaSize(el)
+    if (!h) return
+    const scale = +(outRef.current.h / h).toFixed(5)
+    setClips((prev) => prev.map((c) => {
+      if (c.id !== clip.id || !c._baseFit) return c
+      const rest = { ...c }
+      delete rest._baseFit
+      return {
+        ...rest,
+        layout: 'overlay',
+        frame: 'free',
+        reframe: { ...(c.reframe || newReframe()), crop_w: 1, crop_h: 1, dual_crop: false, keyframes: [] },
+        transform: { x: 0.5, y: 0.5, scale, rotation: 0 },
+      }
+    }))
+  }
+
   function targetTrackFor(kind) {
     const sel = tracks.find((t) => t.id === selTrackId)
     if (sel && sel.kind === kind && !sel.locked) return sel
@@ -746,7 +790,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         ? ((item.end ?? item.duration ?? 0) - (item.start ?? 0))
         : (item.duration || 0)
     const trackEnd = clips.filter((c) => c.track_id === track.id).reduce((m, c) => Math.max(m, clipEnd(c)), 0)
-    const clip = makeClip(assetKind, item, track.id, trackEnd, dur)
+    const clip = flagBaseFit(makeClip(assetKind, item, track.id, trackEnd, dur))
     setClips((prev) => [...prev, clip])
     setSelClipId(clip.id)
     setSelClipIds([clip.id])
@@ -768,9 +812,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       description: payload.description,
       media_version: payload.media_version,
     }, trackId, startTime, payload.duration)
-    setClips((prev) => [...prev, clip])
-    setSelClipId(clip.id)
-    setSelClipIds([clip.id])
+    const dropped = flagBaseFit(clip)
+    setClips((prev) => [...prev, dropped])
+    setSelClipId(dropped.id)
+    setSelClipIds([dropped.id])
   }
 
   function splitClip(id, at) {
@@ -1529,7 +1574,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     mainCanvasRef, framingModeRef, playingRef, stopPlayback, setFramingMode,
     selectedClip, mainTextBox, changeStyle, changeShape, mediaEls, playhead, upsertKeyframe, outAspect,
     changeReframe, clipsRef, tracksRef, playheadRef, alignGuidesRef, seek: scrub, croppingRef,
-    clipModeRef, cropModeRef, hitListRef,
+    clipModeRef, cropModeRef, hitListRef, viewZoomRef,
     onSelectClip: handleSelectClip,
     onClearSelection: clearCanvasSelection,
     changeTransform, commitPose, upsertKeyframe, outW, outH,
@@ -1591,12 +1636,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       clip={c}
       src={mediaUrl(project.id, c)}
       mediaEls={mediaEls}
-      onLoadedMetadata={(e) => registerMediaMeta(c, e.target)}
+      onLoadedMetadata={(e) => { registerMediaMeta(c, e.target); applyBaseFit(c, e.target) }}
     />
   ))
 
   const canEditFrame = isVisualClip(selectedClip)
   const overlayOn = isOverlay(selectedClip)
+  // Escala 100% = altura del clip = altura del cuadro: factor = outH / altura de la fuente.
+  const selSrcH = selectedClip ? mediaSize(mediaEls.current.get(selectedClip.id)).h : 0
+  const heightScale = selSrcH > 0 ? outH / selSrcH : 1
   const isTextSel = selectedClip?.kind === 'text'
   const isShapeSel = selectedClip?.kind === 'shape'
   const selTrackObj = tracks.find((t) => t.id === selTrackId)
@@ -1640,8 +1688,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         onSettings={() => setMatTab('settings')}
         onChat={() => setMatTab('chat')}
         chatBusy={!!mcpAudit.active?.length}
-        formatId={curFormat}
-        onFormat={setFormat}
         onOpenJson={onOpenJson}
         clipMode={mainColTab === 'clip'}
         onLeaveClip={goMainTab}
@@ -1657,7 +1703,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         clipSaveDisabled={!clipMeta.url || !clips.length || clipMeta.preparing}
         onSaveClip={saveClip}
         saveClipLabel={editingExisting ? 'Editar clip' : 'Guardar clip'}
-        formatCustomLabel={`${outW}×${outH}`}
       />
 
       <div className="veditor-workspace" ref={panels.workRef}>
@@ -1679,6 +1724,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onMatTab={setMatTab}
           timelineClips={clips}
           onExportFps={setFps}
+          audioDb={audioDb}
+          onAudioDb={setAudioDb}
           aiContext={{ project_id: project.id, selected_clip_id: selClipId || null, selected_track_id: selTrackId || null, current_time: Math.round((playhead || 0) * 100) / 100 }}
           onReloadTimeline={reloadTimeline}
           onMcpAudit={setMcpAudit}
@@ -1805,17 +1852,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               <div className="ed-scrub-knob" style={{ left: `${duration ? (playhead / duration) * 100 : 0}%` }} />
             </div>
             <span className="ed-time">{fmtRuler(playhead, { step: tickStep(pps, fps), fps, long: duration >= 3600 })} / {fmt(duration)}</span>
-            <label className="ed-audio-db" title="Nivel de audio objetivo del render (LUFS). No cambia la vista previa.">
-              <Icon name="volume_up" size={14} />
-              <select className="select mini" value={audioDb} onChange={(e) => setAudioDb(Number(e.target.value))}>
-                {(AUDIO_DB_PRESETS.includes(Number(audioDb))
-                  ? AUDIO_DB_PRESETS
-                  : [...AUDIO_DB_PRESETS, Number(audioDb)].sort((a, b) => a - b)
-                ).map((db) => (
-                  <option key={db} value={db}>{db} dB</option>
-                ))}
-              </select>
-            </label>
+            <EdViewerTools
+              zoom={viewZoom}
+              onZoom={setViewZoom}
+              formatId={curFormat}
+              onFormat={setFormat}
+              formatCustomLabel={`${outW}×${outH}`}
+            />
           </div>
           {exportJob?.status === 'error' && <div className="error small">⚠️ {exportJob.error}</div>}
           {clipSaveJob?.status === 'error' && <div className="error small">⚠️ {clipSaveJob.error}</div>}
@@ -1850,6 +1893,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             selKfId,
             onInterpKf: interpAnimKf,
             fps,
+            heightScale,
             audioMode: isAudioTrackSel ? 'track' : null,
             trackLabel: isAudioTrackSel ? selTrackObj.name : null,
             trackEmpty: isAudioTrackSel && !trackAudioClip,
