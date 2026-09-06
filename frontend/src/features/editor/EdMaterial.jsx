@@ -264,6 +264,7 @@ export default function EdMaterial({
   onAddText, onApplyTextPreset,
   matTab, onMatTab,
   onExportFps,
+  audioDb, onAudioDb,
   aiContext, onReloadTimeline, timelineClips, onMcpAudit,
 }) {
   const [tabState, setTabState] = useState('video')
@@ -1106,7 +1107,7 @@ export default function EdMaterial({
           onChangeFx={onChangeFx}
         />
       )}
-      {tab === 'settings' && <EdSettings onExportFps={onExportFps} />}
+      {tab === 'settings' && <EdSettings onExportFps={onExportFps} audioDb={audioDb} onAudioDb={onAudioDb} />}
       <div
         className={tab === 'chat' ? 'ed-mat-list pinned' : 'ed-hidden-panel'}
         aria-hidden={tab !== 'chat'}

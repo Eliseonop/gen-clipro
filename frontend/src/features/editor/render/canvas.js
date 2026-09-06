@@ -13,8 +13,33 @@ import { applyCanvasFx, clipFxAt } from '../../../lib/clipFx'
 import { posedTransform, clipPose } from '../../../lib/clipAnim'
 import { keyframesOn, normalizeItems } from '../../../lib/clipKeyframes'
 import {
-  cropWindow, destRectOnCanvas, isOverlay, mediaSize, sourceCropPx, videosAt,
+  cropWindow, destRectOnFrame, frameRectOf, isOverlay, mediaSize, sourceCropPx, videosAt,
 } from '../../../lib/clipLayout'
+
+// Desplaza geometría (dest / box / handles) del sistema local del recuadro Main
+// a coordenadas del canvas, para hit-testing e interacción.
+function offsetDest(d, ox, oy) {
+  if (!d) return d
+  return { ...d, dx: (d.dx ?? d.x) + ox, dy: (d.dy ?? d.y) + oy }
+}
+function offsetBox(box, ox, oy) {
+  if (!box) return box
+  if (box.dx != null) return { ...box, dx: box.dx + ox, dy: box.dy + oy }
+  return { ...box, x: box.x + ox, y: box.y + oy }
+}
+function offsetHandles(handles, ox, oy) {
+  if (!handles) return handles
+  const out = {}
+  for (const k of Object.keys(handles)) {
+    const h = handles[k]
+    out[k] = h && typeof h.x === 'number' ? { ...h, x: h.x + ox, y: h.y + oy } : h
+  }
+  return out
+}
+function offsetRender(r, ox, oy) {
+  if (!r) return r
+  return { ...r, box: offsetBox(r.box, ox, oy), handles: offsetHandles(r.handles, ox, oy) }
+}
 
 export function fillDestRect(cw, ch, clip, localT) {
   const pose = clipPose(clip, localT)
@@ -108,15 +133,15 @@ export function drawFramingOverlay(ctx, cw, ch, fm) {
   ctx.restore()
 }
 
-function overlayDest(ctx, media, clip, srcTime, outW, outH, localT) {
+function overlayDest(ctx, media, clip, srcTime, outW, outH, localT, frame) {
   const { w: vw, h: vh } = mediaSize(media)
   const crop = cropWindow(clip, vw / vh, outW / outH, srcTime, localT)
   const px = sourceCropPx(crop, vw, vh)
-  return { px, dest: destRectOnCanvas(posedTransform(clip, localT), px, outW, outH, ctx.canvas.width, ctx.canvas.height) }
+  return { px, dest: destRectOnFrame(posedTransform(clip, localT), px, outW, outH, frame) }
 }
 
-function drawOverlayLayer(ctx, media, clip, srcTime, outW, outH, fx, localT) {
-  const { px, dest } = overlayDest(ctx, media, clip, srcTime, outW, outH, localT)
+function drawOverlayLayer(ctx, media, clip, srcTime, outW, outH, fx, localT, frame) {
+  const { px, dest } = overlayDest(ctx, media, clip, srcTime, outW, outH, localT, frame)
   const pose = clipPose(clip, localT)
   ctx.save()
   if (fx.wipe != null && fx.wipe < 1) {
@@ -174,14 +199,19 @@ function fxForClip(clip, head) {
   return clipFxAt(clip, localT, clipDur(clip))
 }
 
-// Dibuja el compuesto (todas las pistas de vídeo, fondo→frente + textos) en un canvas.
-export function drawComposite(ctx, head, selClipIds, env) {
+// Dibuja el compuesto (todas las pistas de vídeo, fondo→frente + textos) dentro del
+// recuadro Main (`frame`, en px del canvas). Lo que sobresale del recuadro se dibuja
+// igualmente (contexto estilo CapCut) y el canvas lo recorta en su borde. Los dest/box/
+// handles de `hits` quedan en coordenadas del canvas.
+export function drawComposite(ctx, head, selClipIds, env, frame) {
   const { clipsRef, tracksRef, mediaEls, outRef } = env
   const selected = new Set(Array.isArray(selClipIds) ? selClipIds : (selClipIds ? [selClipIds] : []))
-  const cw = ctx.canvas.width, ch = ctx.canvas.height
+  const fr = frame || { x: 0, y: 0, w: ctx.canvas.width, h: ctx.canvas.height }
+  const cw = fr.w, ch = fr.h, ox = fr.x, oy = fr.y
   const outW = outRef.current.w, outH = outRef.current.h
+  // Fondo del área exportada (negro). El fondo del workspace lo pinta drawMainView.
   ctx.fillStyle = '#000'
-  ctx.fillRect(0, 0, cw, ch)
+  ctx.fillRect(ox, oy, cw, ch)
 
   let overlayDestSel = null
   let selRender = null
@@ -190,10 +220,12 @@ export function drawComposite(ctx, head, selClipIds, env) {
     const localT = Math.max(0, head - (clip.start || 0))
     if (clip.kind === 'shape') {
       const isSel = selected.has(clip.id)
+      ctx.save(); ctx.translate(ox, oy)
       const r = drawShapeClip(ctx, clip, cw, ch, { selected: isSel, time: localT })
-      if (isSel) selRender = r
-      const dest = r?.box ? boxToDest(r.box, r.box.rotation || 0) : fillDestRect(cw, ch, clip, localT)
-      hits.push({ id: clip.id, kind: 'shape', dest, handles: r?.handles || null })
+      ctx.restore()
+      if (isSel) selRender = offsetRender(r, ox, oy)
+      const dest = r?.box ? boxToDest(offsetBox(r.box, ox, oy), r.box.rotation || 0) : offsetDest(fillDestRect(cw, ch, clip, localT), ox, oy)
+      hits.push({ id: clip.id, kind: 'shape', dest, handles: offsetHandles(r?.handles, ox, oy) })
       continue
     }
     const el = mediaEls.current.get(clip.id)
@@ -204,12 +236,13 @@ export function drawComposite(ctx, head, selClipIds, env) {
       : el.currentTime
     const fx = fxForClip(clip, head)
     if (isOverlay(clip)) {
-      const dest = drawOverlayLayer(ctx, el, clip, srcTime, outW, outH, fx, localT)
+      const dest = drawOverlayLayer(ctx, el, clip, srcTime, outW, outH, fx, localT, fr)
       hits.push({ id: clip.id, kind: clip.kind, dest, overlay: true })
       if (selected.has(clip.id)) overlayDestSel = dest
     } else {
       const pose = clipPose(clip, localT)
       ctx.save()
+      ctx.translate(ox, oy)
       applyCanvasFx(ctx, { ...fx, opacity: fx.opacity * pose.opacity }, cw, ch)
       const dx = (pose.x - 0.5) * cw
       const dy = (pose.y - 0.5) * ch
@@ -221,9 +254,9 @@ export function drawComposite(ctx, head, selClipIds, env) {
         ctx.scale(sc, sc)
         ctx.translate(-cw / 2, -ch / 2)
       }
-      drawReframe(ctx, el, reframeForDraw(clip, localT, srcTime), srcTime, outW / outH, { clear: false })
+      drawReframe(ctx, el, reframeForDraw(clip, localT, srcTime), srcTime, outW / outH, { clear: false, dest: { dx: 0, dy: 0, dw: cw, dh: ch } })
       ctx.restore()
-      const dest = fillDestRect(cw, ch, clip, localT)
+      const dest = offsetDest(fillDestRect(cw, ch, clip, localT), ox, oy)
       hits.push({ id: clip.id, kind: clip.kind, dest, overlay: false })
       if (selected.has(clip.id) && !overlayDestSel) overlayDestSel = dest
     }
@@ -236,9 +269,11 @@ export function drawComposite(ctx, head, selClipIds, env) {
     const activeText = head >= c.start - 0.02 && head < c.start + clipDur(c)
     if (!activeText) continue
     const isSel = selected.has(c.id)
+    ctx.save(); ctx.translate(ox, oy)
     const r = drawTextClip(ctx, c, cw, ch, { selected: isSel, time: head, trackStyle: track?.style })
-    if (isSel) selRender = r
-    if (r?.box) hits.push({ id: c.id, kind: 'text', dest: boxToDest(r.box), handles: r.handles || null })
+    ctx.restore()
+    if (isSel) selRender = offsetRender(r, ox, oy)
+    if (r?.box) hits.push({ id: c.id, kind: 'text', dest: boxToDest(offsetBox(r.box, ox, oy)), handles: offsetHandles(r.handles, ox, oy) })
   }
   if (overlayDestSel) drawTransformHandles(ctx, overlayDestSel)
   if (env.hitListRef) env.hitListRef.current = hits
@@ -282,14 +317,17 @@ function drawCropRuler(ctx, bx, by, bw, bh) {
 export function drawMainView(head, env) {
   const {
     mainCanvasRef, clipsRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
-    playingRef, framingModeRef, mainTextBox, alignGuidesRef, clipModeRef, cropModeRef, croppingRef,
+    playingRef, framingModeRef, mainTextBox, alignGuidesRef, cropModeRef, croppingRef,
+    viewZoomRef,
   } = env
   const canvas = mainCanvasRef.current
   if (!canvas) return
   const ctx = canvas.getContext('2d')
 
   const clip = clipsRef.current.find((c) => c.id === selRef.current)
-  const cropEdit = !!(clipModeRef?.current || (cropModeRef?.current && !playingRef.current))
+  // El Clip Editor usa el mismo workspace compuesto que el Main (marco naranja + zoom).
+  // La vista de recorte (fuente + recuadro) solo aparece con la herramienta Encuadre.
+  const cropEdit = !!(cropModeRef?.current && !playingRef.current)
 
   // Recorte (fuente + recuadro): Clip Editor, o herramienta Encuadre con un visual seleccionado.
   if (cropEdit && clip && isVisualClip(clip)) {
@@ -353,7 +391,35 @@ export function drawMainView(head, env) {
   }
 
   sizeCanvasToOutput(canvas, outRef.current.w, outRef.current.h)
-  mainTextBox.current = drawComposite(ctx, head, selIdsRef?.current?.length ? selIdsRef.current : (clip?.id ? [clip.id] : []), env)
-  if (framingModeRef.current) drawFramingOverlay(ctx, canvas.width, canvas.height, framingModeRef.current)
-  drawAlignGuides(ctx, canvas.width, canvas.height, alignGuidesRef?.current)
+  const cw = canvas.width, ch = canvas.height
+  const frame = frameRectOf(cw, ch, viewZoomRef?.current ?? 1)
+  // Fondo del workspace (fuera del Main).
+  ctx.fillStyle = '#0b0e16'
+  ctx.fillRect(0, 0, cw, ch)
+  mainTextBox.current = drawComposite(
+    ctx, head,
+    selIdsRef?.current?.length ? selIdsRef.current : (clip?.id ? [clip.id] : []),
+    env, frame,
+  )
+  // Atenuar el contexto que queda fuera del recuadro exportable.
+  ctx.save()
+  ctx.fillStyle = 'rgba(7, 9, 16, 0.62)'
+  ctx.fillRect(0, 0, cw, frame.y)
+  ctx.fillRect(0, frame.y + frame.h, cw, ch - (frame.y + frame.h))
+  ctx.fillRect(0, frame.y, frame.x, frame.h)
+  ctx.fillRect(frame.x + frame.w, frame.y, cw - (frame.x + frame.w), frame.h)
+  ctx.restore()
+  // Overlays de edición (encuadre de texto, guías) mapeados al recuadro Main.
+  ctx.save()
+  ctx.translate(frame.x, frame.y)
+  if (framingModeRef.current) drawFramingOverlay(ctx, frame.w, frame.h, framingModeRef.current)
+  drawAlignGuides(ctx, frame.w, frame.h, alignGuidesRef?.current)
+  ctx.restore()
+  // Borde naranja fijo = límite del área que se exporta.
+  ctx.save()
+  ctx.strokeStyle = '#ff8c1a'
+  ctx.lineWidth = Math.max(2, cw * 0.004)
+  const lw = ctx.lineWidth
+  ctx.strokeRect(frame.x + lw / 2, frame.y + lw / 2, frame.w - lw, frame.h - lw)
+  ctx.restore()
 }

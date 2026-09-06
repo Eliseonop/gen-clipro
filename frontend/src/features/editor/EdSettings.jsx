@@ -36,6 +36,7 @@ function providerKeysUrl(id) {
 }
 
 const FPS_OPTS = FPS_CHOICES
+const AUDIO_DB_PRESETS = [-24, -18, -16, -14, -12, -10, -8]
 const QUALITY_OPTS = [
   { id: 'draft', label: 'Borrador', hint: 'Más rápido, más compresión' },
   { id: 'standard', label: 'Estándar', hint: 'Equilibrio calidad / tamaño' },
@@ -69,7 +70,7 @@ function txMeta(models, id) {
   return models.find((m) => m.id === id) || { id, label: id, hint: '' }
 }
 
-export default function EdSettings({ onExportFps }) {
+export default function EdSettings({ onExportFps, audioDb, onAudioDb }) {
   const [cfgTab, setCfgTab] = useState('config')
   const [setKeys, setSetKeys] = useState({})
   const [exportCfg, setExportCfg] = useState({ fps: 30, quality: 'standard' })
@@ -576,6 +577,26 @@ export default function EdSettings({ onExportFps }) {
             {QUALITY_OPTS.find((q) => q.id === exportCfg.quality)?.hint}.
             El preview usa el canvas; el MP4 usa estos valores.
           </p>
+          {onAudioDb && (
+            <label className="field">
+              <span>Nivel de audio (dB)</span>
+              <select
+                className="select"
+                value={audioDb}
+                onChange={(e) => onAudioDb(Number(e.target.value))}
+              >
+                {(AUDIO_DB_PRESETS.includes(Number(audioDb))
+                  ? AUDIO_DB_PRESETS
+                  : [...AUDIO_DB_PRESETS, Number(audioDb)].sort((a, b) => a - b)
+                ).map((db) => (
+                  <option key={db} value={db}>{db} dB</option>
+                ))}
+              </select>
+              <p className="ed-key-hint">
+                Nivel de audio objetivo del render (LUFS). No cambia la vista previa.
+              </p>
+            </label>
+          )}
           {err && <div className="ed-mat-err">{err}</div>}
         </div>
       )}

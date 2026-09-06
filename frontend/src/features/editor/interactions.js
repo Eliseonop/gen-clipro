@@ -1,8 +1,8 @@
 // Puntero del canvas: compuesto (mover/escalar/rotar/seleccionar) o recorte de fuente.
 import { clamp, clampCenter, frameAt, zoomFromCorner, isNearCropCorner } from '../../lib/panning'
 import {
-  canvasPointer, clampCrop, cropSizeFromCorner, cropWindow, destRectOnCanvas,
-  hitTransformHandle, isOverlay, mediaSize, sourceCropPx,
+  canvasPointer, clampCrop, CLIP_POS_MAX, CLIP_POS_MIN, cropSizeFromCorner, cropWindow, destRectOnCanvas,
+  frameRectOf, hitTransformHandle, isOverlay, mediaSize, sourceCropPx,
 } from '../../lib/clipLayout'
 import { framingRect, hitFrontmost, pointInDest } from './render/canvas'
 import { snapAlign, textAlignTargets } from '../../lib/alignGuides'
@@ -52,7 +52,7 @@ export function createMainDownHandler(ctx) {
   const {
     mainCanvasRef, framingModeRef, playingRef, stopPlayback, setFramingMode,
     selectedClip, mainTextBox, changeStyle, changeShape, mediaEls, playhead, upsertKeyframe, outAspect,
-    changeReframe, clipsRef, tracksRef, playheadRef, alignGuidesRef, seek, croppingRef,
+    changeReframe, clipsRef, tracksRef, playheadRef, alignGuidesRef, seek, croppingRef, viewZoomRef,
   } = ctx
 
   return function onMainDown(e) {
@@ -64,9 +64,12 @@ export function createMainDownHandler(ctx) {
     const fm = framingModeRef.current
     if (fm) {
       if (playingRef.current) stopPlayback()
-      const cw = canvas.width, ch = canvas.height
+      // El encuadre de texto se dibuja dentro del recuadro Main (workspace).
+      const frame = frameRectOf(canvas.width, canvas.height, viewZoomRef?.current ?? 1)
+      const dispW = frame.w * ptr0.scale, dispH = frame.h * ptr0.scale
       const px = ptr0.x, py = ptr0.y
-      const { bx, by, boxW, boxH } = framingRect(cw, ch, fm)
+      const local = framingRect(frame.w, frame.h, fm)
+      const bx = local.bx + frame.x, by = local.by + frame.y, boxW = local.boxW, boxH = local.boxH
       const near = (hx, hy) => Math.abs(px - hx) < 14 && Math.abs(py - hy) < 14
       let mode = 'move'
       if (near(bx + boxW, by + boxH)) mode = 'corner'
@@ -75,7 +78,7 @@ export function createMainDownHandler(ctx) {
       else if (near(bx + boxW / 2, by + boxH)) mode = 'height'
       const s0 = { x: fm.x ?? 0.5, y: fm.y ?? 0.5, w: fm.w ?? 0.8, h: fm.h ?? 0.13, cx: e.clientX, cy: e.clientY }
       const move = (ev) => {
-        const dxN = (ev.clientX - s0.cx) / rect.width, dyN = (ev.clientY - s0.cy) / rect.height
+        const dxN = (ev.clientX - s0.cx) / dispW, dyN = (ev.clientY - s0.cy) / dispH
         setFramingMode((prev) => {
           if (!prev) return prev
           const n = { ...prev }
@@ -285,7 +288,8 @@ export function createResultDownHandler(ctx) {
   }
 }
 
-function startOverlayTransform(e, canvas, clip, dest, mode, { changeTransform, playhead }) {
+function startOverlayTransform(e, canvas, clip, dest, mode, { changeTransform, playhead }, frame) {
+  const fr = frame || { x: 0, y: 0, w: canvas.width, h: canvas.height }
   const localT = Math.max(0, playhead - clip.start)
   const t0 = posedTransform(clip, localT)
   const p0 = canvasPointer(e, canvas)
@@ -297,11 +301,11 @@ function startOverlayTransform(e, canvas, clip, dest, mode, { changeTransform, p
   listenMove((ev) => {
     const p = canvasPointer(ev, canvas)
     if (mode === 'move') {
-      const dxN = (p.x - p0.x) / canvas.width
-      const dyN = (p.y - p0.y) / canvas.height
+      const dxN = (p.x - p0.x) / fr.w
+      const dyN = (p.y - p0.y) / fr.h
       changeTransform(clip.id, {
-        x: +clamp(t0.x + dxN, -0.2, 1.2).toFixed(4),
-        y: +clamp(t0.y + dyN, -0.2, 1.2).toFixed(4),
+        x: +clamp(t0.x + dxN, CLIP_POS_MIN, CLIP_POS_MAX).toFixed(4),
+        y: +clamp(t0.y + dyN, CLIP_POS_MIN, CLIP_POS_MAX).toFixed(4),
       })
     } else if (mode === 'scale') {
       const dist = Math.hypot(p.x - cx0, p.y - cy0)
@@ -313,13 +317,14 @@ function startOverlayTransform(e, canvas, clip, dest, mode, { changeTransform, p
   })
 }
 
-function startTextShapeDrag(e, canvas, clip, render, ctx) {
+function startTextShapeDrag(e, canvas, clip, render, ctx, frame) {
   const {
     playingRef, stopPlayback, changeStyle, changeShape,
     clipsRef, tracksRef, playheadRef, alignGuidesRef, playhead,
   } = ctx
-  const rect = canvas.getBoundingClientRect()
   const p0 = canvasPointer(e, canvas)
+  const fr = frame || { x: 0, y: 0, w: canvas.width, h: canvas.height }
+  const dispW = fr.w * p0.scale, dispH = fr.h * p0.scale
   if (playingRef.current) stopPlayback()
   const localT = Math.max(0, playhead - (clip.start || 0))
   const pose = clipPose(clip, localT)
@@ -329,7 +334,7 @@ function startTextShapeDrag(e, canvas, clip, render, ctx) {
     const st = clip.style || {}
     const s0 = { x: pose.x, y: pose.y, w: st.w ?? 0.8, size: st.size ?? 0.07, cx: e.clientX, cy: e.clientY }
     const move = (ev) => {
-      const dxN = (ev.clientX - s0.cx) / rect.width, dyN = (ev.clientY - s0.cy) / rect.height
+      const dxN = (ev.clientX - s0.cx) / dispW, dyN = (ev.clientY - s0.cy) / dispH
       if (mode === 'move') {
         const rawX = clamp(s0.x + dxN, 0, 1)
         const rawY = clamp(s0.y + dyN, 0, 1)
@@ -355,7 +360,7 @@ function startTextShapeDrag(e, canvas, clip, render, ctx) {
     cx: e.clientX, cy: e.clientY,
   }
   const move = (ev) => {
-    const dxN = (ev.clientX - s0.cx) / rect.width, dyN = (ev.clientY - s0.cy) / rect.height
+    const dxN = (ev.clientX - s0.cx) / dispW, dyN = (ev.clientY - s0.cy) / dispH
     if (mode === 'move') {
       const rawX = clamp(s0.x + dxN, 0, 1)
       const rawY = clamp(s0.y + dyN, 0, 1)
@@ -373,8 +378,8 @@ function startTextShapeDrag(e, canvas, clip, render, ctx) {
       })
     } else if (mode === 'rotate') {
       const p = canvasPointer(ev, canvas)
-      const cx = pose.x * canvas.width
-      const cy = pose.y * canvas.height
+      const cx = fr.x + pose.x * fr.w
+      const cy = fr.y + pose.y * fr.h
       const ang = Math.atan2(p.y - cy, p.x - cx) * 180 / Math.PI + 90
       changeShape(clip.id, { rotation: +ang.toFixed(1) })
     }
@@ -386,8 +391,9 @@ function startTextShapeDrag(e, canvas, clip, render, ctx) {
   window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
 }
 
-function startFillSourcePan(e, canvas, clip, dest, mode, ctx) {
+function startFillSourcePan(e, canvas, clip, dest, mode, ctx, frame) {
   const { playhead, mediaEls, upsertKeyframe, commitPose, outW, outH } = ctx
+  const fr = frame || { x: 0, y: 0, w: canvas.width, h: canvas.height }
   const el = mediaEls.current.get(clip.id)
   const sz = mediaSize(el)
   if (!sz.w || !outW || !outH) return
@@ -418,8 +424,8 @@ function startFillSourcePan(e, canvas, clip, dest, mode, ctx) {
       upsertKeyframe(clip, srcT, c.cx, c.cy, { zoom: z })
       return
     }
-    const cx = crop.cx - ((p.x - p0.x) / canvas.width) * crop.wf
-    const cy = crop.cy - ((p.y - p0.y) / canvas.height) * crop.hf
+    const cx = crop.cx - ((p.x - p0.x) / fr.w) * crop.wf
+    const cy = crop.cy - ((p.y - p0.y) / fr.h) * crop.hf
     const c = clampCenter(cx, cy, z0, srcAspect, outAspect)
     upsertKeyframe(clip, srcT, c.cx, c.cy)
   })
@@ -430,7 +436,7 @@ export function createCanvasDownHandler(ctx) {
     mainCanvasRef, framingModeRef, playingRef, stopPlayback,
     selectedClip, playhead, mediaEls,
     changeTransform, commitPose, clipsRef,
-    clipModeRef, cropModeRef, hitListRef, onSelectClip, onClearSelection,
+    cropModeRef, hitListRef, onSelectClip, onClearSelection,
   } = ctx
   const onCropDown = createMainDownHandler(ctx)
 
@@ -439,11 +445,14 @@ export function createCanvasDownHandler(ctx) {
     const canvas = mainCanvasRef.current
     if (!canvas) return
 
-    if (framingModeRef.current || clipModeRef?.current || cropModeRef?.current) {
+    if (framingModeRef.current || cropModeRef?.current) {
       onCropDown(e)
       return
     }
 
+    // Recuadro Main (área exportable) dentro del workspace; el hit-testing usa dests
+    // ya en coordenadas de canvas, pero los arrastres normalizan respecto al frame.
+    const frame = frameRectOf(canvas.width, canvas.height, ctx.viewZoomRef?.current ?? 1)
     const p0 = canvasPointer(e, canvas)
     const hits = hitListRef?.current || []
     const selId = selectedClip?.id
@@ -481,7 +490,7 @@ export function createCanvasDownHandler(ctx) {
     if (clip.kind === 'text' || clip.kind === 'shape') {
       const hit = hits.find((h) => h.id === clip.id)
       const render = hit?.handles ? hit : (clip.id === selId ? ctx.mainTextBox.current : hit)
-      startTextShapeDrag(e, canvas, clip, render, ctx)
+      startTextShapeDrag(e, canvas, clip, render, ctx, frame)
       return
     }
     if (!isVisualClip(clip)) return
@@ -499,10 +508,10 @@ export function createCanvasDownHandler(ctx) {
       if (!sz.w) return
       startOverlayTransform(e, canvas, clip, dest, handle, {
         changeTransform, playhead,
-      })
+      }, frame)
       return
     }
 
-    startFillSourcePan(e, canvas, clip, dest, handle, ctx)
+    startFillSourcePan(e, canvas, clip, dest, handle, ctx, frame)
   }
 }

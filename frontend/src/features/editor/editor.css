@@ -77,7 +77,6 @@
 }
 .ed-topbar-sep { width: 1px; height: 18px; background: var(--line-bright); margin: 0 4px; }
 .ed-topbar .icon-btn:disabled { opacity: 0.28; cursor: default; }
-.ed-topbar-format { max-width: 108px; }
 .ed-export-btn { font-weight: 800; }
 .ed-topbar-dot {
   position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%;
@@ -149,7 +148,7 @@
 }
 .ed-clip-banner .ed-clip-desc { flex: 1.4; }
 .ed-canvas-stage {
-  flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center;
+  flex: 1; min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center;
   background:
     radial-gradient(ellipse at center, #141824 0%, #07080c 70%);
   position: relative; overflow: hidden;
@@ -163,6 +162,25 @@
 .ed-canvas-col .ed-transport {
   padding: 6px 10px 8px; background: #0e1118; border-top: 1px solid var(--line);
 }
+/* Formato + zoom dentro de la fila del reproductor (.ed-transport), solo botones */
+.ed-viewer-tools {
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: 4px;
+}
+.ed-viewer-tools button.select.flip-select.ed-vt-sel {
+  height: 22px; min-height: 22px; box-sizing: border-box;
+  padding: 0 6px; font-size: 11px; font-weight: 650;
+}
+.ed-vt-zoom { display: flex; align-items: center; gap: 3px; }
+.ed-vt-zoom .ed-num-stepper { height: 22px; }
+.ed-vt-zoom .ed-num-stepper-val { width: 30px; padding: 1px 3px; font-size: 11px; }
+.ed-vt-zoom .ed-num-stepper-arrows button { width: 15px; min-height: 10px; }
+.ed-vt-reset {
+  height: 22px; padding: 0 6px; flex-shrink: 0;
+  font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--text-secondary); background: var(--card-2);
+  border: 1px solid var(--line); border-radius: 4px; cursor: pointer;
+}
+.ed-vt-reset:hover { border-color: var(--accent); color: #fff; }
 
 .ed-inspector {
   width: var(--ed-insp-w); flex: 0 0 var(--ed-insp-w); min-width: 0;
@@ -223,6 +241,32 @@
   padding: 3px 4px; text-align: right;
 }
 .ed-insp-suf { font-size: 10px; color: var(--muted); font-style: normal; width: 12px; flex-shrink: 0; }
+
+/* Control numérico con flechas ▲▼ siempre visibles (panel Encuadre) */
+.ed-num-stepper {
+  display: inline-flex; align-items: stretch; flex-shrink: 0;
+  background: var(--card-2); border: 1px solid var(--line); border-radius: 4px; overflow: hidden;
+}
+.ed-num-stepper-val {
+  width: 40px; box-sizing: border-box; border: none; background: transparent;
+  color: var(--text); font-size: 11px; font-variant-numeric: tabular-nums;
+  padding: 3px 4px; text-align: right;
+}
+.ed-num-stepper-val:focus { outline: none; }
+.ed-num-stepper-suf {
+  font-size: 10px; color: var(--muted); font-style: normal;
+  display: flex; align-items: center; padding: 0 3px 0 1px;
+}
+.ed-num-stepper-arrows { display: flex; flex-direction: column; border-left: 1px solid var(--line); }
+.ed-num-stepper-arrows button {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  width: 17px; min-height: 11px; padding: 0; border: none;
+  background: var(--card-3); color: var(--muted); cursor: pointer; line-height: 0;
+}
+.ed-num-stepper-arrows button:hover { background: var(--accent); color: #fff; }
+.ed-num-stepper-arrows button:first-child { border-bottom: 1px solid var(--line); }
+.ed-insp-xy .ed-num-stepper { flex: 1; }
+.ed-insp-xy .ed-num-stepper-val { width: auto; flex: 1; text-align: left; }
 .ed-kf-dia {
   width: 11px; height: 11px; padding: 0; flex-shrink: 0;
   border: 1.5px solid var(--muted); background: transparent;

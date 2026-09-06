@@ -29,6 +29,33 @@ export function isOverlay(clip) {
   return clip?.layout === 'overlay'
 }
 
+// --- Main / workspace (estilo CapCut) ---
+// El canvas del editor conserva el aspecto de salida; el "Main" (área exportada)
+// es un recuadro concéntrico dentro del canvas. Lo que queda fuera del recuadro es
+// contexto (el clip se ve, atenuado) que NO se exporta. `viewZoom` es solo visual.
+export const MAIN_FRAME_FRAC = 0.82
+
+// Rango de posición (centro del clip) en coords normalizadas del cuadro de salida.
+// El cuadro naranja es solo el área exportada, NO el límite de movimiento: el clip
+// puede salir ~2 anchos/altos hacia cada lado para animar entradas/salidas de escena.
+export const CLIP_POS_MIN = -2
+export const CLIP_POS_MAX = 3
+
+export function frameRectOf(cw, ch, viewZoom = 1) {
+  const z = Number(viewZoom)
+  const zoom = Number.isFinite(z) && z > 0 ? z : 1
+  const frac = MAIN_FRAME_FRAC * zoom
+  const w = cw * frac
+  const h = ch * frac
+  return { x: (cw - w) / 2, y: (ch - h) / 2, w, h }
+}
+
+/** destRectOnCanvas pero mapeando al recuadro Main (offset + tamaño del frame). */
+export function destRectOnFrame(transform, cropPx, outW, outH, frame) {
+  const d = destRectOnCanvas(transform, cropPx, outW, outH, frame.w, frame.h)
+  return { dx: d.dx + frame.x, dy: d.dy + frame.y, dw: d.dw, dh: d.dh, rotation: d.rotation }
+}
+
 export function mediaSize(el) {
   if (!el) return { w: 0, h: 0 }
   const w = Number(el.videoWidth || el.naturalWidth || 0) || 0

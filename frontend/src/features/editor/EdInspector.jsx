@@ -38,10 +38,6 @@ export default function EdInspector({
   selectedClip,
   textMode,
   audioMode,
-  cropMode,
-  onCropMode,
-  overlayOn,
-  onToggleOverlay,
   effectsProps,
   shapeProps,
   clipMode,
@@ -105,26 +101,6 @@ export default function EdInspector({
           </div>
         )}
 
-        {hasTarget && activeNav === 'video' && sub === 'basic' && visual && (
-          <div className="ed-insp-tools">
-            <button
-              type="button"
-              className={`ed-insp-tool ${cropMode ? 'on' : ''}`}
-              onClick={() => onCropMode?.(!cropMode)}
-              title="Ver el vídeo completo y mover el recuadro de encuadre"
-            >
-              <Icon name="crop_free" size={16} /> Encuadre
-            </button>
-            <label className="ed-chip" title="Colocar este clip encima del canvas sin rellenar el formato de salida">
-              <input
-                type="checkbox"
-                checked={!!overlayOn}
-                onChange={(e) => onToggleOverlay?.(e.target.checked)}
-              /> Superponer
-            </label>
-          </div>
-        )}
-
         {hasTarget && activeNav === 'video' && sub === 'basic' && (
           <>
             {isShape && shapeProps && <EdShape {...shapeProps} />}
@@ -133,9 +109,9 @@ export default function EdInspector({
               clip={clip}
               playhead={p.playhead}
               onPose={p.onPose}
-              onChangeFrame={p.onChangeFrame}
               onAddKf={p.onAddKf}
               fps={p.fps}
+              heightScale={p.heightScale}
             />
             )}
             {canKeyframe(clip) && clip?.kind !== 'audio' && (
