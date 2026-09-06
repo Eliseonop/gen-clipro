@@ -94,6 +94,13 @@ assert.ok(Math.abs(fillCrop.wf / fillCrop.hf - (outAspect / srcAspect)) < 1e-6)
 assert.equal(isOverlay(fillClip), false)
 assert.equal(isOverlay(overlayClip), true)
 
+// 16:9 en salida 9:16 (zoom 1): se ve toda la altura y se recortan los lados; se puede panear X
+const fillCover = { layout: 'fill', reframe: { zoom: 1, pan_mode: 'smooth', keyframes: [] } }
+const cover169 = cropWindow(fillCover, 16 / 9, 9 / 16, 0)
+assert.ok(Math.abs(cover169.hf - 1) < 1e-9)
+assert.ok(cover169.wf < 0.4)
+assert.equal(cover169.cx, 0.5)
+
 // --- Esquinas del encuadre cambian solo el crop ---
 
 const sized = cropSizeFromCorner(0.55, 0.4, 0.4, 0.3)

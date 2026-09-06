@@ -32,7 +32,7 @@ function tabLabel(id) {
   return 'Audio'
 }
 
-function KfTransitionSelect({ clip, selKfId, playhead, onInterp, fps }) {
+export function KfTransitionSelect({ clip, selKfId, playhead, onInterp, fps }) {
   const localT = Math.max(0, (playhead ?? 0) - (clip?.start || 0))
   const target = targetInterpItem(clip, selKfId, localT, fps)
   if (!target) return null

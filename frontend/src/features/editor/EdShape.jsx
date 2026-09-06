@@ -18,7 +18,7 @@ export default function EdShape({ clip, onChangeShape, onChangeDur, layer, onMov
         <button type="button" className="ed-tab on">Propiedades</button>
       </div>
       <div className="ed-text-body">
-        <p className="muted small">Figura vectorial. Arrástrala en el Main; no pierde calidad al escalar.</p>
+        <p className="muted small">Figura vectorial. Arrástrala en el canvas; no pierde calidad al escalar.</p>
         {layer && <EdLayer info={layer} onMove={onMoveLayer} />}
         <div className="ed-text-dense three">
           <label className="ed-mini" title="Posición X">

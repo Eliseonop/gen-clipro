@@ -32,7 +32,7 @@ function kfTime(clip, k, snapshots) {
 export default function EdCrops({
   clip, selKfId, onChangeFx, layer, onMoveLayer,
   onSelectKf, onDeleteKf, fps = 30, onAddKf,
-  playhead, onPose, onFade,
+  playhead, onPose, onFade, hideVolume = false,
 }) {
   const [tab, setTab] = useState('kf')
   const isVideo = isVisualClip(clip)
@@ -46,8 +46,8 @@ export default function EdCrops({
   const kfEmpty = isAudio
     ? 'Ajusta el volumen o pulsa Agregar keyframe en el cabezal.'
     : isText
-      ? 'Mueve el texto en el Main para crear un keyframe en el cabezal.'
-      : 'Mueve el encuadre para crear un keyframe en el cabezal.'
+      ? 'Mueve el texto en el canvas para crear un keyframe en el cabezal.'
+      : 'Mueve el clip en el canvas para crear un keyframe en el cabezal.'
 
   useEffect(() => {
     if (clip?.kind === 'audio') setTab('props')
@@ -126,7 +126,7 @@ export default function EdCrops({
               </div>
             </div>
             )}
-            {hasVolumeControls(clip) && (
+            {hasVolumeControls(clip) && !hideVolume && (
               <VolumePanel
                 clip={clip}
                 playhead={playhead}
