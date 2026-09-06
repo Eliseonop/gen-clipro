@@ -436,7 +436,7 @@ export function createCanvasDownHandler(ctx) {
     mainCanvasRef, framingModeRef, playingRef, stopPlayback,
     selectedClip, playhead, mediaEls,
     changeTransform, commitPose, clipsRef,
-    cropModeRef, hitListRef, onSelectClip, onClearSelection,
+    hitListRef, onSelectClip, onClearSelection,
   } = ctx
   const onCropDown = createMainDownHandler(ctx)
 
@@ -445,7 +445,10 @@ export function createCanvasDownHandler(ctx) {
     const canvas = mainCanvasRef.current
     if (!canvas) return
 
-    if (framingModeRef.current || cropModeRef?.current) {
+    // Clip en modo "Fijar vídeo" (fill) → editar el recuadro (vista de recorte).
+    // Overlay (transformar vídeo) → interacción sobre el compuesto.
+    const sel = selectedClip
+    if (framingModeRef.current || (sel && isVisualClip(sel) && !isOverlay(sel))) {
       onCropDown(e)
       return
     }
