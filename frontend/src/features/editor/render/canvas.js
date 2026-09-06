@@ -88,16 +88,6 @@ export function hitFrontmost(hits, px, py) {
   return null
 }
 
-function sizeCanvasToOutput(canvas, outW, outH, long = 960) {
-  const a = outW / outH
-  const cw = a >= 1 ? long : Math.max(2, Math.round(long * a))
-  const ch = a >= 1 ? Math.max(2, Math.round(long / a)) : long
-  if (canvas.width !== cw || canvas.height !== ch) {
-    canvas.width = cw
-    canvas.height = ch
-  }
-  return { cw, ch }
-}
 
 // Geometría (en px del canvas) del encuadre de texto a partir de fm normalizado.
 export function framingRect(cw, ch, fm) {
@@ -318,7 +308,7 @@ export function drawMainView(head, env) {
   const {
     mainCanvasRef, clipsRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
     playingRef, framingModeRef, mainTextBox, alignGuidesRef, croppingRef,
-    viewZoomRef,
+    viewZoomRef, mainStageRef,
   } = env
   const canvas = mainCanvasRef.current
   if (!canvas) return
@@ -392,9 +382,16 @@ export function drawMainView(head, env) {
     return
   }
 
-  sizeCanvasToOutput(canvas, outRef.current.w, outRef.current.h)
+  // El canvas ocupa TODO el stage (más ancho que la salida), para ver el desborde del
+  // clip fuera del cuadro naranja (p. ej. 16:9 dentro de 9:16). El cuadro va centrado.
+  const sr = mainStageRef?.current?.getBoundingClientRect()
+  const dpr = Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1)
+  const cwT = Math.max(2, Math.round((sr?.width || 900) * dpr))
+  const chT = Math.max(2, Math.round((sr?.height || 700) * dpr))
+  if (canvas.width !== cwT || canvas.height !== chT) { canvas.width = cwT; canvas.height = chT }
   const cw = canvas.width, ch = canvas.height
-  const frame = frameRectOf(cw, ch, viewZoomRef?.current ?? 1)
+  const outA = outRef.current.w / outRef.current.h
+  const frame = frameRectOf(cw, ch, viewZoomRef?.current ?? 1, outA)
   // Fondo del workspace (fuera del Main).
   ctx.fillStyle = '#0b0e16'
   ctx.fillRect(0, 0, cw, ch)
