@@ -25,6 +25,20 @@ export function clampPps(pps, duration, viewW, fps) {
   return clamp(Number(pps) || minPps(duration, viewW), minPps(duration, viewW), maxPps(fps, duration))
 }
 
+// Sensibilidad del zoom por arrastre horizontal: cada píxel multiplica el zoom
+// por este factor. dx>0 (derecha) acerca; dx<0 (izquierda) aleja.
+export const ZOOM_DRAG_BASE = 1.01
+
+/** Nuevo pps al arrastrar `dx` px en horizontal sobre la regla (zoom asistido). */
+export function zoomByDrag(startPps, dx, duration, viewW, fps) {
+  return clampPps(startPps * Math.pow(ZOOM_DRAG_BASE, dx), duration, viewW, fps)
+}
+
+/** scrollLeft que mantiene el instante `anchorT` fijo a `anchorScreenX` px del borde. */
+export function anchorScroll(anchorT, pps, anchorScreenX) {
+  return Math.max(0, anchorT * pps - anchorScreenX)
+}
+
 export function tickSteps(fps) {
   const frame = frameDuration(fps)
   const raw = [

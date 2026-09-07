@@ -9,7 +9,7 @@ import { keyframesEnabled, normalizeItems, clipVolumeAt, clampVolume, sampleVolu
 import { snapToFrame } from '../../lib/projectFps'
 import { stackViewForTrack } from './clipStack.js'
 import { headerScrollPad, timelineWheelAction } from './timelineWheel'
-import { buildTicks, clampPps, fmtRuler, tickStep } from './timelineScale'
+import { anchorScroll, buildTicks, clampPps, fmtRuler, tickStep, zoomByDrag } from './timelineScale'
 
 function PreviewVolButton({ value = 1, onChange }) {
   const [open, setOpen] = useState(false)
@@ -223,7 +223,8 @@ export default function EdTimeline({
     setPps((p) => clampPps(p, duration, w, fps))
   }, [duration, fps])
 
-  // Rueda: zoom solo sobre la regla; en pistas, scroll vertical. ctrl=alto; shift=horizontal.
+  // Rueda: NO hace zoom (el zoom es por arrastre del tirador ↔). En la regla
+  // desplaza en horizontal; en las pistas, en vertical. ctrl=alto; shift=horizontal.
   useEffect(() => {
     const body = bodyRef.current
     const scroll = lanesRef.current
@@ -241,29 +242,49 @@ export default function EdTimeline({
         setRowH((h) => clamp(Math.round(h * (e.deltaY < 0 ? 1.1 : 0.9)), 34, 120))
         return
       }
-      if (action === 'scrollX') { scroll.scrollLeft += e.deltaY; return }
-      const t = xToTime(e.clientX)
-      const w = scroll.clientWidth || viewW
-      setPps((p) => {
-        const np = clampPps(e.deltaY < 0 ? p * 1.2 : p / 1.2, duration, w, fps)
-        requestAnimationFrame(() => {
-          const rect = scroll.getBoundingClientRect()
-          scroll.scrollLeft = t * np - (e.clientX - rect.left)
-        })
-        return np
-      })
+      // scrollX: la rueda vertical y horizontal desplazan la línea de tiempo.
+      scroll.scrollLeft += (e.deltaX || e.deltaY)
     }
     body.addEventListener('wheel', onWheel, { passive: false })
     return () => body.removeEventListener('wheel', onWheel)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pps, duration, fps])
 
+  // Regla estilo Filmora: pulsa sobre un punto y ARRASTRA EN HORIZONTAL (cursor ↔)
+  // para hacer zoom asistido justo en ese punto. Derecha = acercar, izquierda =
+  // alejar. El instante donde pulsaste se queda fijo bajo el cursor. Un clic sin
+  // arrastre solo mueve el cabezal a ese punto (sigue funcionando el scrub por clic).
   function onRulerDown(e) {
+    if (e.button != null && e.button !== 0) return
+    e.preventDefault()   // evita que el arrastre seleccione el texto de las marcas
     setExpandedClusterId(null)
-    onSeek(xToTime(e.clientX))
-    const move = (ev) => onSeek(xToTime(ev.clientX))
-    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
-    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+    const scroll = lanesRef.current
+    const rect = scroll?.getBoundingClientRect()
+    const w = scroll?.clientWidth || viewW
+    const anchorScreenX = rect ? e.clientX - rect.left : 0   // px dentro de la vista
+    const anchorT = xToTime(e.clientX)                       // instante bajo el cursor
+    const startX = e.clientX
+    const startPps = pps
+    onSeek(anchorT)
+    let zooming = false
+    const move = (ev) => {
+      const dx = ev.clientX - startX
+      if (!zooming) {
+        if (Math.abs(dx) < 4) return
+        zooming = true
+        document.body.classList.add('ed-zooming')
+      }
+      const np = zoomByDrag(startPps, dx, duration, w, fps)
+      setPps(np)
+      if (scroll) scroll.scrollLeft = anchorScroll(anchorT, np, anchorScreenX)
+    }
+    const up = () => {
+      document.body.classList.remove('ed-zooming')
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
   }
 
   function startClipDrag(e, clip, mode) {
@@ -418,7 +439,7 @@ export default function EdTimeline({
           <button className="ghost small" onClick={onAddTextTrack} title="Añadir pista de texto"><Icon name="add" size={14} /> Texto</button>
           <span className="ed-zoom">
             <button className="icon-btn" onClick={() => setPps((p) => clampPps(p / 1.4, duration, viewW, fps))} title="Alejar"><Icon name="zoom_out" size={17} /></button>
-            <button className="icon-btn" onClick={() => setPps((p) => clampPps(p * 1.4, duration, viewW, fps))} title="Acercar"><Icon name="zoom_in" size={17} /></button>
+            <button className="icon-btn" onClick={() => setPps((p) => clampPps(p * 1.4, duration, viewW, fps))} title="Acercar (o arrastra ↔ sobre la regla)"><Icon name="zoom_in" size={17} /></button>
           </span>
         </div>
       </div>
@@ -478,7 +499,7 @@ export default function EdTimeline({
 
         <div className="ed-tl-scroll" ref={lanesRef}>
           <div className="ed-tl-inner" style={{ width: totalW }}>
-            <div className={`ed-ruler${trimGuide ? ' live' : ''}`} title="Rueda: zoom de tiempo" onPointerDown={onRulerDown}>
+            <div className={`ed-ruler${trimGuide ? ' live' : ''}`} title="Clic: mover el cursor · Arrastra ↔ para hacer zoom en ese punto" onPointerDown={onRulerDown}>
               {buildTicks(duration + 4, pps, { fps, dense: !!trimGuide, scrollX, viewW }).map((tk) => (
                 <span key={`${tk.minor ? 'm' : 'M'}-${tk.t}`} className={`ed-tick${tk.minor ? ' minor' : ''}`} style={{ left: tk.t * pps }}><i />{tk.major ? <em>{fmtRuler(tk.t, { step: tk.step, fps, long: rulerLong })}</em> : null}</span>
               ))}

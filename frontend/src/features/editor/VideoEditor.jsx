@@ -20,17 +20,18 @@ import {
   trackContextItems, linkedPartnerName, linkTrackPair, unlinkTrackPair,
   applyAudioSpeedToLinkedText, matchClipsToFirstDuration,
   clipLayerInfo, moveClipLayer, canLayerClip,
-  trackTextContent, clipCopyText,
+  pickClipVisualProps, applyClipVisualProps,
+  trackTextContent, trackSrt, trackSrtWithReference, trackSource, clipCopyText,
   previewHead, safeMediaTime, mcpBusyClipIds,
 } from './editorModel'
 import { textRole } from '../../lib/textRole'
 import { SHAPE_DEFAULT_DUR } from '../../lib/shapes'
-import { applyFrame, disableOverlay, enableOverlay, isOverlay, mediaSize, newTransform, videosAt } from '../../lib/clipLayout'
+import { applyFrame, disableOverlay, enableOverlay, frameOf, isFramed, isOverlay, mediaSize, newTransform, videosAt } from '../../lib/clipLayout'
 import {
   AUDIO_FX_KEYS, applyVolumeFade, canKeyframe, clipPropsAt, clipVolumeAt, clampVolume, deleteKeyframeItem, flattenPatch, keyframeIdAt,
   normalizeItems, patchKeyframe, upsertKeyframeAt,
 } from '../../lib/clipKeyframes'
-import { drawMainView } from './render/canvas'
+import { drawMainView, drawResultView } from './render/canvas'
 import { useExportJob } from './hooks/useExportJob'
 import { useSubtitles } from './hooks/useSubtitles'
 import { useFavorites } from './hooks/useFavorites'
@@ -164,6 +165,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const panels = usePanelLayout()
 
   const [ctxMenu, setCtxMenu] = useState(null)      // { x, y, clip }
+  const [propClipboard, setPropClipboard] = useState(null)  // props visuales copiadas
   const [trackMenu, setTrackMenu] = useState(null)  // { x, y, track }
   const [linkPick, setLinkPick] = useState(null)    // id de pista de audio al relacionar
   const [trackToDelete, setTrackToDelete] = useState(null)
@@ -189,6 +191,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [clipToast, setClipToast] = useState(null)
 
   const mainCanvasRef = useRef(null)
+  const resultCanvasRef = useRef(null)
   const mainStageRef = useRef(null)
   const hitListRef = useRef([])
   const mediaEls = useRef(new Map())
@@ -339,6 +342,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clips])
 
+  // Al cambiar de clip seleccionado se sale del modo "Recortar" (evita quedar
+  // recortando un clip distinto por error).
+  useEffect(() => { setCropMode(false) }, [selClipId])
+
   // Recarga el timeline desde el servidor (tras ediciones de la IA por el MCP).
   // Reutiliza el MISMO mapeo que la carga inicial → no hay segundo estado.
   const reloadTimeline = useCallback(async () => {
@@ -391,7 +398,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   useEffect(() => {
     const env = {
       clipsRef, tracksRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
-      playingRef, framingModeRef, mainCanvasRef, mainStageRef, mainTextBox, topVideoAt, alignGuidesRef,
+      playingRef, framingModeRef, mainCanvasRef, mainStageRef, resultCanvasRef, mainTextBox, topVideoAt, alignGuidesRef,
       clipModeRef, cropModeRef, croppingRef, fpsRef, hitListRef, viewZoomRef,
     }
     const tick = () => {
@@ -468,6 +475,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       }
 
       drawMainView(drawHead, env)
+      drawResultView(drawHead, env)  // no-op si el canvas de resultado no está montado
       rafRef.current = requestAnimationFrame(tick)
     }
     rafRef.current = requestAnimationFrame(tick)
@@ -683,6 +691,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         reframe: cutRf,
         volume: video.volume ?? 1,
         muted: !!video.muted,
+        // Formato de salida elegido en el editor (9:16, 16:9, 1:1, …). Sin esto
+        // el backend caía siempre a 720×1280 vertical.
+        width: outW,
+        height: outH,
         ...(video.keyframes?.enabled ? { audio_keyframes: video.keyframes } : {}),
       }))
     } catch (e) {
@@ -730,6 +742,19 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const mutateClip = useCallback((id, patch) => {
     setClips((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)))
   }, [])
+
+  // Copiar/pegar propiedades visuales entre clips (encuadre, layout, escala,
+  // posición, efectos…) sin tocar contenido, tiempos ni id del clip destino.
+  function copyClipProps(clip) {
+    if (!isVisualClip(clip)) return
+    setPropClipboard(pickClipVisualProps(clip))
+    setClipToast({ type: 'success', message: 'Propiedades copiadas' })
+  }
+  function pasteClipProps(clip) {
+    if (!propClipboard || !isVisualClip(clip)) return
+    setClips((prev) => prev.map((c) => (c.id === clip.id ? applyClipVisualProps(c, propClipboard) : c)))
+    setClipToast({ type: 'success', message: 'Propiedades pegadas' })
+  }
 
   function registerMediaMeta(clip, el) {
     if (clip.kind === 'image') return
@@ -969,6 +994,16 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (!track || track.kind !== 'text') return
     await copyPlain(trackTextContent(clipsRef.current, track.id), 'Texto copiado.')
   }
+  async function copyTrackSrt(track) {
+    setTrackMenu(null)
+    if (!track || track.kind !== 'text') return
+    await copyPlain(trackSrt(clipsRef.current, track.id), 'SRT copiado.')
+  }
+  async function copyTrackSrtRef(track) {
+    setTrackMenu(null)
+    if (!track || track.kind !== 'text') return
+    await copyPlain(trackSrtWithReference(clipsRef.current, track.id), 'SRT + referencia copiado.')
+  }
   async function copyClipDescription(clip) {
     setCtxMenu(null)
     if (!clip || clip.kind !== 'audio') return
@@ -1087,7 +1122,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       if (patch.y != null) tr.y = patch.y
       if (patch.scale != null) tr.scale = patch.scale
       if (patch.rotation != null) tr.rotation = patch.rotation
-      next = { ...next, transform: tr, frame: 'free' }
+      // Conserva el encuadre (full o slot) si lo tiene; solo un overlay libre queda 'free'.
+      next = { ...next, transform: tr, frame: (c.frame && c.frame !== 'free') ? c.frame : 'free' }
     }
     if (patch.cx != null || patch.cy != null || patch.zoom != null) {
       const rf = { ...(c.reframe || newReframe()) }
@@ -1592,8 +1628,27 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   }, [linkPick])
 
   // --- Subtítulos ---
+  // Resuelve el clip fuente de la transcripción contra el material del proyecto
+  // para quedarnos con el título/descripción/URL del vídeo (para el copiado SRT
+  // con referencia). Cae a los datos que trae el propio clip de la timeline.
+  function resolveTranscriptSource(src) {
+    if (!src) return null
+    const materials = src.kind === 'video' ? (project.clips || []) : (project.audios || [])
+    const id = String(src.asset_id ?? src.index ?? '')
+    const file = src.filename
+    const hit = materials.find((m) => (
+      (id && (String(m.id) === id || String(m.index) === id || String(m.asset_id) === id))
+      || (file && m.filename === file)
+    ))
+    const title = String(hit?.label || src.name || '').trim()
+    const description = String(hit?.description || src.description || '').trim()
+    const url = String(hit?.source_url || hit?.youtube_url || src.source_url || '').trim()
+    if (!title && !description && !url) return null
+    return { title, description, url }
+  }
   const { subJob, setSubJob, requestSubtitles } = useSubtitles(project.id, {
     tracksRef, ensureTextTrack, setClips, setCtxMenu, onChange,
+    resolveSource: resolveTranscriptSource,
   })
   const fav = useFavorites(project.id)
 
@@ -1642,10 +1697,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         togglePlay()
       } else if (e.key === 'ArrowLeft') {
         e.preventDefault()
-        nudgePlayhead(-0.5)
+        nudgePlayhead(e.shiftKey ? -1 : -0.1)   // fino 0,1s · Shift = 1s
       } else if (e.key === 'ArrowRight') {
         e.preventDefault()
-        nudgePlayhead(0.5)
+        nudgePlayhead(e.shiftKey ? 1 : 0.1)
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selIdsRef.current.length) { e.preventDefault(); deleteClip(selIdsRef.current[0]) }
       } else if (e.key.toLowerCase() === 's') {
@@ -1676,6 +1731,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
 
   const canEditFrame = isVisualClip(selectedClip)
   const overlayOn = isOverlay(selectedClip)
+  // Clip en modo encuadre (Fijar vídeo / Recortar): se muestra la vista de recorte a la
+  // izquierda y la vista de RESULTADO 9:16 en vivo a la derecha.
+  const framingActive = canEditFrame && !framingMode && (isFramed(selectedClip) || cropMode)
   // Escala 100% = altura del clip = altura del cuadro: factor = outH / altura de la fuente.
   const selSrcH = selectedClip ? mediaSize(mediaEls.current.get(selectedClip.id)).h : 0
   const heightScale = selSrcH > 0 ? outH / selSrcH : 1
@@ -1807,7 +1865,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             </div>
           )}
           <div
-            className="ed-canvas-stage"
+            className={`ed-canvas-stage${framingActive ? ' split' : ''}`}
             ref={mainStageRef}
             onPointerDown={onCanvasDown}
             onDragOver={(e) => {
@@ -1822,6 +1880,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             style={{ cursor: (framingMode || (canEditFrame && !overlayOn)) ? 'crosshair' : ((canEditFrame || isTextSel || isShapeSel) ? 'move' : 'default') }}
           >
             <canvas ref={mainCanvasRef} width={540} height={960} className="ed-main-canvas" />
+            {framingActive && (
+              <div className="ed-result-pane" onPointerDown={(e) => e.stopPropagation()}>
+                <span className="ed-result-label">Resultado</span>
+                <canvas ref={resultCanvasRef} className="ed-result-canvas" />
+              </div>
+            )}
             {mainColTab === 'clip' && clipMeta.preparing && (
               <div className="ed-stage-prep">
                 <JobStatusBar progress={clipMeta.prepProgress} message={clipMeta.prepMsg} />
@@ -1858,13 +1922,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             {framingMode && <div className="ed-stage-hint">Ajusta el recuadro amarillo y pulsa Guardar</div>}
           </div>
           <div className="ed-transport">
-            <button className="icon-btn" type="button" onClick={() => nudgePlayhead(-0.5)} title="Atrás 0,5s (←)">
+            <button className="icon-btn" type="button" onClick={(e) => nudgePlayhead(e.shiftKey ? -1 : -0.1)} title="Atrás 0,1s (← · Shift = 1s)">
               <Icon name="fast_rewind" size={18} />
             </button>
             <button className="icon-btn big" type="button" onClick={togglePlay} title="Reproducir / Pausa (Espacio)">
               <Icon name={playing ? 'pause_circle' : 'play_circle'} size={24} />
             </button>
-            <button className="icon-btn" type="button" onClick={() => nudgePlayhead(0.5)} title="Adelante 0,5s (→)">
+            <button className="icon-btn" type="button" onClick={(e) => nudgePlayhead(e.shiftKey ? 1 : 0.1)} title="Adelante 0,1s (→ · Shift = 1s)">
               <Icon name="fast_forward" size={18} />
             </button>
             <button className="icon-btn" type="button" onClick={() => seek(0)} title="Al inicio"><Icon name="first_page" size={18} /></button>
@@ -1897,8 +1961,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           selectedClip={isAudioTrackSel ? (trackAudioClip || { kind: 'audio', volume: 1, muted: false, audio_fx: {}, start: 0 }) : selectedClip}
           textMode={isTextSel ? 'clip' : (isTextTrackSel ? 'track' : null)}
           audioMode={isAudioTrackSel ? 'track' : null}
-          fijarVideo={canEditFrame && !overlayOn}
+          fijarVideo={canEditFrame && isFramed(selectedClip)}
           onFijarVideo={(on) => selectedClip && setFijarVideo(selectedClip, on)}
+          cropping={cropMode}
+          onCropping={setCropMode}
+          frameSlot={frameOf(selectedClip)}
+          onFrameSlot={(slot) => selectedClip && applyClipFrame(selectedClip, slot)}
           clipMode={mainColTab === 'clip'}
           effectsProps={{
             clip: isAudioTrackSel ? (trackAudioClip || { kind: 'audio', volume: 1, muted: false, audio_fx: {}, start: 0 }) : selectedClip,
@@ -1983,7 +2051,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onSelectClip={handleSelectClip}
           onSelectTrack={selectTrack}
           onDoubleClip={(clip) => {
-            seek(clip.start + 0.03)
+            seek(clip.start)   // exactamente el inicio del clip (00:00 relativo), sin offset
             setSelClipId(clip.id)
             setSelClipIds([clip.id])
             setSelKfId(null)
@@ -2098,6 +2166,16 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                 <Icon name="content_copy" size={15} /> Copiar descripción
               </button>
             )}
+            {isVisualClip(ctxMenu.clip) && (
+              <>
+                <button onClick={() => { copyClipProps(ctxMenu.clip); setCtxMenu(null) }}>
+                  <Icon name="content_copy" size={15} /> Copiar propiedades
+                </button>
+                <button disabled={!propClipboard} onClick={() => { pasteClipProps(ctxMenu.clip); setCtxMenu(null) }}>
+                  <Icon name="content_paste" size={15} /> Pegar propiedades
+                </button>
+              </>
+            )}
             <button onClick={() => { splitClip(ctxMenu.clip.id, playhead); setCtxMenu(null) }}><Icon name="content_cut" size={15} /> Dividir aquí</button>
             <button onClick={() => { duplicateSelected(ctxMenu.clip); setCtxMenu(null) }}><Icon name="content_copy" size={15} /> Duplicar</button>
             <button className="danger" onClick={() => { deleteClip(ctxMenu.clip.id); setCtxMenu(null) }}><Icon name="delete" size={15} /> Eliminar</button>
@@ -2117,6 +2195,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               linked: !!(tracks.find((t) => t.id === trackMenu.track.id) || trackMenu.track).linked_track_id,
               canLink: tracks.some((t) => t.kind === 'text'),
               hasText: !!trackTextContent(clips, trackMenu.track.id),
+              hasSource: !!trackSource(clips, trackMenu.track.id),
             }).map((item) => (
               <button
                 key={item.id}
@@ -2131,10 +2210,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                   } else if (item.id === 'link') startLinkPick(trackMenu.track)
                   else if (item.id === 'unlink') unlinkTrack(trackMenu.track)
                   else if (item.id === 'copy-text') copyTrackText(trackMenu.track)
+                  else if (item.id === 'copy-srt') copyTrackSrt(trackMenu.track)
+                  else if (item.id === 'copy-srt-ref') copyTrackSrtRef(trackMenu.track)
                   else if (item.id === 'delete') requestDeleteTrack(trackMenu.track)
                 }}
               >
-                <Icon name={item.id === 'rename' ? 'edit' : item.id === 'link' ? 'link' : item.id === 'unlink' ? 'link_off' : item.id === 'copy-text' ? 'content_copy' : 'delete'} size={15} />
+                <Icon name={item.id === 'rename' ? 'edit' : item.id === 'link' ? 'link' : item.id === 'unlink' ? 'link_off' : item.id === 'copy-text' ? 'content_copy' : item.id === 'copy-srt' ? 'subtitles' : item.id === 'copy-srt-ref' ? 'description' : 'delete'} size={15} />
                 {item.label}
               </button>
             ))}

@@ -179,9 +179,10 @@ function relSegmentWords(segment, src, clipStart, dur) {
 /** Segmentos del Whisper → clips de texto en la timeline, recortados al tramo del clip.
  *  Si el segmento trae ``words[]`` (timing real), cada fragmento hereda solo sus
  *  palabras (relativas al fragmento) y conserva ``origin`` hacia su transcripción. */
-export function textClipsFromTranscript(src, segments, trackId, style, transcript = null) {
+export function textClipsFromTranscript(src, segments, trackId, style, transcript = null, source = null) {
   const clipLen = src.out_point - src.in_point
   const news = []
+  const srcRef = source && (source.title || source.description || source.url) ? source : null
   ;(segments || []).forEach((s, segIndex) => {
     const ls = s.start - src.in_point
     const le = s.end - src.in_point
@@ -197,6 +198,7 @@ export function textClipsFromTranscript(src, segments, trackId, style, transcrip
       segment_index: s.index ?? segIndex,
       source_range: { start: s.start, end: s.end },
       word_range: [0, splitCaptionWords(text).length],
+      ...(srcRef ? { source: srcRef } : {}),
     }
     news.push(...splitClipByMaxWords(made, style?.max_words ?? 8))
   })
@@ -766,6 +768,54 @@ export function duplicateClipOntoTrack(clip, trackId, newId) {
   return copy
 }
 
+// --- Copiar / pegar propiedades visuales entre clips -----------------------
+// Propiedades de configuración visual / transformación / layout que se copian
+// con "Copiar propiedades". Deliberadamente NO incluye: id, pista, tiempos
+// (start/in_point/out_point/source_duration), contenido (filename/asset_*/text),
+// audio (volume/muted/speed) ni la duración. Así el clip destino conserva su
+// contenido y su posición temporal, y solo cambia su aspecto.
+export const CLIP_VISUAL_KEYS = [
+  'layout',    // 'fill' | 'overlay' → "Fijar vídeo" vs objeto libre
+  'frame',     // 'full' | slot ocupado
+  'transform', // { x, y, scale, rotation, opacity } → posición/escala/rotación
+  'reframe',   // encuadre (zoom, crop, keyframes de paneo, dual_crop, …)
+  'keyframes', // keyframes de pose (animación de transformación)
+  'effects',   // efectos visuales del clip
+  'appear', 'exit', 'look', // transiciones/estilo visual
+]
+
+/** Extrae (clonadas) las propiedades visuales de un clip para el portapapeles. */
+export function pickClipVisualProps(clip) {
+  const out = {}
+  for (const k of CLIP_VISUAL_KEYS) {
+    if (clip && clip[k] !== undefined) out[k] = clip[k]
+  }
+  return JSON.parse(JSON.stringify(out))
+}
+
+/** Devuelve un clip nuevo con las props visuales aplicadas; conserva todo lo demás
+ *  (id, pista, tiempos, contenido). Regenera los ids de keyframes para que no
+ *  colisionen con los del clip de origen. */
+export function applyClipVisualProps(clip, props) {
+  if (!clip || !props) return clip
+  const patch = JSON.parse(JSON.stringify(props))
+  if (patch.reframe) {
+    const strip = (arr) => (arr || []).map(({ id: _id, ...k }) => k)
+    patch.reframe = withKfIds({
+      ...patch.reframe,
+      keyframes: strip(patch.reframe.keyframes),
+      keyframes2: strip(patch.reframe.keyframes2),
+    })
+  }
+  if (patch.keyframes?.items) {
+    patch.keyframes = {
+      ...patch.keyframes,
+      items: patch.keyframes.items.map(({ id: _id, ...it }) => ({ ...it, id: uid('k') })),
+    }
+  }
+  return { ...clip, ...patch }
+}
+
 export function syncMaterialInstances(clips, patch) {
   const { assetKind, assetId } = patch
   const dur = Number(patch.duration)
@@ -827,7 +877,62 @@ export function trackTextContent(clips, trackId) {
     .trim()
 }
 
-export function trackContextItems(track, { linked = false, canLink = false, hasText = false } = {}) {
+// Clips de texto de una pista, ordenados por tiempo de entrada.
+export function trackTextClips(clips, trackId) {
+  return (clips || [])
+    .filter((c) => c?.track_id === trackId && c?.kind === 'text')
+    .sort((a, b) => (Number(a.start) || 0) - (Number(b.start) || 0))
+}
+
+// Segundos → marca de tiempo SRT "HH:MM:SS,mmm".
+export function srtTimestamp(sec) {
+  const s = Math.max(0, Number(sec) || 0)
+  const pad = (n, w = 2) => String(Math.floor(n)).padStart(w, '0')
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const ss = Math.floor(s % 60)
+  const ms = Math.round((s - Math.floor(s)) * 1000)
+  return `${pad(h)}:${pad(m)}:${pad(ss)},${String(ms).padStart(3, '0')}`
+}
+
+// Pista de texto → SubRip (.srt): cada cuadro con su rango de tiempo de la timeline.
+export function trackSrt(clips, trackId) {
+  const rows = trackTextClips(clips, trackId)
+    .map((c) => {
+      const start = Number(c.start) || 0
+      return { text: String(c.text || '').trim(), start, end: start + clipDur(c) }
+    })
+    .filter((r) => r.text)
+  return rows
+    .map((r, i) => `${i + 1}\n${srtTimestamp(r.start)} --> ${srtTimestamp(r.end)}\n${r.text}`)
+    .join('\n\n')
+}
+
+// Metadatos del vídeo/fuente que se transcribió (título/descripción/url), si se
+// estamparon al generar los subtítulos. Toma el primer cuadro que los tenga.
+export function trackSource(clips, trackId) {
+  const hit = trackTextClips(clips, trackId).find((c) => c?.origin?.source)
+  return hit?.origin?.source || null
+}
+
+// SRT precedido de una referencia con el título y la descripción del vídeo
+// transcrito. Si no hay fuente, cae al SRT simple.
+export function trackSrtWithReference(clips, trackId) {
+  const srt = trackSrt(clips, trackId)
+  const src = trackSource(clips, trackId)
+  if (!src) return srt
+  const head = []
+  const title = String(src.title || '').trim()
+  const url = String(src.url || '').trim()
+  const desc = String(src.description || '').trim()
+  if (title) head.push(`Título: ${title}`)
+  if (url) head.push(`Fuente: ${url}`)
+  if (desc) head.push(`Descripción:\n${desc}`)
+  if (!head.length) return srt
+  return `${head.join('\n\n')}\n\n---\n\n${srt}`
+}
+
+export function trackContextItems(track, { linked = false, canLink = false, hasText = false, hasSource = false } = {}) {
   const items = [{ id: 'rename', label: 'Renombrar' }]
   if (track?.kind === 'audio') {
     items.push({
@@ -838,6 +943,8 @@ export function trackContextItems(track, { linked = false, canLink = false, hasT
   }
   if (track?.kind === 'text') {
     items.push({ id: 'copy-text', label: 'Copiar texto', disabled: !hasText })
+    items.push({ id: 'copy-srt', label: 'Copiar SRT', disabled: !hasText })
+    items.push({ id: 'copy-srt-ref', label: 'Copiar SRT + referencia', disabled: !hasText || !hasSource })
   }
   items.push({ id: 'delete', label: 'Eliminar', danger: true })
   return items

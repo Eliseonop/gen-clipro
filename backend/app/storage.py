@@ -125,3 +125,20 @@ def pick_folder() -> str | None:
         return path or None
     except Exception:
         return None
+
+
+def reveal_path(path: Path) -> bool:
+    """Abre el explorador de archivos del sistema resaltando `path` (solo local)."""
+    try:
+        p = str(Path(path).resolve())
+        if sys.platform.startswith("win"):
+            # explorer suele devolver código != 0 aunque funcione: no comprobamos returncode.
+            subprocess.run(["explorer", f"/select,{p}"], timeout=20)
+        elif sys.platform == "darwin":
+            subprocess.run(["open", "-R", p], timeout=20)
+        else:
+            # Linux: sin "seleccionar" universal; abre la carpeta contenedora.
+            subprocess.run(["xdg-open", str(Path(p).parent)], timeout=20)
+        return True
+    except Exception:
+        return False

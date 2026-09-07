@@ -110,7 +110,7 @@ export default function AudioTab({ project, onChange, initialYtUrl = '', sourceT
 
   async function copyPrompt() {
     try {
-      await navigator.clipboard?.writeText(buildScriptPrompt(topic))
+      await navigator.clipboard?.writeText(buildScriptPrompt(topic, project?.clips || []))
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch (e) { setError(e.message) }

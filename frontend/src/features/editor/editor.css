@@ -309,6 +309,51 @@
 .ed-mode-toggle input { accent-color: var(--accent); margin: 0; }
 .ed-mode-toggle .material-icons { color: inherit; }
 .ed-mode-toggle.on { border-color: #fb923c; color: #fdba74; background: rgba(234, 88, 12, 0.14); }
+
+/* Presets de posición (encuadre en el 9:16) */
+.ed-insp-pos { padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.ed-insp-pos-lab {
+  display: block; font-size: 9px; font-weight: 750; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 6px;
+}
+.ed-insp-pos-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+.ed-pos-btn {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 5px 2px; background: var(--card-2); border: 1px solid var(--line);
+  border-radius: 6px; color: var(--text-secondary); cursor: pointer;
+}
+.ed-pos-btn em { font-style: normal; font-size: 8.5px; line-height: 1.05; text-align: center; }
+.ed-pos-btn:hover { border-color: var(--accent); }
+.ed-pos-btn.on { border-color: #fb923c; color: #fdba74; background: rgba(234, 88, 12, 0.14); }
+
+/* Vista dividida: recorte/edición (izq) + resultado en vivo (der), MITAD y MITAD.
+   Cada lado ocupa el 50% del stage y su lienzo se ajusta dentro con object-fit
+   (respetando su aspecto: el del resultado = formato de salida → 9:16/16:9/1:1).
+   Ambos se achican a la vez con el resize HORIZONTAL (ancho = 50% cada uno) y
+   VERTICAL (alto = 100% del stage). */
+.ed-canvas-stage.split {
+  flex-direction: row; gap: 12px; padding: 8px 12px;
+  align-items: center; justify-content: center;
+}
+.ed-canvas-stage.split .ed-main-canvas {
+  flex: 1 1 0; min-width: 0;
+  width: auto; height: auto;
+  max-width: calc(50% - 6px); max-height: 100%; object-fit: contain;
+}
+.ed-result-pane {
+  position: relative; flex: 1 1 0; min-width: 0;
+  max-width: calc(50% - 6px); height: 100%;
+  display: flex; align-items: center; justify-content: center;
+}
+.ed-result-canvas {
+  width: auto; height: auto; max-width: 100%; max-height: 100%; object-fit: contain;
+  background: #000; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); border-radius: 2px;
+}
+.ed-result-label {
+  position: absolute; top: 4px; left: 50%; transform: translateX(-50%); z-index: 2;
+  font-size: 9px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+  color: #fdba74; background: rgba(0, 0, 0, 0.55); padding: 2px 8px; border-radius: 10px;
+}
 .ed-insp-tool {
   display: inline-flex; align-items: center; gap: 4px;
   background: var(--card-2); border: 1px solid var(--line); color: var(--text-secondary);
@@ -754,6 +799,10 @@
   cursor: pointer;
 }
 .ed-zoom { display: flex; align-items: center; gap: 2px; margin-left: 4px; }
+/* Zoom asistido estilo Filmora: se arrastra en horizontal sobre la regla (el
+   cursor ↔ lo sugiere, ver .ed-ruler). Mientras se arrastra, todo el cursor
+   pasa a redimensionado horizontal (↔). */
+body.ed-zooming, body.ed-zooming * { cursor: ew-resize !important; user-select: none !important; -webkit-user-select: none !important; }
 
 .ed-tl-body { flex: 1; display: flex; min-height: 0; overflow: hidden; }
 .ed-tl-headers {
@@ -799,7 +848,8 @@
 
 .ed-tl-scroll { flex: 1; min-width: 0; min-height: 0; overflow-x: auto; overflow-y: auto; overscroll-behavior: contain; }
 .ed-tl-inner { position: relative; min-width: 100%; }
-.ed-ruler { height: var(--ed-ruler-h); position: relative; border-bottom: 1px solid var(--line); background: var(--card-2); cursor: pointer; position: sticky; top: 0; z-index: 2; }
+.ed-ruler { height: var(--ed-ruler-h); position: relative; border-bottom: 1px solid var(--line); background: var(--card-2); cursor: ew-resize; position: sticky; top: 0; z-index: 2; user-select: none; -webkit-user-select: none; }
+.ed-ruler, .ed-ruler * { user-select: none; -webkit-user-select: none; }
 .ed-ruler.live { background: #161b28; box-shadow: inset 0 -1px 0 var(--accent); }
 .ed-tick { position: absolute; top: 0; height: 100%; }
 .ed-tick i { position: absolute; left: 0; top: 0; width: 1px; height: 100%; background: var(--line-bright); }

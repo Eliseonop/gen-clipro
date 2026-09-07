@@ -18,7 +18,7 @@ import {
   applyAudioSpeedToLinkedText, makeShapeClip, isGeneratedDurationClip,
   matchClipsToFirstDuration, durationPatchToMatch,
   clipLayerInfo, moveClipLayer, canLayerClip,
-  trackTextContent,
+  trackTextContent, trackSrt, trackSrtWithReference, trackSource, srtTimestamp,
   mcpBusyClipIds, MCP_BUSY_MS,
 } from './editorModel.js'
 
@@ -506,10 +506,37 @@ assert.equal(kept.keyframes[0].cx, 0.2)
 console.log('duplicate + sync + face-track ok')
 
 assert.deepEqual(
-  trackContextItems({ kind: 'text' }, { linked: false, canLink: true, hasText: true }).map((i) => i.id),
-  ['rename', 'copy-text', 'delete'],
+  trackContextItems({ kind: 'text' }, { linked: false, canLink: true, hasText: true, hasSource: true }).map((i) => i.id),
+  ['rename', 'copy-text', 'copy-srt', 'copy-srt-ref', 'delete'],
 )
 assert.equal(trackContextItems({ kind: 'text' }, { hasText: false }).find((i) => i.id === 'copy-text').disabled, true)
+assert.equal(trackContextItems({ kind: 'text' }, { hasText: true, hasSource: true }).find((i) => i.id === 'copy-srt').disabled, false)
+// SRT + referencia se deshabilita sin fuente aunque haya texto.
+assert.equal(trackContextItems({ kind: 'text' }, { hasText: true, hasSource: false }).find((i) => i.id === 'copy-srt-ref').disabled, true)
+
+// --- Copiado SRT de una pista de texto ---
+assert.equal(srtTimestamp(3661.5), '01:01:01,500')
+assert.equal(srtTimestamp(-5), '00:00:00,000')
+const srtClips = [
+  { id: 'b', track_id: 'T1', kind: 'text', start: 2, out_point: 1.5, source_duration: 1.5, text: 'mundo' },
+  { id: 'a', track_id: 'T1', kind: 'text', start: 0, out_point: 1, source_duration: 1, text: 'Hola' },
+]
+assert.equal(
+  trackSrt(srtClips, 'T1'),
+  '1\n00:00:00,000 --> 00:00:01,000\nHola\n\n2\n00:00:02,000 --> 00:00:03,500\nmundo',
+)
+assert.equal(trackSource(srtClips, 'T1'), null)
+// Sin fuente, el copiado con referencia cae al SRT simple.
+assert.equal(trackSrtWithReference(srtClips, 'T1'), trackSrt(srtClips, 'T1'))
+const srtRefClips = [
+  { id: 'a', track_id: 'T1', kind: 'text', start: 0, out_point: 1, source_duration: 1, text: 'Hola',
+    origin: { source: { title: 'Mi vídeo', url: 'https://y', description: 'Desc' } } },
+]
+assert.deepEqual(trackSource(srtRefClips, 'T1'), { title: 'Mi vídeo', url: 'https://y', description: 'Desc' })
+assert.equal(
+  trackSrtWithReference(srtRefClips, 'T1'),
+  'Título: Mi vídeo\n\nFuente: https://y\n\nDescripción:\nDesc\n\n---\n\n1\n00:00:00,000 --> 00:00:01,000\nHola',
+)
 assert.equal(
   trackTextContent([
     { id: 'b', track_id: 'T1', kind: 'text', start: 1, text: 'mundo' },

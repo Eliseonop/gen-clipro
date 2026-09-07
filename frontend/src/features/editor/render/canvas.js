@@ -13,7 +13,7 @@ import { applyCanvasFx, clipFxAt } from '../../../lib/clipFx'
 import { posedTransform, clipPose } from '../../../lib/clipAnim'
 import { keyframesOn, normalizeItems } from '../../../lib/clipKeyframes'
 import {
-  cropWindow, destRectOnFrame, frameRectOf, isOverlay, mediaSize, sourceCropPx, videosAt,
+  cropWindow, destRectOnFrame, frameRectOf, isFramed, isOverlay, mediaSize, slotAspectOf, sourceCropPx, videosAt,
 } from '../../../lib/clipLayout'
 
 // Desplaza geometría (dest / box / handles) del sistema local del recuadro Main
@@ -308,18 +308,18 @@ export function drawMainView(head, env) {
   const {
     mainCanvasRef, clipsRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
     playingRef, framingModeRef, mainTextBox, alignGuidesRef, croppingRef,
-    viewZoomRef, mainStageRef,
+    viewZoomRef, mainStageRef, cropModeRef,
   } = env
   const canvas = mainCanvasRef.current
   if (!canvas) return
   const ctx = canvas.getContext('2d')
 
   const clip = clipsRef.current.find((c) => c.id === selRef.current)
-  // Modo por-clip: si el clip seleccionado está en "Fijar vídeo" (fill), se muestra la
-  // vista de recorte (fuente completa + recuadro naranja móvil, zonas fuera atenuadas).
-  // Si es overlay (transformar vídeo) se usa el compuesto (marco fijo). Estable en play
-  // para no parpadear al reproducir. Igual en Main y en Clip Editor.
-  const cropEdit = !!(clip && isVisualClip(clip) && !isOverlay(clip) && !framingModeRef.current)
+  // Vista de recorte (fuente completa + recuadro naranja móvil, zonas fuera atenuadas)
+  // cuando el clip está encuadrado con "Fijar vídeo" (llena marco o slot) o cuando se
+  // pulsa "Recortar" sobre un overlay libre. Si no, compuesto (marco fijo). Estable en play.
+  const cropEdit = !!(clip && isVisualClip(clip) && !framingModeRef.current
+    && (isFramed(clip) || cropModeRef?.current))
 
   // Recorte (fuente + recuadro): Clip Editor, o herramienta Encuadre con un visual seleccionado.
   if (cropEdit && clip && isVisualClip(clip)) {
@@ -343,7 +343,8 @@ export function drawMainView(head, env) {
     ctx.clearRect(0, 0, cw2, ch2)
     try { ctx.drawImage(el, 0, 0, cw2, ch2) } catch { /* noop */ }
     const rf = clip.reframe || newReframe()
-    const outA = outRef.current.w / outRef.current.h
+    // El recorte se hace respecto al aspecto del SLOT (Completo=salida; mitades≈1:1).
+    const outA = slotAspectOf(clip, outRef.current.w / outRef.current.h)
     const srcT = (playingRef.current && active && clip.kind !== 'image') ? el.currentTime : srcTime
     const localHead = Math.max(0, head - clip.start)
     const crop = cropWindow(clip, srcAspect, outA, srcT, localHead)
@@ -421,4 +422,23 @@ export function drawMainView(head, env) {
   const lw = ctx.lineWidth
   ctx.strokeRect(frame.x + lw / 2, frame.y + lw / 2, frame.w - lw, frame.h - lw)
   ctx.restore()
+}
+
+// Vista de RESULTADO en vivo (composición final 9:16) para el panel lateral mientras se
+// encuadra con Fijar vídeo. Reusa drawComposite en un canvas propio con el aspecto de
+// salida. Sin selección/handles ni hit-list (no debe interferir con la edición del recorte).
+export function drawResultView(head, env) {
+  const { resultCanvasRef, outRef } = env
+  const canvas = resultCanvasRef?.current
+  if (!canvas) return
+  const ctx = canvas.getContext('2d')
+  const a = outRef.current.w / outRef.current.h
+  const long = 640
+  const cw = a >= 1 ? long : Math.max(2, Math.round(long * a))
+  const ch = a >= 1 ? Math.max(2, Math.round(long / a)) : long
+  if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch }
+  ctx.fillStyle = '#000'
+  ctx.fillRect(0, 0, cw, ch)
+  const resultEnv = { ...env, hitListRef: null }
+  drawComposite(ctx, head, [], resultEnv, { x: 0, y: 0, w: cw, h: ch })
 }

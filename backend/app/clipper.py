@@ -67,14 +67,19 @@ def _download_source(url: str, dest_dir: Path, on_progress: ProgressCb) -> Path:
     return files[0]
 
 
-def _crop_filter(mode: CropMode) -> str:
+def _crop_filter(mode: CropMode, out_w: int | None = None, out_h: int | None = None) -> str:
     """Devuelve el filtro FFmpeg (-vf o -filter_complex) para cada modo.
 
-    Todos producen una salida final de 720x1280 (9:16).
+    ``out_w``/``out_h`` es el formato de salida elegido en el editor (9:16, 16:9,
+    1:1, …). Ausentes → 720x1280 (vertical) por compatibilidad. Los modos split
+    (facecam) son una composición inherentemente vertical y mantienen sus
+    proporciones internas escaladas a la altura de salida.
     """
-    W, H = config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT
-    top_h = config.TOP_HEIGHT
-    bot_h = config.BOTTOM_HEIGHT
+    W = out_w or config.OUTPUT_WIDTH
+    H = out_h or config.OUTPUT_HEIGHT
+    # Proporciones del split relativas a la altura de salida (definidas para 1280).
+    top_h = round(H * config.TOP_HEIGHT / config.OUTPUT_HEIGHT)
+    bot_h = H - top_h
 
     if mode == CropMode.center:
         # Recorte central de proporción 9:16 y escalado a 720x1280.
@@ -94,17 +99,19 @@ def _crop_filter(mode: CropMode) -> str:
     return f"{top};{bot};[top][bot]vstack=inputs=2[v]"
 
 
-def _smart_face_filter(source: Path, seg: Segment) -> str:
-    """Filtro de recorte vertical fijo colocado sobre la cara del tramo.
+def _smart_face_filter(source: Path, seg: Segment, out_w: int | None = None, out_h: int | None = None) -> str:
+    """Filtro de recorte de proporción fija colocado sobre la cara del tramo.
 
     Igual que el modo centrado, pero la X del recorte se calcula a partir de
     dónde está la cara (detección YuNet). Si no se detecta cara, cae al centro.
     """
     from . import detect  # import perezoso: solo se necesita en este modo
 
-    W, H = config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT
+    W = out_w or config.OUTPUT_WIDTH
+    H = out_h or config.OUTPUT_HEIGHT
     iw, ih = detect.dims(source)
-    cw = round(ih * W / H)                      # ancho del recorte 9:16 en px fuente
+    cw = round(ih * W / H)                      # ancho del recorte (proporción W:H) en px fuente
+    cw = min(cw, iw)                             # no salir del fotograma (p. ej. 16:9 sobre fuente 16:9)
     cx = detect.face_center_x(source, seg.start, seg.end)
 
     if cx is None:
@@ -212,12 +219,13 @@ def _single_reframe_filter(source: Path, zoom: float, keyframes: list, pan_mode:
     )
 
 
-def _reframe_filter(source: Path, reframe: Reframe) -> tuple[str, bool]:
+def _reframe_filter(source: Path, reframe: Reframe, out_w: int | None = None, out_h: int | None = None) -> tuple[str, bool]:
     """Filtro de reencuadre (simple o doble encuadre).
 
     Devuelve (filtro, es_filter_complex).
     """
-    W, H = config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT
+    W = out_w or config.OUTPUT_WIDTH
+    H = out_h or config.OUTPUT_HEIGHT
     if not reframe.dual_crop:
         filt = _single_reframe_filter(source, reframe.zoom, reframe.keyframes, reframe.pan_mode, W, H)
         return filt, False
@@ -306,8 +314,13 @@ def _run_ffmpeg_cut(base: list[str], filt: list[str], maps_a: list[str], maps_an
 
 def _cut_clip(source: Path, seg: Segment, mode: CropMode, out_path: Path,
               reframe: Reframe | None = None, tmp_dir: Path | None = None,
-              audio: dict | None = None) -> None:
-    """Corta un tramo del vídeo fuente aplicando el filtro del modo elegido."""
+              audio: dict | None = None, out_w: int | None = None,
+              out_h: int | None = None) -> None:
+    """Corta un tramo del vídeo fuente aplicando el filtro del modo elegido.
+
+    ``out_w``/``out_h`` fija el formato de salida (el editor lo elige). Ausentes
+    → 720x1280 vertical por compatibilidad con clips guardados antes.
+    """
     base = [
         "ffmpeg", "-y",
         "-ss", str(seg.start),
@@ -321,17 +334,17 @@ def _cut_clip(source: Path, seg: Segment, mode: CropMode, out_path: Path,
     if uses_source_trim(reframe):
         filt: list[str] = []
     elif mode == CropMode.smart_face and reframe and reframe.keyframes:
-        filt_str, is_complex = _reframe_filter(source, reframe)
+        filt_str, is_complex = _reframe_filter(source, reframe, out_w, out_h)
         filt = _vf_args(filt_str, script_dir, is_complex)
         if is_complex:
             maps_a = ["-map", "[v]", "-map", "0:a?"]
             maps_an = ["-map", "[v]"]
     elif mode == CropMode.center:
-        filt = _vf_args(_crop_filter(mode), script_dir, False)
+        filt = _vf_args(_crop_filter(mode, out_w, out_h), script_dir, False)
     elif mode == CropMode.smart_face:
-        filt = _vf_args(_smart_face_filter(source, seg), script_dir, False)
+        filt = _vf_args(_smart_face_filter(source, seg, out_w, out_h), script_dir, False)
     else:
-        filt = _vf_args(_crop_filter(mode), script_dir, True)
+        filt = _vf_args(_crop_filter(mode, out_w, out_h), script_dir, True)
         maps_a = ["-map", "[v]", "-map", "0:a?"]
         maps_an = ["-map", "[v]"]
 
@@ -354,6 +367,8 @@ def generate_clips(
     volume: float = 1.0,
     muted: bool = False,
     audio_keyframes: dict | None = None,
+    out_w: int = config.OUTPUT_WIDTH,
+    out_h: int = config.OUTPUT_HEIGHT,
 ) -> list[ClipInfo]:
     """Genera todos los clips en ``video_dir`` y los devuelve.
 
@@ -383,7 +398,7 @@ def generate_clips(
             filename = f"{prefix}_{seg.index}.mp4"
             out_path = video_dir / filename
             _cut_clip(source, seg, mode, out_path, reframe=clip_reframe, tmp_dir=tmp_dir,
-                      audio=audio)
+                      audio=audio, out_w=out_w, out_h=out_h)
 
             clips.append(
                 ClipInfo(

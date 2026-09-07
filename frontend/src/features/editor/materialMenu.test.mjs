@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { canDeleteMaterial, materialIdent, materialMenuItems } from './materialMenu.js'
+import { canDeleteMaterial, canDownloadMaterial, materialIdent, materialMenuItems } from './materialMenu.js'
 
 assert.equal(canDeleteMaterial({ scope: 'project' }), true)
 assert.equal(canDeleteMaterial({ scope: 'library' }), false)
@@ -21,5 +21,16 @@ assert.equal(materialIdent('audios', { id: 'a2' }), 'a2')
   assert.deepEqual(items.map((x) => x.id), ['save'])
   assert.equal(items[0].label, 'Quitar de guardados')
 }
+
+{
+  const items = materialMenuItems({ saved: false, canDelete: true, canDownload: true })
+  assert.deepEqual(items.map((x) => x.id), ['save', 'download', 'delete'])
+  assert.equal(items[1].label, 'Descargar')
+}
+
+assert.equal(canDownloadMaterial({ url: '/api/media/x/video/a.mp4' }), true)
+assert.equal(canDownloadMaterial({ filename: 'a.mp4' }), false)
+assert.equal(canDownloadMaterial({}), false)
+assert.equal(canDownloadMaterial(null), false)
 
 console.log('materialMenu ok')

@@ -29,6 +29,7 @@ from .schemas import (
     ExploreSearchRequest,
     ReframePrepareRequest,
     SaveLibraryRequest,
+    RevealMediaRequest,
     SetFolderRequest,
     Timeline,
     TranscribeRequest,
@@ -574,6 +575,31 @@ def sfx_file(relpath: str) -> FileResponse:
     if path is None:
         raise HTTPException(status_code=404, detail="Efecto de sonido no encontrado.")
     return FileResponse(str(path))
+
+
+@app.post("/api/media/reveal")
+def reveal_media(req: RevealMediaRequest) -> dict:
+    """Abre el explorador de archivos resaltando el material en disco (solo local)."""
+    kind_map = {
+        "clips": "video", "video": "video",
+        "images": "image", "image": "image",
+        "audios": "audio", "audio": "audio",
+    }
+    kind = kind_map.get((req.kind or "").lower())
+    if not kind or not req.filename:
+        raise HTTPException(status_code=400, detail="Material inválido.")
+    if (req.scope or "").lower() == "library":
+        path = storage.resolve_library_media(kind, req.filename)
+    else:
+        proj = projects.get_project(req.project_id or "")
+        if proj is None:
+            raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+        path = storage.resolve_media(proj, kind, req.filename)
+    if path is None or not path.exists():
+        raise HTTPException(status_code=404, detail="El archivo no está guardado en disco.")
+    if not storage.reveal_path(path):
+        raise HTTPException(status_code=500, detail="No se pudo abrir el explorador.")
+    return {"ok": True, "path": str(path)}
 
 
 @app.get("/api/media/{project_id}/{kind}/{filename}")

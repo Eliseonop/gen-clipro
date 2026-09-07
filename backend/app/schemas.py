@@ -118,6 +118,10 @@ class ClipRequest(BaseModel):
     volume: float = Field(default=1.0, ge=0.0, le=2.0)
     muted: bool = False
     audio_keyframes: Optional[dict] = None
+    # Formato de salida del clip (el editor lo elige: 9:16, 16:9, 1:1, …).
+    # Ausente → vertical 720×1280 por compatibilidad con clips antiguos.
+    width: int = Field(default=720, ge=16, le=8192)
+    height: int = Field(default=1280, ge=16, le=8192)
 
 
 class CompLayer(BaseModel):
@@ -171,6 +175,13 @@ class CreateProjectRequest(BaseModel):
 
 class SetFolderRequest(BaseModel):
     path: str
+
+
+class RevealMediaRequest(BaseModel):
+    kind: str
+    filename: str
+    project_id: str | None = None
+    scope: str | None = None
 
 
 # --- Transcripción (guion) ---------------------------------------------
