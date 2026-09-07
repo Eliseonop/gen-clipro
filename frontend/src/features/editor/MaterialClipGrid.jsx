@@ -87,7 +87,7 @@ function openCardMenu(e, onMenu) {
 export function VideoCard({
   clip, onAdd, onPlay, di, draggable = true,
   addTitle = 'Agregar al proyecto',
-  onEdit, onMenu,
+  onEdit, onMenu, onDownload,
 }) {
   const { ref, playing, setPlaying, toggle } = useToggle(onPlay)
   const title = clip.label || (clip.scope === 'library' ? (clip.filename || 'Guardado') : `Clip #${clip.index}`)
@@ -136,6 +136,17 @@ export function VideoCard({
             <Icon name="movie_edit" size={15} />
           </button>
         )}
+        {onDownload && (
+          <button
+            type="button"
+            className="ed-dl-corner"
+            title="Descargar"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onDownload() }}
+          >
+            <Icon name="download" size={15} />
+          </button>
+        )}
         <button className="ed-add-corner" onClick={(e) => { e.stopPropagation(); onAdd() }} title={addTitle}>
           <Icon name="add" size={16} />
         </button>
@@ -152,6 +163,7 @@ export function ImageCard({
   image, onAdd, di, draggable = true,
   addTitle = 'Agregar al proyecto',
   onMenu,
+  onDownload,
   onSaveDescription,
 }) {
   const title = image.label || image.name || image.filename || 'Imagen'
@@ -201,6 +213,17 @@ export function ImageCard({
         <button className="ed-add-corner" onClick={(e) => { e.stopPropagation(); onAdd() }} title={addTitle}>
           <Icon name="add" size={16} />
         </button>
+        {onDownload && (
+          <button
+            type="button"
+            className="ed-dl-corner"
+            title="Descargar"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onDownload() }}
+          >
+            <Icon name="download" size={15} />
+          </button>
+        )}
         {onMenu && <MaterialMenuBtn onOpen={(e) => openCardMenu(e, onMenu)} />}
         {dim ? <span className="ed-card-dur">{dim}</span> : null}
       </div>
@@ -253,6 +276,7 @@ export default function MaterialClipGrid({
   emptyText = 'Sin clips. Pulsa Cargar clips.',
   onEdit,
   onMenu,
+  onDownload,
 }) {
   const internalPlay = useExclusiveMedia()
   const play = onPlay || internalPlay
@@ -271,6 +295,7 @@ export default function MaterialClipGrid({
             addTitle={addTitle}
             onEdit={onEdit ? () => onEdit(c) : undefined}
             onMenu={onMenu ? (e) => onMenu(e, c) : undefined}
+            onDownload={onDownload ? () => onDownload(c) : undefined}
           />
         ))}
     </div>

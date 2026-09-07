@@ -4,6 +4,7 @@ import FlipSelect from '../../components/FlipSelect'
 import { clipPose } from '../../lib/clipAnim'
 import { APPEAR_OPTIONS, COLOR_FX, EXIT_OPTIONS, fxNum } from '../../lib/clipFx'
 import { canKeyframe, keyframeIdAt } from '../../lib/clipKeyframes'
+import { FRAME_OPTIONS } from '../../lib/clipLayout'
 import { isVisualClip } from './editorModel'
 import EdShape from './EdShape'
 import EdText, { TextFxPanel } from './EdText'
@@ -40,6 +41,10 @@ export default function EdInspector({
   audioMode,
   fijarVideo,
   onFijarVideo,
+  cropping,
+  onCropping,
+  frameSlot,
+  onFrameSlot,
   effectsProps,
   shapeProps,
   clipMode,
@@ -117,6 +122,40 @@ export default function EdInspector({
               <Icon name={fijarVideo ? 'lock' : 'open_with'} size={15} />
               Fijar vídeo
             </label>
+            {!fijarVideo && onCropping && (
+              <label
+                className={`ed-mode-toggle ${cropping ? 'on' : ''}`}
+                title="Recortar: elige qué parte de la fuente se ve (arrastra el recuadro naranja). Luego muévela/escálala libre en el lienzo."
+              >
+                <input
+                  type="checkbox"
+                  checked={!!cropping}
+                  onChange={(e) => onCropping(e.target.checked)}
+                />
+                <Icon name="crop" size={15} />
+                Recortar
+              </label>
+            )}
+          </div>
+        )}
+
+        {hasTarget && activeNav === 'video' && sub === 'basic' && visual && fijarVideo && onFrameSlot && (
+          <div className="ed-insp-pos">
+            <span className="ed-insp-pos-lab">Posición en el 9:16</span>
+            <div className="ed-insp-pos-grid">
+              {FRAME_OPTIONS.map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  className={`ed-pos-btn ${frameSlot === o.id ? 'on' : ''}`}
+                  title={o.label}
+                  onClick={() => onFrameSlot(o.id)}
+                >
+                  <Icon name={o.icon} size={16} />
+                  <em>{o.label.replace('Mitad ', '')}</em>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 

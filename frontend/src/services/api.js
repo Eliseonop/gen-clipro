@@ -49,6 +49,9 @@ export const createProject = (name) => post('/api/projects', { name })
 export const getProject = (id) => get(`/api/projects/${id}`)
 export const deleteProject = (id) => del(`/api/projects/${id}`)
 export const pickFolder = () => post('/api/pick-folder', {})
+// Abre el explorador del sistema resaltando el archivo del material (solo local).
+export const revealMaterial = ({ projectId, kind, filename, scope }) =>
+  post('/api/media/reveal', { project_id: projectId, kind, filename, scope })
 export const setProjectFolder = (id, path) => post(`/api/projects/${id}/folder`, { path })
 
 // --- Audio (TTS) + ajustes ---

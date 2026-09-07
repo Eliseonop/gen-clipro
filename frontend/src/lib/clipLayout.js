@@ -8,25 +8,47 @@ import { keyframesOn } from './clipKeyframes.js'
 
 export const newTransform = () => ({ x: 0.5, y: 0.5, scale: 1, rotation: 0 })
 
-/** Huecos asistidos en el canvas de salida (fracción). Cuarteto más adelante. */
+/** Huecos asistidos en el canvas de salida (fracción). x/y = centro; w/h = tamaño. */
 export const FRAME_SLOTS = {
   top: { x: 0.5, y: 0.25, w: 1, h: 0.5 },
   bottom: { x: 0.5, y: 0.75, w: 1, h: 0.5 },
+  left: { x: 0.25, y: 0.5, w: 0.5, h: 1 },
+  right: { x: 0.75, y: 0.5, w: 0.5, h: 1 },
 }
 
 export const FRAME_OPTIONS = [
-  { id: 'full', label: 'Completo' },
-  { id: 'top', label: 'Mitad superior' },
-  { id: 'bottom', label: 'Mitad inferior' },
+  { id: 'full', label: 'Completo', icon: 'crop_free' },
+  { id: 'top', label: 'Mitad superior', icon: 'vertical_align_top' },
+  { id: 'bottom', label: 'Mitad inferior', icon: 'vertical_align_bottom' },
+  { id: 'left', label: 'Mitad izquierda', icon: 'align_horizontal_left' },
+  { id: 'right', label: 'Mitad derecha', icon: 'align_horizontal_right' },
 ]
 
 export function frameOf(clip) {
-  if (clip?.frame === 'top' || clip?.frame === 'bottom') return clip.frame
-  return 'full'
+  const f = clip?.frame
+  return FRAME_SLOTS[f] ? f : 'full'
+}
+
+/**
+ * Aspecto del slot del clip dentro de la salida. Para `full` = aspecto de salida;
+ * para las mitades = (slot.w · outAspect) / slot.h. El recorte (Fijar vídeo) y sus
+ * keyframes se hacen respecto a este aspecto.
+ */
+export function slotAspectOf(clip, outAspect) {
+  const slot = FRAME_SLOTS[frameOf(clip)]
+  if (!slot) return outAspect
+  return (slot.w * outAspect) / slot.h
 }
 
 export function isOverlay(clip) {
   return clip?.layout === 'overlay'
+}
+
+// Clip "encuadrado" (Fijar vídeo): llena el marco completo (fill) o un slot (overlay en
+// mitad sup/inf/izq/der). Se edita con la vista de recorte. Un overlay libre (frame 'free')
+// NO está encuadrado (se mueve/escala en el compuesto).
+export function isFramed(clip) {
+  return isVisualClip(clip) && (!isOverlay(clip) || !!FRAME_SLOTS[clip?.frame])
 }
 
 // --- Main / workspace (estilo CapCut) ---

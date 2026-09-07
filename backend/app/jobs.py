@@ -93,6 +93,8 @@ def _run(job_id: str, req: ClipRequest, title: str) -> None:
             volume=req.volume,
             muted=req.muted,
             audio_keyframes=req.audio_keyframes,
+            out_w=req.width,
+            out_h=req.height,
         )
         projects.add_clips(req.project_id, clips)   # persistir en el proyecto
         job.clips = clips

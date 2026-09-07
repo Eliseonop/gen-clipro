@@ -2,7 +2,7 @@
 import { clamp, clampCenter, frameAt, zoomFromCorner, isNearCropCorner } from '../../lib/panning'
 import {
   canvasPointer, clampCrop, CLIP_POS_MAX, CLIP_POS_MIN, cropSizeFromCorner, cropWindow, destRectOnCanvas,
-  frameRectOf, hitTransformHandle, isOverlay, mediaSize, sourceCropPx,
+  frameRectOf, hitTransformHandle, isFramed, isOverlay, mediaSize, sourceCropPx,
 } from '../../lib/clipLayout'
 import { framingRect, hitFrontmost, pointInDest } from './render/canvas'
 import { snapAlign, textAlignTargets } from '../../lib/alignGuides'
@@ -436,7 +436,7 @@ export function createCanvasDownHandler(ctx) {
     mainCanvasRef, framingModeRef, playingRef, stopPlayback,
     selectedClip, playhead, mediaEls,
     changeTransform, commitPose, clipsRef,
-    hitListRef, onSelectClip, onClearSelection,
+    cropModeRef, hitListRef, onSelectClip, onClearSelection,
   } = ctx
   const onCropDown = createMainDownHandler(ctx)
 
@@ -445,10 +445,12 @@ export function createCanvasDownHandler(ctx) {
     const canvas = mainCanvasRef.current
     if (!canvas) return
 
-    // Clip en modo "Fijar vídeo" (fill) → editar el recuadro (vista de recorte).
-    // Overlay (transformar vídeo) → interacción sobre el compuesto.
-    const sel = selectedClip
-    if (framingModeRef.current || (sel && isVisualClip(sel) && !isOverlay(sel))) {
+    // Recorte de fuente cuando el clip está encuadrado (Fijar vídeo: llena marco o slot)
+    // o cuando "Recortar" está activo sobre un overlay libre. Si no, compuesto.
+    // Se usa el clip FRESCO de clipsRef (evita un `selectedClip` desfasado tras aplicar slot).
+    const sel = (clipsRef?.current || []).find((c) => c.id === selectedClip?.id) || selectedClip
+    if (framingModeRef.current
+      || (sel && isVisualClip(sel) && (isFramed(sel) || cropModeRef?.current))) {
       onCropDown(e)
       return
     }

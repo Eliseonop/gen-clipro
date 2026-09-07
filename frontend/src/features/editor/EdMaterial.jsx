@@ -15,7 +15,7 @@ import EdExplore from './EdExplore'
 import AudioTab from '../audio/AudioTab'
 import ConfirmModal from '../../components/ConfirmModal'
 import AnchoredMenu from '../../components/AnchoredMenu'
-import { canDeleteMaterial, materialIdent, materialMenuItems, materialDeleteTitle, materialLabel } from './materialMenu'
+import { canDeleteMaterial, canDownloadMaterial, downloadMaterialFile, materialIdent, materialMenuItems, materialDeleteTitle, materialLabel } from './materialMenu'
 import { clipCopyText } from './editorModel'
 import { isTypingTarget, scopeShortcutIndex, scopeTabsFor, stepNavId, wheelStepDir } from './materialNav'
 import JobStatusBar from '../../components/JobStatusBar'
@@ -1152,12 +1152,13 @@ export default function EdMaterial({
             {materialMenuItems({
               saved: matMenu.saved,
               canDelete: canDeleteMaterial(matMenu.item),
+              canDownload: canDownloadMaterial(matMenu.item),
             }).map((it) => (
               <button
                 key={it.id}
                 type="button"
                 className={it.danger ? 'danger' : undefined}
-                onClick={() => {
+                onClick={async () => {
                   const { kind, item } = matMenu
                   setMatMenu(null)
                   if (it.id === 'save') {
@@ -1165,11 +1166,19 @@ export default function EdMaterial({
                     toggleSave(resource, item)
                     return
                   }
+                  if (it.id === 'download') {
+                    try {
+                      await downloadMaterialFile(item)
+                    } catch (err) {
+                      setMatToast({ type: 'error', message: err.message || 'No se pudo descargar.' })
+                    }
+                    return
+                  }
                   if (it.id === 'delete') setDeleteTarget({ kind, item })
                 }}
               >
                 <Icon
-                  name={it.id === 'save' ? (matMenu.saved ? 'bookmark' : 'bookmark_border') : 'delete'}
+                  name={it.id === 'save' ? (matMenu.saved ? 'bookmark' : 'bookmark_border') : (it.id === 'download' ? 'download' : 'delete')}
                   size={15}
                 />
                 {it.label}

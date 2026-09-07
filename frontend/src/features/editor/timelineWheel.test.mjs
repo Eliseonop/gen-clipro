@@ -17,10 +17,10 @@ assert.equal(
 )
 assert.equal(
   timelineWheelAction(none, { canScrollY: true, overRuler: true }),
-  'zoom',
-  'sobre .ed-ruler la rueda hace zoom aunque haya pistas de más',
+  'scrollX',
+  'sobre .ed-ruler la rueda desplaza en horizontal; el zoom es por arrastre',
 )
-assert.equal(timelineWheelAction(none, { canScrollY: false, overRuler: true }), 'zoom')
+assert.equal(timelineWheelAction(none, { canScrollY: false, overRuler: true }), 'scrollX')
 
 assert.equal(headerScrollPad(277, 267), 10)
 assert.equal(headerScrollPad(267, 267), 0)

@@ -4,7 +4,7 @@ import { getJob, generateSubtitles, transcribeClip, getSettings } from '../../..
 import { subtitleStyle } from '../../../lib/textstyles'
 import { canCaptionClip, textClipsFromTranscript } from '../editorModel'
 
-export function useSubtitles(projectId, { tracksRef, ensureTextTrack, setClips, setCtxMenu, onChange }) {
+export function useSubtitles(projectId, { tracksRef, ensureTextTrack, setClips, setCtxMenu, onChange, resolveSource }) {
   const [subJob, setSubJob] = useState(null)
 
   function requestSubtitles(clip) {
@@ -33,7 +33,8 @@ export function useSubtitles(projectId, { tracksRef, ensureTextTrack, setClips, 
     const existing = tracksRef.current.find((t) => t.kind === 'text')
     const style = existing?.style || subtitleStyle()
     const tid = ensureTextTrack(style)
-    const news = textClipsFromTranscript(src, job.transcript.segments || [], tid, style, job.transcript)
+    const source = resolveSource ? resolveSource(src) : null
+    const news = textClipsFromTranscript(src, job.transcript.segments || [], tid, style, job.transcript, source)
     if (news.length) setClips((prev) => [...prev, ...news])
   }
 
