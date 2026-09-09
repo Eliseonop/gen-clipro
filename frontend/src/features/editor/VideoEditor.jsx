@@ -26,6 +26,7 @@ import {
 } from './editorModel'
 import { textRole } from '../../lib/textRole'
 import { SHAPE_DEFAULT_DUR } from '../../lib/shapes'
+import { MASK_KF_KEYS, clipMasks, defaultMask, maskId, normalizeMask } from '../../lib/clipMask'
 import { applyFrame, disableOverlay, enableOverlay, frameOf, isFramed, isOverlay, mediaSize, newTransform, videosAt } from '../../lib/clipLayout'
 import {
   AUDIO_FX_KEYS, applyVolumeFade, canKeyframe, clipPropsAt, clipVolumeAt, clampVolume, deleteKeyframeItem, flattenPatch, keyframeIdAt,
@@ -177,6 +178,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   // Zoom SOLO visual del canvas (aleja/acerca la vista para ver alrededor del encuadre).
   // No toca el clip ni el export. Independiente por editor (Main vs Clip).
   const [mainZoom, setMainZoom] = useState(1)
+  // Máscara: `maskMode` muestra y permite manipularla sobre el reproductor
+  // (se enciende al abrir Video → Máscara); `maskDraw` es el pincel.
+  const [maskMode, setMaskMode] = useState(false)
+  const [maskDraw, setMaskDraw] = useState(false)
   const [clipZoom, setClipZoom] = useState(1)
   const viewZoom = mainColTab === 'clip' ? clipZoom : mainZoom
   const setViewZoom = mainColTab === 'clip' ? setClipZoom : setMainZoom
@@ -213,6 +218,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const outRef = useRef({ w: outW, h: outH }); outRef.current = { w: outW, h: outH }
   const framingModeRef = useRef(null); framingModeRef.current = framingMode
   const cropModeRef = useRef(false); cropModeRef.current = cropMode
+  const maskModeRef = useRef(false); maskModeRef.current = maskMode
+  const maskDrawRef = useRef(false); maskDrawRef.current = maskDraw
   const viewZoomRef = useRef(1); viewZoomRef.current = viewZoom
   const previewVolRef = useRef(previewVol); previewVolRef.current = previewVol
   const alignGuidesRef = useRef(null)
@@ -400,6 +407,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       clipsRef, tracksRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
       playingRef, framingModeRef, mainCanvasRef, mainStageRef, resultCanvasRef, mainTextBox, topVideoAt, alignGuidesRef,
       clipModeRef, cropModeRef, croppingRef, fpsRef, hitListRef, viewZoomRef,
+      maskModeRef, maskDrawRef,
     }
     const tick = () => {
       const total = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
@@ -1426,6 +1434,107 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       return next
     }))
   }
+  // --- Máscaras del clip -------------------------------------------------
+  // La geometría (mx/my/mw/mh/msx/msy/mrot/mfeather) es animable y viaja por el
+  // MISMO sistema de keyframes que la pose; el resto son campos estáticos.
+  function patchFirstMask(id, build) {
+    setClips((prev) => prev.map((c) => {
+      if (c.id !== id) return c
+      const masks = clipMasks(c)
+      const next = build(masks, c)
+      return next ? { ...c, masks: next } : c
+    }))
+  }
+  function addMask(type) {
+    const clip = selectedClip
+    if (!clip) return
+    patchFirstMask(clip.id, (masks) => [defaultMask(type, outAspect), ...masks])
+    setMaskMode(true)
+  }
+  function removeMask() {
+    const clip = selectedClip
+    if (!clip) return
+    patchFirstMask(clip.id, (masks) => (masks.length ? masks.slice(1) : null))
+    setMaskDraw(false)
+  }
+  function duplicateMask() {
+    const clip = selectedClip
+    if (!clip) return
+    patchFirstMask(clip.id, (masks) => {
+      if (!masks.length) return null
+      const copy = { ...masks[0], id: maskId(), x: masks[0].x + 0.06, y: masks[0].y + 0.06 }
+      return [masks[0], copy, ...masks.slice(1)]
+    })
+  }
+  // Cambiar de tipo re-siembra el tamaño por defecto de la forma nueva; los
+  // keyframes sueltan mw/mh/msx/msy para no arrastrar la medida de la anterior.
+  function retypeMask(masks, type) {
+    const base = defaultMask(type, outAspect)
+    return {
+      ...base,
+      id: masks[0].id,
+      enabled: masks[0].enabled,
+      x: masks[0].x,
+      y: masks[0].y,
+      rotation: masks[0].rotation,
+      feather: masks[0].feather,
+      invert: masks[0].invert,
+      opacity: masks[0].opacity,
+    }
+  }
+  function dropMaskSizeKfs(clip) {
+    if (!clip.keyframes?.enabled) return clip
+    const drop = new Set(['mw', 'mh', 'msx', 'msy'])
+    const items = (clip.keyframes.items || []).map((k) => {
+      const props = { ...(k.props || {}) }
+      for (const key of drop) delete props[key]
+      return { ...k, props }
+    })
+    return { ...clip, keyframes: { ...clip.keyframes, items } }
+  }
+  function changeMask(id, patch) {
+    setClips((prev) => prev.map((c) => {
+      if (c.id !== id) return c
+      const masks = clipMasks(c)
+      if (!masks.length) return c
+      const retype = patch.type && patch.type !== masks[0].type
+      const first = retype
+        ? retypeMask(masks, patch.type)
+        : normalizeMask({ ...masks[0], ...patch })
+      const next = { ...c, masks: [first, ...masks.slice(1)] }
+      return retype ? dropMaskSizeKfs(next) : next
+    }))
+  }
+  function applyStaticMask(c, patch) {
+    const masks = clipMasks(c)
+    if (!masks.length) return c
+    const first = { ...masks[0] }
+    const fields = {
+      mx: 'x', my: 'y', mw: 'w', mh: 'h',
+      msx: 'scale_x', msy: 'scale_y', mrot: 'rotation', mfeather: 'feather',
+    }
+    for (const key of MASK_KF_KEYS) {
+      if (patch[key] != null && Number.isFinite(Number(patch[key]))) {
+        first[fields[key]] = Number(patch[key])
+      }
+    }
+    return { ...c, masks: [normalizeMask(first), ...masks.slice(1)] }
+  }
+  function commitMask(id, patch) {
+    setClips((prev) => prev.map((c) => {
+      if (c.id !== id || !clipMasks(c).length) return c
+      let next = applyStaticMask(c, patch)
+      const t = localTOf(next)
+      next = upsertKf(next, t, patch)
+      markKf(next, t)
+      return next
+    }))
+  }
+  const onMaskPanel = useCallback((open) => {
+    setMaskMode(open)
+    if (!open) setMaskDraw(false)
+  }, [])
+
   function applyPreset(id, preset) {
     const ids = new Set(selIdsRef.current.includes(id) ? selIdsRef.current : [id])
     const source = clipsRef.current.find((c) => c.id === id)
@@ -1664,6 +1773,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     selectedClip, mainTextBox, changeStyle, changeShape, mediaEls, playhead, upsertKeyframe, outAspect,
     changeReframe, clipsRef, tracksRef, playheadRef, alignGuidesRef, seek: scrub, croppingRef,
     clipModeRef, cropModeRef, hitListRef, viewZoomRef,
+    maskModeRef, maskDrawRef, changeMask, commitMask,
     onSelectClip: handleSelectClip,
     onClearSelection: clearCanvasSelection,
     changeTransform, commitPose, upsertKeyframe, outW, outH,
@@ -2018,6 +2128,19 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                 ? () => requestFragmentTrack(selTrackObj.id)
                 : (isTextSel ? () => requestFragmentClip(selectedClip.id) : undefined),
             },
+          }}
+          maskProps={{
+            maskMode,
+            onMaskMode: setMaskMode,
+            drawMode: maskDraw,
+            onDrawMode: setMaskDraw,
+            onPanelOpen: onMaskPanel,
+            onAddMask: addMask,
+            onRemoveMask: removeMask,
+            onDuplicateMask: duplicateMask,
+            onChangeMask: (patch) => selectedClip && changeMask(selectedClip.id, patch),
+            onCommitMask: (patch) => selectedClip && commitMask(selectedClip.id, patch),
+            onAddKf: addKeyframeAtPlayhead,
           }}
           shapeProps={isShapeSel ? {
             clip: selectedClip,

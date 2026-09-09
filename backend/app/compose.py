@@ -26,6 +26,7 @@ from typing import Callable, Optional
 from . import clipper, config, gpu, sfx, storage
 from .clip_fx import _scale_expr, audio_fx_chain, fx_windows, overlay_xy_for_fx, video_fx_chain
 from .clip_keyframes import keyframes_enabled, volume_filter
+from .clip_mask import build_timeline_masks, has_mask, maskable
 from .schemas import Keyframe, Project, Reframe, Timeline, TimelineClip
 from .clip_layout import dest_rect_even, is_overlay, source_crop_px
 from .diagnostics import timed
@@ -555,8 +556,30 @@ def _text_chain(timeline: Timeline, W: int, H: int, in_label: str) -> tuple[list
     return steps, last
 
 
+def _mask_input_args(spec: dict, fps: int, total: float) -> list[str]:
+    """Args ``-i`` del PNG (o secuencia PNG) de máscara de un clip."""
+    if spec.get("animated"):
+        return ["-framerate", f"{float(spec.get('fps') or fps):.4f}", "-i", spec["path"]]
+    return ["-loop", "1", "-framerate", str(int(fps)), "-t", f"{total:.3f}", "-i", spec["path"]]
+
+
+def _mask_stream_filter(idx: int, spec: dict, label: str, fps: int,
+                        start: float, dur: float, total: float) -> str:
+    """Lleva la máscara al reloj de la composición (gbrp, misma cadencia)."""
+    chain = f"[{idx}:v]fps={fps},format=gbrp"
+    if spec.get("animated"):
+        chain += ",setpts=PTS-STARTPTS"
+        if start > 0.02:
+            chain += f",tpad=start_mode=clone:start_duration={start:.3f}"
+        rest = max(0.0, total - start - dur)
+        if rest > 0.02:
+            chain += f",tpad=stop_mode=clone:stop_duration={rest + 0.1:.3f}"
+    return f"{chain}[{label}]"
+
+
 def build_command(project: Project, timeline: Timeline, out_path: Path,
-                  ass_path: Optional[Path] = None, shape_files: Optional[dict] = None) -> list[str]:
+                  ass_path: Optional[Path] = None, shape_files: Optional[dict] = None,
+                  mask_files: Optional[dict] = None) -> list[str]:
     """Construye la lista de argumentos de ffmpeg para renderizar la timeline."""
     W = int(timeline.width or config.OUTPUT_WIDTH)
     H = int(timeline.height or config.OUTPUT_HEIGHT)
@@ -620,6 +643,16 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
     for c, path in all_files:
         inputs += _ffmpeg_input_args(c, path, fps)
 
+    # Máscaras: un input extra (PNG o secuencia PNG) por clip enmascarado. Van
+    # DESPUÉS del material para no alterar los índices de `idx_of`.
+    mask_idx: dict[str, int] = {}
+    for (c, _path, _t) in vclips:
+        spec = (mask_files or {}).get(c.id)
+        if not spec or c.id in mask_idx or not maskable(c) or not has_mask(c):
+            continue
+        mask_idx[c.id] = len(all_files) + len(mask_idx)
+        inputs += _mask_input_args(spec, fps, total)
+
     filt: list[str] = []
 
     # --- Vídeo: fondo negro + overlays por capa ---
@@ -681,10 +714,25 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         )
         out_label = f"ov{n}"
         ov_fmt = ":format=auto" if (fx or is_still_clip(c) or fill_pose) else ""
-        filt.append(
-            f"[{last_label}][{vlabel}]overlay={overlay_xy}:eof_action=repeat"
-            f"{ov_fmt}:enable='between(t,{start:.3f},{end:.3f})'[{out_label}]"
-        )
+        mi = mask_idx.get(c.id)
+        if mi is None:
+            filt.append(
+                f"[{last_label}][{vlabel}]overlay={overlay_xy}:eof_action=repeat"
+                f"{ov_fmt}:enable='between(t,{start:.3f},{end:.3f})'[{out_label}]"
+            )
+        else:
+            # La máscara se aplica DESPUÉS de componer el clip (recorte, pose,
+            # efectos y opacidad ya aplicados), igual que el preview: se mezcla
+            # el fondo sin el clip con el fondo CON el clip usando el alfa de la
+            # máscara. Vale igual para fill y para PIP con posición animada.
+            filt.append(f"[{last_label}]format=gbrp,split=2[mb{n}][mo{n}]")
+            filt.append(
+                f"[mo{n}][{vlabel}]overlay={overlay_xy}:eof_action=repeat"
+                f"{ov_fmt}:enable='between(t,{start:.3f},{end:.3f})',format=gbrp[mt{n}]"
+            )
+            filt.append(_mask_stream_filter(
+                mi, mask_files[c.id], f"mk{n}", fps, start, dur, total))
+            filt.append(f"[mb{n}][mt{n}][mk{n}]maskedmerge[{out_label}]")
         last_label = out_label
         n += 1
 
@@ -771,7 +819,10 @@ def render(project: Project, timeline: Timeline, out_path: Path,
         ass_path.write_text(build_ass(timeline.clips, W, H, timeline.tracks), encoding="utf-8")
     with tempfile.TemporaryDirectory(prefix="vy-shapes-") as td:
         shape_files = rasterize_timeline_shapes(timeline, Path(td), W, H)
-        cmd = build_command(project, timeline, out_path, ass_path=ass_path, shape_files=shape_files)
+        mask_files = build_timeline_masks(
+            timeline, Path(td) / "masks", W, H, int(timeline.fps or 30))
+        cmd = build_command(project, timeline, out_path, ass_path=ass_path,
+                            shape_files=shape_files, mask_files=mask_files)
         on_progress(0.15, "Renderizando el vídeo final con FFmpeg…")
         log.info("Export: %d clip(s), encoder=%s crf=%s → %s",
                  len(timeline.clips), gpu.selected_encoder(), config.VIDEO_CRF,

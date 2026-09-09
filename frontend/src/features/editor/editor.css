@@ -326,6 +326,18 @@
 .ed-pos-btn:hover { border-color: var(--accent); }
 .ed-pos-btn.on { border-color: #fb923c; color: #fdba74; background: rgba(234, 88, 12, 0.14); }
 
+/* Máscara del clip (Video → Máscara) */
+.ed-mask-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.ed-mask-grid .ed-pos-btn { padding: 7px 2px; gap: 3px; }
+.ed-mask-tools { padding: 6px 0 2px; border-bottom: none; }
+.ed-insp-ico.on { border-color: #38bdf8; color: #7dd3fc; background: rgba(56, 189, 248, 0.14); }
+.ed-mask-text {
+  width: 100%; box-sizing: border-box; resize: vertical; min-height: 42px;
+  background: var(--card-2); border: 1px solid var(--line); border-radius: 5px;
+  color: var(--text); font-size: 11.5px; font-family: inherit; padding: 5px 6px;
+}
+.ed-mask-text:focus { outline: none; border-color: var(--accent); }
+
 /* Vista dividida: recorte/edición (izq) + resultado en vivo (der), MITAD y MITAD.
    Cada lado ocupa el 50% del stage y su lienzo se ajusta dentro con object-fit
    (respetando su aspecto: el del resultado = formato de salida → 9:16/16:9/1:1).

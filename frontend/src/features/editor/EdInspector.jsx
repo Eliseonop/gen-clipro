@@ -5,7 +5,9 @@ import { clipPose } from '../../lib/clipAnim'
 import { APPEAR_OPTIONS, COLOR_FX, EXIT_OPTIONS, fxNum } from '../../lib/clipFx'
 import { canKeyframe, keyframeIdAt } from '../../lib/clipKeyframes'
 import { FRAME_OPTIONS } from '../../lib/clipLayout'
+import { maskable } from '../../lib/clipMask'
 import { isVisualClip } from './editorModel'
+import EdMask from './EdMask'
 import EdShape from './EdShape'
 import EdText, { TextFxPanel } from './EdText'
 import EdTransform, { InspSection, InspSlider } from './EdTransform'
@@ -47,6 +49,7 @@ export default function EdInspector({
   onFrameSlot,
   effectsProps,
   shapeProps,
+  maskProps,
   clipMode,
 }) {
   const clip = selectedClip
@@ -61,12 +64,18 @@ export default function EdInspector({
   const localT = Math.max(0, (p.playhead ?? 0) - (clip?.start || 0))
   const kfOn = !!(clip && canKeyframe(clip) && keyframeIdAt(clip, localT, p.fps || 30))
   const effects = clip?.effects && typeof clip.effects === 'object' ? clip.effects : {}
+  const canMask = !!(maskProps && maskable(clip))
 
   useEffect(() => {
     const next = navsFor(clip, textMode, audioMode)
     setNav((cur) => (next.includes(cur) ? cur : (next[0] || 'video')))
     setSub('basic')
   }, [clip?.id, clip?.kind, textMode, audioMode])
+
+  // La manipulación de la máscara en el reproductor solo vive con su panel abierto.
+  const onMaskOpen = maskProps?.onPanelOpen
+  const maskOpen = activeNav === 'video' && sub === 'mask' && canMask
+  useEffect(() => { onMaskOpen?.(maskOpen) }, [maskOpen, onMaskOpen])
 
   function patchEffects(next) {
     p.onChangeFx?.({ effects: { ...effects, ...next } })
@@ -94,6 +103,9 @@ export default function EdInspector({
       {hasTarget && videoSubs && (
         <nav className="ed-insp-sub" aria-label="Secciones">
           <button type="button" className={sub === 'basic' ? 'on' : ''} onClick={() => setSub('basic')}>Básico</button>
+          {canMask && (
+            <button type="button" className={sub === 'mask' ? 'on' : ''} onClick={() => setSub('mask')}>Máscara</button>
+          )}
           {visual && (
             <button type="button" className={sub === 'adjust' ? 'on' : ''} onClick={() => setSub('adjust')}>Ajustar</button>
           )}
@@ -190,6 +202,15 @@ export default function EdInspector({
               </InspSection>
             )}
           </>
+        )}
+
+        {hasTarget && activeNav === 'video' && sub === 'mask' && canMask && (
+          <EdMask
+            clip={clip}
+            playhead={p.playhead}
+            fps={p.fps}
+            {...maskProps}
+          />
         )}
 
         {hasTarget && activeNav === 'video' && sub === 'adjust' && visual && (

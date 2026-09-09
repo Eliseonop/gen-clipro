@@ -7,12 +7,15 @@ from __future__ import annotations
 import uuid
 from typing import Any, Optional
 
+from .clip_mask import MASK_KF_KEYS, mask_static_props
+
 KF_SNAP = 0.06
 AUDIO_FX_KEYS = ("eq", "compressor", "reverb", "echo", "denoise", "distortion")
 VOL_MIN = 0.0
 VOL_MAX = 2.0
 KF_PROP_KEYS = (
     "x", "y", "scale", "rotation", "opacity", "cx", "cy", "zoom",
+    *MASK_KF_KEYS,
     "volume", *AUDIO_FX_KEYS,
 )
 
@@ -100,6 +103,7 @@ def static_props(clip: Any) -> dict:
             "scale": _num(st.get("scale"), 1.0), "rotation": _num(st.get("rotation"), 0.0),
             "opacity": _num(st.get("opacity"), 1.0),
             "cx": 0.5, "cy": 0.5, "zoom": 1.0,
+            **mask_static_props(clip),
             **audio,
         }
     if kind == "text":
@@ -111,6 +115,7 @@ def static_props(clip: Any) -> dict:
             "scale": _num(st.get("scale"), 1.0), "rotation": _num(st.get("rotation"), 0.0),
             "opacity": _num(st.get("opacity"), 1.0),
             "cx": 0.5, "cy": 0.5, "zoom": 1.0,
+            **mask_static_props(clip),
             **audio,
         }
     tr = get(clip, "transform") or {}
@@ -124,6 +129,7 @@ def static_props(clip: Any) -> dict:
         "rotation": _num(tr.get("rotation"), 0.0),
         "opacity": 1.0 if get(clip, "opacity") is None else _num(get(clip, "opacity"), 1.0),
         "cx": 0.5, "cy": 0.5, "zoom": _num(zoom, 1.0),
+        **mask_static_props(clip),
         **audio,
     }
 

@@ -10,7 +10,9 @@ import { drawShapeClip } from '../../../lib/shapes'
 import { drawAlignGuides } from '../../../lib/alignGuides'
 import { clipDur, clipEnd, isVisualClip, newReframe, timelineToSource, safeMediaTime } from '../editorModel'
 import { applyCanvasFx, clipFxAt } from '../../../lib/clipFx'
-import { posedTransform, clipPose } from '../../../lib/clipAnim'
+import { posedTransform, clipPose, clipMasksAt } from '../../../lib/clipAnim'
+import { beginMaskLayer, endMaskLayer, maskHandles, strokeMaskShape } from '../../../lib/clipMask'
+import { cssFont } from '../../../lib/textstyles'
 import { keyframesOn, normalizeItems } from '../../../lib/clipKeyframes'
 import {
   cropWindow, destRectOnFrame, frameRectOf, isFramed, isOverlay, mediaSize, slotAspectOf, sourceCropPx, videosAt,
@@ -208,11 +210,18 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
   const hits = []
   for (const clip of videosAt(head, clipsRef.current, tracksRef.current)) {
     const localT = Math.max(0, head - (clip.start || 0))
+    // Con máscara el clip se pinta en una capa aparte y la máscara recorta su
+    // alfa; sin máscara se pinta directo (mismo camino de siempre).
+    const masks = clipMasksAt(clip, localT)
+    const layer = masks.length ? beginMaskLayer(ctx) : null
+    const g = layer ? layer.ctx : ctx
+    const flush = () => { if (layer) endMaskLayer(ctx, layer, masks, fr, { cssFontOf: cssFont }) }
     if (clip.kind === 'shape') {
       const isSel = selected.has(clip.id)
-      ctx.save(); ctx.translate(ox, oy)
-      const r = drawShapeClip(ctx, clip, cw, ch, { selected: isSel, time: localT })
-      ctx.restore()
+      g.save(); g.translate(ox, oy)
+      const r = drawShapeClip(g, clip, cw, ch, { selected: isSel, time: localT })
+      g.restore()
+      flush()
       if (isSel) selRender = offsetRender(r, ox, oy)
       const dest = r?.box ? boxToDest(offsetBox(r.box, ox, oy), r.box.rotation || 0) : offsetDest(fillDestRect(cw, ch, clip, localT), ox, oy)
       hits.push({ id: clip.id, kind: 'shape', dest, handles: offsetHandles(r?.handles, ox, oy) })
@@ -220,32 +229,34 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
     }
     const el = mediaEls.current.get(clip.id)
     const { w: mw } = mediaSize(el)
-    if (!el || !mw) continue
+    if (!el || !mw) { flush(); continue }
     const srcTime = clip.kind === 'image'
       ? clamp(timelineToSource(clip, head), clip.in_point, clip.out_point)
       : el.currentTime
     const fx = fxForClip(clip, head)
     if (isOverlay(clip)) {
-      const dest = drawOverlayLayer(ctx, el, clip, srcTime, outW, outH, fx, localT, fr)
+      const dest = drawOverlayLayer(g, el, clip, srcTime, outW, outH, fx, localT, fr)
+      flush()
       hits.push({ id: clip.id, kind: clip.kind, dest, overlay: true })
       if (selected.has(clip.id)) overlayDestSel = dest
     } else {
       const pose = clipPose(clip, localT)
-      ctx.save()
-      ctx.translate(ox, oy)
-      applyCanvasFx(ctx, { ...fx, opacity: fx.opacity * pose.opacity }, cw, ch)
+      g.save()
+      g.translate(ox, oy)
+      applyCanvasFx(g, { ...fx, opacity: fx.opacity * pose.opacity }, cw, ch)
       const dx = (pose.x - 0.5) * cw
       const dy = (pose.y - 0.5) * ch
       const rot = pose.rotation || 0
       const sc = pose.scale ?? 1
       if (dx || dy || rot || Math.abs(sc - 1) > 0.001) {
-        ctx.translate(cw / 2 + dx, ch / 2 + dy)
-        ctx.rotate(rot * Math.PI / 180)
-        ctx.scale(sc, sc)
-        ctx.translate(-cw / 2, -ch / 2)
+        g.translate(cw / 2 + dx, ch / 2 + dy)
+        g.rotate(rot * Math.PI / 180)
+        g.scale(sc, sc)
+        g.translate(-cw / 2, -ch / 2)
       }
-      drawReframe(ctx, el, reframeForDraw(clip, localT, srcTime), srcTime, outW / outH, { clear: false, dest: { dx: 0, dy: 0, dw: cw, dh: ch } })
-      ctx.restore()
+      drawReframe(g, el, reframeForDraw(clip, localT, srcTime), srcTime, outW / outH, { clear: false, dest: { dx: 0, dy: 0, dw: cw, dh: ch } })
+      g.restore()
+      flush()
       const dest = offsetDest(fillDestRect(cw, ch, clip, localT), ox, oy)
       hits.push({ id: clip.id, kind: clip.kind, dest, overlay: false })
       if (selected.has(clip.id) && !overlayDestSel) overlayDestSel = dest
@@ -266,8 +277,49 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
     if (r?.box) hits.push({ id: c.id, kind: 'text', dest: boxToDest(offsetBox(r.box, ox, oy)), handles: offsetHandles(r.handles, ox, oy) })
   }
   if (overlayDestSel) drawTransformHandles(ctx, overlayDestSel)
+  if (env.maskModeRef?.current) {
+    const selId = selected.values().next().value
+    const selClip = selId ? clipsRef.current.find((c) => c.id === selId) : null
+    const selLocalT = selClip ? Math.max(0, head - (selClip.start || 0)) : 0
+    const selMasks = selClip ? clipMasksAt(selClip, selLocalT) : []
+    if (selMasks.length) drawMaskOverlay(ctx, selMasks[0], fr)
+  }
   if (env.hitListRef) env.hitListRef.current = hits
   return selRender
+}
+
+// Guía de edición de la máscara: contorno + caja + tiradores (tamaño, giro, pluma).
+export function drawMaskOverlay(ctx, mask, frame) {
+  const h = maskHandles(mask, frame)
+  const g = h.box
+  ctx.save()
+  strokeMaskShape(ctx, mask, frame, { color: 'rgba(56,189,248,0.95)', lineWidth: 2 })
+  ctx.translate(g.cx, g.cy)
+  ctx.rotate(g.rot)
+  ctx.strokeStyle = 'rgba(56,189,248,0.45)'
+  ctx.lineWidth = 1
+  ctx.setLineDash([6, 5])
+  ctx.strokeRect(-g.hw, -g.hh, g.hw * 2, g.hh * 2)
+  ctx.setLineDash([])
+  ctx.beginPath()
+  ctx.moveTo(0, -g.hh)
+  ctx.lineTo(0, -g.hh - Math.max(16, frame.h * 0.022))
+  ctx.stroke()
+  ctx.restore()
+  const hs = 5
+  for (const [key, p] of Object.entries(h)) {
+    if (key === 'box' || key === 'c') continue
+    ctx.save()
+    ctx.fillStyle = key === 'fea' ? '#fbbf24' : '#38bdf8'
+    ctx.strokeStyle = '#fff'
+    ctx.lineWidth = 1.4
+    ctx.beginPath()
+    if (key === 'rot') ctx.arc(p.x, p.y, hs + 1, 0, Math.PI * 2)
+    else ctx.rect(p.x - hs, p.y - hs, hs * 2, hs * 2)
+    ctx.fill()
+    ctx.stroke()
+    ctx.restore()
+  }
 }
 
 function drawCropRuler(ctx, bx, by, bw, bh) {
@@ -318,7 +370,10 @@ export function drawMainView(head, env) {
   // Vista de recorte (fuente completa + recuadro naranja móvil, zonas fuera atenuadas)
   // cuando el clip está encuadrado con "Fijar vídeo" (llena marco o slot) o cuando se
   // pulsa "Recortar" sobre un overlay libre. Si no, compuesto (marco fijo). Estable en play.
+  // Con el panel de Máscara abierto siempre se muestra el compuesto: es donde
+  // se manipula la máscara (la vista de recorte no la puede representar).
   const cropEdit = !!(clip && isVisualClip(clip) && !framingModeRef.current
+    && !env.maskModeRef?.current
     && (isFramed(clip) || cropModeRef?.current))
 
   // Recorte (fuente + recuadro): Clip Editor, o herramienta Encuadre con un visual seleccionado.

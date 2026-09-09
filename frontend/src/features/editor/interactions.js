@@ -7,8 +7,9 @@ import {
 import { framingRect, hitFrontmost, pointInDest } from './render/canvas'
 import { snapAlign, textAlignTargets } from '../../lib/alignGuides'
 import { clipEnd, isVisualClip, timelineToSource } from './editorModel'
-import { clipPose, posedTransform } from '../../lib/clipAnim'
+import { clipMasksAt, clipPose, posedTransform } from '../../lib/clipAnim'
 import { keyframesOn } from '../../lib/clipKeyframes'
+import { MASK_FEATHER_MAX, maskHandleBox, maskHitMode, toMaskLocal } from '../../lib/clipMask'
 
 function nearHandle(px, py, h, pad = 12) {
   return !!(h && Math.abs(px - h.x) < pad && Math.abs(py - h.y) < pad)
@@ -46,6 +47,90 @@ function listenMove(move) {
   }
   window.addEventListener('pointermove', move)
   window.addEventListener('pointerup', up)
+}
+
+// --- Máscara: arrastrar / redimensionar / girar / pluma sobre el preview ----
+// La geometría es animable, así que se escribe con `commitMask` (mismo camino
+// que la pose: valor estático + keyframe en el cabezal si los hay activos).
+function startMaskDrag(e, canvas, clip, mask, mode, ctx, frame) {
+  const { commitMask, playingRef, stopPlayback } = ctx
+  if (playingRef?.current) stopPlayback?.()
+  const g = maskHandleBox(mask, frame)
+  const p0 = canvasPointer(e, canvas)
+  const ang0 = Math.atan2(p0.y - g.cy, p0.x - g.cx)
+  const l0 = toMaskLocal(p0.x, p0.y, mask, frame)
+  const s0 = {
+    x: mask.x, y: mask.y, sx: mask.scale_x || 1, sy: mask.scale_y || 1,
+    rot: mask.rotation || 0, feather: mask.feather || 0,
+  }
+  listenMove((ev) => {
+    const p = canvasPointer(ev, canvas)
+    if (mode === 'move') {
+      commitMask?.(clip.id, {
+        mx: +clamp(s0.x + (p.x - p0.x) / frame.w, -1, 2).toFixed(4),
+        my: +clamp(s0.y + (p.y - p0.y) / frame.h, -1, 2).toFixed(4),
+      })
+      return
+    }
+    if (mode === 'rotate') {
+      const ang = Math.atan2(p.y - g.cy, p.x - g.cx)
+      commitMask?.(clip.id, { mrot: +((s0.rot + (ang - ang0) * 180 / Math.PI) % 360).toFixed(2) })
+      return
+    }
+    const l = toMaskLocal(p.x, p.y, mask, frame)
+    if (mode === 'feather') {
+      commitMask?.(clip.id, {
+        mfeather: +clamp(s0.feather + (l0.x - l.x), 0, MASK_FEATHER_MAX).toFixed(4),
+      })
+      return
+    }
+    const patch = {}
+    if (mode === 'width' || mode === 'corner') patch.mw = +clamp(Math.abs(l.x) * 2 / s0.sx, 0.01, 8).toFixed(4)
+    if (mode === 'height' || mode === 'corner') patch.mh = +clamp(Math.abs(l.y) * 2 / s0.sy, 0.01, 8).toFixed(4)
+    if (Object.keys(patch).length) commitMask?.(clip.id, patch)
+  })
+}
+
+// Pincel: los puntos se guardan en el espacio LOCAL de la máscara (unidades de
+// alto), así que mover/rotar/escalar la máscara arrastra el trazo con ella.
+function startMaskBrush(e, canvas, clip, mask, ctx, frame) {
+  const { changeMask, playingRef, stopPlayback } = ctx
+  if (playingRef?.current) stopPlayback?.()
+  const pts = [...(mask.brush?.points || [])]
+  const sx = mask.scale_x || 1
+  const sy = mask.scale_y || 1
+  const add = (ev, first) => {
+    const p = canvasPointer(ev, canvas)
+    const l = toMaskLocal(p.x, p.y, mask, frame)
+    const pt = { x: +(l.x / sx).toFixed(4), y: +(l.y / sy).toFixed(4) }
+    const last = pts[pts.length - 1]
+    if (first) pt.m = 1
+    else if (last && Math.hypot(pt.x - last.x, pt.y - last.y) < 0.004) return
+    pts.push(pt)
+    changeMask?.(clip.id, { brush: { ...(mask.brush || {}), points: [...pts] } })
+  }
+  add(e, true)
+  listenMove((ev) => add(ev, false))
+}
+
+/** Máscara bajo el puntero: devuelve true si el arrastre lo consume la máscara. */
+function handleMaskPointer(e, canvas, ctx) {
+  if (!ctx.maskModeRef?.current) return false
+  const sel = (ctx.clipsRef?.current || []).find((c) => c.id === ctx.selectedClip?.id) || ctx.selectedClip
+  if (!sel) return false
+  const head = ctx.playheadRef?.current ?? ctx.playhead ?? 0
+  const mask = clipMasksAt(sel, Math.max(0, head - (sel.start || 0)))[0]
+  if (!mask) return false
+  const frame = frameRectOf(canvas.width, canvas.height, ctx.viewZoomRef?.current ?? 1, ctx.outAspect)
+  if (ctx.maskDrawRef?.current && mask.type === 'brush') {
+    startMaskBrush(e, canvas, sel, mask, ctx, frame)
+    return true
+  }
+  const p0 = canvasPointer(e, canvas)
+  const mode = maskHitMode(p0.x, p0.y, mask, frame)
+  if (!mode) return false
+  startMaskDrag(e, canvas, sel, mask, mode, ctx, frame)
+  return true
 }
 
 export function createMainDownHandler(ctx) {
@@ -445,12 +530,23 @@ export function createCanvasDownHandler(ctx) {
     const canvas = mainCanvasRef.current
     if (!canvas) return
 
-    // Recorte de fuente cuando el clip está encuadrado (Fijar vídeo: llena marco o slot)
-    // o cuando "Recortar" está activo sobre un overlay libre. Si no, compuesto.
+    // Prioridad del puntero: encuadre de texto > máscara > recorte de fuente >
+    // compuesto. El mismo orden que decide la vista en drawMainView.
+    if (framingModeRef.current) {
+      onCropDown(e)
+      return
+    }
+    // Con su panel abierto la máscara manda: se edita sobre el compuesto, por
+    // delante del recorte y del transform del clip.
+    if (handleMaskPointer(e, canvas, ctx)) return
+    // Recorte de fuente cuando el clip está encuadrado (Fijar vídeo: llena marco o
+    // slot) o con "Recortar" sobre un overlay libre. Con el panel de máscara abierto
+    // NO aplica: el lienzo muestra el compuesto y estas coordenadas son las de la
+    // vista de fuente, así que moverían el encuadre a ciegas.
     // Se usa el clip FRESCO de clipsRef (evita un `selectedClip` desfasado tras aplicar slot).
     const sel = (clipsRef?.current || []).find((c) => c.id === selectedClip?.id) || selectedClip
-    if (framingModeRef.current
-      || (sel && isVisualClip(sel) && (isFramed(sel) || cropModeRef?.current))) {
+    if (!ctx.maskModeRef?.current
+      && sel && isVisualClip(sel) && (isFramed(sel) || cropModeRef?.current)) {
       onCropDown(e)
       return
     }

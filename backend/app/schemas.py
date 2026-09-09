@@ -387,6 +387,7 @@ class TimelineClip(BaseModel):
     origin: Optional[dict] = None         # (texto) procedencia: {transcript_id, segment_index, fragment_index, word_range, source_range}
     text_role: Optional[str] = None       # "caption" | "free"; None = inferir al usar
     shape: Optional[dict] = None          # figura vectorial: type, fill, stroke, x/y/w/h…
+    masks: list[dict] = []                # máscaras de composición (ver clip_mask.py); masks[0] anima con keyframes
     anim: Optional[dict] = None           # (legado) pistas {x,y,scale,rotation,opacity: [{t,v,ease}]}
     keyframes: Optional[dict] = None      # snapshots: {enabled, items: [{id,t,interpolation,props}]}
     asset_scope: str = "project"          # "project" | "library"

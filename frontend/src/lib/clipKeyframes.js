@@ -2,6 +2,7 @@
 // `t` es tiempo LOCAL del clip (0 = inicio de la barra).
 
 import { frameAt } from './panning.js'
+import { MASK_KF_KEYS, maskStaticProps } from './clipMask.js'
 import { DEFAULT_FPS, kfSnap, snapToFrame } from './projectFps.js'
 
 export const KF_SNAP = kfSnap(DEFAULT_FPS)
@@ -20,6 +21,7 @@ export const VOL_MAX = 2
 // incluir la clave aquí y guardarla en cada snapshot; interpItems la interpolará.
 export const KF_PROP_KEYS = [
   'x', 'y', 'scale', 'rotation', 'opacity', 'cx', 'cy', 'zoom',
+  ...MASK_KF_KEYS,
   'volume', ...AUDIO_FX_KEYS,
 ]
 
@@ -112,6 +114,7 @@ export function staticProps(clip) {
       cx: 0.5,
       cy: 0.5,
       zoom: 1,
+      ...maskStaticProps(clip),
       ...audioStatic(clip),
     }
   }
@@ -126,6 +129,7 @@ export function staticProps(clip) {
       cx: 0.5,
       cy: 0.5,
       zoom: 1,
+      ...maskStaticProps(clip),
       ...audioStatic(clip),
     }
   }
@@ -140,6 +144,7 @@ export function staticProps(clip) {
     cx: 0.5,
     cy: 0.5,
     zoom: num(rf.zoom, 1),
+    ...maskStaticProps(clip),
     ...audioStatic(clip),
   }
 }
