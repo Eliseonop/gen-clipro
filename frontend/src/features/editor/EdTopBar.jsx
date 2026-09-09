@@ -13,6 +13,7 @@ export default function EdTopBar({
   onChat,
   chatBusy,
   onOpenJson,
+  onOpenResolve,
   clipMode,
   onLeaveClip,
   exporting,
@@ -65,6 +66,9 @@ export default function EdTopBar({
         </button>
         <button className="ghost small" type="button" onClick={onOpenJson} title="Ver / editar el JSON del proyecto">
           <Icon name="data_object" size={15} /> JSON
+        </button>
+        <button className="ghost small" type="button" onClick={onOpenResolve} title="Generar subtítulos animados y voz para DaVinci Resolve">
+          <Icon name="subtitles" size={15} /> Resolve
         </button>
         {clipMode ? (
           clipSaving ? (

@@ -178,3 +178,8 @@ export const createSfxCategory = (label) => post('/api/sfx/category', { label })
 
 // --- Subtítulos ---
 export const generateSubtitles = (pid, params) => post(`/api/projects/${pid}/subtitles`, params)
+
+// --- Entrega a DaVinci Resolve (Free) ---
+export const resolvePresets = () => get('/api/resolve/presets')
+export const resolvePreview = (pid, params) => post(`/api/projects/${pid}/resolve/preview`, params)
+export const resolveExport = (pid, params) => post(`/api/projects/${pid}/resolve/export`, params)

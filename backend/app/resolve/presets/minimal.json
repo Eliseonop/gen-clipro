@@ -1,0 +1,25 @@
+{
+  "id": "minimal",
+  "label": "Minimal",
+  "style": {
+    "font": "Open Sans",
+    "font_style": "Regular",
+    "size": 0.055,
+    "bold": false,
+    "color": "#FFFFFF",
+    "highlight_color": "#FFFFFF",
+    "border_color": "#000000",
+    "border_width": 3,
+    "shadow": true,
+    "x": 0.5,
+    "y": 0.85,
+    "align": "center",
+    "w": 0.9
+  },
+  "animation": {
+    "word_fx": [],
+    "duration": 0.0,
+    "block_appear": "none",
+    "mode": "accumulate"
+  }
+}

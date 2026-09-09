@@ -1,0 +1,25 @@
+{
+  "id": "typewriter",
+  "label": "Typewriter",
+  "style": {
+    "font": "Open Sans",
+    "font_style": "Bold",
+    "size": 0.07,
+    "bold": true,
+    "color": "#FFFFFF",
+    "highlight_color": "#FFFFFF",
+    "border_color": "#000000",
+    "border_width": 5,
+    "shadow": true,
+    "x": 0.5,
+    "y": 0.82,
+    "align": "center",
+    "w": 0.9
+  },
+  "animation": {
+    "word_fx": ["typewriter"],
+    "duration": 0.08,
+    "block_appear": "none",
+    "mode": "typewriter"
+  }
+}

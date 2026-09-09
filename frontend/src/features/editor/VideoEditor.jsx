@@ -22,6 +22,7 @@ import {
   clipLayerInfo, moveClipLayer, canLayerClip,
   pickClipVisualProps, applyClipVisualProps,
   trackTextContent, trackSrt, trackSrtWithReference, trackSource, clipCopyText,
+  freeTextTrackForSpan,
   previewHead, safeMediaTime, mcpBusyClipIds,
 } from './editorModel'
 import { textRole } from '../../lib/textRole'
@@ -137,7 +138,7 @@ function bakedReframeForCut(clip, dur) {
   return rf
 }
 
-export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
+export default function VideoEditor({ project, onChange, onBack, onOpenJson, onOpenResolve }) {
   const [tracks, setTracks] = useState(defaultTracks())
   const [clips, setClips] = useState([])
   const [loaded, setLoaded] = useState(false)
@@ -1646,8 +1647,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (!title && !description && !url) return null
     return { title, description, url }
   }
+  // Coloca los subtítulos de una transcripción en una pista de texto que esté
+  // LIBRE en ese rango; si todas las existentes ya tienen cuadros ahí, crea una
+  // pista nueva (T2, T3…) para no solapar los subtítulos de otro clip/audio.
+  function pickCaptionTrack(span, style) {
+    const freeId = freeTextTrackForSpan(tracksRef.current, clipsRef.current, span)
+    return freeId || addTrack('text', style)
+  }
   const { subJob, setSubJob, requestSubtitles } = useSubtitles(project.id, {
-    tracksRef, ensureTextTrack, setClips, setCtxMenu, onChange,
+    tracksRef, pickCaptionTrack, setClips, setCtxMenu, onChange,
     resolveSource: resolveTranscriptSource,
   })
   const fav = useFavorites(project.id)
@@ -1781,6 +1789,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         onChat={() => setMatTab('chat')}
         chatBusy={!!mcpAudit.active?.length}
         onOpenJson={onOpenJson}
+        onOpenResolve={onOpenResolve}
         clipMode={mainColTab === 'clip'}
         onLeaveClip={goMainTab}
         exporting={exporting}

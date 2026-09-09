@@ -1,0 +1,27 @@
+{
+  "id": "bounce",
+  "label": "Bounce",
+  "style": {
+    "font": "Anton",
+    "font_style": "Regular",
+    "size": 0.095,
+    "bold": true,
+    "color": "#FFFFFF",
+    "highlight_color": "#FF5C7A",
+    "border_color": "#000000",
+    "border_width": 7,
+    "shadow": true,
+    "x": 0.5,
+    "y": 0.80,
+    "align": "center",
+    "w": 0.9
+  },
+  "animation": {
+    "word_fx": ["bounce", "pop"],
+    "pop_scale": [0.85, 1.2, 1.0],
+    "bounce_height": 0.035,
+    "duration": 0.2,
+    "block_appear": "slide_up",
+    "mode": "typewriter"
+  }
+}

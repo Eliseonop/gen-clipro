@@ -1,0 +1,25 @@
+{
+  "id": "karaoke",
+  "label": "Karaoke",
+  "style": {
+    "font": "Open Sans",
+    "font_style": "Bold",
+    "size": 0.075,
+    "bold": true,
+    "color": "#FFFFFF",
+    "highlight_color": "#33E1FF",
+    "border_color": "#000000",
+    "border_width": 6,
+    "shadow": true,
+    "x": 0.5,
+    "y": 0.82,
+    "align": "center",
+    "w": 0.9
+  },
+  "animation": {
+    "word_fx": ["karaoke"],
+    "duration": 0.15,
+    "block_appear": "fade",
+    "mode": "accumulate"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "id": "word-pop",
+  "label": "Word Pop",
+  "style": {
+    "font": "Anton",
+    "font_style": "Regular",
+    "size": 0.10,
+    "bold": true,
+    "color": "#FFFFFF",
+    "highlight_color": "#FFE44D",
+    "border_color": "#000000",
+    "border_width": 8,
+    "shadow": true,
+    "x": 0.5,
+    "y": 0.80,
+    "align": "center",
+    "w": 0.9
+  },
+  "animation": {
+    "word_fx": ["pop"],
+    "pop_scale": [0.8, 1.15, 1.0],
+    "duration": 0.18,
+    "block_appear": "fade",
+    "mode": "typewriter"
+  }
+}

@@ -19,6 +19,7 @@ import {
   matchClipsToFirstDuration, durationPatchToMatch,
   clipLayerInfo, moveClipLayer, canLayerClip,
   trackTextContent, trackSrt, trackSrtWithReference, trackSource, srtTimestamp,
+  captionSpanForSource, freeTextTrackForSpan, textTrackOccupiedInSpan,
   mcpBusyClipIds, MCP_BUSY_MS,
 } from './editorModel.js'
 
@@ -555,6 +556,25 @@ assert.equal(clipCopyText({ kind: 'video', filename: 'n.wav' }, [{ filename: 'n.
 const ttsClip = makeClip('audios', { id: 'a9', filename: 'n.wav', text: 'hola mundo', duration: 2 }, 'A1', 0, 2)
 assert.equal(ttsClip.description, 'hola mundo')
 assert.equal(clipCopyText(ttsClip), 'hola mundo')
+// --- Colocación de subtítulos en pista de texto sin solapar ---
+assert.deepEqual(captionSpanForSource({ start: 5, in_point: 1, out_point: 4 }), { start: 5, end: 8 })
+const spanTracks = [{ id: 'T1', kind: 'text' }, { id: 'T2', kind: 'text' }, { id: 'V1', kind: 'video' }]
+const spanClips = [
+  { id: 'x', track_id: 'T1', kind: 'text', start: 4, out_point: 2, source_duration: 2 }, // 4..6
+]
+// T1 ocupada en [5,8) (solapa 4..6), T2 libre → elige T2.
+assert.equal(textTrackOccupiedInSpan(spanClips, 'T1', { start: 5, end: 8 }), true)
+assert.equal(textTrackOccupiedInSpan(spanClips, 'T2', { start: 5, end: 8 }), false)
+assert.equal(freeTextTrackForSpan(spanTracks, spanClips, { start: 5, end: 8 }), 'T2')
+// Rango que no toca T1 (empieza donde acaba el cuadro) → reutiliza T1.
+assert.equal(freeTextTrackForSpan(spanTracks, spanClips, { start: 6, end: 9 }), 'T1')
+// Todas ocupadas → null (el editor creará una pista nueva).
+const bothBusy = [
+  { id: 'x', track_id: 'T1', kind: 'text', start: 4, out_point: 3, source_duration: 3 }, // 4..7
+  { id: 'y', track_id: 'T2', kind: 'text', start: 5, out_point: 3, source_duration: 3 }, // 5..8
+]
+assert.equal(freeTextTrackForSpan(spanTracks, bothBusy, { start: 5, end: 8 }), null)
+
 assert.deepEqual(
   trackContextItems({ kind: 'audio' }, { linked: false, canLink: true }).map((i) => i.label),
   ['Renombrar', 'Relacionar', 'Eliminar'],

@@ -21,7 +21,7 @@ class _Seg:
 class _CudaThenCpu:
     calls = []
 
-    def __init__(self, size, device="cpu", compute_type="int8"):
+    def __init__(self, size, device="cpu", compute_type="int8", **kwargs):
         self.device = device
         type(self).calls.append(device)
 
@@ -29,6 +29,18 @@ class _CudaThenCpu:
         if self.device == "cuda":
             raise RuntimeError("Could not locate cublas64_12.dll")
         return iter([_Seg()]), _Info()
+
+
+class _Batched:
+    """Doble del pipeline batched: delega en el modelo envuelto (ignora
+    ``batch_size``), para probar el fallback sin ejecutar el batched real."""
+
+    def __init__(self, model=None):
+        self.model = model
+
+    def transcribe(self, *args, **kwargs):
+        kwargs.pop("batch_size", None)
+        return self.model.transcribe(*args, **kwargs)
 
 
 class TranscribeCudaFallbackTest(unittest.TestCase):
@@ -43,7 +55,8 @@ class TranscribeCudaFallbackTest(unittest.TestCase):
         progress = []
         with patch("app.gpu.whisper_device", side_effect=[("cuda", "float16"), ("cpu", "int8")]), \
              patch("app.gpu.mark_cuda_broken") as marked, \
-             patch("app.transcribe.WhisperModel", _CudaThenCpu):
+             patch("app.transcribe.WhisperModel", _CudaThenCpu), \
+             patch("app.transcribe.BatchedInferencePipeline", _Batched):
             out = transcribe.run_file("x.wav", "base", "es", lambda f, m: progress.append((f, m)))
         self.assertEqual(_CudaThenCpu.calls, ["cuda", "cpu"])
         self.assertEqual(out["language"], "es")

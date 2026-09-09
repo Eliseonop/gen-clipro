@@ -7,12 +7,13 @@ primera vez (tiny ~75MB … large-v3 ~3GB).
 from __future__ import annotations
 
 import logging
+import os
 import tempfile
 import threading
 from pathlib import Path
 from typing import Callable, Optional
 
-from faster_whisper import WhisperModel
+from faster_whisper import BatchedInferencePipeline, WhisperModel
 
 from . import gpu, transcribe_settings, ytdlp
 
@@ -23,8 +24,28 @@ ProgressCb = Callable[[float, str], None]
 # Modelos válidos (de más rápido/menos preciso a más lento/más preciso).
 MODELS = list(transcribe_settings.MODELS)
 
-_models: dict[str, tuple[str, WhisperModel]] = {}
+# Cada modelo se cachea junto a su pipeline por lotes (device, modelo, batched).
+_models: dict[str, tuple[str, WhisperModel, BatchedInferencePipeline]] = {}
 _infer_lock = threading.Lock()
+
+
+def _cpu_threads() -> int:
+    """Hilos para la inferencia en CPU (ctranslate2). Por defecto: todos los
+    núcleos; ``WHISPER_CPU_THREADS`` lo sobreescribe."""
+    env = os.environ.get("WHISPER_CPU_THREADS", "").strip()
+    if env.isdigit() and int(env) > 0:
+        return int(env)
+    return max(1, os.cpu_count() or 4)
+
+
+def _batch_size(device: str) -> int:
+    """Tamaño de lote del pipeline batched (transcribe varios tramos en
+    paralelo). Más alto = más rápido pero más memoria. ``WHISPER_BATCH_SIZE``
+    lo sobreescribe."""
+    env = os.environ.get("WHISPER_BATCH_SIZE", "").strip()
+    if env.isdigit() and int(env) > 0:
+        return int(env)
+    return 16 if device == "cuda" else 8
 
 
 def _attr(w, name, default=None):
@@ -56,25 +77,28 @@ def shape_words(raw) -> list[dict]:
     return out
 
 
-def _get_model(size: str) -> tuple[str, WhisperModel]:
-    """Carga (y cachea) un modelo. Usa GPU (cuda/float16) si hay; si no, o si la
-    carga en CUDA falla (faltan cuBLAS/cuDNN), cae a CPU (int8)."""
+def _get_model(size: str) -> tuple[str, WhisperModel, BatchedInferencePipeline]:
+    """Carga (y cachea) un modelo y su pipeline por lotes. Usa GPU
+    (cuda/float16) si hay; si no, o si la carga en CUDA falla (faltan
+    cuBLAS/cuDNN), cae a CPU (int8) usando todos los núcleos disponibles."""
     cached = _models.get(size)
     if cached is not None:
         return cached
     device, compute = gpu.whisper_device()
+    threads = _cpu_threads()
     try:
-        model = WhisperModel(size, device=device, compute_type=compute)
-        log.info("Whisper '%s' cargado en %s (%s).", size, device, compute)
+        model = WhisperModel(size, device=device, compute_type=compute, cpu_threads=threads)
+        log.info("Whisper '%s' cargado en %s (%s, %d hilos).", size, device, compute, threads)
     except Exception as exc:  # noqa: BLE001 - fallback seguro a CPU
         if device == "cpu":
             raise
         log.warning("Whisper en %s falló (%s); usando CPU (int8).", device, exc)
         device, compute = "cpu", "int8"
-        model = WhisperModel(size, device=device, compute_type=compute)
-        log.info("Whisper '%s' cargado en cpu (int8).", size)
-    _models[size] = (device, model)
-    return device, model
+        model = WhisperModel(size, device=device, compute_type=compute, cpu_threads=threads)
+        log.info("Whisper '%s' cargado en cpu (int8, %d hilos).", size, threads)
+    batched = BatchedInferencePipeline(model=model)
+    _models[size] = (device, model, batched)
+    return device, model, batched
 
 
 def _download_audio(url: str, dest_dir: Path, on_progress: ProgressCb) -> Path:
@@ -117,6 +141,16 @@ def _collect_segments(segments, info, on_progress: ProgressCb, base: float) -> d
     return {"language": info.language, "duration": round(total, 1), "segments": out}
 
 
+def _infer(batched: BatchedInferencePipeline, device: str, path: str,
+           language: Optional[str], on_progress: ProgressCb, base: float) -> dict:
+    """Lanza el pipeline batched (varios tramos en paralelo) y recoge segmentos."""
+    segments, info = batched.transcribe(
+        str(path), language=language or None, word_timestamps=True,
+        batch_size=_batch_size(device),
+    )
+    return _collect_segments(segments, info, on_progress, base)
+
+
 def _transcribe_path(path: str, model_size: str, language: Optional[str],
                      on_progress: ProgressCb, base: float = 0.3) -> dict:
     """Transcribe un archivo de audio/vídeo ya en disco."""
@@ -124,26 +158,21 @@ def _transcribe_path(path: str, model_size: str, language: Optional[str],
 
     on_progress(base * 0.66, f"Cargando modelo {model_size}…")
     with _infer_lock:
-        device, model = _get_model(model_size)
+        device, _model, batched = _get_model(model_size)
         on_progress(base, f"Transcribiendo ({device})…")
-        log.info("Whisper '%s' infiriendo en %s: %s", model_size, device, path)
+        log.info("Whisper '%s' infiriendo en %s (lote %d): %s",
+                 model_size, device, _batch_size(device), path)
         try:
-            segments, info = model.transcribe(
-                str(path), language=language or None, word_timestamps=True,
-            )
-            result = _collect_segments(segments, info, on_progress, base)
+            result = _infer(batched, device, path, language, on_progress, base)
         except Exception as exc:  # noqa: BLE001
             if device == "cpu":
                 raise
             log.warning("Whisper CUDA falló al inferir (%s); reintento en CPU.", exc)
             gpu.mark_cuda_broken()
             _models.pop(model_size, None)
-            device, model = _get_model(model_size)
+            device, _model, batched = _get_model(model_size)
             on_progress(base, "Transcribiendo (cpu)…")
-            segments, info = model.transcribe(
-                str(path), language=language or None, word_timestamps=True,
-            )
-            result = _collect_segments(segments, info, on_progress, base)
+            result = _infer(batched, device, path, language, on_progress, base)
         log.info("Whisper '%s' listo: %s segmentos.", model_size, len(result["segments"]))
         return result
 

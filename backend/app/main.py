@@ -497,6 +497,199 @@ def get_export(project_id: str, filename: str) -> FileResponse:
     return FileResponse(str(target), media_type="video/mp4")
 
 
+# --- Entrega a DaVinci Resolve (Free) -----------------------------------
+# Genera subtítulos dinámicos (Título Fusion animado por palabra) + SRT + voz
+# como un paquete que el usuario importa en Resolve. Free no tiene scripting,
+# así que la inserción es por archivos (ver app/resolve/).
+
+@app.get("/api/resolve/presets")
+def resolve_presets() -> list[dict]:
+    """Presets de subtítulos disponibles (id, label, style, animation)."""
+    from .resolve.styles import load_presets
+    return list(load_presets().values())
+
+
+def _resolve_pick_transcript(proj, body: dict):
+    """Elige el transcript del proyecto (por índice o el último)."""
+    transcripts = proj.transcripts or []
+    if not transcripts:
+        raise HTTPException(
+            status_code=400,
+            detail="El proyecto no tiene transcripción. Transcribe el audio/vídeo primero.",
+        )
+    idx = body.get("transcript_index")
+    if isinstance(idx, int) and -len(transcripts) <= idx < len(transcripts):
+        return transcripts[idx]
+    return transcripts[-1]
+
+
+def _timeline_has_text(proj) -> bool:
+    tl = proj.timeline
+    if tl is None:
+        return False
+    return any(c.kind == "text" and (c.words or c.text) for c in (tl.clips or []))
+
+
+def _resolve_build_doc(proj, body: dict):
+    """Construye el documento de subtítulos (Project).
+
+    Prioriza los **clips de texto del timeline** (lo que el usuario ya montó);
+    si no hay, cae al último ``transcript`` del proyecto (re-segmentado).
+    """
+    from . import export_settings
+    from .resolve.adapter import build_project, text_clips_to_project
+
+    fps = float(body.get("fps") or export_settings.load().get("fps") or 30.0)
+    w = int(body.get("w") or 1080)
+    h = int(body.get("h") or 1920)
+    preset = str(body.get("preset") or "word-pop")
+    style = body.get("style") or {}
+    animation = body.get("animation") or {}
+    source = body.get("source")   # 'timeline' | 'transcript' | None (auto)
+
+    # 1) Preferido: subtítulos que ya están en el timeline (pista de texto).
+    if source != "transcript" and _timeline_has_text(proj):
+        doc = text_clips_to_project(
+            proj.timeline, project_id=proj.id, fps=fps, w=w, h=h,
+            language=None, preset=preset, style=style, animation=animation,
+        )
+        if doc.words:
+            return doc
+
+    # 2) Alternativa: un transcript del proyecto (re-segmentado).
+    if proj.transcripts:
+        tr = _resolve_pick_transcript(proj, body)
+        doc = build_project(
+            tr, project_id=proj.id, fps=fps, w=w, h=h,
+            preset=preset, style=style, animation=animation,
+            seg_params=body.get("seg_params") or {},
+        )
+        if doc.words:
+            return doc
+
+    raise HTTPException(
+        status_code=400,
+        detail=("No encuentro subtítulos con timing por palabra. Genera subtítulos en la "
+                "pista de texto del timeline (o transcribe el audio) y vuelve a intentarlo."),
+    )
+
+
+@app.post("/api/projects/{project_id}/resolve/preview")
+def resolve_preview(project_id: str, body: dict = Body(default={})) -> dict:
+    """Devuelve EXACTAMENTE lo que se exportará (palabras, segmentos, estilo/animación
+    resueltos y aviso de fuente), sin escribir archivos. Para el preview en vivo."""
+    proj = projects.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    from .resolve.fusion.fonts import resolve_font
+    from .resolve.styles import get_preset, resolve_animation, resolve_style
+
+    doc = _resolve_build_doc(proj, body)
+    preset = get_preset(doc.preset)
+    st = resolve_style(preset, doc.style)
+    an = resolve_animation(preset, doc.animation)
+    _f, _s, note = resolve_font(str(st.get("font", "Open Sans")), str(st.get("font_style", "Bold")))
+    d = doc.to_dict()
+    d["resolved_style"] = st
+    d["resolved_animation"] = an
+    d["font_note"] = note
+    return d
+
+
+@app.post("/api/projects/{project_id}/resolve/export")
+def resolve_export(project_id: str, body: dict = Body(default={})) -> dict:
+    """Genera el paquete para Resolve (Fusion .setting + SRT + voz) y lo empaqueta
+    en un ZIP descargable. Síncrono: es rápido y determinista."""
+    import zipfile
+    from datetime import datetime, timezone
+    from pathlib import Path as _Path
+    from urllib.parse import quote
+
+    proj = projects.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    from .resolve.package import build_package
+
+    doc = _resolve_build_doc(proj, body)
+
+    # Voz TTS opcional (un audio ya generado del proyecto).
+    voice_wav = None
+    vf = body.get("voice_filename")
+    if vf:
+        p = storage.resolve_media(proj, str(body.get("voice_kind") or "audio"), str(vf))
+        if p and p.exists():
+            voice_wav = p
+
+    # Timeline importable (.fcpxml): mapea las pistas de vídeo/audio del proyecto.
+    fcp_items = None
+    fcp_captions = None
+    fcp_warnings = None
+    if body.get("include_timeline", True) and proj.timeline is not None:
+        from .resolve.fcpxml import FcpCaption
+        from .resolve.timeline_map import items_from_timeline
+        fcp_items, fcp_warnings = items_from_timeline(proj, proj.timeline)
+        if body.get("include_captions", False):
+            fcp_captions = [FcpCaption(text=s.text.replace("\n", " "),
+                                       offset=s.start, duration=max(0.04, s.end - s.start))
+                            for s in doc.segments]
+
+    base = storage.ensure_dirs(storage.project_base(proj))
+    exports = base / "exports"
+    exports.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    pkg_dir = exports / f"resolve_{stamp}"
+    pkg = build_package(doc, pkg_dir, voice_wav=voice_wav, stem="subtitulos",
+                        fcp_items=fcp_items, fcp_captions=fcp_captions, fcp_warnings=fcp_warnings)
+
+    zip_name = f"resolve_{stamp}.zip"
+    zip_path = exports / zip_name
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in pkg.files:
+            z.write(f, arcname=_Path(f).name)
+
+    # Automatización Free: instala el script interno (montaje) y la plantilla de
+    # Título animado (overlay que arrastras a una pista superior), y apunta al paquete.
+    script_install = None
+    title_install = None
+    if body.get("install_script", True):
+        from .resolve.install import install_script, install_title_template
+        script_install = install_script(pkg.manifest)
+        title_install = install_title_template(str(_Path(pkg.dir) / "subtitulos.setting"))
+
+    return {
+        "dir": pkg.dir,
+        "files": [_Path(f).name for f in pkg.files],
+        "font_note": pkg.font_note,
+        "warnings": pkg.warnings,
+        "script_install": script_install,
+        "title_install": title_install,
+        "download_url": f"/api/projects/{project_id}/resolve/download/{quote(zip_name)}",
+        "segments": len(doc.segments),
+        "words": len(doc.words),
+        "preset": doc.preset,
+        "message": pkg.message,
+    }
+
+
+@app.post("/api/resolve/install-script")
+def resolve_install_script() -> dict:
+    """Instala/actualiza ds_import.py en la carpeta de Scripts de Resolve (sin puntero)."""
+    from .resolve.install import install_script
+    return install_script(None)
+
+
+@app.get("/api/projects/{project_id}/resolve/download/{filename}")
+def resolve_download(project_id: str, filename: str) -> FileResponse:
+    proj = projects.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    base = storage.project_base(proj).resolve()
+    target = (base / "exports" / filename).resolve()
+    if base not in target.parents or not target.exists():
+        raise HTTPException(status_code=404, detail="Paquete no encontrado.")
+    return FileResponse(str(target), media_type="application/zip", filename=filename)
+
+
 # --- Sound Effects (biblioteca de SFX) ---------------------------------
 
 @app.get("/api/sfx")

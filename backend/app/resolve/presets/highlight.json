@@ -1,0 +1,27 @@
+{
+  "id": "highlight",
+  "label": "Highlight",
+  "style": {
+    "font": "Open Sans",
+    "font_style": "Bold",
+    "size": 0.07,
+    "bold": true,
+    "color": "#FFFFFF",
+    "highlight_color": "#111111",
+    "border_color": "#000000",
+    "border_width": 0,
+    "shadow": false,
+    "bg": "#FFE44D",
+    "bg_opacity": 0.95,
+    "x": 0.5,
+    "y": 0.82,
+    "align": "center",
+    "w": 0.85
+  },
+  "animation": {
+    "word_fx": ["highlight"],
+    "duration": 0.12,
+    "block_appear": "none",
+    "mode": "accumulate"
+  }
+}

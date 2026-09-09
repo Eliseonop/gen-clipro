@@ -932,6 +932,32 @@ export function trackSrtWithReference(clips, trackId) {
   return `${head.join('\n\n')}\n\n---\n\n${srt}`
 }
 
+// Rango de tiempo [start, end) que ocuparán los subtítulos de un clip fuente,
+// que caen dentro del tramo del propio clip en la timeline.
+export function captionSpanForSource(src) {
+  const len = Math.max(0, (src?.out_point ?? 0) - (src?.in_point ?? 0))
+  const start = Number(src?.start) || 0
+  return { start, end: start + len }
+}
+
+// ¿La pista de texto tiene algún cuadro que solape el rango [start, end)?
+export function textTrackOccupiedInSpan(clips, trackId, span) {
+  if (!span) return false
+  return (clips || []).some((c) => (
+    c?.track_id === trackId && c?.kind === 'text'
+    && clipEnd(c) > span.start + 1e-3 && (Number(c.start) || 0) < span.end - 1e-3
+  ))
+}
+
+// Primera pista de texto LIBRE en ese rango (sin cuadros que solapen), o null si
+// todas están ocupadas ahí (habría que crear una pista nueva para no solapar).
+export function freeTextTrackForSpan(tracks, clips, span) {
+  const hit = (tracks || []).find((t) => (
+    t?.kind === 'text' && !textTrackOccupiedInSpan(clips, t.id, span)
+  ))
+  return hit ? hit.id : null
+}
+
 export function trackContextItems(track, { linked = false, canLink = false, hasText = false, hasSource = false } = {}) {
   const items = [{ id: 'rename', label: 'Renombrar' }]
   if (track?.kind === 'audio') {
