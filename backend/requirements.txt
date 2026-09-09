@@ -3,6 +3,7 @@ uvicorn[standard]
 yt-dlp
 opencv-python-headless
 numpy
+pillow
 faster-whisper
 kokoro-onnx
 soundfile

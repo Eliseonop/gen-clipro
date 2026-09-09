@@ -4,6 +4,7 @@
 import {
   clipPropsAt, keyframesEnabled, staticProps,
 } from './clipKeyframes.js'
+import { clipMasks, maskFromProps } from './clipMask.js'
 
 export const ANIM_PROPS = ['x', 'y', 'scale', 'rotation', 'opacity']
 
@@ -89,4 +90,11 @@ export function applyShapePose(st, pose) {
     w: num(st?.w, 0.38) * scale,
     h: num(st?.h, 0.16) * scale,
   }
+}
+
+/** Máscaras activas del clip en `localT` (la primera con sus keyframes aplicados). */
+export function clipMasksAt(clip, localT) {
+  const masks = clipMasks(clip).filter((m) => m.enabled)
+  if (!masks.length || !keyframesEnabled(clip)) return masks
+  return [maskFromProps(masks[0], clipPropsAt(clip, localT)), ...masks.slice(1)]
 }
