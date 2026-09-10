@@ -19,6 +19,9 @@ DEFAULTS = {
     "api_keys": {},
     "export": {"fps": 30, "quality": "standard"},
     "transcribe": {"model": "base"},
+    # Eliminar fondo: device de ONNX Runtime (auto | cuda | dml | cpu) y modelo
+    # de segmentación por defecto para los clips nuevos.
+    "bg_removal": {"device": "auto", "provider": "u2net"},
 }
 
 _KEY_MASKS = {"", "true", "false", "********", "••••", "••••••••"}
@@ -68,6 +71,7 @@ def load() -> dict:
             "api_keys": {},
             "export": dict(DEFAULTS["export"]),
             "transcribe": dict(DEFAULTS["transcribe"]),
+            "bg_removal": dict(DEFAULTS["bg_removal"]),
         }
     try:
         data = json.loads(_FILE.read_text(encoding="utf-8"))
@@ -118,6 +122,16 @@ def save(data: dict) -> dict:
                 **(current.get("transcribe") or {}),
                 **(incoming.get("transcribe") or {}),
             })
+
+        if "bg_removal" in incoming:
+            from .clip_bg import BG_PROVIDER_IDS, DEFAULT_PROVIDER
+            raw = {**(current.get("bg_removal") or {}), **(incoming.get("bg_removal") or {})}
+            dev = str(raw.get("device") or "auto")
+            prov = str(raw.get("provider") or DEFAULT_PROVIDER)
+            incoming["bg_removal"] = {
+                "device": dev if dev in ("auto", "cuda", "dml", "cpu") else "auto",
+                "provider": prov if prov in BG_PROVIDER_IDS else DEFAULT_PROVIDER,
+            }
 
         current.update(incoming)
         current["api_keys"] = merged

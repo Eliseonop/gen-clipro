@@ -9,7 +9,8 @@ import { drawTextClip } from '../../../lib/textstyles'
 import { drawShapeClip } from '../../../lib/shapes'
 import { drawAlignGuides } from '../../../lib/alignGuides'
 import { clipDur, clipEnd, isVisualClip, newReframe, timelineToSource, safeMediaTime } from '../editorModel'
-import { gifFrameAt } from '../gifPlayer'
+import { gifFrameAt, gifInfo } from '../gifPlayer'
+import { cutoutDrawable } from '../bgCutout'
 import { applyCanvasFx, clipFxAt } from '../../../lib/clipFx'
 import { posedTransform, clipPose, clipMasksAt } from '../../../lib/clipAnim'
 import { beginMaskLayer, endMaskLayer, maskHandles, strokeMaskShape } from '../../../lib/clipMask'
@@ -204,6 +205,137 @@ function gifDrawable(clip, el, srcTime) {
   return gifFrameAt(src, srcTime, clip.loop !== false)
 }
 
+// Duración intrínseca de un GIF (para indexar su matte igual que su reproductor).
+function gifLoopDur(clip, el) {
+  if (!el || clip?.kind !== 'image') return 0
+  const src = el.currentSrc || el.src || ''
+  if (!/\.gif(\?|#|$)/i.test(src)) return 0
+  return gifInfo(src)?.duration || 0
+}
+
+// Fuente de dibujo del clip: fotograma de GIF si toca, y encima el recorte de
+// Eliminar fondo. El resultado siempre tiene el ASPECTO del material, así que la
+// geometría posterior (recorte, pose, máscaras) no cambia. Mismo gancho que ya
+// usaba el GIF: para el resto del dibujo esto "es" la fuente.
+function drawSourceFor(clip, el, srcTime) {
+  const gif = gifDrawable(clip, el, srcTime)
+  const base = gif || el
+  return cutoutDrawable(clip, base, srcTime, gifLoopDur(clip, el)) || base
+}
+
+// Punto del canvas → coordenadas NORMALIZADAS de la fuente (0-1 del ancho/alto
+// del material). Es la inversa exacta de lo que dibuja drawComposite, y es lo
+// que necesita el pincel de Eliminar fondo: el usuario pinta sobre el
+// reproductor y el trazo se guarda en el espacio del material, así que sigue
+// valiendo aunque luego se recorte, se mueva o se escale el clip.
+// Devuelve null si el punto cae fuera del material.
+export function canvasToSourceNorm(clip, px, py, frame, env, head) {
+  const el = env.mediaEls?.current?.get(clip.id)
+  const { w: vw, h: vh } = mediaSize(el)
+  if (!vw || !vh) return null
+  const outW = env.outRef.current.w, outH = env.outRef.current.h
+  const localT = Math.max(0, head - (clip.start || 0))
+  const srcTime = clip.kind === 'image'
+    ? clamp(timelineToSource(clip, head), clip.in_point, clip.out_point)
+    : (el.currentTime || 0)
+  // La aparición/salida (zoom, pop, slide) también transforma el dibujo, así que
+  // hay que deshacerla: si no, pintar durante los primeros/últimos 0,4 s de un
+  // clip con transición dejaría el trazo desplazado.
+  const fx = clipFxAt(clip, localT, clipDur(clip))
+  const fxs = fx.scale || 1
+
+  const unrotate = (x, y, deg) => {
+    if (!deg) return [x, y]
+    const rad = -deg * Math.PI / 180
+    const c = Math.cos(rad), sn = Math.sin(rad)
+    return [x * c - y * sn, x * sn + y * c]
+  }
+
+  if (isOverlay(clip)) {
+    // El PIP se dibuja centrado en `dest` (desplazado por fx, girado y escalado
+    // por fx.scale) recortando `crop` de la fuente.
+    const { px: crop, dest } = overlayDest(null, el, clip, srcTime, outW, outH, localT, frame)
+    let x = px - (dest.dx + dest.dw / 2 + fx.tx * dest.dw)
+    let y = py - (dest.dy + dest.dh / 2 + fx.ty * dest.dh)
+    ;[x, y] = unrotate(x, y, dest.rotation || 0)
+    x /= fxs
+    y /= fxs
+    const u = (x + dest.dw / 2) / dest.dw
+    const v = (y + dest.dh / 2) / dest.dh
+    if (u < 0 || u > 1 || v < 0 || v > 1) return null
+    return { x: (crop.sx + u * crop.sw) / vw, y: (crop.sy + v * crop.sh) / vh }
+  }
+
+  // Fill: deshacer fx, luego la pose (traslación/rotación/escala) y por último
+  // el recorte cover. Es la inversa exacta de lo que hace drawComposite.
+  const cw = frame.w, ch = frame.h
+  // fx⁻¹
+  let x = (px - frame.x) - (cw / 2 + fx.tx * cw)
+  let y = (py - frame.y) - (ch / 2 + fx.ty * ch)
+  x = x / fxs + cw / 2
+  y = y / fxs + ch / 2
+  // pose⁻¹
+  const pose = clipPose(clip, localT)
+  x -= cw / 2 + (pose.x - 0.5) * cw
+  y -= ch / 2 + (pose.y - 0.5) * ch
+  ;[x, y] = unrotate(x, y, pose.rotation || 0)
+  const sc = pose.scale ?? 1
+  if (sc) { x /= sc; y /= sc }
+  const u = (x + cw / 2) / cw
+  const v = (y + ch / 2) / ch
+  if (u < 0 || u > 1 || v < 0 || v > 1) return null
+  const crop = cropWindow(clip, vw / vh, slotAspectOf(clip, outW / outH), srcTime, localT)
+  return {
+    x: crop.cx - crop.wf / 2 + u * crop.wf,
+    y: crop.cy - crop.hf / 2 + v * crop.hf,
+  }
+}
+
+// Radio EN PÍXELES DEL LIENZO de un pincel definido en fracción del alto de la
+// fuente. Es la relación directa que usa el dibujo del clip, así que el círculo
+// que ve el usuario coincide con lo que se pinta de verdad.
+export function bgBrushRadiusPx(clip, size, frame, env, head) {
+  const el = env.mediaEls?.current?.get(clip.id)
+  const { w: vw, h: vh } = mediaSize(el)
+  if (!vw || !vh) return 0
+  const outW = env.outRef.current.w, outH = env.outRef.current.h
+  const localT = Math.max(0, head - (clip.start || 0))
+  const srcTime = clip.kind === 'image'
+    ? clamp(timelineToSource(clip, head), clip.in_point, clip.out_point)
+    : (el.currentTime || 0)
+  const fxs = clipFxAt(clip, localT, clipDur(clip)).scale || 1
+  if (isOverlay(clip)) {
+    const { px: crop, dest } = overlayDest(null, el, clip, srcTime, outW, outH, localT, frame)
+    if (!crop.sh) return 0
+    return (size * vh / crop.sh) * dest.dh * fxs / 2
+  }
+  const crop = cropWindow(clip, vw / vh, slotAspectOf(clip, outW / outH), srcTime, localT)
+  const pose = clipPose(clip, localT)
+  if (!crop.hf) return 0
+  return (size / crop.hf) * frame.h * (pose.scale ?? 1) * fxs / 2
+}
+
+// Círculo del pincel de Eliminar fondo bajo el cursor: verde = conservar,
+// rojo = eliminar. Es el mismo radio que se pinta en la máscara.
+function drawBgBrushCursor(ctx, clip, brush, frame, env, head) {
+  const r = bgBrushRadiusPx(clip, brush.size || 0.08, frame, env, head)
+  if (!(r > 0) || brush.px == null || brush.py == null) return
+  const keep = brush.op === 'keep'
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(brush.px, brush.py, r, 0, Math.PI * 2)
+  ctx.fillStyle = keep ? 'rgba(52, 211, 153, 0.18)' : 'rgba(248, 113, 113, 0.18)'
+  ctx.fill()
+  ctx.lineWidth = Math.max(1.5, frame.h * 0.003)
+  ctx.strokeStyle = keep ? 'rgba(52, 211, 153, 0.95)' : 'rgba(248, 113, 113, 0.95)'
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.arc(brush.px, brush.py, Math.max(1.5, r * 0.06), 0, Math.PI * 2)
+  ctx.fillStyle = keep ? '#34d399' : '#f87171'
+  ctx.fill()
+  ctx.restore()
+}
+
 // Dibuja el compuesto (todas las pistas de vídeo, fondo→frente + textos) dentro del
 // recuadro Main (`frame`, en px del canvas). Lo que sobresale del recuadro se dibuja
 // igualmente (contexto estilo CapCut) y el canvas lo recorta en su borde. Los dest/box/
@@ -246,9 +378,9 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
     const srcTime = clip.kind === 'image'
       ? clamp(timelineToSource(clip, head), clip.in_point, clip.out_point)
       : el.currentTime
-    // GIF animado: dibuja el fotograma que corresponde al tiempo del timeline
-    // (mismas dimensiones que el <img>, así el recorte/encuadre no cambia).
-    const drawEl = gifDrawable(clip, el, srcTime) || el
+    // GIF animado + Eliminar fondo: la fuente de dibujo se sustituye por un
+    // canvas de las MISMAS dimensiones, así el recorte/encuadre no cambia.
+    const drawEl = drawSourceFor(clip, el, srcTime)
     const fx = fxForClip(clip, head)
     if (isOverlay(clip)) {
       const dest = drawOverlayLayer(g, drawEl, clip, srcTime, outW, outH, fx, localT, fr)
@@ -293,6 +425,12 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
     if (r?.box) hits.push({ id: c.id, kind: 'text', dest: boxToDest(offsetBox(r.box, ox, oy)), handles: offsetHandles(r.handles, ox, oy) })
   }
   if (overlayDestSel) drawTransformHandles(ctx, overlayDestSel)
+  const bgBrush = env.bgBrushRef?.current
+  if (bgBrush?.on) {
+    const selId = selected.values().next().value
+    const selClip = selId ? clipsRef.current.find((c) => c.id === selId) : null
+    if (selClip) drawBgBrushCursor(ctx, selClip, bgBrush, fr, env, head)
+  }
   if (env.maskModeRef?.current) {
     const selId = selected.values().next().value
     const selClip = selId ? clipsRef.current.find((c) => c.id === selId) : null
@@ -412,7 +550,7 @@ export function drawMainView(head, env) {
       if (Math.abs(el.currentTime - seekT) > 0.06) { try { el.currentTime = seekT } catch { /* noop */ } }
     }
     ctx.clearRect(0, 0, cw2, ch2)
-    const drawEl = gifDrawable(clip, el, srcTime) || el
+    const drawEl = drawSourceFor(clip, el, srcTime)
     try { ctx.drawImage(drawEl, 0, 0, cw2, ch2) } catch { /* noop */ }
     const rf = clip.reframe || newReframe()
     // El recorte se hace respecto al aspecto del SLOT (Completo=salida; mitades≈1:1).

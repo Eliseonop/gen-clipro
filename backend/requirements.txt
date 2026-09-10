@@ -11,3 +11,6 @@ google-genai
 mcp>=2,<3
 google-genai
 openai
+# Eliminar fondo (segmentación U2-Net) y Kokoro TTS. Para GPU:
+#   onnxruntime-gpu (NVIDIA/CUDA) u onnxruntime-directml (Windows, cualquier GPU)
+onnxruntime

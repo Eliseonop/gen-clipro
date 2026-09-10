@@ -397,6 +397,7 @@ class TimelineClip(BaseModel):
     text_role: Optional[str] = None       # "caption" | "free"; None = inferir al usar
     shape: Optional[dict] = None          # figura vectorial: type, fill, stroke, x/y/w/h…
     masks: list[dict] = []                # máscaras de composición (ver clip_mask.py); masks[0] anima con keyframes
+    bg_removal: Optional[dict] = None     # eliminar fondo: matte IA + chroma key (ver clip_bg.py); None = apagado
     anim: Optional[dict] = None           # (legado) pistas {x,y,scale,rotation,opacity: [{t,v,ease}]}
     keyframes: Optional[dict] = None      # snapshots: {enabled, items: [{id,t,interpolation,props}]}
     asset_scope: str = "project"          # "project" | "library"
@@ -450,5 +451,8 @@ class Job(BaseModel):
     audio: Optional["AudioInfo"] = None
     reframe_prep: Optional["ReframePrep"] = None
     export_url: Optional[str] = None      # URL del vídeo final exportado
+    # Eliminar fondo: resultado del matte (clave de caché, modelo, rango). El
+    # editor lo aplica a SU copia del clip, así que el autosave no lo pisa.
+    bg_removal: Optional[dict] = None
     error: Optional[str] = None
     cancel_requested: bool = False        # cancelación cooperativa (best-effort)

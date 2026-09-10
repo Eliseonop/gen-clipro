@@ -188,6 +188,7 @@ def summary() -> dict:
         "whisper_device": dev,
         "whisper_compute": ct,
         "video_encoder": selected_encoder(),
+        **onnx_summary(),
     }
 
 
@@ -197,3 +198,74 @@ def _reset_cache() -> None:
     _cuda_broken = False
     cuda_available.cache_clear()
     hw_encoder.cache_clear()
+    _ort_available.cache_clear()
+
+
+# --- ONNX Runtime (segmentación de Eliminar fondo) --------------------------
+#
+# Misma filosofía que el resto del módulo: se decide UNA vez, con sonda real, y
+# si algo falla se cae a CPU sin romper nada. La preferencia se puede fijar en
+# Configuración (``bg_removal.device``) además del override global VIDEOYT_GPU.
+
+_ORT_PREF = {
+    "cuda": ("CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"),
+    "dml": ("DmlExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"),
+    "cpu": ("CPUExecutionProvider",),
+}
+_ORT_DEVICES = ("auto", "cuda", "dml", "cpu")
+
+
+@lru_cache(maxsize=1)
+def _ort_available() -> tuple[str, ...]:
+    try:
+        import onnxruntime as ort
+        return tuple(ort.get_available_providers())
+    except Exception:  # noqa: BLE001 - sin onnxruntime → el proveedor avisa
+        return ()
+
+
+def onnx_providers(device: str = "auto") -> list[str]:
+    """Lista de *execution providers* de ONNX Runtime, mejor primero.
+
+    ``device``: auto | cuda | dml | cpu. Siempre termina en CPU (salvo que se
+    pida CPU explícitamente), así que nunca se queda sin proveedor válido.
+    """
+    dev = (device or "auto").strip().lower()
+    if dev not in _ORT_DEVICES:
+        dev = "auto"
+    if _gpu_disabled():
+        dev = "cpu"
+    available = _ort_available()
+    if not available:
+        return []
+    if dev == "auto":
+        pref = _ORT_PREF["cuda"]
+    else:
+        pref = _ORT_PREF[dev]
+    picked = [p for p in pref if p in available]
+    if "CPUExecutionProvider" in available and "CPUExecutionProvider" not in picked:
+        picked.append("CPUExecutionProvider")
+    if dev in ("cuda", "dml") and picked and picked[0] == "CPUExecutionProvider":
+        log.warning(
+            "Se pidió '%s' para Eliminar fondo pero onnxruntime solo ofrece %s; se usará CPU. "
+            "Para GPU: `pip install onnxruntime-gpu` (NVIDIA/CUDA) o "
+            "`pip install onnxruntime-directml` (cualquier GPU en Windows).",
+            dev, ", ".join(available),
+        )
+    return picked
+
+
+def onnx_device_label(providers: list[str] | tuple[str, ...]) -> str:
+    """Nombre corto del device efectivo, para el progreso del job y diagnóstico."""
+    first = (list(providers) or ["CPUExecutionProvider"])[0]
+    return {"CUDAExecutionProvider": "cuda", "DmlExecutionProvider": "directml"}.get(first, "cpu")
+
+
+def onnx_summary() -> dict:
+    available = list(_ort_available())
+    picked = onnx_providers("auto")
+    return {
+        "onnx_available": bool(available),
+        "onnx_providers": available,
+        "onnx_selected": onnx_device_label(picked),
+    }

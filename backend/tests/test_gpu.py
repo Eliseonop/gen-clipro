@@ -100,7 +100,48 @@ class GpuSelectionTest(unittest.TestCase):
              patch("app.diagnostics.probe", return_value=_probe([])):
             gpu._reset_cache()
             s = gpu.summary()
-        self.assertEqual(set(s), {"gpu_disabled", "whisper_device", "whisper_compute", "video_encoder"})
+        self.assertEqual(set(s), {"gpu_disabled", "whisper_device", "whisper_compute",
+                                  "video_encoder", "onnx_available", "onnx_providers",
+                                  "onnx_selected"})
+
+
+class OnnxProviderTest(unittest.TestCase):
+    """Eliminar fondo: la elección de device nunca debe quedarse sin proveedor."""
+
+    def setUp(self):
+        gpu._reset_cache()
+
+    def tearDown(self):
+        gpu._reset_cache()
+
+    def test_cpu_only_cae_a_cpu_sin_fallar(self):
+        with patch("app.gpu._ort_available", return_value=("CPUExecutionProvider",)):
+            for dev in ("auto", "cuda", "dml", "cpu"):
+                self.assertEqual(gpu.onnx_providers(dev), ["CPUExecutionProvider"], dev)
+
+    def test_cuda_se_prefiere_y_cpu_queda_de_respaldo(self):
+        avail = ("CUDAExecutionProvider", "CPUExecutionProvider")
+        with patch("app.gpu._ort_available", return_value=avail):
+            self.assertEqual(gpu.onnx_providers("auto"),
+                             ["CUDAExecutionProvider", "CPUExecutionProvider"])
+            self.assertEqual(gpu.onnx_providers("cpu"), ["CPUExecutionProvider"])
+            self.assertEqual(gpu.onnx_device_label(gpu.onnx_providers("auto")), "cuda")
+
+    def test_directml_cuando_se_pide(self):
+        avail = ("DmlExecutionProvider", "CPUExecutionProvider")
+        with patch("app.gpu._ort_available", return_value=avail):
+            self.assertEqual(gpu.onnx_providers("dml")[0], "DmlExecutionProvider")
+            self.assertEqual(gpu.onnx_device_label(gpu.onnx_providers("dml")), "directml")
+
+    def test_videoyt_gpu_0_fuerza_cpu(self):
+        avail = ("CUDAExecutionProvider", "CPUExecutionProvider")
+        with patch("app.gpu._ort_available", return_value=avail), \
+             patch.dict(os.environ, {"VIDEOYT_GPU": "0"}):
+            self.assertEqual(gpu.onnx_providers("cuda"), ["CPUExecutionProvider"])
+
+    def test_sin_onnxruntime_devuelve_lista_vacia(self):
+        with patch("app.gpu._ort_available", return_value=()):
+            self.assertEqual(gpu.onnx_providers("auto"), [])
 
 
 if __name__ == "__main__":

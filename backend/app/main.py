@@ -487,6 +487,80 @@ def generate_subtitles(project_id: str, body: dict = Body(...)) -> Job:
     return job
 
 
+# --- Eliminar fondo (matte de IA + chroma key) --------------------------
+#
+# El chroma key NO pasa por aquí: es un filtro puro, se resuelve en el preview y
+# en el export a partir de las propiedades del clip. Estos endpoints son solo
+# para el matte de IA, que sí necesita un job y caché en disco.
+
+@app.get("/api/bg/providers")
+def bg_providers() -> dict:
+    """Modelos de segmentación disponibles y device efectivo."""
+    from .bg import providers as bg_prov
+
+    return {"providers": bg_prov.catalog(), **gpu_onnx_summary()}
+
+
+def gpu_onnx_summary() -> dict:
+    from . import gpu
+    return gpu.onnx_summary()
+
+
+@app.post("/api/projects/{project_id}/bg-removal", response_model=Job)
+def bg_removal(project_id: str, body: dict = Body(...)) -> Job:
+    """Lanza el cálculo del matte de un clip. Devuelve un Job con progreso."""
+    proj = projects.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    if not (body or {}).get("filename"):
+        raise HTTPException(status_code=400, detail="Falta el material del clip.")
+    job = jobs.create_job()
+    jobs.start_bg_removal_job(job, project_id, body or {})
+    return job
+
+
+@app.get("/api/bg/status/{base_key}")
+def bg_status(base_key: str) -> dict:
+    """Metadatos del matte en caché: rango disponible, cadencia y tamaño."""
+    from .bg import service as bg_service
+
+    meta = bg_service.read_meta(base_key)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Matte no encontrado.")
+    return meta
+
+
+@app.get("/api/bg/matte/{base_key}/{index}.png")
+def bg_matte_frame(base_key: str, index: int) -> Response:
+    """Un fotograma del matte CRUDO, con ``alfa = matte``.
+
+    El preview lo recorta con ``destination-in`` (sin recorrer píxeles) y aplica
+    umbral/pluma/pincel en JS. Es inmutable para una ``base_key`` dada, así que
+    se cachea de forma agresiva: mover un slider no vuelve a pedir red.
+    """
+    from .bg import service as bg_service
+
+    png = bg_service.matte_png(base_key, index)
+    if png is None:
+        raise HTTPException(status_code=404, detail="Fotograma de matte no encontrado.")
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+@app.get("/api/bg/cache")
+def bg_cache_stats() -> dict:
+    from .bg import service as bg_service
+    return bg_service.cache_stats()
+
+
+@app.delete("/api/bg/cache")
+def bg_cache_clear(base_key: str | None = None) -> dict:
+    from .bg import service as bg_service
+
+    bg_service.clear_cache(base_key)
+    return {"ok": True, "cleared": base_key or "all"}
+
+
 @app.get("/api/projects/{project_id}/exports/{filename}")
 def get_export(project_id: str, filename: str) -> FileResponse:
     proj = projects.get_project(project_id)
@@ -1040,3 +1114,15 @@ def job_status(job_id: str) -> Job:
     if job is None:
         raise HTTPException(status_code=404, detail="Trabajo no encontrado.")
     return job
+
+
+@app.delete("/api/job/{job_id}")
+def job_cancel(job_id: str) -> dict:
+    """Pide cancelar un trabajo (cooperativo, como la tool ``cancel_job`` del MCP).
+
+    El bucle del job aborta en el siguiente tick de progreso, así que lo ya
+    calculado queda en su caché y una reanudación posterior lo aprovecha.
+    """
+    if jobs.get_job(job_id) is None:
+        raise HTTPException(status_code=404, detail="Trabajo no encontrado.")
+    return {"ok": jobs.request_cancel(job_id)}

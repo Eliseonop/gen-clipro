@@ -34,6 +34,7 @@ OPS = {
     "set_clip_transition": timeline_ops.set_clip_transition,
     "set_text_role": timeline_ops.set_text_role,
     "set_clip_effects": timeline_ops.set_clip_effects,
+    "set_clip_bg_removal": timeline_ops.set_clip_bg_removal,
     "set_clip_audio_fx": timeline_ops.set_clip_audio_fx,
     "set_clip_volume": timeline_ops.set_clip_volume,
     "set_track_audio": timeline_ops.set_track_audio,

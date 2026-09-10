@@ -26,6 +26,7 @@ from typing import Callable, Optional
 from . import clipper, config, gpu, sfx, storage
 from .clip_fx import _scale_expr, audio_fx_chain, fx_windows, overlay_xy_for_fx, video_fx_chain
 from .clip_keyframes import keyframes_enabled, volume_filter
+from .clip_bg import auto_active, bg_active, bg_capable, chroma_active, chroma_filters, clip_bg
 from .clip_mask import build_timeline_masks, has_mask, maskable
 from .schemas import Keyframe, Project, Reframe, Timeline, TimelineClip
 from .clip_layout import dest_rect_even, is_overlay, source_crop_px
@@ -583,9 +584,88 @@ def _mask_stream_filter(idx: int, spec: dict, label: str, fps: int,
     return f"{chain}[{label}]"
 
 
+def _bg_input_args(spec: dict) -> list[str]:
+    """Args ``-i`` de la secuencia PNG del matte (Eliminar fondo) de un clip.
+
+    ``-start_number`` es lo que alinea el matte con el recorte del clip: los PNG
+    se numeran por fotograma ABSOLUTO de la fuente, así que recortar o mover el
+    clip solo cambia el número de arranque — no hay que regenerar nada.
+    """
+    return [
+        "-framerate", f"{float(spec.get('mask_fps') or 15):.4f}",
+        "-start_number", str(int(spec.get("start_number") or 1)),
+        "-i", spec["path"],
+    ]
+
+
+def _bg_source_chain(clip: TimelineClip, path: Path, spec: Optional[dict],
+                     bg_input: Optional[int], n: int, fps: int,
+                     in_label: str) -> tuple[list[str], str]:
+    """Alfa de FUENTE del clip: chroma key y/o matte de IA.
+
+    Va ANTES del recorte/pose/efectos, en el espacio del material original —
+    igual que el preview, que sustituye el elemento fuente por un recorte con
+    alfa. Devuelve (pasos del filtergraph, etiqueta de salida). Sin nada activo
+    devuelve ([], in_label) y la cadena de siempre no cambia.
+
+    El alfa del croma y el del matte se MULTIPLICAN. Hay que hacerlo a mano
+    porque ``chromakey`` y ``alphamerge`` ambos SOBREESCRIBEN el alfa: se extrae
+    el del croma con ``alphaextract``, se multiplica con el matte y el producto
+    entra una sola vez por ``alphamerge``.
+
+    La velocidad y el ``reverse`` del clip se aplican después, sobre el stream ya
+    fusionado, así que el alfa las hereda sin duplicar filtros.
+    """
+    bg = clip_bg(clip)
+    chroma_on = chroma_active(bg)
+    matte_on = spec is not None and bg_input is not None and auto_active(bg)
+    if not chroma_on and not matte_on:
+        return [], in_label
+
+    steps: list[str] = []
+    last = in_label
+    if not matte_on:
+        # Solo croma: cabe en la propia cadena del clip, sin streams extra.
+        out = f"bgc{n}"
+        steps.append(f"[{last}]" + ",".join(chroma_filters(bg["chroma"])) + f"[{out}]")
+        return steps, out
+
+    from . import detect
+    iw, ih = detect.dims(path)
+    if iw <= 0 or ih <= 0:
+        iw, ih = int(spec.get("width") or 0), int(spec.get("height") or 0)
+    if iw <= 0 or ih <= 0:
+        return [], in_label
+
+    # El matte se sube al tamaño del material: ``alphamerge`` exige que ambos
+    # streams midan lo mismo, y así el recorte posterior remuestrea RGB y alfa
+    # juntos (un solo remuestreo, sin desalineación de borde).
+    steps.append(
+        f"[{bg_input}:v]format=gray,scale={iw}:{ih}:flags=bicubic,"
+        f"fps={fps},setpts=PTS-STARTPTS[bgm{n}]"
+    )
+    # ``alphamerge`` y ``blend`` abortan si los dos streams no miden EXACTAMENTE
+    # lo mismo. Fijar el material al tamaño sondeado (no-op cuando la sonda
+    # acierta, que es lo normal) evita que un desajuste tumbe el export: en el
+    # peor caso remuestrea al tamaño que ya asume el resto de compose.py.
+    fit = f"scale={iw}:{ih}"
+    if chroma_on:
+        chain = ",".join(chroma_filters(bg["chroma"]))
+        steps.append(f"[{last}]{fit},{chain},format=gbrap,fps={fps}[bgk{n}]")
+        steps.append(f"[bgk{n}]split=2[bgk{n}a][bgk{n}b]")
+        steps.append(f"[bgk{n}a]alphaextract[bgka{n}]")
+        steps.append(f"[bgka{n}][bgm{n}]blend=all_mode=multiply,format=gray[bgmix{n}]")
+        steps.append(f"[bgk{n}b][bgmix{n}]alphamerge[bgcut{n}]")
+    else:
+        steps.append(f"[{last}]{fit},format=gbrap,fps={fps}[bgs{n}]")
+        steps.append(f"[bgs{n}][bgm{n}]alphamerge[bgcut{n}]")
+    return steps, f"bgcut{n}"
+
+
 def build_command(project: Project, timeline: Timeline, out_path: Path,
                   ass_path: Optional[Path] = None, shape_files: Optional[dict] = None,
-                  mask_files: Optional[dict] = None) -> list[str]:
+                  mask_files: Optional[dict] = None,
+                  bg_files: Optional[dict] = None) -> list[str]:
     """Construye la lista de argumentos de ffmpeg para renderizar la timeline."""
     W = int(timeline.width or config.OUTPUT_WIDTH)
     H = int(timeline.height or config.OUTPUT_HEIGHT)
@@ -659,6 +739,17 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         mask_idx[c.id] = len(all_files) + len(mask_idx)
         inputs += _mask_input_args(spec, fps, total)
 
+    # Eliminar fondo: un input extra (secuencia PNG del matte) por clip con
+    # eliminación automática lista. Van DESPUÉS de las máscaras para no mover
+    # los índices ya asignados.
+    bg_idx: dict[str, int] = {}
+    for (c, _path, _t) in vclips:
+        spec = (bg_files or {}).get(c.id)
+        if not spec or c.id in bg_idx or not bg_capable(c) or not auto_active(clip_bg(c)):
+            continue
+        bg_idx[c.id] = len(all_files) + len(mask_idx) + len(bg_idx)
+        inputs += _bg_input_args(spec)
+
     filt: list[str] = []
 
     # --- Vídeo: fondo negro + overlays por capa ---
@@ -685,6 +776,11 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         end = start + dur
         overlay_xy = "x=0:y=0"
         src_dur = clip_source_duration(c)
+        # Alfa de FUENTE (Eliminar fondo): se resuelve antes porque decide si la
+        # cadena tiene que transportar alfa (format=gbrap / overlay format=auto).
+        bg_steps, bg_label = _bg_source_chain(
+            c, path, (bg_files or {}).get(c.id), bg_idx.get(c.id), n, fps, f"bgin{n}")
+        has_bg = bool(bg_steps)
         animated_ov = is_overlay(c) and keyframes_enabled(c)
         fill_pose = (not is_overlay(c)) and pose_transform_animates(c)
         fx = video_fx_chain(
@@ -706,7 +802,7 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
                 c, W, H, start, base_cs, fx=(fx if fill_pose else ""))
         else:
             cropscale = _fill_base_cropscale(path, c, W, H)
-        if is_still_clip(c) or is_overlay(c) or fill_pose:
+        if is_still_clip(c) or is_overlay(c) or fill_pose or has_bg:
             cropscale = f"{cropscale},format=gbrap"
         fx_part = "" if (animated_ov or fill_pose) else (f",{fx}" if fx else "")
         spd = "" if is_still_clip(c) else video_speed_filters(c)
@@ -714,12 +810,24 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         overlay_xy = overlay_xy_for_fx(overlay_xy, c, start, dur, W, H)
         vlabel = f"v{n}"
         tin, tout = ffmpeg_trim_window(c, fps)
-        filt.append(
-            f"[{k}:v]trim={tin:.3f}:{tout:.3f},setpts=PTS-STARTPTS,"
-            f"{cropscale},fps={fps}{spd_part}{fx_part},setpts=PTS-STARTPTS+{start:.3f}/TB[{vlabel}]"
-        )
+        if has_bg:
+            # El alfa se aplica en el espacio del MATERIAL (antes del recorte),
+            # igual que el preview, que sustituye el elemento fuente por un
+            # recorte con alfa. Velocidad/reverse van después: el alfa las
+            # hereda sin duplicar filtros.
+            filt.append(f"[{k}:v]trim={tin:.3f}:{tout:.3f},setpts=PTS-STARTPTS[bgin{n}]")
+            filt.extend(bg_steps)
+            filt.append(
+                f"[{bg_label}]{cropscale},fps={fps}{spd_part}{fx_part},"
+                f"setpts=PTS-STARTPTS+{start:.3f}/TB[{vlabel}]"
+            )
+        else:
+            filt.append(
+                f"[{k}:v]trim={tin:.3f}:{tout:.3f},setpts=PTS-STARTPTS,"
+                f"{cropscale},fps={fps}{spd_part}{fx_part},setpts=PTS-STARTPTS+{start:.3f}/TB[{vlabel}]"
+            )
         out_label = f"ov{n}"
-        ov_fmt = ":format=auto" if (fx or is_still_clip(c) or fill_pose) else ""
+        ov_fmt = ":format=auto" if (fx or is_still_clip(c) or fill_pose or has_bg) else ""
         mi = mask_idx.get(c.id)
         if mi is None:
             filt.append(
@@ -916,8 +1024,13 @@ def render(project: Project, timeline: Timeline, out_path: Path,
         shape_files = rasterize_timeline_shapes(timeline, Path(td), W, H)
         mask_files = build_timeline_masks(
             timeline, Path(td) / "masks", W, H, int(timeline.fps or 30))
+        # Eliminar fondo: el matte NO es temporal (vive en la caché de data/), así
+        # que exportar dos veces no vuelve a ejecutar el modelo.
+        from .bg import service as bg_service
+        bg_files = bg_service.build_timeline_bg_masks(timeline, int(timeline.fps or 30))
         cmd = build_command(project, timeline, out_path, ass_path=ass_path,
-                            shape_files=shape_files, mask_files=mask_files)
+                            shape_files=shape_files, mask_files=mask_files,
+                            bg_files=bg_files)
         cmd = _filter_script_cmd(cmd, Path(td))
         on_progress(0.15, "Renderizando el vídeo final con FFmpeg…")
         log.info("Export: %d clip(s), encoder=%s crf=%s → %s",

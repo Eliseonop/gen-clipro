@@ -733,3 +733,92 @@ def start_subtitles_job(job: Job, pid: str, filename: str, asset_kind: str, mode
         daemon=True,
     )
     thread.start()
+
+
+def _run_bg_removal(job_id: str, pid: str, req: dict) -> None:
+    """Calcula el matte de Eliminar fondo de un clip (nivel 1 de la caché).
+
+    NO escribe la timeline: devuelve el resultado en ``job.bg_removal`` y el
+    editor lo aplica a su copia del clip. Así el autosave del editor no puede
+    pisar lo que escriba el job, y el cambio entra por el undo/redo de siempre.
+    """
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+
+    def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from . import clip_bg, compose
+        from .bg import providers as bg_providers
+        from .bg import service as bg_service
+        from .clip_kind import is_still_clip
+        from .schemas import TimelineClip
+
+        project = projects.get_project(pid)
+        if project is None:
+            raise RuntimeError("Proyecto no encontrado.")
+
+        # El descriptor viene del editor (no de la timeline guardada): así no hay
+        # carrera con el autosave y funciona con clips recién añadidos.
+        clip = TimelineClip(**{
+            "id": str(req.get("clip_id") or "tmp"),
+            "track_id": "V1",
+            "kind": str(req.get("kind") or "video"),
+            "asset_kind": str(req.get("asset_kind") or "clips"),
+            "asset_id": str(req.get("asset_id") or "0"),
+            "filename": str(req.get("filename") or ""),
+            "asset_scope": str(req.get("asset_scope") or "project"),
+            "in_point": float(req.get("in_point") or 0.0),
+            "out_point": float(req.get("out_point") or 0.0),
+            "source_duration": float(req.get("source_duration") or 0.0),
+        })
+        if not clip_bg.bg_capable(clip):
+            raise RuntimeError("Eliminar fondo solo funciona en clips de vídeo o imagen.")
+        path = compose._clip_path(project, clip)
+        if path is None or not path.exists():
+            raise RuntimeError(f"No se encuentra el material: {clip.filename}")
+
+        auto = clip_bg.normalize_auto(req.get("auto"))
+        provider = bg_providers.get(auto["provider"])
+        on_progress(0.02, f"Preparando el modelo {provider.id}…")
+        t0, t1 = bg_service.clip_range(clip)
+        meta = bg_service.build_matte(
+            path, auto, t0, t1, still=is_still_clip(clip),
+            on_progress=on_progress, cancel=lambda: job.cancel_requested)
+
+        job.bg_removal = {
+            "clip_id": clip.id,
+            "base_key": meta["base_key"],
+            "provider": meta["provider"],
+            "model_version": meta["model_version"],
+            "mask_fps": meta["mask_fps"],
+            "mask_height": meta["mask_height"],
+            "range": meta["range"],
+            "source_duration": meta["source_duration"],
+            "device": meta["device"],
+        }
+        job.progress = 1.0
+        job.message = f"Fondo separado ({meta['range'][1] - meta['range'][0] + 1} fotogramas)."
+        job.status = JobStatus.done
+    except Exception as exc:  # noqa: BLE001 - queremos reportar cualquier fallo
+        # La cancelación llega por dos vías: `on_progress` lanza JobCancelled y
+        # la extracción de fotogramas lanza BgCancelled. Las dos son cancelación,
+        # no error, y lo ya calculado queda en la caché para reanudar.
+        from .bg.service import BgCancelled
+
+        job.status = JobStatus.error
+        if isinstance(exc, (JobCancelled, BgCancelled)):
+            job.error = "Cancelado."
+            job.message = "Eliminar fondo cancelado. Lo calculado queda en caché."
+        else:
+            job.error = str(exc)
+            job.message = "Error al eliminar el fondo."
+
+
+def start_bg_removal_job(job: Job, pid: str, req: dict) -> None:
+    thread = threading.Thread(target=_run_bg_removal, args=(job.id, pid, req), daemon=True)
+    thread.start()

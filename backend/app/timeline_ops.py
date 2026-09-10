@@ -529,6 +529,39 @@ def update_clip(tl: Timeline, clip_id: str, patch: dict | None = None) -> EditRe
     return EditResult(cur, changed=[clip_id], warnings=warnings)
 
 
+def set_clip_bg_removal(tl: Timeline, clip_id: str, bg_removal: dict | None,
+                        replace: bool = False) -> EditResult:
+    """Eliminar fondo del clip: matte de IA y/o chroma key (ver ``clip_bg.py``).
+
+    MERGE por secciones (``auto`` / ``chroma``) por defecto: un patch que solo
+    toca la tolerancia del croma no puede borrar la clave de caché del matte ya
+    calculado. ``replace=True`` sustituye todo; ``bg_removal=None`` lo quita.
+    No toca el archivo original: es una propiedad del clip, y nada más.
+    """
+    from .clip_bg import bg_capable, normalize_bg
+
+    out = _copy(tl)
+    c = _find_clip(out, clip_id)
+    if bg_removal is None:
+        c.bg_removal = None
+        return EditResult(out, changed=[clip_id])
+    if not bg_capable(c):
+        raise ValueError("bg_removal solo aplica a clips de vídeo o imagen")
+    if not isinstance(bg_removal, dict):
+        raise ValueError("bg_removal debe ser un objeto")
+    base = {} if replace else dict(c.bg_removal or {})
+    merged = dict(base)
+    for key, val in bg_removal.items():
+        if key in ("auto", "chroma") and isinstance(val, dict):
+            section = dict(base.get(key) or {})
+            section.update(val)
+            merged[key] = section
+        else:
+            merged[key] = val
+    c.bg_removal = normalize_bg(merged)
+    return EditResult(out, changed=[clip_id])
+
+
 def set_clip_effects(tl: Timeline, clip_id: str, effects: dict, replace: bool = False) -> EditResult:
     """Efectos visuales del clip (blur/grayscale/sepia/brightness…). Por defecto
     MERGE sobre los existentes; ``replace=True`` los sustituye. Solo clips visuales."""

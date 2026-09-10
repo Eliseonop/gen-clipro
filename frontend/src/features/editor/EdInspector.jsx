@@ -5,8 +5,10 @@ import { clipPose } from '../../lib/clipAnim'
 import { APPEAR_OPTIONS, COLOR_FX, EXIT_OPTIONS, fxNum } from '../../lib/clipFx'
 import { canKeyframe, keyframeIdAt } from '../../lib/clipKeyframes'
 import { FRAME_OPTIONS } from '../../lib/clipLayout'
+import { bgCapable } from '../../lib/clipBg'
 import { maskable } from '../../lib/clipMask'
 import { isVisualClip } from './editorModel'
+import EdBgRemove from './EdBgRemove'
 import EdMask from './EdMask'
 import EdShape from './EdShape'
 import EdText, { TextFxPanel } from './EdText'
@@ -50,6 +52,7 @@ export default function EdInspector({
   effectsProps,
   shapeProps,
   maskProps,
+  bgProps,
   clipMode,
 }) {
   const clip = selectedClip
@@ -65,6 +68,7 @@ export default function EdInspector({
   const kfOn = !!(clip && canKeyframe(clip) && keyframeIdAt(clip, localT, p.fps || 30))
   const effects = clip?.effects && typeof clip.effects === 'object' ? clip.effects : {}
   const canMask = !!(maskProps && maskable(clip))
+  const canBg = !!(bgProps && bgCapable(clip))
 
   useEffect(() => {
     const next = navsFor(clip, textMode, audioMode)
@@ -76,6 +80,12 @@ export default function EdInspector({
   const onMaskOpen = maskProps?.onPanelOpen
   const maskOpen = activeNav === 'video' && sub === 'mask' && canMask
   useEffect(() => { onMaskOpen?.(maskOpen) }, [maskOpen, onMaskOpen])
+
+  // Igual el pincel de Eliminar fondo: al cerrar el panel se apaga, para que el
+  // puntero vuelva a mover/seleccionar clips.
+  const onBgOpen = bgProps?.onPanelOpen
+  const bgOpen = activeNav === 'video' && sub === 'bg' && canBg
+  useEffect(() => { onBgOpen?.(bgOpen) }, [bgOpen, onBgOpen])
 
   function patchEffects(next) {
     p.onChangeFx?.({ effects: { ...effects, ...next } })
@@ -103,6 +113,9 @@ export default function EdInspector({
       {hasTarget && videoSubs && (
         <nav className="ed-insp-sub" aria-label="Secciones">
           <button type="button" className={sub === 'basic' ? 'on' : ''} onClick={() => setSub('basic')}>Básico</button>
+          {canBg && (
+            <button type="button" className={sub === 'bg' ? 'on' : ''} onClick={() => setSub('bg')}>Eliminar fondo</button>
+          )}
           {canMask && (
             <button type="button" className={sub === 'mask' ? 'on' : ''} onClick={() => setSub('mask')}>Máscara</button>
           )}
@@ -202,6 +215,10 @@ export default function EdInspector({
               </InspSection>
             )}
           </>
+        )}
+
+        {hasTarget && activeNav === 'video' && sub === 'bg' && canBg && (
+          <EdBgRemove clip={clip} {...bgProps} />
         )}
 
         {hasTarget && activeNav === 'video' && sub === 'mask' && canMask && (
