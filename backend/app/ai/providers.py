@@ -36,8 +36,20 @@ def _status_code(exc: Exception) -> int | None:
         return None
 
 
+def _is_malformed_toolcall(exc: Exception) -> bool:
+    """El modelo emitió argumentos de tool que NO son JSON válido (frecuente en
+    modelos pequeños con JSON grande). Reintentar suele arreglarlo."""
+    s = str(exc).lower()
+    return any(k in s for k in (
+        "failed to parse tool call", "tool call arguments", "arguments as json",
+        "tool_use_failed", "json_validate_failed"))
+
+
 def _retryable(exc: Exception) -> bool:
-    """¿SATURACIÓN transitoria (5xx) que conviene reintentar? (429/404/401 no)."""
+    """¿Transitorio que conviene reintentar? 5xx, saturación o tool-call malformado.
+    (429/404/401 no)."""
+    if _is_malformed_toolcall(exc):
+        return True
     code = _status_code(exc)
     if code in (500, 502, 503, 504):
         return True
@@ -45,6 +57,17 @@ def _retryable(exc: Exception) -> bool:
         return False  # tiene código y no es 5xx → no reintentar
     s = str(exc).lower()
     return any(k in s for k in ("overloaded", "high demand", "try again later", "temporarily unavailable"))
+
+
+def _is_auth_or_quota(exc: Exception) -> bool:
+    """¿Fallo de la CLAVE (auth/cuota) que justifica probar otra key?"""
+    code = _status_code(exc)
+    if code in (401, 403, 429):
+        return True
+    s = str(exc).lower()
+    return any(k in s for k in (
+        "quota", "rate limit", "rate-limit", "resource_exhausted", "insufficient",
+        "invalid api key", "incorrect api key", "invalid_api_key", "unauthor", "permission"))
 
 
 def _friendly_error(exc: Exception) -> str:
@@ -72,6 +95,20 @@ OPENAI_COMPATIBLE = {
                    # Auto-router GRATIS de OpenRouter: elige solo un modelo free
                    # disponible con function-calling (resiliente a rate-limits).
                    "default_model": "openrouter/free"},
+    # Groq — free tier, muy rápido, con function-calling. OJO: Groq retira modelos
+    # a menudo (Llama 3.3 ya no está); usa uno vigente con tool use.
+    "groq": {"base_url": "https://api.groq.com/openai/v1", "key": "groq",
+             "default_model": "openai/gpt-oss-20b"},
+    # Cerebras — free tier, inferencia ultrarrápida, con tool use.
+    "cerebras": {"base_url": "https://api.cerebras.ai/v1", "key": "cerebras",
+                 "default_model": "llama-3.3-70b"},
+    # Mistral — free tier (La Plateforme), con function-calling.
+    "mistral": {"base_url": "https://api.mistral.ai/v1", "key": "mistral",
+                "default_model": "mistral-small-latest"},
+    # Hugging Face — router OpenAI-compatible (Inference Providers), free limitado.
+    # El soporte de tools depende del modelo/proveedor; cambia el modelo si falla.
+    "huggingface": {"base_url": "https://router.huggingface.co/v1", "key": "huggingface",
+                    "default_model": "meta-llama/Llama-3.1-8B-Instruct"},
     # LM Studio local (OpenAI-compatible). El modelo es el que tengas cargado.
     "lmstudio": {"base_url": "http://localhost:1234/v1", "key": None,
                  "default_model": "qwen2.5-7b-instruct"},
@@ -106,12 +143,23 @@ def _default_model(provider: str) -> str:
     return spec["default_model"] if spec else DEFAULT_MODEL
 
 
+def _is_local_provider(provider: str) -> bool:
+    """Local (sin key, base_url configurable): LM Studio / Ollama."""
+    spec = OPENAI_COMPATIBLE.get(provider)
+    return bool(spec) and spec.get("key") is None
+
+
 def ai_config() -> dict:
     raw = (settings.load() or {}).get("ai")
     data = raw if isinstance(raw, dict) else {}
     provider = (data.get("provider") or "").strip().lower() or _auto_provider()
     model = (data.get("model") or "").strip() or _default_model(provider)
-    base_url = (data.get("base_url") or "").strip() or None  # override para local/custom
+    base_url = (data.get("base_url") or "").strip() or None  # override solo para local
+    # El override de base_url SOLO aplica a proveedores locales (LM Studio/Ollama).
+    # Para proveedores cloud (OpenRouter, Groq…), un base_url guardado de una config
+    # previa (p.ej. http://localhost:1234 de LM Studio) NO debe pisar su URL oficial.
+    if not _is_local_provider(provider):
+        base_url = None
     return {"provider": provider, "model": model, "base_url": base_url}
 
 
@@ -202,11 +250,17 @@ class GeminiProvider(AIProvider):
         from .. import gemini_tts
         return gemini_tts.api_key()
 
+    def _keys(self) -> list[str]:
+        ks = settings.keys_for("gemini")
+        return ks or ([self._key()] if self._key() else [])
+
     async def run(self, *, system, history, user_message, tools, call_tool, emit, max_iters):
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=self._key())
+        keys = self._keys() or [self._key()]
+        key_idx = 0
+        client = genai.Client(api_key=keys[key_idx])
         fn_decls = [
             types.FunctionDeclaration(
                 name=t["name"], description=t["description"],
@@ -232,7 +286,8 @@ class GeminiProvider(AIProvider):
             calls = []
             turn_parts = []   # parts CRUDOS del modelo (conservan thought_signature)
             got = False
-            for attempt in range(RETRY_ATTEMPTS):
+            attempt = 0
+            while True:
                 turn_text, calls, turn_parts = "", [], []
                 try:
                     stream = await client.aio.models.generate_content_stream(
@@ -250,10 +305,17 @@ class GeminiProvider(AIProvider):
                     got = True
                     break
                 except Exception as exc:  # noqa: BLE001
+                    # Fallback: clave con auth/cuota fallida y hay otra → prueba la siguiente.
+                    if _is_auth_or_quota(exc) and not turn_text and key_idx + 1 < len(keys):
+                        key_idx += 1
+                        client = genai.Client(api_key=keys[key_idx])
+                        await emit({"type": "status", "message": f"Cambiando a otra API key (#{key_idx + 1})…"})
+                        continue
                     # Reintenta errores transitorios (503/429/500) si aún no hubo texto.
                     if _retryable(exc) and not turn_text and attempt < RETRY_ATTEMPTS - 1:
+                        attempt += 1
                         await emit({"type": "status", "message": "El modelo está saturado; reintentando…"})
-                        await asyncio.sleep(RETRY_BASE_DELAY * (2 ** attempt))
+                        await asyncio.sleep(RETRY_BASE_DELAY * (2 ** (attempt - 1)))
                         continue
                     await emit({"type": "error", "message": _friendly_error(exc)})
                     return final_text
@@ -296,8 +358,9 @@ class GeminiProvider(AIProvider):
 
 
 class OpenAICompatibleProvider(AIProvider):
-    """OpenAI y OpenRouter (API compatible): streaming + tool-calling. Un mismo
-    código, distinto ``base_url``/key. OpenRouter da modelos GRATIS con tools."""
+    """Proveedores con API compatible con OpenAI: streaming + tool-calling. Un
+    mismo código, distinto ``base_url``/key (OpenAI, OpenRouter, Groq, Cerebras,
+    Mistral, Hugging Face, LM Studio local). Varios ofrecen modelos GRATIS."""
 
     def __init__(self, provider: str, model: str, base_url: str | None = None):
         self.name = provider
@@ -311,8 +374,14 @@ class OpenAICompatibleProvider(AIProvider):
             return "lm-studio"   # los servidores locales ignoran la key
         return str(_api_keys().get(self._key_name) or "").strip()
 
+    def _keys(self) -> list[str]:
+        """Todas las claves del proveedor (para fallback). Local → una ficticia."""
+        if self._key_name is None:
+            return ["lm-studio"]
+        return settings.keys_for(self._key_name)
+
     def unavailable_reason(self) -> str | None:
-        if self._key_name is not None and not str(_api_keys().get(self._key_name) or "").strip():
+        if self._key_name is not None and not self._keys():
             return f"Falta la API key de {self.name}. Añádela en Configuración."
         try:
             import openai  # noqa: F401
@@ -325,7 +394,9 @@ class OpenAICompatibleProvider(AIProvider):
 
         from openai import AsyncOpenAI
 
-        client = AsyncOpenAI(api_key=self._key(), base_url=self._base_url)
+        keys = self._keys() or [self._key()]
+        key_idx = 0
+        client = AsyncOpenAI(api_key=keys[key_idx], base_url=self._base_url)
         oai_tools = [
             {"type": "function", "function": {
                 "name": t["name"], "description": t["description"],
@@ -343,7 +414,8 @@ class OpenAICompatibleProvider(AIProvider):
             turn_text = ""
             slots: dict = {}
             got = False
-            for attempt in range(RETRY_ATTEMPTS):
+            attempt = 0
+            while True:
                 turn_text, slots = "", {}
                 try:
                     stream = await client.chat.completions.create(
@@ -369,9 +441,16 @@ class OpenAICompatibleProvider(AIProvider):
                     got = True
                     break
                 except Exception as exc:  # noqa: BLE001
+                    # Fallback: si la clave falla por auth/cuota y hay otra, prueba la siguiente.
+                    if _is_auth_or_quota(exc) and not turn_text and key_idx + 1 < len(keys):
+                        key_idx += 1
+                        client = AsyncOpenAI(api_key=keys[key_idx], base_url=self._base_url)
+                        await emit({"type": "status", "message": f"Cambiando a otra API key (#{key_idx + 1})…"})
+                        continue
                     if _retryable(exc) and not turn_text and attempt < RETRY_ATTEMPTS - 1:
+                        attempt += 1
                         await emit({"type": "status", "message": "El modelo está saturado; reintentando…"})
-                        await asyncio.sleep(RETRY_BASE_DELAY * (2 ** attempt))
+                        await asyncio.sleep(RETRY_BASE_DELAY * (2 ** (attempt - 1)))
                         continue
                     await emit({"type": "error", "message": _friendly_error(exc)})
                     return final_text

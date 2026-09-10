@@ -25,6 +25,7 @@ from . import (
     tools_edit,
     tools_jobs,
     tools_media,
+    tools_motion,
     tools_read,
     tools_render,
     tools_vision,
@@ -52,6 +53,7 @@ tools_audio.register(mcp)     # Etapa 6: transcribe, generate_subtitles, generat
 tools_render.register(mcp)    # Etapa 7: export_project, list_jobs, cancel_job
 tools_workflow.register(mcp)  # Etapa 8: create_short_from_youtube, make_short_from_library
 tools_vision.register(mcp)    # Visión: get_frame (ojos) + set_clip_ai_description
+tools_motion.register(mcp)    # Motion Studio: composiciones editables (motion graphics)
 
 # Registro de resources (Fase 2): descubrimiento + estado de solo lectura.
 resources.register(mcp)

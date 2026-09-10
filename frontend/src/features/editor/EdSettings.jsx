@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Icon from '../../components/Icon'
 import Toast from '../../components/Toast'
 import { FPS_CHOICES, normalizeFps } from '../../lib/projectFps'
-import { getSettings, putSettings, getAiConfig, getLmStudioModels } from '../../services/api'
+import { getSettings, putSettings, getAiConfig, getLmStudioModels, testApiKeys, addApiKey, setApiKeyAt, deleteApiKeyAt } from '../../services/api'
 
 const API_PROVIDERS = [
   { id: 'gemini', label: 'Google Gemini', hint: 'Narración TTS, guion e imágenes', keys: 'https://aistudio.google.com/apikey' },
@@ -10,6 +10,9 @@ const API_PROVIDERS = [
   { id: 'anthropic', label: 'Anthropic', hint: 'Claude para guiones', keys: 'https://console.anthropic.com/settings/keys' },
   { id: 'elevenlabs', label: 'ElevenLabs', hint: 'Voces TTS', keys: 'https://elevenlabs.io/app/settings/api-keys' },
   { id: 'openrouter', label: 'OpenRouter', hint: 'Varios modelos con una sola clave', keys: 'https://openrouter.ai/keys' },
+  { id: 'groq', label: 'Groq', hint: 'Chat IA gratis y muy rápido', keys: 'https://console.groq.com/keys' },
+  { id: 'cerebras', label: 'Cerebras', hint: 'Chat IA gratis, inferencia ultrarrápida', keys: 'https://cloud.cerebras.ai/platform' },
+  { id: 'mistral', label: 'Mistral', hint: 'Chat IA gratis (La Plateforme)', keys: 'https://console.mistral.ai/api-keys' },
   { id: 'pexels', label: 'Pexels', hint: 'Vídeo e imágenes de stock', keys: 'https://www.pexels.com/api/' },
   { id: 'giphy', label: 'GIPHY', hint: 'GIFs animados', keys: 'https://developers.giphy.com/dashboard/' },
   { id: 'pixabay', label: 'Pixabay', hint: 'Stock libre', keys: 'https://pixabay.com/api/docs/' },
@@ -73,6 +76,9 @@ function txMeta(models, id) {
 export default function EdSettings({ onExportFps, audioDb, onAudioDb }) {
   const [cfgTab, setCfgTab] = useState('config')
   const [setKeys, setSetKeys] = useState({})
+  const [keyCounts, setKeyCounts] = useState({})
+  const [testing, setTesting] = useState(false)
+  const [testResults, setTestResults] = useState(null)  // {provider: [{index, ok, message}]}
   const [exportCfg, setExportCfg] = useState({ fps: 30, quality: 'standard' })
   const [txCfg, setTxCfg] = useState({ model: 'base' })
   const [txModels, setTxModels] = useState(TX_FALLBACK)
@@ -107,6 +113,7 @@ export default function EdSettings({ onExportFps, audioDb, onAudioDb }) {
   async function reload() {
     const s = await getSettings()
     setSetKeys(s.api_keys && typeof s.api_keys === 'object' ? s.api_keys : {})
+    setKeyCounts(s.api_keys_counts && typeof s.api_keys_counts === 'object' ? s.api_keys_counts : {})
     const ex = s.export && typeof s.export === 'object' ? s.export : {}
     setExportCfg({
       fps: normalizeFps(ex.fps),
@@ -196,10 +203,16 @@ export default function EdSettings({ onExportFps, audioDb, onAudioDb }) {
     setForm({ mode: 'add', id: first.id })
   }
 
-  function openEdit(id) {
+  function openEdit(id, index = 0) {
     setErr('')
     setValue('')
-    setForm({ mode: 'edit', id })
+    setForm({ mode: 'edit', id, index })
+  }
+
+  function openAddExtra(id) {
+    setErr('')
+    setValue('')
+    setForm({ mode: 'addExtra', id })
   }
 
   function cancel() {
@@ -216,9 +229,14 @@ export default function EdSettings({ onExportFps, audioDb, onAudioDb }) {
     setBusy(true)
     setErr('')
     try {
-      await putSettings({ api_keys: { [id]: key } })
+      // 'add' = primera clave de un proveedor (flujo Agregar, sin cambios).
+      // 'addExtra' = otra clave del mismo proveedor. 'edit' = reemplaza la clave #index.
+      if (form.mode === 'addExtra') await addApiKey(id, key)
+      else if (form.mode === 'edit') await setApiKeyAt(id, form.index || 0, key)
+      else await putSettings({ api_keys: { [id]: key } })
       setValue('')
       setForm(null)
+      setTestResults(null)
       await reload()
       setToast({ type: 'success', message: `Clave de ${providerLabel(id)} guardada.` })
     } catch (e) {
@@ -227,18 +245,39 @@ export default function EdSettings({ onExportFps, audioDb, onAudioDb }) {
     setBusy(false)
   }
 
-  async function remove(id) {
+  async function remove(id, index = 0) {
     setBusy(true)
     setErr('')
     try {
-      await putSettings({ api_keys: { [id]: '' } })
+      await deleteApiKeyAt(id, index)
       if (form?.id === id) cancel()
+      setTestResults(null)
       await reload()
       setToast({ type: 'success', message: `Clave de ${providerLabel(id)} eliminada.` })
     } catch (e) {
       setErr(e.message || 'No se pudo eliminar.')
     }
     setBusy(false)
+  }
+
+  async function runTest() {
+    if (testing) return
+    setTesting(true)
+    setErr('')
+    setTestResults(null)
+    try {
+      const r = await testApiKeys()
+      setTestResults(r.results || {})
+    } catch (e) {
+      setErr(e.message || 'No se pudieron probar las claves.')
+    }
+    setTesting(false)
+  }
+
+  function resultFor(id, index) {
+    const list = testResults?.[id]
+    if (!list) return undefined
+    return list.find((e) => e.index === index)
   }
 
   async function saveExport(patch) {
@@ -480,45 +519,23 @@ export default function EdSettings({ onExportFps, audioDb, onAudioDb }) {
 
       {cfgTab === 'keys' && (
         <div className="ed-cfg-keys">
+          {/* Barra: Agregar + Probar, arriba de la lista */}
+          <div className="ed-key-toolbar">
+            {unused.length > 0 && (
+              <button type="button" className="ghost small ed-key-add" onClick={openAdd} disabled={busy || testing || !!form}>
+                <Icon name="add" size={16} /> Agregar
+              </button>
+            )}
+            <button type="button" className="ghost small ed-key-test" onClick={runTest} disabled={testing || busy || rows.length === 0}>
+              {testing ? 'Probando…' : (<><Icon name="check_circle" size={16} /> Probar</>)}
+            </button>
+          </div>
+
           {rows.length === 0 && !form && (
             <div className="ed-mat-empty">Aún no hay claves. Pulsa Agregar.</div>
           )}
 
-          {rows.map((id) => {
-            const editing = form?.mode === 'edit' && form.id === id
-            return (
-              <div className="ed-key-row" key={id}>
-                <div className="ed-key-row-head">
-                  <span className="ed-key-name">{providerLabel(id)}</span>
-                  {!editing && <span className="ed-key-set">Guardada</span>}
-                  {!editing && (
-                    <div className="ed-key-actions">
-                      <button type="button" className="ghost small" onClick={() => openEdit(id)} disabled={busy}>
-                        Editar
-                      </button>
-                      <button type="button" className="ghost small danger" onClick={() => remove(id)} disabled={busy}>
-                        Quitar
-                      </button>
-                    </div>
-                  )}
-                </div>
-                {editing && (
-                  <KeyForm
-                    selectId={id}
-                    providers={[{ id, label: providerLabel(id) }]}
-                    selectLocked
-                    hint={providerHint(id)}
-                    value={value}
-                    setValue={setValue}
-                    busy={busy}
-                    onSave={save}
-                    onCancel={cancel}
-                  />
-                )}
-              </div>
-            )
-          })}
-
+          {/* Alta de un proveedor nuevo (flujo Agregar; sin cambios) */}
           {form?.mode === 'add' && (
             <div className="ed-key-row">
               <KeyForm
@@ -535,13 +552,70 @@ export default function EdSettings({ onExportFps, audioDb, onAudioDb }) {
             </div>
           )}
 
-          {err && <div className="ed-mat-err">{err}</div>}
+          {rows.map((id) => {
+            const count = Math.max(1, keyCounts[id] || 1)
+            const editingExtra = form?.mode === 'addExtra' && form.id === id
+            return (
+              <div className="ed-key-row" key={id}>
+                <div className="ed-key-row-head">
+                  <span className="ed-key-name">{providerLabel(id)}</span>
+                  {count > 1 && <span className="ed-key-count">{count} claves</span>}
+                </div>
+                <div className="ed-key-slots">
+                  {Array.from({ length: count }).map((_, index) => {
+                    const editing = form?.mode === 'edit' && form.id === id && (form.index || 0) === index
+                    const res = resultFor(id, index)
+                    return (
+                      <div className="ed-key-slot" key={index}>
+                        <div className="ed-key-slot-head">
+                          <span className="ed-key-num">#{index + 1}</span>
+                          <KeyStatus testing={testing} res={res} />
+                          {!editing && (
+                            <div className="ed-key-actions">
+                              <button type="button" className="ghost small" onClick={() => openEdit(id, index)} disabled={busy || testing}>Editar</button>
+                              <button type="button" className="ghost small danger" onClick={() => remove(id, index)} disabled={busy || testing}>Quitar</button>
+                            </div>
+                          )}
+                        </div>
+                        {editing && (
+                          <KeyForm
+                            selectId={id}
+                            providers={[{ id, label: providerLabel(id) }]}
+                            selectLocked
+                            hint={providerHint(id)}
+                            value={value}
+                            setValue={setValue}
+                            busy={busy}
+                            onSave={save}
+                            onCancel={cancel}
+                          />
+                        )}
+                      </div>
+                    )
+                  })}
+                  {editingExtra ? (
+                    <KeyForm
+                      selectId={id}
+                      providers={[{ id, label: providerLabel(id) }]}
+                      selectLocked
+                      hint={`Otra clave de ${providerLabel(id)} (de otra cuenta).`}
+                      value={value}
+                      setValue={setValue}
+                      busy={busy}
+                      onSave={save}
+                      onCancel={cancel}
+                    />
+                  ) : (
+                    <button type="button" className="ghost small ed-key-otra" onClick={() => openAddExtra(id)} disabled={busy || testing || !!form}>
+                      <Icon name="add" size={14} /> otra
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+          })}
 
-          {!form && unused.length > 0 && (
-            <button type="button" className="ghost small ed-key-add" onClick={openAdd} disabled={busy}>
-              <Icon name="add" size={16} /> Agregar
-            </button>
-          )}
+          {err && <div className="ed-mat-err">{err}</div>}
         </div>
       )}
 
@@ -603,6 +677,18 @@ export default function EdSettings({ onExportFps, audioDb, onAudioDb }) {
 
       <Toast toast={toast} onClose={() => setToast(null)} />
     </div>
+  )
+}
+
+function KeyStatus({ testing, res }) {
+  if (testing) return <span className="ed-key-testing">Probando…</span>
+  if (!res) return null
+  const cls = res.ok === true ? 'ok' : res.ok === false ? 'fail' : 'unknown'
+  const icon = res.ok === true ? '✓' : res.ok === false ? '✕' : '?'
+  return (
+    <span className={`ed-key-status ${cls}`} title={res.message || ''}>
+      <span className="ed-key-dot" />{icon}
+    </span>
   )
 }
 

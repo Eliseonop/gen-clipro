@@ -23,6 +23,7 @@ import {
   pickClipVisualProps, applyClipVisualProps,
   trackTextContent, trackSrt, trackSrtWithReference, trackSource, clipCopyText,
   previewHead, safeMediaTime, mcpBusyClipIds,
+  motionLayersToTimeline, motionClipTiming,
 } from './editorModel'
 import { textRole } from '../../lib/textRole'
 import { SHAPE_DEFAULT_DUR } from '../../lib/shapes'
@@ -33,6 +34,9 @@ import {
   normalizeItems, patchKeyframe, upsertKeyframeAt,
 } from '../../lib/clipKeyframes'
 import { drawMainView, drawResultView } from './render/canvas'
+import MotionCanvas from '../motion/MotionCanvas'
+import MotionProps from '../motion/MotionProps'
+import { useMotionComp } from '../motion/useMotionComp'
 import { useExportJob } from './hooks/useExportJob'
 import { useSubtitles } from './hooks/useSubtitles'
 import { useFavorites } from './hooks/useFavorites'
@@ -174,6 +178,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [dragInfo, setDragInfo] = useState(null)    // { kind, duration, name }
   const [framingMode, setFramingMode] = useState(null) // { trackId, x, y, w } o null
   const [mainColTab, setMainColTab] = useState('main')
+  // Motion Studio como MODO nativo: estado de composición compartido; el timeline
+  // real muestra las capas como clips (adapter en editorModel), el canvas central el
+  // preview y el inspector las propiedades de la capa.
+  const motion = useMotionComp(project?.id, { onReloadTimeline: () => reloadTimeline() })
+  const motionRef = useRef(motion); motionRef.current = motion
+  const motionModeRef = useRef(false)
+  const motionControlsRef = useRef(null)
+  const [motionTime, setMotionTime] = useState(0)
+  const [motionPlaying, setMotionPlaying] = useState(false)
   const [cropMode, setCropMode] = useState(false)
   // Zoom SOLO visual del canvas (aleja/acerca la vista para ver alrededor del encuadre).
   // No toca el clip ni el export. Independiente por editor (Main vs Clip).
@@ -554,13 +567,26 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setSelClipIds([])
     setSelKfId(null)
   }
+  // Aplica una composición de motion como timeline (capas → clips), reusando EdTimeline.
+  function applyMotionTimeline(c) {
+    const { tracks: mt, clips: mc } = c ? motionLayersToTimeline(c) : { tracks: [], clips: [] }
+    setTracks(mt)
+    setClips(mc)
+    setPlayhead(0)
+    playheadRef.current = 0
+    setSelTrackId(mt[0]?.id || null)
+    setSelClipId(null)
+    setSelClipIds([])
+    setSelKfId(null)
+  }
   function goMainTab() {
     if (mainColTab === 'main') return
     if (!projectTlRef.current) return
     stopPlayback()
-    clipTlRef.current = snapshotTl()
+    if (mainColTab === 'clip') clipTlRef.current = snapshotTl()
     applyTl(projectTlRef.current)
     clipModeRef.current = false
+    motionModeRef.current = false
     setCropMode(false)
     hist.reset()
     setLinkPick(null)
@@ -569,8 +595,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   function goClipTab() {
     if (mainColTab === 'clip') return
     stopPlayback()
-    projectTlRef.current = snapshotTl()
+    if (mainColTab === 'main') projectTlRef.current = snapshotTl()
     clipModeRef.current = true
+    motionModeRef.current = false
     setCropMode(false)
     hist.reset()
     setLinkPick(null)
@@ -578,6 +605,58 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (clipTlRef.current) applyTl(clipTlRef.current)
     else applyEmptyClipTl()
   }
+  async function goMotionTab(compId = null) {
+    stopPlayback()
+    // Preserva la timeline del editor donde estemos para poder volver.
+    if (mainColTab === 'main') projectTlRef.current = snapshotTl()
+    else if (mainColTab === 'clip') clipTlRef.current = snapshotTl()
+    setLinkPick(null)
+    clipModeRef.current = false
+    motionModeRef.current = true
+    setCropMode(false)
+    hist.reset()
+    setMainColTab('motion')
+    let c = motion.comp
+    if (compId) c = await motion.loadComp(compId)
+    applyMotionTimeline(c)
+  }
+  function goMotionBlank() {
+    // Volver a la pantalla inicial de creación (sin composición cargada).
+    motion.close()
+    applyMotionTimeline(null)
+  }
+
+  // Sync TIMELINE → composición: al mover/estirar un clip en modo motion, actualiza
+  // start/end de la capa (el preview se reconstruye). Guardado por comparación (sin bucle).
+  useEffect(() => {
+    if (!motionModeRef.current) return
+    const c = motionRef.current.comp
+    if (!c) return
+    let changed = false
+    const layers = c.layers.map((l) => {
+      const clip = clips.find((cl) => cl.id === l.id)
+      if (!clip) return l
+      const { start, end } = motionClipTiming(clip)
+      const curEnd = l.end == null ? c.duration : l.end
+      if ((l.start || 0) !== start || curEnd !== end) { changed = true; return { ...l, start, end } }
+      return l
+    })
+    if (changed) motionRef.current.applyTiming(layers)
+  }, [clips])
+
+  // Sync composición → TIMELINE: cuando cambia el CONJUNTO de capas (añadir/quitar),
+  // re-deriva los clips. Solo estructura (los tiempos van por el efecto de arriba).
+  const motionLayerIdsRef = useRef('')
+  useEffect(() => {
+    if (!motionModeRef.current) { motionLayerIdsRef.current = ''; return }
+    const ids = (motion.comp?.layers || []).map((l) => l.id).join(',')
+    if (ids !== motionLayerIdsRef.current) {
+      motionLayerIdsRef.current = ids
+      const { tracks: mt, clips: mc } = motion.comp ? motionLayersToTimeline(motion.comp) : { tracks: [], clips: [] }
+      setTracks(mt)
+      setClips(mc)
+    }
+  }, [motion.comp])
 
   async function startClipPrepare(url, start, end, title) {
     const gen = ++prepGen.current
@@ -832,7 +911,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     const track = targetTrackFor(trackKindForClip(clipKind))
     if (!track) return
     const dur = assetKind === 'images'
-      ? IMAGE_DEFAULT_DUR
+      ? (item.animated && Number(item.duration) > 0 ? Number(item.duration) : IMAGE_DEFAULT_DUR)
       : assetKind === 'clips'
         ? ((item.end ?? item.duration ?? 0) - (item.start ?? 0))
         : (item.duration || 0)
@@ -858,6 +937,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       scope: payload.scope,
       description: payload.description,
       media_version: payload.media_version,
+      animated: payload.animated,
+      loop: payload.loop,
     }, trackId, startTime, payload.duration)
     const dropped = flagBaseFit(clip)
     setClips((prev) => [...prev, dropped])
@@ -1873,7 +1954,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   return (
     <div
       ref={panels.editorRef}
-      className={`veditor${mainColTab === 'clip' ? ' clip-mode' : ''}${linkPick ? ' link-picking' : ''}${panels.dragging ? ` is-resizing is-rs-${panels.dragging}` : ''}`}
+      className={`veditor${mainColTab === 'clip' ? ' clip-mode' : ''}${mainColTab === 'motion' ? ' motion-mode' : ''}${linkPick ? ' link-picking' : ''}${panels.dragging ? ` is-resizing is-rs-${panels.dragging}` : ''}`}
       style={panels.vars}
     >
       <div className="ed-hidden-media">{mediaPool}</div>
@@ -1931,6 +2012,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           aiContext={{ project_id: project.id, selected_clip_id: selClipId || null, selected_track_id: selTrackId || null, current_time: Math.round((playhead || 0) * 100) / 100 }}
           onReloadTimeline={reloadTimeline}
           onMcpAudit={setMcpAudit}
+          motion={motion}
+          motionFormat={{ width: outW, height: outH, fps }}
+          onGoMotion={() => goMotionTab(null)}
+          onMotionBack={goMotionBlank}
         />
         <EdSplit axis="x" kind="materials" label="Redimensionar materiales" onDown={panels.begin('materials')} />
 
@@ -1950,7 +2035,57 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             >
               Clip Editor
             </button>
+            <button
+              type="button"
+              className={`ed-tab ${mainColTab === 'motion' ? 'on' : ''}`}
+              onClick={() => goMotionTab(null)}
+            >
+              Motion Studio
+            </button>
           </div>
+          {mainColTab === 'motion' && (
+            <div className="ed-motion-canvas">
+              {motion.comp ? (
+                <MotionCanvas
+                  projectId={project.id}
+                  comp={motion.comp}
+                  onControls={(c) => { motionControlsRef.current = c }}
+                  onTime={(t) => { setMotionTime(t); setMotionPlaying(!!motionControlsRef.current?.isPlaying?.()) }}
+                  selLayerId={motion.selLayerId}
+                  onSelectLayer={motion.setSelLayerId}
+                  onMoveLayer={motion.moveLayerBy}
+                />
+              ) : (
+                <div className="ed-stage-empty">Crea un motion graphic desde Materiales (icono Motion).</div>
+              )}
+              <div className="ed-transport">
+                <button className="icon-btn big" type="button" title="Reproducir / Pausa"
+                  onClick={() => {
+                    const c = motionControlsRef.current
+                    if (!c) return
+                    if (c.isPlaying()) { c.pause(); setMotionPlaying(false) }
+                    else { c.setLoop(true); c.play(); setMotionPlaying(true) }
+                  }}>
+                  <Icon name={motionPlaying ? 'pause_circle' : 'play_circle'} size={24} />
+                </button>
+                <button className="icon-btn" type="button" title="Al inicio"
+                  onClick={() => motionControlsRef.current?.seek(0)}><Icon name="first_page" size={18} /></button>
+                <div className="ed-scrub" onPointerDown={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  const dur = motion.comp?.duration || 1
+                  const doSeek = (cx) => motionControlsRef.current?.seek(((cx - rect.left) / rect.width) * dur)
+                  doSeek(e.clientX)
+                  const mv = (ev) => doSeek(ev.clientX)
+                  const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up) }
+                  window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up)
+                }}>
+                  <div className="ed-scrub-fill" style={{ width: `${motion.comp?.duration ? (motionTime / motion.comp.duration) * 100 : 0}%` }} />
+                  <div className="ed-scrub-knob" style={{ left: `${motion.comp?.duration ? (motionTime / motion.comp.duration) * 100 : 0}%` }} />
+                </div>
+                <span className="ed-time">{motionTime.toFixed(2)} / {Number(motion.comp?.duration || 0).toFixed(2)}s</span>
+              </div>
+            </div>
+          )}
           {mainColTab === 'clip' && (
             <div className="ed-clip-banner">
               <span className="ed-clip-banner-label">Preparar clip</span>
@@ -2067,6 +2202,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         </div>
         <EdSplit axis="x" kind="inspector" label="Redimensionar inspector" onDown={panels.begin('inspector')} />
 
+        {mainColTab === 'motion' ? (
+          <aside className="ed-inspector motion-props-panel">
+            <div className="motion-panel-title">Propiedades</div>
+            <MotionProps comp={motion.comp} layer={motion.selLayer}
+              onChange={(patch) => motion.selLayerId && motion.editLayer(motion.selLayerId, patch)} />
+          </aside>
+        ) : (
         <EdInspector
           selectedClip={isAudioTrackSel ? (trackAudioClip || { kind: 'audio', volume: 1, muted: false, audio_fx: {}, start: 0 }) : selectedClip}
           textMode={isTextSel ? 'clip' : (isTextTrackSel ? 'track' : null)}
@@ -2157,6 +2299,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             },
           } : null}
         />
+        )}
       </div>
 
       <EdSplit axis="y" kind="bottom" label="Redimensionar timeline" onDown={panels.begin('bottom')} />
@@ -2166,14 +2309,18 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         <EdTimeline
           tracks={tracks} clips={clips} pps={pps} setPps={setPps} fps={fps}
           duration={duration} playhead={playhead} rowH={rowH} setRowH={setRowH}
-          selectedClipId={selClipId} selectedClipIds={selClipIds} selectedTrackId={selTrackId}
+          selectedClipId={mainColTab === 'motion' ? motion.selLayerId : selClipId} selectedClipIds={mainColTab === 'motion' ? (motion.selLayerId ? [motion.selLayerId] : []) : selClipIds} selectedTrackId={selTrackId}
           selectedClip={selectedClip} selKfId={selKfId} dragInfo={dragInfo}
           mcpBusyIds={mcpBusyIds}
           onSeek={seek}
           onScrub={scrub}
-          onSelectClip={handleSelectClip}
+          onSelectClip={mainColTab === 'motion' ? ((clip) => motion.setSelLayerId(clip.id)) : handleSelectClip}
           onSelectTrack={selectTrack}
           onDoubleClip={(clip) => {
+            if (clip.kind === 'motion' && (clip.composition_id || clip.asset_id)) {
+              goMotionTab(clip.composition_id || clip.asset_id)   // reeditar el motion graphic
+              return
+            }
             seek(clip.start)   // exactamente el inicio del clip (00:00 relativo), sin offset
             setSelClipId(clip.id)
             setSelClipIds([clip.id])

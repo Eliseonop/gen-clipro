@@ -57,6 +57,14 @@ def _system_prompt(context_summary: str | None, context: dict | None) -> str:
         "un fotograma que puedes VER) y/o su transcripción; al analizar/etiquetar "
         "material, guarda tu descripción con set_clip_ai_description (va a un campo "
         "aparte, NO pisa la descripción del usuario).",
+        "Motion graphics (títulos, lower thirds, SUSCRÍBETE, intros animadas): usa "
+        "Motion Studio. Genera una COMPOSICIÓN estructurada con "
+        "motion_create_composition (pasa 'composition' con layers de texto, estilos "
+        "y animación de entrada/salida: fade|slide|scale|zoom|rotate, o un 'template'). "
+        "El preview es inmediato; NO generas un vídeo cerrado. Ante cambios del usuario "
+        "('más grande', 'que entre desde la izquierda', 'color blanco') edita el JSON con "
+        "motion_update_composition. Solo cuando el usuario diga 'agregar al proyecto' usa "
+        "motion_add_to_timeline. motion_list_templates lista los prefabricados.",
         "Para tareas largas (crear un short) puedes usar los workflows de alto "
         "nivel si encajan, o encadenar tools. No expliques nombres técnicos de "
         "tools al usuario.",
@@ -70,9 +78,45 @@ def _system_prompt(context_summary: str | None, context: dict | None) -> str:
         hint.append(f"pista seleccionada={ctx['selected_track_id']}")
     if ctx.get("current_time") is not None:
         hint.append(f"tiempo actual={ctx['current_time']}s")
+    if ctx.get("motion_composition_id"):
+        hint.append(f"composición de Motion Studio activa={ctx['motion_composition_id']} "
+                    "(edítala con motion_update_composition salvo que pidan una nueva)")
     if hint:
         lines.append("Contexto del editor: " + ", ".join(hint) + ".")
-    if context_summary:
+    if ctx.get("surface") == "motion_studio":
+        # En Motion Studio el objetivo es la composición, NO la timeline: evita
+        # peticiones inútiles (cada tool es una llamada al modelo y agota cuota).
+        lines.append(
+            "ESTÁS EN MOTION STUDIO. Reglas estrictas para no malgastar llamadas: "
+            "(1) NO uses get_project_context, get_timeline, inspect_clip ni list_media: "
+            "no necesitas la timeline para diseñar un motion graphic. "
+            "(2) Crea UNA SOLA composición con motion_create_composition pasando 'composition' "
+            "con TODAS las capas necesarias de una vez (varias layers en un único JSON); NO "
+            "llames a motion_create_composition varias veces. "
+            "(3) Para diagramas COMPLEJOS o con muchos elementos repetidos (redes neuronales, "
+            "diagramas de flujo…) NO intentes emitir un JSON enorme: usa un TEMPLATE. Mira "
+            "motion_list_templates y llama motion_create_composition con template + params "
+            "pequeños (p.ej. template='neural_network', params={inputs, hidden, output, duration}). "
+            "Para motion graphics simples de texto, emite la 'composition' directamente. "
+            "(4) Para ajustes posteriores usa motion_update_composition sobre la composición activa. "
+            "(5) NO uses motion_add_to_timeline salvo que el usuario diga 'agregar al proyecto'. "
+            "Sé directo: idealmente 1 sola llamada para crear la composición completa."
+        )
+        lines.append(
+            "CAPAS disponibles: type 'text' y type 'shape'. Una shape lleva un objeto "
+            "'shape': {kind:'circle', radius, fill, stroke, glow} para NODOS; "
+            "{kind:'line', x2, y2, thickness, stroke, glow} para CONEXIONES (va de x,y a x2,y2); "
+            "o {kind:'rect', width, height, fill}. x,y son el CENTRO en píxeles del lienzo "
+            "(p.ej. 1920x1080 para 16:9). Cada capa tiene start/end (segundos) y "
+            "animation.entrance/exit (fade|slide|scale|zoom|rotate; y 'draw' para dibujar líneas "
+            "progresivamente). Además 'effect' CONTINUO: {type:'pulse'} (nodo que late), "
+            "{type:'flow', duration} (punto de luz viajando por una línea → datos que fluyen), "
+            "{type:'glow'}. Diagramas tipo red neuronal: nodos = circles con glow y effect pulse "
+            "escalonado (effect.delay distinto por capa); conexiones = lines con entrance 'draw' y "
+            "effect 'flow'. Fondo oscuro: pon background a un color oscuro (#0a0e1a). Escalona "
+            "start/effect.delay para que el flujo se lea de izquierda a derecha."
+        )
+    if context_summary and ctx.get("surface") != "motion_studio":
         lines.append("Resumen del proyecto:\n" + context_summary)
     return "\n\n".join(lines)
 
@@ -160,12 +204,14 @@ async def run_chat(project_id: str, message: str, *, context: dict | None = None
             async with McpToolset.open() as tools:
                 specs = await tools.tool_specs()
                 summary = ""
-                with audit.source("ai_chat"):
-                    try:
-                        ctxres = await tools.call("get_project_context", {"project_id": project_id})
-                        summary = _compact_context(ctxres.get("data"))
-                    except Exception:  # noqa: BLE001
-                        summary = ""
+                # En Motion Studio no se usa el resumen del proyecto: evita el fetch.
+                if ctx.get("surface") != "motion_studio":
+                    with audit.source("ai_chat"):
+                        try:
+                            ctxres = await tools.call("get_project_context", {"project_id": project_id})
+                            summary = _compact_context(ctxres.get("data"))
+                        except Exception:  # noqa: BLE001
+                            summary = ""
                 system = _system_prompt(summary, ctx)
 
                 async def call_tool(name: str, args: dict) -> dict:

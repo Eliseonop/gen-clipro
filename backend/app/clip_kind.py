@@ -11,6 +11,7 @@ CLIP_TRACK_KIND = {
     "video": "video",
     "image": "video",
     "shape": "video",
+    "motion": "video",   # motion graphic (Motion Studio): overlay con alfa en pista de vídeo
     "audio": "audio",
     "text": "text",
 }
@@ -24,6 +25,7 @@ ASSET_DISK_KIND = {
     "audios": "audio",
     "images": "image",
     "sfx": "sfx",
+    "motion": "motion",
 }
 
 IMAGE_DEFAULT_DUR = 5.0
@@ -87,11 +89,31 @@ def ffmpeg_trim_window(clip, fps: int = 30) -> tuple[float, float]:
 
 
 def ffmpeg_input_args(clip, path, fps: int) -> list[str]:
-    """Args ``-i`` de un clip. Still: loop; vídeo/audio: archivo tal cual."""
+    """Args ``-i`` de un clip. Still: loop; vídeo/audio: archivo tal cual.
+
+    Motion graphic (WebM VP9 con alfa): fuerza el decoder ``libvpx-vp9``. El
+    decoder VP9 por defecto de FFmpeg NO expone el plano alfa, así que la zona
+    transparente saldría negra al componer el overlay sobre la timeline.
+    """
     p = str(path if isinstance(path, Path) else path)
+    kind = clip.get("kind") if isinstance(clip, dict) else getattr(clip, "kind", None)
+    if kind == "motion":
+        return ["-c:v", "libvpx-vp9", "-i", p]
     if is_still_clip(clip):
         _, dur = ffmpeg_trim_window(clip)
         t = dur + 0.05
+        if p.lower().endswith(".gif"):
+            # GIF (posiblemente animado): leerlo con su propio demuxer y repetirlo
+            # en bucle hasta cubrir la duración del clip. NUNCA usar ``-loop 1``:
+            # es opción del demuxer image2, no del de gif; en muchas builds de
+            # FFmpeg rompe la apertura del input ("Option loop not found") y en
+            # otras congela el primer fotograma. ``-ignore_loop 0`` repite la
+            # animación (o el frame único de un gif estático) y ``-t`` la acota.
+            # Con ``loop=False`` se reproduce una vez (``-ignore_loop 1``); el
+            # overlay del compose mantiene el último fotograma con eof_action=repeat.
+            loop = clip.get("loop") if isinstance(clip, dict) else getattr(clip, "loop", None)
+            ignore = "1" if loop is False else "0"
+            return ["-ignore_loop", ignore, "-t", f"{t:.3f}", "-i", p]
         return ["-loop", "1", "-framerate", str(int(fps)), "-t", f"{t:.3f}", "-i", p]
     return ["-i", p]
 

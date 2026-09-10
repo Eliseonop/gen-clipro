@@ -9,6 +9,7 @@ import { drawTextClip } from '../../../lib/textstyles'
 import { drawShapeClip } from '../../../lib/shapes'
 import { drawAlignGuides } from '../../../lib/alignGuides'
 import { clipDur, clipEnd, isVisualClip, newReframe, timelineToSource, safeMediaTime } from '../editorModel'
+import { gifFrameAt } from '../gifPlayer'
 import { applyCanvasFx, clipFxAt } from '../../../lib/clipFx'
 import { posedTransform, clipPose, clipMasksAt } from '../../../lib/clipAnim'
 import { beginMaskLayer, endMaskLayer, maskHandles, strokeMaskShape } from '../../../lib/clipMask'
@@ -191,6 +192,18 @@ function fxForClip(clip, head) {
   return clipFxAt(clip, localT, clipDur(clip))
 }
 
+// Para un clip de GIF animado devuelve el <canvas> del fotograma que toca en
+// `srcTime` (tiempo local en el gif), sincronizado con el timeline. Devuelve null
+// si no es un gif o aún no está decodificado → el llamador usa el <img> original.
+// El fotograma comparte dimensiones con el <img>, así que la geometría de recorte
+// (sourceCropPx, reframe) no cambia al sustituir la fuente.
+function gifDrawable(clip, el, srcTime) {
+  if (!el || clip?.kind !== 'image') return null
+  const src = el.currentSrc || el.src || ''
+  if (!/\.gif(\?|#|$)/i.test(src)) return null
+  return gifFrameAt(src, srcTime, clip.loop !== false)
+}
+
 // Dibuja el compuesto (todas las pistas de vídeo, fondo→frente + textos) dentro del
 // recuadro Main (`frame`, en px del canvas). Lo que sobresale del recuadro se dibuja
 // igualmente (contexto estilo CapCut) y el canvas lo recorta en su borde. Los dest/box/
@@ -233,9 +246,12 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
     const srcTime = clip.kind === 'image'
       ? clamp(timelineToSource(clip, head), clip.in_point, clip.out_point)
       : el.currentTime
+    // GIF animado: dibuja el fotograma que corresponde al tiempo del timeline
+    // (mismas dimensiones que el <img>, así el recorte/encuadre no cambia).
+    const drawEl = gifDrawable(clip, el, srcTime) || el
     const fx = fxForClip(clip, head)
     if (isOverlay(clip)) {
-      const dest = drawOverlayLayer(g, el, clip, srcTime, outW, outH, fx, localT, fr)
+      const dest = drawOverlayLayer(g, drawEl, clip, srcTime, outW, outH, fx, localT, fr)
       flush()
       hits.push({ id: clip.id, kind: clip.kind, dest, overlay: true })
       if (selected.has(clip.id)) overlayDestSel = dest
@@ -254,7 +270,7 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
         g.scale(sc, sc)
         g.translate(-cw / 2, -ch / 2)
       }
-      drawReframe(g, el, reframeForDraw(clip, localT, srcTime), srcTime, outW / outH, { clear: false, dest: { dx: 0, dy: 0, dw: cw, dh: ch } })
+      drawReframe(g, drawEl, reframeForDraw(clip, localT, srcTime), srcTime, outW / outH, { clear: false, dest: { dx: 0, dy: 0, dw: cw, dh: ch } })
       g.restore()
       flush()
       const dest = offsetDest(fillDestRect(cw, ch, clip, localT), ox, oy)
@@ -396,7 +412,8 @@ export function drawMainView(head, env) {
       if (Math.abs(el.currentTime - seekT) > 0.06) { try { el.currentTime = seekT } catch { /* noop */ } }
     }
     ctx.clearRect(0, 0, cw2, ch2)
-    try { ctx.drawImage(el, 0, 0, cw2, ch2) } catch { /* noop */ }
+    const drawEl = gifDrawable(clip, el, srcTime) || el
+    try { ctx.drawImage(drawEl, 0, 0, cw2, ch2) } catch { /* noop */ }
     const rf = clip.reframe || newReframe()
     // El recorte se hace respecto al aspecto del SLOT (Completo=salida; mitades≈1:1).
     const outA = slotAspectOf(clip, outRef.current.w / outRef.current.h)

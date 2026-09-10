@@ -139,13 +139,127 @@ def api_key(name: str) -> str:
     return str(_api_keys_map(load()).get(kid) or "").strip()
 
 
+# --- Varias keys por proveedor (para fallback) --------------------------------
+# La clave primaria vive en ``api_keys[provider]`` (compatibilidad total con los
+# consumidores actuales). Las adicionales en ``api_keys_extra[provider]: [..]``.
+# El índice 0 es la primaria; 1.. las extra. Los valores NUNCA se exponen al
+# frontend (ver ``public``); la gestión desde la UI es por índice.
+
+def _read_file() -> dict:
+    if not _FILE.exists():
+        return {}
+    try:
+        return json.loads(_FILE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _write_file(data: dict) -> None:
+    _FILE.parent.mkdir(exist_ok=True)
+    _FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _keys_list_from(d: dict, provider: str) -> list[str]:
+    out: list[str] = []
+    prim = str((d.get("api_keys") or {}).get(provider) or "").strip()
+    if prim:
+        out.append(prim)
+    for k in (d.get("api_keys_extra") or {}).get(provider) or []:
+        s = str(k or "").strip()
+        if s:
+            out.append(s)
+    return out
+
+
+def _set_keys_list(d: dict, provider: str, keys: list[str]) -> None:
+    ak = d.setdefault("api_keys", {})
+    ex = d.setdefault("api_keys_extra", {})
+    keys = [str(k).strip() for k in keys if str(k).strip()]
+    if keys:
+        ak[provider] = keys[0]
+        if len(keys) > 1:
+            ex[provider] = keys[1:]
+        else:
+            ex.pop(provider, None)
+    else:
+        ak.pop(provider, None)
+        ex.pop(provider, None)
+    if provider == "gemini":
+        if ak.get("gemini"):
+            d["gemini_api_key"] = ak["gemini"]
+        else:
+            d.pop("gemini_api_key", None)
+
+
+def keys_for(provider: str) -> list[str]:
+    """Todas las claves de un proveedor (primaria + extra), en orden de uso."""
+    kid = str(provider or "").strip()
+    return _keys_list_from(load(), kid) if kid else []
+
+
+def key_count(provider: str) -> int:
+    return len(keys_for(provider))
+
+
+def add_key(provider: str, value: str) -> int:
+    """Añade una clave (a la primaria si no hay, si no como extra). Devuelve el total."""
+    kid = str(provider or "").strip()
+    val = str(value or "").strip()
+    if not kid:
+        raise ValueError("Proveedor vacío.")
+    if not val:
+        raise ValueError("La API key está vacía.")
+    with _lock:
+        d = _read_file()
+        keys = _keys_list_from(d, kid)
+        keys.append(val)
+        _set_keys_list(d, kid, keys)
+        _write_file(d)
+        return len(keys)
+
+
+def set_key(provider: str, index: int, value: str) -> int:
+    kid = str(provider or "").strip()
+    val = str(value or "").strip()
+    if not val:
+        raise ValueError("La API key está vacía.")
+    with _lock:
+        d = _read_file()
+        keys = _keys_list_from(d, kid)
+        if 0 <= index < len(keys):
+            keys[index] = val
+        else:
+            keys.append(val)
+        _set_keys_list(d, kid, keys)
+        _write_file(d)
+        return len(keys)
+
+
+def remove_key(provider: str, index: int) -> int:
+    kid = str(provider or "").strip()
+    with _lock:
+        d = _read_file()
+        keys = _keys_list_from(d, kid)
+        if 0 <= index < len(keys):
+            keys.pop(index)
+        _set_keys_list(d, kid, keys)
+        _write_file(d)
+        return len(keys)
+
+
 def public() -> dict:
     """Ajustes para el frontend: no expone secretos de API."""
     data = dict(load())
     keys = _api_keys_map(data)
+    # Conteo de claves por proveedor (primaria + extra) SIN exponer valores.
+    providers = set(keys) | set((data.get("api_keys_extra") or {}).keys())
+    counts = {p: len(_keys_list_from(data, p)) for p in providers}
+    counts = {p: n for p, n in counts.items() if n > 0}
     data.pop("gemini_api_key", None)
+    data.pop("api_keys_extra", None)   # nunca al frontend
     data["gemini_api_key_set"] = bool(keys.get("gemini"))
     data["api_keys"] = {k: True for k in keys}
+    data["api_keys_counts"] = counts
     from .export_settings import normalize as _export_norm
     from .transcribe_settings import public_view as _tx_public
     data["export"] = _export_norm(data.get("export"))

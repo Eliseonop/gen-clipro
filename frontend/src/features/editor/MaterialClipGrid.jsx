@@ -19,6 +19,7 @@ export function bustUrl(url, item) {
 export function dragPayload(assetKind, item) {
   const fromLibrary = item?.scope === 'library' || String(item?.id || '').startsWith('lib_')
   const isImage = assetKind === 'images'
+  const animatedGif = isImage && !!item.animated
   return JSON.stringify({
     asset_kind: assetKind,
     asset_id: fromLibrary
@@ -28,9 +29,11 @@ export function dragPayload(assetKind, item) {
     name: item.label || item.name || item.filename,
     url: item.url,
     duration: isImage
-      ? IMAGE_DEFAULT_DUR
+      ? (animatedGif && Number(item.duration) > 0 ? Number(item.duration) : IMAGE_DEFAULT_DUR)
       : (assetKind === 'clips' ? ((item.end ?? item.duration ?? 0) - (item.start ?? 0)) : (item.duration || 0)),
     kind: isImage ? 'image' : (assetKind === 'clips' ? 'video' : 'audio'),
+    animated: animatedGif || undefined,
+    loop: animatedGif ? item.loop !== false : undefined,
     reframe: item.reframe || null,
     scope: fromLibrary ? 'library' : 'project',
     description: item.description || item.text || null,
@@ -169,6 +172,8 @@ export function ImageCard({
   const title = image.label || image.name || image.filename || 'Imagen'
   const desc = (image.description || '').trim()
   const dim = image.width && image.height ? `${image.width}×${image.height}` : ''
+  const isGif = !!image.animated || /\.gif($|\?|#)/i.test(image.filename || image.url || '')
+  const gifDur = isGif && Number(image.duration) > 0 ? Number(image.duration) : IMAGE_DEFAULT_DUR
   const savedDesc = image.description || ''
   const [draft, setDraft] = useState(savedDesc)
   const [editing, setEditing] = useState(false)
@@ -204,7 +209,7 @@ export function ImageCard({
       onContextMenu={onMenu ? (e) => openCardMenu(e, onMenu) : undefined}
       onDragStart={draggable && !editing ? (e) => {
         e.dataTransfer.setData('application/x-material', dragPayload('images', image))
-        di?.({ kind: 'image', duration: IMAGE_DEFAULT_DUR, name: title })
+        di?.({ kind: 'image', duration: gifDur, name: title })
       } : undefined}
       onDragEnd={draggable ? () => di?.(null) : undefined}
     >
@@ -225,6 +230,7 @@ export function ImageCard({
           </button>
         )}
         {onMenu && <MaterialMenuBtn onOpen={(e) => openCardMenu(e, onMenu)} />}
+        {isGif ? <span className="ed-card-gif" title="GIF animado">GIF</span> : null}
         {dim ? <span className="ed-card-dur">{dim}</span> : null}
       </div>
       <div className="ed-card-name" title={title}>{title}</div>

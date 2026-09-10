@@ -581,6 +581,44 @@ export function displayTracks(tracks) {
   return [...txt.slice().reverse(), ...vids.slice().reverse(), ...auds]
 }
 
+// --- Motion Studio: capas de una composición ↔ pistas/clips del timeline real ---
+// Cada capa se representa como un clip de duración generada (text o shape), una
+// pista por capa, para reutilizar EdTimeline tal cual (arrastrar=start, trim=fin).
+export function motionLayersToTimeline(comp) {
+  const dur = Math.max(0.1, comp?.duration || 4)
+  const layers = comp?.layers || []
+  const tracks = []
+  const clips = []
+  layers.forEach((l) => {
+    const isText = l.type === 'text'
+    const trackId = `mt_${l.id}`
+    const kind = isText ? 'text' : 'video'
+    const start = Math.max(0, l.start || 0)
+    const end = l.end != null ? l.end : dur
+    const span = +Math.max(0.1, end - start).toFixed(3)
+    const label = isText ? (l.content || 'Texto').slice(0, 22) : (l.shape?.kind || 'forma')
+    tracks.push({ id: trackId, kind, name: label, muted: false, hidden: false, locked: false })
+    clips.push({
+      id: l.id, track_id: trackId, kind: isText ? 'text' : 'shape',
+      asset_kind: isText ? 'text' : 'shape', asset_id: l.id, filename: '', name: label,
+      start: +start.toFixed(3), in_point: 0, out_point: span, source_duration: +Math.max(span, dur).toFixed(3),
+      volume: 1, muted: false, speed: 1, keep_pitch: true, reverse: false, speed_curve: null,
+      reframe: null, effects: {}, audio_fx: {}, description: null, dup_of: null, motion: true,
+      ...(isText
+        ? { text: l.content || '', style: {}, words: [], text_role: 'free' }
+        : { shape: { type: l.shape?.kind === 'line' ? 'line' : (l.shape?.kind || 'rect') } }),
+    })
+  })
+  return { tracks, clips }
+}
+
+// Tiempos {start, end} de una capa a partir de su clip (para sincronizar al mover/estirar).
+export function motionClipTiming(clip) {
+  const start = Math.max(0, clip?.start || 0)
+  const span = Math.max(0.1, (clip?.out_point || 0) - (clip?.in_point || 0))
+  return { start: +start.toFixed(3), end: +(start + span).toFixed(3) }
+}
+
 // --- Formatos de salida disponibles ---
 export const FORMATS = [
   { id: '9:16', w: 720, h: 1280 },
@@ -644,7 +682,10 @@ export function makeClip(assetKind, item, trackId, start, dur) {
   const fromLibrary = item?.scope === 'library' || String(item?.id || '').startsWith('lib_')
   const visual = kind === 'video' || kind === 'image'
   const fromLib = kind === 'video' && isMasterReframe(item.reframe)
-  const defaultDur = kind === 'image' ? IMAGE_DEFAULT_DUR : 1
+  // GIF animado: la duración inicial es la del propio gif; PNG/JPG usan el default.
+  const animatedGif = kind === 'image' && !!item.animated
+  const gifDur = animatedGif && Number(item.duration) > 0 ? Number(item.duration) : 0
+  const defaultDur = kind === 'image' ? (gifDur || IMAGE_DEFAULT_DUR) : 1
   const span = +Math.max(0.3, dur || defaultDur).toFixed(3)
   return {
     id: uid('c'),
@@ -673,6 +714,7 @@ export function makeClip(assetKind, item, trackId, start, dur) {
       : null,
     layout: visual ? 'fill' : undefined,
     frame: visual ? 'full' : undefined,
+    ...(animatedGif ? { loop: item.loop !== false } : {}),
     appear: 'none',
     exit: 'none',
     look: 'none',

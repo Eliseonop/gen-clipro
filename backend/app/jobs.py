@@ -475,6 +475,18 @@ def _run_export(job_id: str, pid: str, timeline_dict: dict) -> None:
         except OSError as exc:
             log.warning("No se pudo guardar la timeline antes de exportar: %s", exc)
 
+        # Motion graphics: asegurar el asset (WebM con alfa) antes de componer.
+        motion_ids = {c.composition_id or c.asset_id for c in timeline.clips
+                      if getattr(c, "kind", None) == "motion"}
+        if motion_ids:
+            from .motion import service as motion_service
+            for i, cid in enumerate(sorted(m for m in motion_ids if m)):
+                try:
+                    motion_service.render_composition(pid, cid,
+                                                      lambda f, m: on_progress(0.02 + 0.08 * f, m))
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("No se pudo renderizar el motion graphic %s: %s", cid, exc)
+
         base = storage.ensure_dirs(storage.project_base(project))
         exports = base / "exports"
         exports.mkdir(parents=True, exist_ok=True)
@@ -496,6 +508,92 @@ def _run_export(job_id: str, pid: str, timeline_dict: dict) -> None:
 
 def start_export_job(job: Job, pid: str, timeline_dict: dict) -> None:
     thread = threading.Thread(target=_run_export, args=(job.id, pid, timeline_dict), daemon=True)
+    thread.start()
+
+
+# --- Motion Studio -------------------------------------------------------
+
+def _run_motion_render(job_id: str, pid: str, cid: str) -> None:
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+
+    def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from .motion import service as motion_service
+        motion_service.render_composition(pid, cid, on_progress)
+        job.progress = 1.0
+        job.message = "Motion graphic renderizado."
+        job.status = JobStatus.done
+    except Exception as exc:  # noqa: BLE001
+        job.status = JobStatus.error
+        job.error = str(exc)
+        job.message = "Error renderizando el motion graphic."
+
+
+def start_motion_render_job(job: Job, pid: str, cid: str) -> None:
+    thread = threading.Thread(target=_run_motion_render, args=(job.id, pid, cid), daemon=True)
+    thread.start()
+
+
+def _run_motion_add(job_id: str, pid: str, cid: str, track_id, start: float) -> None:
+    """Renderiza la composición y la inserta en la timeline como clip 'motion'."""
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+
+    def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
+        job.progress = round(frac * 0.9, 3)
+        job.message = message
+
+    try:
+        from . import timeline_store
+        from .clip_kind import track_kind_for_clip
+        from .motion import service as motion_service
+
+        comp = motion_service.get_composition(pid, cid)
+        if comp is None:
+            raise RuntimeError("Composición no encontrada.")
+        asset = motion_service.render_composition(pid, cid, on_progress)
+
+        tid = track_id
+        if not tid:
+            proj = projects.get_project(pid)
+            tl = getattr(proj, "timeline", None)
+            existing = next((t for t in (tl.tracks if tl else []) if t.kind == "video"), None)
+            if existing is None:
+                tr = timeline_store.apply_op(pid, "add_track", {"kind": track_kind_for_clip("motion")})
+                tid = tr["changed"][0]
+            else:
+                tid = existing.id
+
+        clip = {
+            "track_id": tid, "kind": "motion", "asset_kind": "motion",
+            "asset_id": cid, "composition_id": cid,
+            "filename": asset.name, "name": comp.name,
+            "start": float(start), "in_point": 0.0,
+            "out_point": round(float(comp.duration), 3),
+            "source_duration": round(float(comp.duration), 3),
+            "layout": "overlay",
+            "transform": {"x": 0.5, "y": 0.5, "scale": 1.0, "rotation": 0.0},
+        }
+        timeline_store.apply_op(pid, "add_clip", {"clip": clip})
+        job.progress = 1.0
+        job.message = "Motion graphic añadido a la timeline."
+        job.status = JobStatus.done
+    except Exception as exc:  # noqa: BLE001
+        job.status = JobStatus.error
+        job.error = str(exc)
+        job.message = "Error añadiendo el motion graphic a la timeline."
+
+
+def start_motion_add_job(job: Job, pid: str, cid: str, track_id, start: float) -> None:
+    thread = threading.Thread(target=_run_motion_add, args=(job.id, pid, cid, track_id, start), daemon=True)
     thread.start()
 
 

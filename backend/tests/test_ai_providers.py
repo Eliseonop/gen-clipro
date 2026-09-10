@@ -46,6 +46,40 @@ class ProviderSelectionTest(unittest.TestCase):
         p = providers.get_provider()
         self.assertIsNotNone(p.unavailable_reason())
 
+    def test_free_openai_compatible_providers_registered(self):
+        # Groq / Cerebras / Mistral / Hugging Face: OpenAI-compatibles con base_url propio.
+        for prov, host in (("groq", "groq.com"), ("cerebras", "cerebras.ai"),
+                           ("mistral", "mistral.ai"), ("huggingface", "huggingface.co")):
+            self.assertIn(prov, providers.OPENAI_COMPATIBLE)
+            spec = providers.OPENAI_COMPATIBLE[prov]
+            self.assertIn(host, spec["base_url"])
+            self.assertTrue(spec["default_model"])
+            self.assertEqual(spec["key"], prov)
+
+    def test_free_provider_needs_key(self):
+        for prov in ("groq", "cerebras", "mistral", "huggingface"):
+            settings.save({"ai": {"provider": prov}})
+            p = providers.get_provider()
+            self.assertIsInstance(p, providers.OpenAICompatibleProvider)
+            self.assertIn("key", (p.unavailable_reason() or "").lower())
+
+    def test_cloud_provider_ignores_stale_local_base_url(self):
+        # Un base_url local guardado (p.ej. de LM Studio) NO debe pisar la URL
+        # oficial de un proveedor cloud como OpenRouter (regresión).
+        settings.save({"api_keys": {"openrouter": "sk-or-x"},
+                       "ai": {"provider": "openrouter", "model": "openrouter/free",
+                              "base_url": "http://localhost:1234"}})
+        cfg = providers.ai_config()
+        self.assertIsNone(cfg["base_url"])
+        p = providers.get_provider()
+        self.assertEqual(p._base_url, "https://openrouter.ai/api/v1")
+
+    def test_free_provider_available_with_key(self):
+        settings.save({"api_keys": {"groq": "gsk_x"}, "ai": {"provider": "groq"}})
+        p = providers.get_provider()
+        self.assertEqual(p._base_url, "https://api.groq.com/openai/v1")
+        self.assertIsNone(p.unavailable_reason())   # key + openai instalado
+
     def test_lmstudio_local_no_key_needed(self):
         settings.save({"ai": {"provider": "lmstudio", "model": "qwen2.5-7b-instruct",
                               "base_url": "http://localhost:4321/v1"}})
