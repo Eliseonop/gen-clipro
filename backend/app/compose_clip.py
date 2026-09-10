@@ -109,7 +109,8 @@ def generate_composition(
             dur = max(0.1, layer.end - layer.start)
             cmd += ["-ss", str(layer.start), "-t", str(dur), "-i", str(src)]
         cmd += [
-            "-filter_complex", filt,
+            # Filtro por archivo si es grande: evita WinError 206 en Windows.
+            *clipper._vf_args(filt, tmp_dir, True),
             "-map", "[vout]",
             "-map", "0:a?",
             "-t", f"{out_dur:.3f}",
@@ -126,7 +127,7 @@ def generate_composition(
                 dur = max(0.1, layer.end - layer.start)
                 cmd_no_a += ["-ss", str(layer.start), "-t", str(dur), "-i", str(src)]
             cmd_no_a += [
-                "-filter_complex", filt,
+                *clipper._vf_args(filt, tmp_dir, True),
                 "-map", "[vout]",
                 "-t", f"{out_dur:.3f}",
                 "-c:v", "libx264",

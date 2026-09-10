@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { clipFxAt, effectsCss, FX_DUR, lookCss } from './clipFx.js'
+import { clipFxAt, effectsCss, FX_DUR, lookCss, typingReveal } from './clipFx.js'
 
 const dur = 4
 const mid = { appear: 'none', exit: 'none', look: 'none' }
@@ -78,5 +78,15 @@ assert.equal(effectsCss({ look: 'none', effects: {} }), 'none')
 assert.match(lookCss('bw'), /grayscale/)
 assert.equal(lookCss('none'), 'none')
 assert.match(clipFxAt({ look: 'bw' }, 1, dur).cssFilter, /grayscale/)
+
+// Typing: revela caracteres de izquierda a derecha; no muta el original.
+assert.equal(typingReveal('Hola mundo', 0), '')
+assert.equal(typingReveal('Hola mundo', 1), 'Hola mundo')
+assert.equal(typingReveal('Hola mundo', 0.5), 'Hola ')     // ceil(0.5*10)=5
+assert.equal(typingReveal('Hi', 0.01), 'H')                // 1er carácter en cuanto arranca
+assert.equal(typingReveal('', 0.5), '')                     // texto vacío
+assert.equal(typingReveal('abc', 2), 'abc')                 // p fuera de rango se satura
+// Textos cortos y largos completan al final (p=1)
+assert.equal(typingReveal('a'.repeat(120), 1).length, 120)
 
 console.log('clipFx ok')

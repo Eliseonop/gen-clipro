@@ -3,7 +3,7 @@
 // x/y son el centro del texto en coordenadas normalizadas (0-1) de la salida.
 
 import { clipPose } from './clipAnim.js'
-import { clipFxAt } from './clipFx.js'
+import { clipFxAt, typingReveal } from './clipFx.js'
 import { activeWordIndex, activeWordIndexFromWords, applyThemeToStyle, hasWordFx, karaokeOn, styleOpacity, wordOpacity } from './textKaraoke.js'
 import { themeById } from './subtitleThemes.js'
 import { keyframesEnabled } from './clipKeyframes.js'
@@ -199,7 +199,11 @@ export function drawTextClip(ctx, clip, cw, ch, opts = {}) {
   const dur = Math.max(0.01, (clip.out_point ?? 0) - (clip.in_point ?? 0))
   const motionOff = opts.reduceMotion ?? reduceMotionOn()
   const skipBlock = motionOff || opts.selected
-  const karaoke = karaokeOn(st)
+  // "Typing": revela el texto carácter a carácter durante todo el clip. Al
+  // estar seleccionado o con reduce-motion se muestra completo (skipBlock).
+  const typing = st.block_appear === 'typing' && !skipBlock
+  const shownText = typing ? typingReveal(clip.text || '', Math.max(0, localT) / dur) : (clip.text || '')
+  const karaoke = karaokeOn(st) && !typing
 
   ctx.save()
   ctx.globalAlpha *= styleOpacity(st)
@@ -208,7 +212,7 @@ export function drawTextClip(ctx, clip, cw, ch, opts = {}) {
 
   const boxW = clampN(st.w ?? 0.8, 0.1, 1) * cw
   const maxW = boxW - size * 0.4
-  const rows = wrapWordRows(ctx, clip.text || '', maxW)
+  const rows = wrapWordRows(ctx, shownText, maxW)
   const lineH = size * 1.22
   const blockH = Math.max(lineH, rows.length * lineH)
   const cx = (st.x ?? 0.5) * cw

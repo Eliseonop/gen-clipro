@@ -251,10 +251,13 @@ _CMD_FILTER_LIMIT = 6000
 
 def _vf_args(filt_str: str, tmp_dir: Path, complex_graph: bool) -> list[str]:
     """-vf / -filter_complex, o un archivo de script si el filtro no cabe en argv."""
+    # ``-/OPCION ARCHIVO`` lee el valor de un archivo (FFmpeg 6.1+). Los antiguos
+    # ``-filter_complex_script`` / ``-filter_script:v`` se eliminaron en FFmpeg 8.0
+    # ("Error splitting the argument list: Option not found").
     if complex_graph:
-        flag, script_flag = "-filter_complex", "-filter_complex_script"
+        flag, script_flag = "-filter_complex", "-/filter_complex"
     else:
-        flag, script_flag = "-vf", "-filter_script:v"
+        flag, script_flag = "-vf", "-/vf"
     if len(filt_str) < _CMD_FILTER_LIMIT:
         return [flag, filt_str]
     tmp_dir.mkdir(parents=True, exist_ok=True)
