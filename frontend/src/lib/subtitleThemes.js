@@ -180,4 +180,5 @@ export const BLOCK_APPEAR_OPTIONS = [
   { value: 'fade', label: 'Fade' },
   { value: 'pop', label: 'Pop' },
   { value: 'slide_up', label: 'Slide up' },
+  { value: 'typing', label: 'Escritura' },
 ]

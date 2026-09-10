@@ -44,6 +44,36 @@ class TextAssTest(unittest.TestCase):
         self.assertIn("\\pos(", lines[1])
         self.assertTrue(any("Dialogue:" in ln for ln in lines))
 
+    def test_typing_revela_progresivamente(self):
+        # "typing" emite un evento por paso; el primero muestra el prefijo y el
+        # último el texto completo. La velocidad se reparte por la duración.
+        clip = TimelineClip(
+            id="c1", track_id="T1", kind="text", asset_kind="text", asset_id="t1",
+            filename="", start=0.0, in_point=0.0, out_point=2.0, source_duration=2.0,
+            text="Hola mundo",
+            style={"block_appear": "typing", "color": "#ffffff"},
+        )
+        lines = caption_dialogues(clip, 720, 1280)
+        # 10 caracteres, 2 s → min(10, 60) = 10 pasos
+        self.assertEqual(len(lines), 10)
+        self.assertTrue(lines[0].rstrip().endswith("H"))
+        self.assertTrue(lines[-1].rstrip().endswith("Hola mundo"))
+        self.assertIn("\\pos(", lines[0])
+        # Cada evento posterior no acorta el texto revelado.
+        self.assertIn("0:00:00.00", lines[0])
+        self.assertIn("0:00:02.00", lines[-1])
+
+    def test_typing_ignora_karaoke(self):
+        # typing tiene prioridad: no genera un evento por palabra de karaoke.
+        clip = TimelineClip(
+            id="c1", track_id="T1", kind="text", asset_kind="text", asset_id="t1",
+            filename="", start=0.0, in_point=0.0, out_point=1.0, source_duration=1.0,
+            text="uno dos tres",
+            style={"block_appear": "typing", "word_fx": "glow"},
+        )
+        lines = caption_dialogues(clip, 720, 1280)
+        self.assertTrue(lines[-1].rstrip().endswith("uno dos tres"))
+
     def test_build_ass_includes_playres(self):
         clip = TimelineClip(
             id="c1", track_id="T1", kind="text", asset_kind="text", asset_id="t1",

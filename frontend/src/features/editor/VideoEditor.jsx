@@ -227,6 +227,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const selIdsRef = useRef(selClipIds); selIdsRef.current = selClipIds
   const selKfRef = useRef(selKfId); selKfRef.current = selKfId
   const pendingKfSel = useRef(null)
+  const clipClipboardRef = useRef(null)   // [{ clip, offset }] copiados con Ctrl+C
   const hiddenKfRef = useRef(hiddenKf); hiddenKfRef.current = hiddenKf
   const outRef = useRef({ w: outW, h: outH }); outRef.current = { w: outW, h: outH }
   const framingModeRef = useRef(null); framingModeRef.current = framingMode
@@ -804,6 +805,55 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setSelKfId(null)
   }
 
+  // Copiar (Ctrl+C) cualquier clip del timeline —audio, imagen, vídeo, texto o
+  // forma—. Guarda una instantánea y el desfase de cada uno respecto al primero,
+  // para pegar el grupo conservando su separación.
+  function copySelectedClips() {
+    const ids = selIdsRef.current || []
+    const chosen = clipsRef.current.filter((c) => ids.includes(c.id))
+    if (!chosen.length) return false
+    const base = Math.min(...chosen.map((c) => c.start || 0))
+    clipClipboardRef.current = chosen.map((c) => ({
+      clip: JSON.parse(JSON.stringify(c)),
+      offset: (c.start || 0) - base,
+    }))
+    setClipToast({ type: 'success', message: chosen.length > 1 ? `${chosen.length} clips copiados` : 'Clip copiado' })
+    return true
+  }
+  // Pegar (Ctrl+V) donde está el cabezal (la línea roja). El primer clip queda
+  // en el cabezal y el resto conserva su separación original. Mantiene la pista
+  // de origen si sigue existiendo; si no, busca una compatible.
+  function pasteClips() {
+    const buf = clipClipboardRef.current
+    if (!buf?.length) return false
+    const at = Math.max(0, playheadRef.current || 0)
+    const tracks = tracksRef.current
+    const fresh = []
+    const ids = []
+    for (const { clip, offset } of buf) {
+      let trackId = clip.track_id
+      if (!tracks.some((t) => t.id === trackId)) {
+        const kind = trackKindForClip(clip.kind)
+        const fallback = tracks.find((t) => t.kind === kind && !t.locked)
+        if (!fallback) continue
+        trackId = fallback.id
+      }
+      const copy = duplicateClipOntoTrack(clip, trackId, uid('c'))
+      copy.start = +(at + offset).toFixed(3)
+      fresh.push(copy)
+      ids.push(copy.id)
+    }
+    if (!fresh.length) return false
+    setClips((prev) => [...prev, ...fresh])
+    const anchor = ids[ids.length - 1]
+    setSelClipIds(ids)
+    setSelClipId(anchor)
+    selIdsRef.current = ids
+    selRef.current = anchor
+    setSelKfId(null)
+    return true
+  }
+
   async function startFaceTrack(mode) {
     if (faceJob && faceJob.status !== 'done' && faceJob.status !== 'error') return
     const url = (clipMeta.url || '').trim()
@@ -897,11 +947,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   }
 
   function addAsset(assetKind, item) {
+    // El material se agrega justo donde está el cabezal (la línea roja), no al
+    // final de la pista.
+    const at = Math.max(0, playheadRef.current || 0)
     if (assetKind === 'shape') {
       const track = targetTrackFor('video')
       if (!track) return
-      const trackEnd = clips.filter((c) => c.track_id === track.id).reduce((m, c) => Math.max(m, clipEnd(c)), 0)
-      const clip = makeShapeClip(track.id, trackEnd, SHAPE_DEFAULT_DUR, item)
+      const clip = makeShapeClip(track.id, at, SHAPE_DEFAULT_DUR, item)
       setClips((prev) => [...prev, clip])
       setSelClipId(clip.id)
       setSelClipIds([clip.id])
@@ -915,8 +967,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       : assetKind === 'clips'
         ? ((item.end ?? item.duration ?? 0) - (item.start ?? 0))
         : (item.duration || 0)
-    const trackEnd = clips.filter((c) => c.track_id === track.id).reduce((m, c) => Math.max(m, clipEnd(c)), 0)
-    const clip = flagBaseFit(makeClip(assetKind, item, track.id, trackEnd, dur))
+    const clip = flagBaseFit(makeClip(assetKind, item, track.id, at, dur))
     setClips((prev) => [...prev, clip])
     setSelClipId(clip.id)
     setSelClipIds([clip.id])
@@ -1157,6 +1208,23 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     selRef.current = null
     setSelKfId(null)
     setCropMode(false)
+  }
+  // Selección múltiple desde el rectángulo del timeline. Fija el conjunto de ids
+  // (ya unido con la selección previa si fue aditiva) y usa el último como ancla,
+  // para que las ops existentes (mover/eliminar grupo) y Shift funcionen igual
+  // que con la selección por clic.
+  function selectClipIds(ids) {
+    const arr = (ids || []).filter((id) => clipsRef.current.some((c) => c.id === id))
+    const anchor = arr.length ? arr[arr.length - 1] : null
+    setSelClipIds(arr)
+    setSelClipId(anchor)
+    selIdsRef.current = arr
+    selRef.current = anchor
+    setSelKfId(null)
+    setCropMode(false)
+    setFramingMode(null)
+    const last = anchor ? clipsRef.current.find((c) => c.id === anchor) : null
+    if (last?.track_id) setSelTrackId(last.track_id)
   }
   function matchSelectedDurations() {
     const ids = selIdsRef.current
@@ -1878,6 +1946,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         } else if (k === 'y') {
           e.preventDefault()
           applyHistSnap(histRef.current.redo())
+        } else if (k === 'c') {
+          if (selIdsRef.current.length && copySelectedClips()) e.preventDefault()
+        } else if (k === 'x') {
+          if (selIdsRef.current.length && copySelectedClips()) { e.preventDefault(); deleteClip(selIdsRef.current[0]) }
+        } else if (k === 'v') {
+          if (pasteClips()) e.preventDefault()
         }
         return
       }
@@ -2315,6 +2389,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onSeek={seek}
           onScrub={scrub}
           onSelectClip={mainColTab === 'motion' ? ((clip) => motion.setSelLayerId(clip.id)) : handleSelectClip}
+          onMarqueeSelect={mainColTab === 'motion' ? undefined : selectClipIds}
           onSelectTrack={selectTrack}
           onDoubleClip={(clip) => {
             if (clip.kind === 'motion' && (clip.composition_id || clip.asset_id)) {

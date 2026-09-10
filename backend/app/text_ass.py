@@ -6,9 +6,14 @@ partes iguales (fallback retrocompatible).
 """
 from __future__ import annotations
 
+import math
 from typing import Iterable
 
 from .schemas import TimelineClip
+
+# Nº máximo de eventos ASS que genera la aparición "typing" por clip. Acota el
+# tamaño del .ass en textos largos revelando varios caracteres por paso.
+_TYPING_MAX_STEPS = 240
 
 _FX_NONE = "none"
 _KNOWN_FX = ("highlight", "glow", "pop")
@@ -330,11 +335,51 @@ def word_windows(clip: TimelineClip) -> list[tuple[float, float]]:
     return [(start + i * slot, start + (i + 1) * slot) for i in range(n)]
 
 
+def _typing_text(text: str, p: float) -> str:
+    """Prefijo visible del texto según el progreso ``p`` (0-1). Espejo de
+    ``typingReveal`` en frontend/src/lib/clipFx.js (mismo recorte char-a-char)."""
+    chars = list(text or "")
+    if not chars:
+        return ""
+    k = math.ceil(_clamp01(p) * len(chars))
+    return "".join(chars[:k])
+
+
+def _typing_dialogues(clip: TimelineClip, W: int, H: int, st: dict) -> list[str]:
+    """Aparición "typing": revela el texto de izquierda a derecha durante todo
+    el clip. Un evento ASS por paso, cada uno mostrando el prefijo visible; el
+    último completa el texto. La velocidad se adapta a la duración y al nº de
+    caracteres, igual que el preview."""
+    text = clip.text or ""
+    chars = list(text)
+    n = len(chars)
+    dur = _clip_dur(clip)
+    if n == 0 or dur <= 0:
+        return []
+    start = max(0.0, float(clip.start or 0))
+    style_name = f"s{clip.id}"
+    prefix = _layout_prefix(st, W, H, True)
+    ov = _idle_override(st)
+    steps = min(n, max(1, int(round(dur * 30))), _TYPING_MAX_STEPS)
+    lines: list[str] = []
+    for i in range(steps):
+        t0 = start + dur * i / steps
+        t1 = start + dur * (i + 1) / steps
+        k = max(1, math.ceil((i + 1) / steps * n))
+        body = prefix + ov + _esc_ass("".join(chars[:k]))
+        lines.append(
+            f"Dialogue: 0,{ass_time(t0)},{ass_time(t1)},{style_name},,0,0,0,," + body
+        )
+    return lines
+
+
 def caption_dialogues(clip: TimelineClip, W: int, H: int, style: dict | None = None) -> list[str]:
     st = style if style is not None else (clip.style or {})
     words = split_words(clip.text or "")
     if not words:
         return []
+    if (st.get("block_appear") or _FX_NONE) == "typing":
+        return _typing_dialogues(clip, W, H, st)
     dur = _clip_dur(clip)
     start = max(0.0, float(clip.start or 0))
     fx = word_fx_set(st)

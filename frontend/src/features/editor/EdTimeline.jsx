@@ -130,7 +130,7 @@ export default function EdTimeline({
   onDropAsset, onTrackToggle, onTrackCompact, onAddTrack, onAddTextTrack, onRenameTrack, onMoveKeyframe, onSelectKf, onAddKf, onDeleteKf, onContextClip, onContextTrack,
   onFaceTrack, faceTrackBusy, faceTrackDisabled,
   linkPick, onPickLinkTrack, onCancelLinkPick, onCopyDesc, audioMaterials,
-  mcpBusyIds,
+  mcpBusyIds, onMarqueeSelect,
 }) {
   const lanesRef = useRef(null)
   const bodyRef = useRef(null)
@@ -142,6 +142,7 @@ export default function EdTimeline({
   const [alignTimes, setAlignTimes] = useState(null) // number[] mientras se mueve/recorta
   const [scrollX, setScrollX] = useState(0)
   const [viewW, setViewW] = useState(900)
+  const [marquee, setMarquee] = useState(null)   // { x, y, w, h } en coords del contenido
   const rulerStep = tickStep(pps, fps, !!trimGuide)
   const rulerLong = duration >= 3600
 
@@ -402,6 +403,54 @@ export default function EdTimeline({
     onDropAsset(payload, track.id, xToTime(e.clientX))
   }
 
+  // Selección por área (rubber band estilo Windows). Arranca en un hueco de una
+  // pista, dibuja un rectángulo y selecciona todos los clips que intersecta —
+  // en cualquier pista. Ctrl/Cmd suma a la selección actual. Un clic sin
+  // arrastre limpia la selección (salvo con Ctrl). No interfiere con arrastres
+  // de clip/handle: esos hacen stopPropagation antes de llegar aquí.
+  function startMarquee(e) {
+    if (e.button !== 0 || linkPick || !onMarqueeSelect) return
+    const scroll = lanesRef.current
+    if (!scroll) return
+    e.preventDefault()
+    const additive = !!(e.ctrlKey || e.metaKey)
+    const baseIds = additive ? [...selectedIds] : []
+    const rect = scroll.getBoundingClientRect()
+    const ox = e.clientX
+    const oy = e.clientY
+    let moved = false
+    const apply = (curX, curY) => {
+      const left = Math.min(ox, curX), right = Math.max(ox, curX)
+      const top = Math.min(oy, curY), bottom = Math.max(oy, curY)
+      setMarquee({
+        x: left - rect.left + scroll.scrollLeft,
+        y: top - rect.top + scroll.scrollTop,
+        w: right - left,
+        h: bottom - top,
+      })
+      const hits = []
+      scroll.querySelectorAll('.ed-clip[data-clip-id]').forEach((el) => {
+        const r = el.getBoundingClientRect()
+        if (right < r.left || left > r.right || bottom < r.top || top > r.bottom) return
+        hits.push(el.getAttribute('data-clip-id'))
+      })
+      onMarqueeSelect(additive ? [...new Set([...baseIds, ...hits])] : hits)
+    }
+    const move = (ev) => {
+      if (!moved && Math.hypot(ev.clientX - ox, ev.clientY - oy) < 4) return
+      moved = true
+      apply(ev.clientX, ev.clientY)
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      setMarquee(null)
+      if (!moved && !additive) onMarqueeSelect([])   // clic en vacío: limpia
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
   return (
     <div className="ed-timeline-wrap" style={{ '--ed-row-h': `${rowH}px` }}>
       <div className="ed-tl-toolbar">
@@ -526,7 +575,10 @@ export default function EdTimeline({
                       return
                     }
                     onSelectTrack(t.id)
-                    if (e.target === e.currentTarget) setExpandedClusterId(null)
+                    if (e.target === e.currentTarget) {
+                      setExpandedClusterId(null)
+                      startMarquee(e)
+                    }
                   }}
                   onDragOver={(e) => onLaneDragOver(e, t)}
                   onDragLeave={() => setDropHint((h) => (h?.trackId === t.id ? null : h))}
@@ -568,6 +620,9 @@ export default function EdTimeline({
             {(alignTimes || []).map((t) => (
               <div key={t} className="ed-align-guide" style={{ left: t * pps }} aria-hidden="true" />
             ))}
+            {marquee && (
+              <div className="ed-marquee" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} aria-hidden="true" />
+            )}
             <div className="ed-playhead" style={{ left: playhead * pps }}><span className="ed-playhead-knob" /></div>
           </div>
         </div>
@@ -614,6 +669,7 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
     <div className={`ed-clip ${clip.kind} ${layout.variant !== 'solo' ? layout.variant : ''} ${selected ? 'sel' : ''} ${clip.muted ? 'muted' : ''} ${mcpBusy ? 'mcp-busy' : ''}`}
       style={{ left, width: w, top: layout.top, height: layout.height, zIndex: layout.z }}
       title={clip.name}
+      data-clip-id={clip.id}
       data-cluster-id={layout.clusterId || undefined}
       onPointerDown={(e) => onDown(e, 'move')}
       onContextMenu={onContext} onDoubleClick={onDouble}>

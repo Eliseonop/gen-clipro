@@ -158,9 +158,9 @@ def _rotate_chain(pose_rot: list[tuple[float, float]], local: bool = True) -> st
     rot = pose_rot[-1][1]
     if local and spread > 0.08:
         expr = clipper._pw_expr(pose_rot).replace(",", "\\,")
-        return f",rotate=a='({expr})*PI/180':ow=rotw(iw):oh=roth(ih):c=none@0x00000000"
+        return f",rotate=a='({expr})*PI/180':ow=rotw(iw):oh=roth(ih):c=0x00000000"
     if abs(rot) > 0.05:
-        return f",rotate={rot:.3f}*PI/180:ow=rotw(iw):oh=roth(ih):c=none@0x00000000"
+        return f",rotate={rot:.3f}*PI/180:ow=rotw(iw):oh=roth(ih):c=0x00000000"
     return ""
 
 
@@ -306,7 +306,7 @@ def _overlay_video_filter(path: Path, clip: TimelineClip, W: int, H: int, dur: f
     else:
         chain = f"{crop_f},scale={dw}:{dh}"
         if abs(rot) > 0.05:
-            chain += f",format=gbrap,rotate={rot:.3f}*PI/180:ow=rotw(iw):oh=roth(ih):c=none@0x00000000"
+            chain += f",format=gbrap,rotate={rot:.3f}*PI/180:ow=rotw(iw):oh=roth(ih):c=0x00000000"
             xy = f"x={ox}-(overlay_w-{dw})/2:y={oy}-(overlay_h-{dh})/2"
         else:
             xy = f"x={ox}:y={oy}"
@@ -809,6 +809,95 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
     return cmd
 
 
+# Umbral (caracteres del filtergraph) a partir del cual se usa un archivo de
+# script. Conservador: la línea de comandos de Windows corta ~32 KB e incluye
+# también los ``-i`` de cada clip. Mismo criterio que clipper._vf_args.
+_FILTER_SCRIPT_LIMIT = 6000
+
+
+def _filter_script_cmd(cmd: list[str], td: Path) -> list[str]:
+    """Evita ``[WinError 206]`` (la línea de comandos de Windows tiene un límite
+    de ~32 KB): cuando el filtergraph es grande —muchos clips, máscaras u
+    overlays— se escribe a un archivo y se pasa con ``-/filter_complex`` en vez
+    de inline. La semántica del filtergraph es idéntica, solo cambia cómo se
+    entrega a ffmpeg."""
+    try:
+        i = cmd.index("-filter_complex")
+    except ValueError:
+        return cmd
+    graph = cmd[i + 1]
+    if len(graph) < _FILTER_SCRIPT_LIMIT:
+        return cmd
+    td.mkdir(parents=True, exist_ok=True)
+    script = td / "filtergraph.txt"
+    script.write_text(graph, encoding="utf-8")
+    out = list(cmd)
+    # ``-/filter_complex ARCHIVO`` lee el filtro de un archivo (FFmpeg 6.1+). El
+    # antiguo ``-filter_complex_script`` se eliminó en FFmpeg 8.0 y provoca
+    # "Error splitting the argument list: Option not found".
+    out[i:i + 2] = ["-/filter_complex", str(script)]
+    return out
+
+
+def _hms_to_sec(ts: str) -> float | None:
+    """``HH:MM:SS.micro`` de ffmpeg -progress → segundos (o None si N/A)."""
+    ts = (ts or "").strip()
+    if not ts or ts == "N/A":
+        return None
+    try:
+        h, m, s = ts.split(":")
+        return int(h) * 3600 + int(m) * 60 + float(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def _last_t(cmd: list[str]) -> float:
+    """Duración de salida (último ``-t`` del comando) para calcular el progreso."""
+    for i in range(len(cmd) - 1, 0, -1):
+        if cmd[i - 1] == "-t":
+            try:
+                return float(cmd[i])
+            except ValueError:
+                return 0.0
+    return 0.0
+
+
+def _run_ffmpeg_export(cmd: list[str], total: float, on_progress: ProgressCb,
+                       err_path: Path) -> tuple[int, str]:
+    """Lanza ffmpeg leyendo su progreso real por stdout (``-progress pipe:1``) y
+    lo reporta entre 0.15 y 0.98, para que la barra avance en vez de quedarse
+    clavada en 15 %. stderr se vuelca a un archivo para el diagnóstico de error."""
+    full = list(cmd)
+    # Opciones globales tras 'ffmpeg': sin stdin interactivo, progreso a stdout,
+    # sin la tabla de stats por stderr (así stderr solo lleva logs/errores).
+    full[1:1] = ["-nostdin", "-progress", "pipe:1", "-nostats"]
+    with open(err_path, "w", encoding="utf-8", errors="replace") as errf:
+        proc = subprocess.Popen(
+            full, stdout=subprocess.PIPE, stderr=errf,
+            text=True, encoding="utf-8", errors="replace",
+        )
+        last = 0.15
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if line.startswith("out_time="):
+                    sec = _hms_to_sec(line.split("=", 1)[1])
+                    if sec is not None and total > 0:
+                        frac = 0.15 + 0.83 * min(1.0, sec / total)
+                        if frac >= last + 0.01:
+                            last = frac
+                            on_progress(round(frac, 3),
+                                        f"Renderizando… {int(sec)}s / {int(total)}s")
+        finally:
+            proc.wait()
+    err = ""
+    try:
+        err = err_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        pass
+    return proc.returncode, err
+
+
 def render(project: Project, timeline: Timeline, out_path: Path,
            on_progress: ProgressCb) -> Path:
     """Renderiza la timeline al archivo ``out_path`` y lo devuelve."""
@@ -829,14 +918,16 @@ def render(project: Project, timeline: Timeline, out_path: Path,
             timeline, Path(td) / "masks", W, H, int(timeline.fps or 30))
         cmd = build_command(project, timeline, out_path, ass_path=ass_path,
                             shape_files=shape_files, mask_files=mask_files)
+        cmd = _filter_script_cmd(cmd, Path(td))
         on_progress(0.15, "Renderizando el vídeo final con FFmpeg…")
         log.info("Export: %d clip(s), encoder=%s crf=%s → %s",
                  len(timeline.clips), gpu.selected_encoder(), config.VIDEO_CRF,
                  out_path.name)
         with timed("render FFmpeg (export)", log, clips=len(timeline.clips)):
-            proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(_ffmpeg_export_error(proc.stderr, proc.returncode))
+            returncode, stderr = _run_ffmpeg_export(
+                cmd, _last_t(cmd), on_progress, Path(td) / "ffmpeg-export.log")
+    if returncode != 0:
+        raise RuntimeError(_ffmpeg_export_error(stderr, returncode))
     if not out_path.exists():
         raise RuntimeError("La exportación no generó ningún archivo.")
     on_progress(1.0, "Vídeo final listo.")
