@@ -207,7 +207,9 @@ async def upload_images(project_id: str, files: list[UploadFile] = File(...)) ->
     for f in files:
         try:
             data = await f.read()
-            info = image_mod.import_image(proj, f.filename or "imagen.png", data)
+            # keep_gif: los GIF animados se conservan como .gif (no se aplanan a PNG);
+            # import_image solo lo aplica si el archivo es realmente un GIF.
+            info = image_mod.import_image(proj, f.filename or "imagen.png", data, keep_gif=True)
             saved.append(info.model_dump())
         except ValueError as exc:
             errors.append({"file": f.filename, "error": str(exc)})
@@ -495,6 +497,132 @@ def get_export(project_id: str, filename: str) -> FileResponse:
     if base not in target.parents or not target.exists():
         raise HTTPException(status_code=404, detail="Exportación no encontrada.")
     return FileResponse(str(target), media_type="video/mp4")
+
+
+# --- Motion Studio (motion graphics editables) --------------------------
+
+def _project_or_404(project_id: str) -> Project:
+    proj = projects.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    return proj
+
+
+@app.get("/api/projects/{project_id}/motion")
+def motion_list(project_id: str) -> dict:
+    from .motion import service as motion_service
+    _project_or_404(project_id)
+    return {"compositions": [c.model_dump() for c in motion_service.list_compositions(project_id)]}
+
+
+@app.get("/api/projects/{project_id}/motion/templates")
+def motion_templates(project_id: str) -> dict:
+    from .motion import templates as motion_templates
+    return {"templates": motion_templates.list_templates()}
+
+
+@app.post("/api/projects/{project_id}/motion")
+def motion_create(project_id: str, body: dict = Body(default={})) -> dict:
+    """Crea una composición: desde template (``template``+``params``) o desde un
+    ``composition`` JSON (p.ej. el que genera la IA). Devuelve la composición."""
+    from .motion import service as motion_service
+    from .motion import templates as motion_templates
+    from .motion.models import MotionComposition
+    from .motion.validator import MotionValidationError
+
+    _project_or_404(project_id)
+    body = body or {}
+    cid = motion_service.new_id()
+    try:
+        if body.get("template"):
+            comp = motion_templates.instantiate(body["template"], cid, body.get("params") or {})
+        elif body.get("composition"):
+            raw = dict(body["composition"])
+            raw["id"] = cid
+            comp = MotionComposition(**raw)
+        else:
+            comp = MotionComposition(id=cid, name=body.get("name") or "Motion Graphic",
+                                     width=int(body.get("width") or 1080),
+                                     height=int(body.get("height") or 1920),
+                                     fps=int(body.get("fps") or 30),
+                                     duration=float(body.get("duration") or 4.0))
+        saved = motion_service.save_composition(project_id, comp, bump=False)
+    except MotionValidationError as exc:
+        raise HTTPException(status_code=400, detail={"errors": exc.errors})
+    except (KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return saved.model_dump()
+
+
+@app.get("/api/projects/{project_id}/motion/{comp_id}")
+def motion_get(project_id: str, comp_id: str) -> dict:
+    from .motion import service as motion_service
+    comp = motion_service.get_composition(project_id, comp_id)
+    if comp is None:
+        raise HTTPException(status_code=404, detail="Composición no encontrada.")
+    return comp.model_dump()
+
+
+@app.put("/api/projects/{project_id}/motion/{comp_id}")
+def motion_update(project_id: str, comp_id: str, body: dict = Body(...)) -> dict:
+    from .motion import service as motion_service
+    from .motion.models import MotionComposition
+    from .motion.validator import MotionValidationError
+
+    _project_or_404(project_id)
+    raw = dict(body or {})
+    raw["id"] = comp_id
+    try:
+        comp = MotionComposition(**raw)
+        saved = motion_service.save_composition(project_id, comp, bump=True)
+    except MotionValidationError as exc:
+        raise HTTPException(status_code=400, detail={"errors": exc.errors})
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return saved.model_dump()
+
+
+@app.delete("/api/projects/{project_id}/motion/{comp_id}")
+def motion_delete(project_id: str, comp_id: str) -> dict:
+    from .motion import service as motion_service
+    ok = motion_service.delete_composition(project_id, comp_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Composición no encontrada.")
+    return {"ok": True}
+
+
+@app.get("/api/projects/{project_id}/motion/{comp_id}/preview.html")
+def motion_preview(project_id: str, comp_id: str) -> Response:
+    """HTML autocontenido de la composición (el frontend lo carga en un iframe)."""
+    from .motion import service as motion_service
+    html = motion_service.preview_html(project_id, comp_id)
+    if html is None:
+        raise HTTPException(status_code=404, detail="Composición no encontrada.")
+    return Response(content=html, media_type="text/html; charset=utf-8")
+
+
+@app.post("/api/projects/{project_id}/motion/{comp_id}/render", response_model=Job)
+def motion_render(project_id: str, comp_id: str) -> Job:
+    from .motion import service as motion_service
+    _project_or_404(project_id)
+    if motion_service.get_composition(project_id, comp_id) is None:
+        raise HTTPException(status_code=404, detail="Composición no encontrada.")
+    job = jobs.create_job()
+    jobs.start_motion_render_job(job, project_id, comp_id)
+    return job
+
+
+@app.post("/api/projects/{project_id}/motion/{comp_id}/add-to-timeline", response_model=Job)
+def motion_add_to_timeline(project_id: str, comp_id: str, body: dict = Body(default={})) -> Job:
+    from .motion import service as motion_service
+    _project_or_404(project_id)
+    if motion_service.get_composition(project_id, comp_id) is None:
+        raise HTTPException(status_code=404, detail="Composición no encontrada.")
+    body = body or {}
+    job = jobs.create_job()
+    jobs.start_motion_add_job(job, project_id, comp_id,
+                              body.get("track_id"), float(body.get("start") or 0.0))
+    return job
 
 
 # --- Sound Effects (biblioteca de SFX) ---------------------------------
@@ -791,6 +919,40 @@ def put_settings(data: dict) -> dict:
     return settings.public()
 
 
+@app.post("/api/settings/api-keys/test")
+def test_api_keys() -> dict:
+    """Prueba TODAS las claves registradas (primaria + extra). No expone valores."""
+    from . import keytest
+    return keytest.test_all()
+
+
+@app.post("/api/settings/api-keys/{provider}")
+def add_api_key(provider: str, body: dict = Body(...)) -> dict:
+    """Añade otra clave al proveedor (extra si ya hay primaria). Devuelve settings públicos."""
+    value = (body or {}).get("value") or ""
+    try:
+        settings.add_key(provider, value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return settings.public()
+
+
+@app.put("/api/settings/api-keys/{provider}/{index}")
+def set_api_key(provider: str, index: int, body: dict = Body(...)) -> dict:
+    value = (body or {}).get("value") or ""
+    try:
+        settings.set_key(provider, index, value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return settings.public()
+
+
+@app.delete("/api/settings/api-keys/{provider}/{index}")
+def delete_api_key(provider: str, index: int) -> dict:
+    settings.remove_key(provider, index)
+    return settings.public()
+
+
 # --- Chat IA (agente que opera el MCP existente) -----------------------
 
 @app.get("/api/ai/config")
@@ -804,6 +966,8 @@ def ai_config() -> dict:
     except Exception as exc:  # noqa: BLE001
         reason = str(exc)
     labels = {"openai": "OpenAI", "openrouter": "OpenRouter (modelos gratis)",
+              "groq": "Groq (gratis)", "cerebras": "Cerebras (gratis)",
+              "mistral": "Mistral (gratis)", "huggingface": "Hugging Face (gratis, limitado)",
               "lmstudio": "LM Studio (local)"}
     providers = [{"id": "gemini", "label": "Google Gemini",
                   "has_key": bool(gemini_tts.api_key()), "local": False,

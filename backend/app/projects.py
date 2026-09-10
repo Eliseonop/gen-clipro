@@ -278,6 +278,40 @@ def save_timeline(pid: str, timeline: dict) -> Project | None:
     return None
 
 
+def save_motion_composition(pid: str, comp: dict) -> Project | None:
+    """Inserta o actualiza (upsert por id) una composición de Motion Studio."""
+    cid = comp.get("id")
+    if not cid:
+        return None
+    with _lock:
+        data = _load()
+        for p in data["projects"]:
+            if p["id"] == pid:
+                comps = p.setdefault("motion_compositions", [])
+                idx = next((i for i, c in enumerate(comps) if c.get("id") == cid), None)
+                if idx is not None:
+                    comps[idx] = comp
+                else:
+                    comps.append(comp)
+                _save(data)
+                return _project_from_dict(p)
+    return None
+
+
+def delete_motion_composition(pid: str, cid: str) -> bool:
+    with _lock:
+        data = _load()
+        for p in data["projects"]:
+            if p["id"] == pid:
+                comps = p.get("motion_compositions") or []
+                new = [c for c in comps if c.get("id") != cid]
+                if len(new) != len(comps):
+                    p["motion_compositions"] = new
+                    _save(data)
+                    return True
+    return False
+
+
 def retarget_timeline_asset(
     pid: str, asset_kind: str, old_id: str, old_filename: str,
     new_id: str, new_filename: str,

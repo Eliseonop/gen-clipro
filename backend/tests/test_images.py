@@ -91,6 +91,31 @@ class FfmpegStillInputTest(unittest.TestCase):
         self.assertIn("-i", args)
         self.assertIn("a.png", args[-1])
 
+    def test_gif_input_no_usa_loop1_y_repite(self):
+        # Un GIF (animado) NO debe entrar por -loop 1 (rompe/congela el input en
+        # muchas builds); se lee con -ignore_loop 0 y se acota con -t.
+        from app.clip_kind import ffmpeg_input_args
+        clip = TimelineClip(
+            id="c1", track_id="V2", kind="image", asset_kind="images",
+            asset_id="i", filename="meme.gif", out_point=5.0, source_duration=5.0,
+        )
+        args = ffmpeg_input_args(clip, Path("meme.gif"), 30)
+        self.assertNotIn("-loop", args)
+        self.assertEqual(args[:2], ["-ignore_loop", "0"])
+        self.assertEqual(args[2:4], ["-t", "5.050"])
+        self.assertIn("meme.gif", args[-1])
+
+    def test_gif_loop_false_reproduce_una_vez(self):
+        from app.clip_kind import ffmpeg_input_args
+        clip = TimelineClip(
+            id="c1", track_id="V2", kind="image", asset_kind="images",
+            asset_id="i", filename="meme.gif", out_point=5.0, source_duration=5.0,
+            loop=False,
+        )
+        args = ffmpeg_input_args(clip, Path("meme.gif"), 30)
+        self.assertEqual(args[:2], ["-ignore_loop", "1"])
+        self.assertNotIn("-loop", args)
+
     def test_still_partido_trimea_desde_cero(self):
         from app.clip_kind import ffmpeg_input_args, ffmpeg_trim_window
         clip = TimelineClip(
@@ -221,6 +246,52 @@ class ImageImportTest(unittest.TestCase):
         self.assertTrue(info.filename.endswith(".png"))
         path = storage.resolve_media(proj, "image", info.filename)
         self.assertEqual(path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+
+
+def _mini_gif(frames=2, delay_cs=10, netscape_loop=0, transparent=False):
+    """GIF sintético válido en estructura de bloques (no en LZW) para probar el parser."""
+    b = bytearray(b"GIF89a")
+    b += (4).to_bytes(2, "little") + (3).to_bytes(2, "little")   # 4x3
+    b += bytes([0x80, 0x00, 0x00]) + b"\x00\x00\x00\xff\xff\xff"  # GCT de 2 colores
+    if netscape_loop is not None:
+        b += b"\x21\xff\x0bNETSCAPE2.0\x03\x01" + int(netscape_loop).to_bytes(2, "little") + b"\x00"
+    for _ in range(frames):
+        b += bytes([0x21, 0xf9, 0x04, 0x01 if transparent else 0x00])
+        b += int(delay_cs).to_bytes(2, "little") + b"\x00\x00"
+        b += bytes([0x2c]) + b"\x00\x00\x00\x00" + (4).to_bytes(2, "little") + (3).to_bytes(2, "little") + b"\x00"
+        b += bytes([0x02, 0x01, 0x4c, 0x00])                     # LZW min code + subbloque + terminador
+    b += b"\x3b"
+    return bytes(b)
+
+
+class ProbeGifTest(unittest.TestCase):
+    def test_animado_frames_duracion_loop(self):
+        from app.images import probe_gif
+        m = probe_gif(_mini_gif(frames=3, delay_cs=10, netscape_loop=0))
+        self.assertTrue(m["animated"])
+        self.assertEqual(m["frames"], 3)
+        self.assertAlmostEqual(m["duration"], 0.3, places=3)
+        self.assertEqual((m["width"], m["height"]), (4, 3))
+        self.assertTrue(m["loop"])
+        self.assertFalse(m["has_alpha"])
+
+    def test_transparencia_y_sin_loop_finito(self):
+        from app.images import probe_gif
+        m = probe_gif(_mini_gif(frames=2, netscape_loop=1, transparent=True))
+        self.assertTrue(m["has_alpha"])
+        self.assertFalse(m["loop"])            # NETSCAPE con contador finito → no repite
+
+    def test_estatico_un_frame(self):
+        from app.images import probe_gif
+        m = probe_gif(_mini_gif(frames=1, netscape_loop=None))
+        self.assertFalse(m["animated"])
+        self.assertEqual(m["frames"], 1)
+        self.assertFalse(m["loop"])
+
+    def test_no_es_gif(self):
+        from app.images import probe_gif
+        m = probe_gif(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+        self.assertFalse(m["animated"])
 
 
 class ImageFetchTest(unittest.TestCase):

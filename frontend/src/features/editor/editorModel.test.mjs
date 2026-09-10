@@ -443,6 +443,20 @@ const imgGrown = resizeGeneratedClip(img, 'trim-right', 3)
 assert.equal(imgGrown.out_point, 8)
 assert.ok(imgGrown.source_duration >= 8)
 
+// GIF animado: duración inicial = duración real del gif; loop persistido; extensible.
+const gif = makeClip('images', { id: 'g1', filename: 'meme.gif', animated: true, duration: 3.2, loop: true }, 'V2', 0)
+assert.equal(gif.kind, 'image')
+assert.equal(gif.out_point, 3.2)
+assert.equal(gif.source_duration, 3.2)
+assert.equal(gif.loop, true)
+const gifGrown = resizeGeneratedClip(gif, 'trim-right', 5)   // alargar más allá del gif → loop
+assert.equal(gifGrown.out_point, 8.2)
+assert.ok(gifGrown.source_duration >= 8.2)
+// GIF estático (no animado) mantiene el default de imagen.
+const staticGif = makeClip('images', { id: 'g2', filename: 'x.gif' }, 'V2', 0)
+assert.equal(staticGif.out_point, 5)
+assert.equal(staticGif.loop, undefined)
+
 console.log('image clip ok')
 
 assert.equal(isEditingExistingClip({ existingIndex: 12 }), true)

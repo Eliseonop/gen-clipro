@@ -63,6 +63,11 @@ export const saveLibraryItem = (params) => post('/api/library/save', params)
 export const unsaveLibraryItem = (id) => del(`/api/library/${id}`)
 export const getSettings = () => get('/api/settings')
 export const putSettings = (data) => put('/api/settings', data)
+// API keys: prueba todas, y gestión de varias claves por proveedor (por índice).
+export const testApiKeys = () => post('/api/settings/api-keys/test', {})
+export const addApiKey = (provider, value) => post(`/api/settings/api-keys/${provider}`, { value })
+export const setApiKeyAt = (provider, index, value) => put(`/api/settings/api-keys/${provider}/${index}`, { value })
+export const deleteApiKeyAt = (provider, index) => del(`/api/settings/api-keys/${provider}/${index}`)
 
 // --- Materiales (etiquetar / eliminar / manifest) ---
 export const uploadImages = (pid, files) => {
@@ -158,6 +163,19 @@ export async function aiChat({ projectId, message, conversationId, context, sign
     }
   }
 }
+
+// --- Motion Studio (motion graphics editables) ---
+export const listMotion = (pid) => get(`/api/projects/${pid}/motion`)
+export const listMotionTemplates = (pid) => get(`/api/projects/${pid}/motion/templates`)
+export const createMotion = (pid, body) => post(`/api/projects/${pid}/motion`, body || {})
+export const getMotion = (pid, cid) => get(`/api/projects/${pid}/motion/${cid}`)
+export const updateMotion = (pid, cid, composition) => put(`/api/projects/${pid}/motion/${cid}`, composition)
+export const deleteMotion = (pid, cid) => del(`/api/projects/${pid}/motion/${cid}`)
+export const motionPreviewUrl = (pid, cid, version) =>
+  `/api/projects/${pid}/motion/${cid}/preview.html${version != null ? `?v=${version}` : ''}`
+export const renderMotion = (pid, cid) => post(`/api/projects/${pid}/motion/${cid}/render`, {})
+export const addMotionToTimeline = (pid, cid, body) =>
+  post(`/api/projects/${pid}/motion/${cid}/add-to-timeline`, body || {})
 
 // --- Sound Effects ---
 export const listSfx = (q = '', category = '') =>

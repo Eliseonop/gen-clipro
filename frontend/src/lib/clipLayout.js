@@ -86,8 +86,9 @@ export function destRectOnFrame(transform, cropPx, outW, outH, frame) {
 
 export function mediaSize(el) {
   if (!el) return { w: 0, h: 0 }
-  const w = Number(el.videoWidth || el.naturalWidth || 0) || 0
-  const h = Number(el.videoHeight || el.naturalHeight || 0) || 0
+  // videoWidth (<video>), naturalWidth (<img>), width (<canvas>: fotograma de GIF).
+  const w = Number(el.videoWidth || el.naturalWidth || el.width || 0) || 0
+  const h = Number(el.videoHeight || el.naturalHeight || el.height || 0) || 0
   return { w, h }
 }
 

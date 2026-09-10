@@ -13,6 +13,7 @@ import EdShapes from './EdShapes'
 import EdChat from './EdChat'
 import EdExplore from './EdExplore'
 import AudioTab from '../audio/AudioTab'
+import MotionElements from '../motion/MotionElements'
 import ConfirmModal from '../../components/ConfirmModal'
 import AnchoredMenu from '../../components/AnchoredMenu'
 import { canDeleteMaterial, canDownloadMaterial, downloadMaterialFile, materialIdent, materialMenuItems, materialDeleteTitle, materialLabel } from './materialMenu'
@@ -62,9 +63,31 @@ function normalizeHistory(raw) {
   return raw.filter((x) => x && typeof x === 'object' && String(x.url || '').trim())
 }
 
-function hasOsImageDrag(e) {
+function hasOsFileDrag(e) {
   const types = [...(e.dataTransfer?.types || [])]
   return types.includes('Files') && !types.includes('application/x-material')
+}
+
+// Tipo de material arrastrado, por MIME. Durante el drag el navegador NO expone
+// nombres ni bytes (solo `items[].type`), así que la detección es best-effort:
+// si el MIME viene vacío devolvemos 'file' (neutro) y dejamos que el drop valide
+// por extensión. 'other' = MIME presente pero no es medio soportado.
+function dragMediaKind(e) {
+  const items = [...(e.dataTransfer?.items || [])].filter((it) => it.kind === 'file')
+  const mimes = items.map((it) => (it.type || '').toLowerCase())
+  if (mimes.some((m) => m.startsWith('video/'))) return 'video'
+  if (mimes.some((m) => m.startsWith('image/'))) return 'image'
+  if (mimes.some((m) => m.startsWith('audio/'))) return 'audio'
+  if (mimes.some((m) => m)) return 'other'
+  return 'file'
+}
+
+const DROP_HINT = {
+  video: 'Suelta el vídeo aquí',
+  image: 'Suelta la imagen aquí',
+  audio: 'Suelta el audio aquí',
+  file: 'Suelta el archivo aquí',
+  other: 'Formato no compatible',
 }
 
 function pickDefaultSfxCat(categories, current) {
@@ -254,6 +277,7 @@ const MAT_NAV = [
   { id: 'shapes', icon: 'category', label: 'Figuras' },
   { id: 'text', icon: 'title', label: 'Texto' },
   { id: 'transitions', icon: 'animation', label: 'Transiciones' },
+  { id: 'motion', icon: 'animation', label: 'Motion', sep: true },
   { id: 'settings', icon: 'settings', label: 'Configuración', sep: true },
   { id: 'chat', icon: 'forum', label: 'Chat IA' },
 ]
@@ -266,6 +290,7 @@ export default function EdMaterial({
   onExportFps,
   audioDb, onAudioDb,
   aiContext, onReloadTimeline, timelineClips, onMcpAudit,
+  motion, motionFormat, onGoMotion, onMotionBack,
 }) {
   const [tabState, setTabState] = useState('video')
   const tab = matTab ?? tabState
@@ -278,6 +303,7 @@ export default function EdMaterial({
   const [err, setErr] = useState('')
   const [matToast, setMatToast] = useState(null)
   const [fileDrop, setFileDrop] = useState(false)
+  const [dragKind, setDragKind] = useState('file')
   const [ytUrl, setYtUrl] = useState('')
   const [ytErr, setYtErr] = useState('')
   const [ytAnalyzing, setYtAnalyzing] = useState(false)
@@ -530,48 +556,43 @@ export default function EdMaterial({
     return () => clearInterval(id)
   }, [ytAnalyzing])
 
-  async function ingestFiles(fileList) {
-    const files = [...(fileList || [])].filter(isImageFile)
-    if (!files.length) {
-      setErr('Suelta un PNG, JPG, WebP o GIF.')
-      return
-    }
-    setTab('image')
-    setErr('')
-    try {
-      await uploadImages(project.id, files)
-      onRefresh?.()
-    } catch (e) {
-      setErr(e.message)
-    }
-  }
-
   function onFileDragEnter(e) {
     if (onCargarPane) return
-    if (!hasOsImageDrag(e)) return
+    if (!hasOsFileDrag(e)) return
     e.preventDefault()
     dropDepth.current += 1
+    setDragKind(dragMediaKind(e))
     setFileDrop(true)
   }
   function onFileDragOver(e) {
     if (onCargarPane) return
-    if (!hasOsImageDrag(e)) return
+    if (!hasOsFileDrag(e)) return
     e.preventDefault()
-    e.dataTransfer.dropEffect = 'copy'
+    setDragKind(dragMediaKind(e))
+    e.dataTransfer.dropEffect = dragMediaKind(e) === 'other' ? 'none' : 'copy'
   }
   function onFileDragLeave(e) {
     if (onCargarPane) return
-    if (!hasOsImageDrag(e)) return
+    if (!hasOsFileDrag(e)) return
     dropDepth.current = Math.max(0, dropDepth.current - 1)
     if (dropDepth.current === 0) setFileDrop(false)
   }
   function onFileDrop(e) {
     if (onCargarPane) return
-    if (!hasOsImageDrag(e)) return
+    if (!hasOsFileDrag(e)) return
     e.preventDefault()
     dropDepth.current = 0
     setFileDrop(false)
-    ingestFiles(e.dataTransfer.files)
+    importMedia(e.dataTransfer.files, {
+      setError: setErr,
+      notify: (m) => { if (m) setMatToast({ type: 'success', message: m }) },
+      emptyMsg: 'Formato no compatible. Suelta un vídeo, una imagen o un audio.',
+      onDone: ({ videos, images }) => {
+        if (videos.length) setTab('video')
+        else if (images.length) setTab('image')
+        else setTab('audio')
+      },
+    })
   }
 
   async function loadYt(fromUrl) {
@@ -706,18 +727,22 @@ export default function EdMaterial({
     }
   }
 
-  async function importMedia(fileList) {
+  async function importMedia(fileList, opts = {}) {
+    // Los mensajes van por defecto al panel Cargar (ytErr/importMsg); el drop del
+    // contenedor los redirige (setError→err visible siempre, notify→toast).
+    const setError = opts.setError || setYtErr
+    const notify = opts.notify || setImportMsg
     const files = [...(fileList || [])]
     const videos = files.filter(isVideoFile)
     const images = files.filter(isImageFile)
     const audios = files.filter(isAudioFile)
     if (!videos.length && !images.length && !audios.length) {
-      setImportMsg('')
-      setYtErr('Suelta un vídeo, una imagen o un audio.')
+      notify('')
+      setError(opts.emptyMsg || 'Suelta un vídeo, una imagen o un audio.')
       return
     }
-    setYtErr('')
-    setImportMsg('')
+    setError('')
+    notify('')
     setImporting(true)
     const done = []
     try {
@@ -734,11 +759,12 @@ export default function EdMaterial({
         done.push(f.name)
       }
       await onRefresh?.()
-      setImportMsg(done.length === 1
+      notify(done.length === 1
         ? `«${done[0]}» está en el material.`
         : `${done.length} archivos añadidos al material.`)
+      opts.onDone?.({ videos, images, audios })
     } catch (e) {
-      setYtErr(e.message || 'No se pudo importar el archivo.')
+      setError(e.message || 'No se pudo importar el archivo.')
     } finally {
       setImporting(false)
     }
@@ -801,6 +827,12 @@ export default function EdMaterial({
       onDragLeave={onFileDragLeave}
       onDrop={onFileDrop}
     >
+      {fileDrop && (
+        <div className={`ed-drop-hint${dragKind === 'other' ? ' bad' : ''}`} aria-hidden="true">
+          <Icon name={dragKind === 'other' ? 'block' : 'upload'} size={22} />
+          <span>{DROP_HINT[dragKind] || DROP_HINT.file}</span>
+        </div>
+      )}
       <nav className="ed-mat-nav" aria-label="Materiales" onMouseLeave={closeNavTip}>
         <div className="ed-mat-nav-scroll" onScroll={closeNavTip}>
           {MAT_NAV.map((item) => {
@@ -815,7 +847,7 @@ export default function EdMaterial({
                   aria-label={item.id === 'chat' && chatBusy ? `${label} (trabajando)` : label}
                   aria-current={tab === item.id ? 'page' : undefined}
                   onMouseEnter={(e) => openNavTip(e, item.id === 'chat' && chatBusy ? `${label} (trabajando)` : label)}
-                  onClick={() => setTab(item.id)}
+                  onClick={() => { setTab(item.id); if (item.id === 'motion') onGoMotion?.() }}
                 >
                   <Icon name={item.icon} size={20} />
                 </button>
@@ -1106,6 +1138,10 @@ export default function EdMaterial({
           clip={selectedClip}
           onChangeFx={onChangeFx}
         />
+      )}
+      {tab === 'motion' && motion && (
+        <MotionElements pid={project.id} m={motion} format={motionFormat}
+          onReloadTimeline={onReloadTimeline} onBack={onMotionBack} />
       )}
       {tab === 'settings' && <EdSettings onExportFps={onExportFps} audioDb={audioDb} onAudioDb={onAudioDb} />}
       <div

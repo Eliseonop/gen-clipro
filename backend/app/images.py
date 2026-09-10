@@ -56,6 +56,85 @@ def to_working_png(filename: str, data: bytes) -> bytes:
         raise ValueError("No se pudo leer la imagen. Usa PNG, JPG, WebP o GIF.") from None
 
 
+def _skip_subblocks(data: bytes, pos: int) -> int:
+    """Salta una cadena de sub-bloques GIF (``size`` byte + datos, terminada en 0)."""
+    n = len(data)
+    while pos < n:
+        size = data[pos]
+        pos += 1
+        if size == 0:
+            break
+        pos += size
+    return pos
+
+
+def probe_gif(data: bytes) -> dict:
+    """Metadatos de un GIF leyendo su cabecera (sin dependencias externas).
+
+    Recorre los bloques del GIF para contar fotogramas, sumar sus retardos
+    (Graphic Control Extension), leer dimensiones, transparencia y si repite
+    (extensión de aplicación NETSCAPE2.0, contador 0 = infinito). Un GIF animado
+    sin NETSCAPE se trata como ``loop=True`` (comportamiento estilo CapCut).
+    """
+    out = {"animated": False, "frames": 1, "duration": 0.0, "fps": 0.0,
+           "width": None, "height": None, "loop": False, "has_alpha": False}
+    if len(data) < 13 or data[:6] not in GIF_MAGICS:
+        return out
+    try:
+        out["width"] = int.from_bytes(data[6:8], "little")
+        out["height"] = int.from_bytes(data[8:10], "little")
+        packed = data[10]
+        pos = 13
+        if packed & 0x80:                                   # tabla de color global
+            pos += 3 * (2 ** ((packed & 0x07) + 1))
+        frames = 0
+        total_delay = 0.0
+        pending_delay = 0.1
+        has_alpha = False
+        loop = False
+        netscape = False
+        n = len(data)
+        while pos < n:
+            b = data[pos]
+            if b == 0x3B:                                   # trailer
+                break
+            if b == 0x21:                                   # extensión
+                label = data[pos + 1]
+                if label == 0xF9 and pos + 6 < n:           # Graphic Control Extension
+                    delay_cs = int.from_bytes(data[pos + 4:pos + 6], "little")
+                    pending_delay = (delay_cs / 100.0) if delay_cs > 0 else 0.1
+                    if data[pos + 3] & 0x01:
+                        has_alpha = True
+                elif label == 0xFF and data[pos + 2:pos + 14] == b"\x0bNETSCAPE2.0":
+                    sb = pos + 14
+                    if data[sb:sb + 2] == b"\x03\x01":
+                        netscape = True
+                        loop = int.from_bytes(data[sb + 2:sb + 4], "little") == 0
+                pos = _skip_subblocks(data, pos + 2)
+                continue
+            if b == 0x2C:                                   # Image Descriptor → un fotograma
+                frames += 1
+                total_delay += pending_delay
+                pending_delay = 0.1
+                img_packed = data[pos + 9]
+                pos += 10
+                if img_packed & 0x80:                       # tabla de color local
+                    pos += 3 * (2 ** ((img_packed & 0x07) + 1))
+                pos += 1                                     # LZW min code size
+                pos = _skip_subblocks(data, pos)
+                continue
+            pos += 1                                         # byte inesperado: avanzar
+        out["frames"] = max(1, frames)
+        out["animated"] = frames > 1
+        out["duration"] = round(total_delay, 3) if frames else 0.0
+        out["fps"] = round(frames / total_delay, 3) if total_delay > 0 else 0.0
+        out["has_alpha"] = has_alpha
+        out["loop"] = loop if netscape else (frames > 1)
+    except Exception:
+        pass
+    return out
+
+
 def _clean_filename(filename: str) -> str:
     name = Path(unquote(filename or "")).name
     name = name.split("?")[0].split("#")[0].strip()
@@ -157,9 +236,11 @@ def import_image(
     storage.ensure_dirs(storage.project_base(project))
     ident = _new_id()
     stem = storage.safe_name(Path(name).stem)
+    gif_meta = None
     if keep_gif and is_gif:
         dest_name = f"{stem}_{ident}.gif"
         payload = data
+        gif_meta = probe_gif(data)
     else:
         payload = to_working_png(name, data)
         dest_name = f"{stem}_{ident}.png"
@@ -168,6 +249,9 @@ def import_image(
         raise ValueError("No se pudo guardar la imagen.")
     dest.write_bytes(payload)
     w, h = probe_size(dest)
+    if gif_meta:                                  # dims desde la cabecera si cv2 no las leyó
+        w = w or gif_meta.get("width")
+        h = h or gif_meta.get("height")
     info = ImageInfo(
         id=ident,
         filename=dest_name,
@@ -183,6 +267,12 @@ def import_image(
         source_url=source_url,
         author=author,
         license_info=license_info,
+        animated=(gif_meta or {}).get("animated"),
+        frames=(gif_meta or {}).get("frames"),
+        fps=(gif_meta or {}).get("fps"),
+        duration=(gif_meta or {}).get("duration"),
+        loop=(gif_meta or {}).get("loop"),
+        has_alpha=(gif_meta or {}).get("has_alpha"),
     )
     projects.add_image(project.id, info)
     return info

@@ -284,6 +284,14 @@ class ImageInfo(BaseModel):
     source_url: Optional[str] = None
     author: Optional[str] = None
     license_info: Optional[str] = None
+    # GIF animado: se conserva como .gif (no se aplana a PNG). Metadatos del propio
+    # archivo para tratarlo como elemento visual con duración (ver images.probe_gif).
+    animated: Optional[bool] = None
+    frames: Optional[int] = None
+    fps: Optional[float] = None
+    duration: Optional[float] = None      # duración total del gif (s)
+    loop: Optional[bool] = None
+    has_alpha: Optional[bool] = None
 
 
 class SaveLibraryRequest(BaseModel):
@@ -383,6 +391,7 @@ class TimelineClip(BaseModel):
     reverse: bool = False
     speed_curve: Optional[dict] = None  # reserva; sin motor en esta entrega
     opacity: Optional[float] = None     # opacidad estática del clip (1 = opaco); los keyframes la animan
+    loop: Optional[bool] = None         # GIF animado: repetir la animación hasta cubrir la duración del clip
     words: list[Word] = []                # (texto) timing real por palabra, RELATIVO al inicio del clip
     origin: Optional[dict] = None         # (texto) procedencia: {transcript_id, segment_index, fragment_index, word_range, source_range}
     text_role: Optional[str] = None       # "caption" | "free"; None = inferir al usar
@@ -393,6 +402,7 @@ class TimelineClip(BaseModel):
     asset_scope: str = "project"          # "project" | "library"
     description: Optional[str] = None
     dup_of: Optional[str] = None          # id del clip original si es una copia
+    composition_id: Optional[str] = None  # (motion) id de la MotionComposition de origen
 
 
 class Timeline(BaseModel):
@@ -420,6 +430,7 @@ class Project(BaseModel):
     audios: list[AudioInfo] = []
     images: list[ImageInfo] = []
     timeline: Optional[Timeline] = None   # composición del editor de vídeo
+    motion_compositions: list[dict] = []  # composiciones de Motion Studio (ver app/motion)
 
 
 class JobStatus(str, Enum):

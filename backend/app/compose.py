@@ -84,6 +84,12 @@ _MEDIA_KIND = {k: v for k, v in ASSET_DISK_KIND.items() if v != "sfx"}
 def _clip_path(project: Project, clip: TimelineClip, shape_files: Optional[dict] = None) -> Optional[Path]:
     if getattr(clip, "kind", None) == "shape":
         return (shape_files or {}).get(clip.id)
+    if getattr(clip, "kind", None) == "motion":
+        # Motion graphic: WebM con alfa pre-renderizado por Motion Studio.
+        from .motion import service as motion_service
+        cid = getattr(clip, "composition_id", None) or clip.asset_id
+        comp = motion_service.get_composition(project.id, cid)
+        return motion_service.asset_path(project.id, comp) if comp else None
     if clip.asset_kind == "sfx":
         return sfx.resolve(clip.filename)
     kind = _MEDIA_KIND.get(clip.asset_kind)
