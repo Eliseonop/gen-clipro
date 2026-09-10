@@ -3,7 +3,8 @@ import Icon from '../../components/Icon'
 import ConfirmModal from '../../components/ConfirmModal'
 import Toast from '../../components/Toast'
 import { fmt } from '../../lib/utils'
-import { getTimeline, saveTimeline, prepareReframe, getJob, createClipJob, getSettings } from '../../services/api'
+import { getTimeline, saveTimeline, prepareReframe, getJob, createClipJob, getSettings,
+  createBgRemovalJob, listBgProviders, cancelJob } from '../../services/api'
 import { clamp } from '../../lib/panning'
 import { defaultTextStyle, subtitleStyle, wrappedText, ensureEditorFonts, selectedSubtitleThemeId, clearTextTheme, effectiveTextStyle } from '../../lib/textstyles'
 import { applyThemeToStyle, wordsPerBoxOptions, activeWordsPerBox, splitCaptionWords } from '../../lib/textKaraoke'
@@ -28,6 +29,8 @@ import {
 import { textRole } from '../../lib/textRole'
 import { SHAPE_DEFAULT_DUR } from '../../lib/shapes'
 import { MASK_KF_KEYS, clipMasks, defaultMask, maskId, normalizeMask } from '../../lib/clipMask'
+import { autoActive, bgCapable, clipBg, defaultBg, normalizeBg } from '../../lib/clipBg'
+import { resetBgMeta, resetCutout } from './bgCutout'
 import { applyFrame, disableOverlay, enableOverlay, frameOf, isFramed, isOverlay, mediaSize, newTransform, videosAt } from '../../lib/clipLayout'
 import {
   AUDIO_FX_KEYS, applyVolumeFade, canKeyframe, clipPropsAt, clipVolumeAt, clampVolume, deleteKeyframeItem, flattenPatch, keyframeIdAt,
@@ -195,6 +198,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   // (se enciende al abrir Video → Máscara); `maskDraw` es el pincel.
   const [maskMode, setMaskMode] = useState(false)
   const [maskDraw, setMaskDraw] = useState(false)
+  // Eliminar fondo: pincel de corrección (op/tamaño/posición del cursor),
+  // job del matte y catálogo de modelos. El chroma key no necesita estado:
+  // es una propiedad del clip que el preview lee cada fotograma.
+  const [bgBrush, setBgBrush] = useState({ on: false, op: 'erase', size: 0.08, px: null, py: null })
+  const [bgJob, setBgJob] = useState(null)
+  const [bgInfo, setBgInfo] = useState({ providers: [], device: '' })
+  const [chromaPick, setChromaPick] = useState(false)
   const [clipZoom, setClipZoom] = useState(1)
   const viewZoom = mainColTab === 'clip' ? clipZoom : mainZoom
   const setViewZoom = mainColTab === 'clip' ? setClipZoom : setMainZoom
@@ -234,6 +244,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const cropModeRef = useRef(false); cropModeRef.current = cropMode
   const maskModeRef = useRef(false); maskModeRef.current = maskMode
   const maskDrawRef = useRef(false); maskDrawRef.current = maskDraw
+  const bgBrushRef = useRef(bgBrush); bgBrushRef.current = bgBrush
+  const chromaPickRef = useRef(false); chromaPickRef.current = chromaPick
   const viewZoomRef = useRef(1); viewZoomRef.current = viewZoom
   const previewVolRef = useRef(previewVol); previewVolRef.current = previewVol
   const alignGuidesRef = useRef(null)
@@ -421,7 +433,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       clipsRef, tracksRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
       playingRef, framingModeRef, mainCanvasRef, mainStageRef, resultCanvasRef, mainTextBox, topVideoAt, alignGuidesRef,
       clipModeRef, cropModeRef, croppingRef, fpsRef, hitListRef, viewZoomRef,
-      maskModeRef, maskDrawRef,
+      maskModeRef, maskDrawRef, bgBrushRef,
     }
     const tick = () => {
       const total = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
@@ -1684,6 +1696,233 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (!open) setMaskDraw(false)
   }, [])
 
+  // --- Eliminar fondo ----------------------------------------------------
+  // Todo vive en `clip.bg_removal`: entra por el mismo setClips que el resto de
+  // propiedades, así que el undo/redo del editor (snapshot con debounce) lo
+  // cubre sin código extra — arrastrar un slider colapsa en un solo estado, y
+  // aplicar un trazo o activar/desactivar sí dejan un paso reversible.
+  function patchBg(id, build) {
+    setClips((prev) => prev.map((c) => {
+      if (c.id !== id) return c
+      const next = build(clipBg(c) || defaultBg(), c)
+      return next === undefined ? c : { ...c, bg_removal: next }
+    }))
+  }
+  function patchBgAuto(id, patch) {
+    patchBg(id, (bg) => normalizeBg({ ...bg, auto: { ...bg.auto, ...patch } }))
+  }
+  function patchBgChroma(id, patch) {
+    patchBg(id, (bg) => normalizeBg({ ...bg, chroma: { ...bg.chroma, ...patch } }))
+  }
+
+  const toggleBgAuto = (on) => {
+    const clip = selectedClip
+    if (!clip) return
+    patchBgAuto(clip.id, { enabled: !!on })
+    if (!on) setBgBrush((b) => ({ ...b, on: false }))
+  }
+
+  // Lanza el cálculo del matte. Manda el DESCRIPTOR del clip (material + tramo),
+  // no su id: así no hay carrera con el autosave y funciona con clips recién
+  // añadidos que todavía no están guardados en el servidor.
+  function applyBgAuto() {
+    const clip = selectedClip
+    if (!clip || !bgCapable(clip)) return
+    const bg = clipBg(clip) || defaultBg()
+    patchBgAuto(clip.id, { enabled: true, status: 'running', error: null })
+    createBgRemovalJob(projectId, {
+      clip_id: clip.id,
+      kind: clip.kind,
+      asset_kind: clip.asset_kind,
+      asset_id: String(clip.asset_id ?? ''),
+      filename: clip.filename,
+      asset_scope: clip.asset_scope || 'project',
+      in_point: clip.in_point,
+      out_point: clip.out_point,
+      source_duration: clip.source_duration,
+      auto: bg.auto,
+    })
+      .then((job) => setBgJob({ ...job, clipId: clip.id }))
+      .catch((e) => {
+        patchBgAuto(clip.id, { status: 'error', error: e.message })
+        setBgJob({ status: 'error', error: e.message, clipId: clip.id })
+      })
+  }
+
+  function cancelBgAuto() {
+    if (!bgJob?.id) return
+    cancelJob(bgJob.id).catch(() => {})
+    setBgJob((j) => (j ? { ...j, message: 'Cancelando…' } : j))
+  }
+
+  const changeBgAuto = (patch) => {
+    const clip = selectedClip
+    if (!clip) return
+    // Cambiar de modelo obliga a recalcular: el matte cacheado es de otro modelo.
+    const resets = patch.provider !== undefined
+      ? { base_key: '', status: 'idle', error: null }
+      : {}
+    patchBgAuto(clip.id, { ...patch, ...resets })
+    resetCutout(clip.id)
+  }
+
+  // Un trazo = una entrada de `edits`; arrastrar solo alarga la última. Se
+  // guarda en el espacio normalizado de la FUENTE, así que sigue pegado al
+  // sujeto aunque después se recorte, se mueva o se anime el clip.
+  const addBgStroke = useCallback((id, stroke) => {
+    setClips((prev) => prev.map((c) => {
+      if (c.id !== id) return c
+      const bg = clipBg(c) || defaultBg()
+      return {
+        ...c,
+        bg_removal: normalizeBg({ ...bg, auto: { ...bg.auto, edits: [...bg.auto.edits, stroke] } }),
+      }
+    }))
+  }, [])
+
+  const extendBgStroke = useCallback((id, point) => {
+    setClips((prev) => prev.map((c) => {
+      if (c.id !== id) return c
+      const bg = clipBg(c)
+      if (!bg?.auto.edits.length) return c
+      const edits = bg.auto.edits.slice()
+      const last = edits[edits.length - 1]
+      edits[edits.length - 1] = { ...last, points: [...last.points, point] }
+      return { ...c, bg_removal: normalizeBg({ ...bg, auto: { ...bg.auto, edits } }) }
+    }))
+  }, [])
+
+  function undoBgEdit() {
+    const clip = selectedClip
+    if (!clip) return
+    patchBg(clip.id, (bg) => normalizeBg({
+      ...bg, auto: { ...bg.auto, edits: bg.auto.edits.slice(0, -1) },
+    }))
+  }
+  function clearBgEdits() {
+    const clip = selectedClip
+    if (clip) patchBgAuto(clip.id, { edits: [] })
+  }
+
+  const onBgBrush = (patch) => {
+    setBgBrush((b) => ({ ...b, ...patch }))
+    // El pincel y la manipulación de la máscara no pueden convivir: se pisan el
+    // puntero. Al encender uno se apaga el otro.
+    if (patch.on) { setMaskMode(false); setMaskDraw(false); setChromaPick(false) }
+  }
+
+  const toggleBgChroma = (on) => {
+    const clip = selectedClip
+    if (!clip) return
+    patchBgChroma(clip.id, { enabled: !!on })
+    if (!on) setChromaPick(false)
+  }
+  const changeBgChroma = (patch) => {
+    if (selectedClip) patchBgChroma(selectedClip.id, patch)
+  }
+  const resetBgChroma = () => {
+    const clip = selectedClip
+    if (!clip) return
+    patchBg(clip.id, (bg) => normalizeBg({ ...bg, chroma: { enabled: bg.chroma.enabled } }))
+  }
+  const onPickChroma = (on) => {
+    setChromaPick(!!on)
+    if (on) setBgBrush((b) => ({ ...b, on: false }))
+  }
+
+  // El panel abierto es lo que mantiene vivo el pincel sobre el reproductor.
+  const onBgPanel = useCallback((open) => {
+    if (!open) {
+      setBgBrush((b) => (b.on ? { ...b, on: false } : b))
+      setChromaPick(false)
+    }
+  }, [])
+
+  // Cursor del pincel sobre el lienzo (el círculo lo dibuja drawComposite).
+  function onCanvasBgMove(e) {
+    if (!bgBrushRef.current.on) return
+    const canvas = mainCanvasRef.current
+    if (!canvas) return
+    const r = canvas.getBoundingClientRect()
+    setBgBrush((b) => ({
+      ...b,
+      px: (e.clientX - r.left) * (canvas.width / (r.width || 1)),
+      py: (e.clientY - r.top) * (canvas.height / (r.height || 1)),
+    }))
+  }
+  function onCanvasBgLeave() {
+    if (bgBrushRef.current.px != null) setBgBrush((b) => ({ ...b, px: null, py: null }))
+  }
+
+  // Cuentagotas: toma el color del PÍXEL COMPUESTO bajo el puntero, que es lo
+  // que el usuario ve. Devuelve true si consumió el clic.
+  function pickChromaAt(e) {
+    if (!chromaPickRef.current) return false
+    const canvas = mainCanvasRef.current
+    const clip = selectedClip
+    if (!canvas || !clip) return false
+    const r = canvas.getBoundingClientRect()
+    const x = Math.round((e.clientX - r.left) * (canvas.width / (r.width || 1)))
+    const y = Math.round((e.clientY - r.top) * (canvas.height / (r.height || 1)))
+    try {
+      const d = canvas.getContext('2d').getImageData(x, y, 1, 1).data
+      const hex = [d[0], d[1], d[2]].map((v) => v.toString(16).padStart(2, '0')).join('')
+      patchBgChroma(clip.id, { color: `#${hex.toUpperCase()}`, enabled: true })
+    } catch { /* lienzo no legible: ignorar */ }
+    setChromaPick(false)
+    return true
+  }
+
+  // Catálogo de modelos + device efectivo (una vez por sesión del editor).
+  useEffect(() => {
+    let alive = true
+    listBgProviders()
+      .then((r) => {
+        if (alive) setBgInfo({ providers: r.providers || [], device: r.onnx_selected || '' })
+      })
+      .catch(() => { /* sin catálogo se usan los ids por defecto */ })
+    return () => { alive = false }
+  }, [])
+
+  // Sondeo del job del matte.
+  useEffect(() => {
+    if (!bgJob?.id || bgJob.status === 'done' || bgJob.status === 'error') return undefined
+    const id = setInterval(async () => {
+      try {
+        const j = await getJob(bgJob.id)
+        setBgJob({ ...j, clipId: bgJob.clipId })
+      } catch { /* reintenta */ }
+    }, 700)
+    return () => clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bgJob?.id, bgJob?.status])
+
+  // Al terminar, la clave de caché se escribe en EL CLIP (la copia del editor),
+  // no en el timeline del servidor: así el autosave no la pisa y el cambio queda
+  // en el historial como cualquier otra edición.
+  useEffect(() => {
+    if (!bgJob?.clipId) return
+    if (bgJob.status === 'done' && bgJob.bg_removal) {
+      const r = bgJob.bg_removal
+      resetBgMeta(r.base_key)
+      resetCutout(bgJob.clipId)
+      patchBgAuto(bgJob.clipId, {
+        enabled: true,
+        status: 'ready',
+        error: null,
+        base_key: r.base_key,
+        provider: r.provider,
+        model_version: r.model_version,
+        mask_fps: r.mask_fps,
+        mask_height: r.mask_height,
+      })
+      setBgJob(null)
+    } else if (bgJob.status === 'error') {
+      patchBgAuto(bgJob.clipId, { status: 'error', error: bgJob.error || 'Error' })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bgJob?.status])
+
   function applyPreset(id, preset) {
     const ids = new Set(selIdsRef.current.includes(id) ? selIdsRef.current : [id])
     const source = clipsRef.current.find((c) => c.id === id)
@@ -1923,6 +2162,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     changeReframe, clipsRef, tracksRef, playheadRef, alignGuidesRef, seek: scrub, croppingRef,
     clipModeRef, cropModeRef, hitListRef, viewZoomRef,
     maskModeRef, maskDrawRef, changeMask, commitMask,
+    bgBrushRef, addBgStroke, extendBgStroke, mediaEls, outRef,
     onSelectClip: handleSelectClip,
     onClearSelection: clearCanvasSelection,
     changeTransform, commitPose, upsertKeyframe, outW, outH,
@@ -2186,7 +2426,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           <div
             className={`ed-canvas-stage${framingActive ? ' split' : ''}`}
             ref={mainStageRef}
-            onPointerDown={onCanvasDown}
+            onPointerDown={(e) => { if (!pickChromaAt(e)) onCanvasDown(e) }}
+            onPointerMove={onCanvasBgMove}
+            onPointerLeave={onCanvasBgLeave}
             onDragOver={(e) => {
               if ([...e.dataTransfer.types].includes('application/x-material')) e.preventDefault()
             }}
@@ -2196,7 +2438,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               if (!raw) return
               try { dropAsset(JSON.parse(raw), selTrackId, playhead) } catch { /* noop */ }
             }}
-            style={{ cursor: (framingMode || (canEditFrame && !overlayOn)) ? 'crosshair' : ((canEditFrame || isTextSel || isShapeSel) ? 'move' : 'default') }}
+            style={{
+              cursor: (bgBrush.on || chromaPick) ? 'crosshair'
+                : ((framingMode || (canEditFrame && !overlayOn)) ? 'crosshair'
+                  : ((canEditFrame || isTextSel || isShapeSel) ? 'move' : 'default')),
+            }}
           >
             <canvas ref={mainCanvasRef} width={540} height={960} className="ed-main-canvas" />
             {framingActive && (
@@ -2344,6 +2590,25 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                 ? () => requestFragmentTrack(selTrackObj.id)
                 : (isTextSel ? () => requestFragmentClip(selectedClip.id) : undefined),
             },
+          }}
+          bgProps={{
+            job: bgJob,
+            providers: bgInfo.providers,
+            device: bgInfo.device,
+            brush: bgBrush,
+            picking: chromaPick,
+            onPanelOpen: onBgPanel,
+            onToggleAuto: toggleBgAuto,
+            onApplyAuto: applyBgAuto,
+            onCancelAuto: cancelBgAuto,
+            onChangeAuto: changeBgAuto,
+            onBrush: onBgBrush,
+            onUndoEdit: undoBgEdit,
+            onClearEdits: clearBgEdits,
+            onToggleChroma: toggleBgChroma,
+            onChangeChroma: changeBgChroma,
+            onResetChroma: resetBgChroma,
+            onPickColor: onPickChroma,
           }}
           maskProps={{
             maskMode,

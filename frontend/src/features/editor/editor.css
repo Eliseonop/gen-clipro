@@ -1955,3 +1955,60 @@ body.ed-zooming, body.ed-zooming * { cursor: ew-resize !important; user-select: 
 .ed-key-status.unknown .ed-key-dot { background: var(--muted); }
 .motion-elem-btns { display: flex; flex-wrap: wrap; gap: 6px; }
 .motion-elem-btns .motion-btn { flex: 1; min-width: 72px; }
+
+/* --- Video → Eliminar fondo ------------------------------------------------
+   Reutiliza los bloques del inspector (ed-insp-sec / ed-insp-row / ed-mode-toggle);
+   aquí solo van las piezas propias: botones de acción, estado del job, pincel
+   conservar/eliminar y selector de color del croma. */
+.ed-bg-actions {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 10px 4px;
+}
+.ed-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--card-2); border: 1px solid var(--line); color: var(--text-secondary);
+  border-radius: 6px; padding: 6px 11px; font-size: 11.5px; font-weight: 600;
+  cursor: pointer; transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+.ed-btn:hover:not(:disabled) { border-color: var(--line-bright); color: var(--text); }
+.ed-btn:disabled { opacity: 0.4; cursor: default; }
+.ed-btn.primary { border-color: #fb923c; color: #fdba74; background: rgba(234, 88, 12, 0.16); }
+.ed-btn.primary:hover { background: rgba(234, 88, 12, 0.26); color: #fed7aa; }
+.ed-btn.danger { border-color: #f87171; color: #fca5a5; background: rgba(220, 38, 38, 0.14); }
+
+.ed-bg-status {
+  display: flex; align-items: center; gap: 6px; margin: 4px 10px 2px;
+  padding: 6px 9px; border-radius: 6px; font-size: 11px; line-height: 1.35;
+  border: 1px solid var(--line); background: var(--card-2); color: var(--text-secondary);
+}
+.ed-bg-status b { margin-left: auto; font-variant-numeric: tabular-nums; }
+.ed-bg-status.run { border-color: #fb923c; color: #fdba74; background: rgba(234, 88, 12, 0.12); }
+.ed-bg-status.run .material-icons { animation: ed-bg-spin 1s linear infinite; }
+.ed-bg-status.ok { border-color: rgba(52, 211, 153, 0.5); color: #6ee7b7; background: rgba(16, 185, 129, 0.1); }
+.ed-bg-status.err { border-color: #f87171; color: #fca5a5; background: rgba(220, 38, 38, 0.12); }
+@keyframes ed-bg-spin { to { transform: rotate(360deg); } }
+
+/* Pincel: conservar (verde) / eliminar (rojo), el mismo código de color que el
+   círculo que se dibuja sobre el reproductor. */
+.ed-bg-brush { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px 10px 2px; }
+.ed-bg-op {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  background: var(--card-2); border: 1px solid var(--line); color: var(--text-secondary);
+  border-radius: 6px; padding: 8px 6px; font-size: 11.5px; font-weight: 650; cursor: pointer;
+}
+.ed-bg-op:hover { border-color: var(--line-bright); color: var(--text); }
+.ed-bg-op.keep.on { border-color: #34d399; color: #6ee7b7; background: rgba(16, 185, 129, 0.16); }
+.ed-bg-op.erase.on { border-color: #f87171; color: #fca5a5; background: rgba(220, 38, 38, 0.16); }
+
+/* Color del croma */
+.ed-bg-color { display: flex; align-items: center; gap: 8px; }
+.ed-bg-color input[type="color"] {
+  width: 34px; height: 24px; padding: 0; border: 1px solid var(--line-bright);
+  border-radius: 5px; background: none; cursor: pointer;
+}
+.ed-bg-hex { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.ed-bg-presets { display: flex; align-items: center; gap: 6px; padding: 2px 10px 8px; }
+.ed-bg-swatch {
+  width: 26px; height: 20px; border-radius: 5px; cursor: pointer;
+  border: 1px solid var(--line-bright); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+.ed-bg-swatch.on { outline: 2px solid #fdba74; outline-offset: 1px; }

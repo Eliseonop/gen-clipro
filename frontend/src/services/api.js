@@ -196,3 +196,14 @@ export const createSfxCategory = (label) => post('/api/sfx/category', { label })
 
 // --- Subtítulos ---
 export const generateSubtitles = (pid, params) => post(`/api/projects/${pid}/subtitles`, params)
+
+// --- Eliminar fondo ---
+// El chroma key NO pasa por la API: es un filtro puro que resuelven el preview y
+// el export desde las propiedades del clip. Esto es solo para el matte de IA.
+export const listBgProviders = () => get('/api/bg/providers')
+export const createBgRemovalJob = (pid, params) => post(`/api/projects/${pid}/bg-removal`, params)
+export const getBgStatus = (baseKey) => get(`/api/bg/status/${encodeURIComponent(baseKey)}`)
+export const getBgCacheStats = () => get('/api/bg/cache')
+export const clearBgCache = (baseKey) =>
+  del(`/api/bg/cache${baseKey ? `?base_key=${encodeURIComponent(baseKey)}` : ''}`)
+export const cancelJob = (jobId) => del(`/api/job/${jobId}`)

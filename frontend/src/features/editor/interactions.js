@@ -4,7 +4,7 @@ import {
   canvasPointer, clampCrop, CLIP_POS_MAX, CLIP_POS_MIN, cropSizeFromCorner, cropWindow, destRectOnCanvas,
   frameRectOf, hitTransformHandle, isFramed, isOverlay, mediaSize, sourceCropPx,
 } from '../../lib/clipLayout'
-import { framingRect, hitFrontmost, pointInDest } from './render/canvas'
+import { canvasToSourceNorm, framingRect, hitFrontmost, pointInDest } from './render/canvas'
 import { snapAlign, textAlignTargets } from '../../lib/alignGuides'
 import { clipEnd, isVisualClip, timelineToSource } from './editorModel'
 import { clipMasksAt, clipPose, posedTransform } from '../../lib/clipAnim'
@@ -111,6 +111,49 @@ function startMaskBrush(e, canvas, clip, mask, ctx, frame) {
   }
   add(e, true)
   listenMove((ev) => add(ev, false))
+}
+
+// --- Eliminar fondo: pincel de corrección de la máscara de IA ---------------
+// Los puntos se guardan en el espacio NORMALIZADO DE LA FUENTE (0-1 del material),
+// no del lienzo: así el trazo sigue pegado al sujeto aunque después se recorte,
+// se mueva, se escale o se anime el clip. `canvasToSourceNorm` es la inversa
+// exacta de lo que dibuja el compuesto.
+function startBgBrush(e, canvas, clip, ctx, frame) {
+  const { addBgStroke, extendBgStroke, playingRef, stopPlayback, bgBrushRef } = ctx
+  if (playingRef?.current) stopPlayback?.()
+  const head = ctx.playheadRef?.current ?? ctx.playhead ?? 0
+  const brush = bgBrushRef?.current || {}
+  const op = brush.op === 'keep' ? 'keep' : 'erase'
+  const size = brush.size || 0.08
+  let last = null
+
+  const at = (ev) => {
+    const p = canvasPointer(ev, canvas)
+    return canvasToSourceNorm(clip, p.x, p.y, frame, ctx, head)
+  }
+  const first = at(e)
+  if (!first) return false
+  // Un trazo = una entrada de `edits`. Al soltar queda un único estado en el
+  // historial (el snapshot del editor colapsa los cambios del arrastre).
+  addBgStroke?.(clip.id, { op, size, points: [{ x: +first.x.toFixed(4), y: +first.y.toFixed(4), m: 1 }] })
+  last = first
+  listenMove((ev) => {
+    const q = at(ev)
+    if (!q) return
+    if (last && Math.hypot(q.x - last.x, q.y - last.y) < 0.003) return
+    last = q
+    extendBgStroke?.(clip.id, { x: +q.x.toFixed(4), y: +q.y.toFixed(4) })
+  })
+  return true
+}
+
+/** Pincel de Eliminar fondo: consume el arrastre si está activo. */
+function handleBgPointer(e, canvas, ctx) {
+  if (!ctx.bgBrushRef?.current?.on) return false
+  const sel = (ctx.clipsRef?.current || []).find((c) => c.id === ctx.selectedClip?.id) || ctx.selectedClip
+  if (!sel) return false
+  const frame = frameRectOf(canvas.width, canvas.height, ctx.viewZoomRef?.current ?? 1, ctx.outAspect)
+  return startBgBrush(e, canvas, sel, ctx, frame)
 }
 
 /** Máscara bajo el puntero: devuelve true si el arrastre lo consume la máscara. */
@@ -536,6 +579,9 @@ export function createCanvasDownHandler(ctx) {
       onCropDown(e)
       return
     }
+    // El pincel de Eliminar fondo manda sobre todo lo demás mientras está
+    // activo: cada arrastre es un trazo, no una selección ni un movimiento.
+    if (handleBgPointer(e, canvas, ctx)) return
     // Con su panel abierto la máscara manda: se edita sobre el compuesto, por
     // delante del recorte y del transform del clip.
     if (handleMaskPointer(e, canvas, ctx)) return
