@@ -203,6 +203,48 @@ class OverlayChainOrderTest(unittest.TestCase):
         self.assertEqual(starts, sorted(starts))
         self.assertEqual(starts[0], 5.0)   # el que empieza antes va primero
 
+    @patch("app.detect.dims", return_value=(1920, 916))
+    def test_overlay_animado_sin_format_tras_scale_animado(self, _dims):
+        # Regresión: 'format=gbrap' (o cualquier filtro que renegocie el enlace)
+        # colocado DESPUÉS de 'scale=eval=frame' CONGELA el tamaño dinámico → el
+        # PIP animado sale pequeño y mal posicionado (marco negro), aunque la
+        # posición sí anime. El alfa ya lo pone el format=gbrap que va ANTES del
+        # scale, así que no se debe re-añadir fuera para el overlay animado.
+        import re
+        import tempfile
+        from app import compose
+        from app.schemas import Project, Timeline, TimelineTrack, TimelineClip
+        tmp = Path(tempfile.mkdtemp())
+        vid = tmp / "a.mp4"
+        vid.write_bytes(b"x")
+        clip = TimelineClip(
+            id="ov", track_id="V1", kind="video", asset_kind="clips",
+            asset_id="1", filename="a.mp4", start=0.0, in_point=0.0,
+            out_point=2.0, source_duration=2.0, layout="overlay", frame="free",
+            reframe=Reframe(crop_w=1.0, crop_h=1.0),
+            keyframes={
+                "enabled": True,
+                "items": [
+                    {"id": "a", "t": 0.0, "interpolation": "linear",
+                     "props": {"x": 0.5, "y": 0.5, "scale": 0.8, "rotation": 0, "opacity": 1}},
+                    {"id": "b", "t": 1.0, "interpolation": "linear",
+                     "props": {"x": 0.97, "y": 0.8, "scale": 1.3, "rotation": 0, "opacity": 1}},
+                ],
+            },
+        )
+        tl = Timeline(width=1280, height=720, fps=30,
+                      tracks=[TimelineTrack(id="V1", kind="video", name="V1")],
+                      clips=[clip])
+        proj = Project(id="p", name="p", source_video="x",
+                       created_at="2026-01-01T00:00:00")
+        with patch.object(compose, "_clip_path", return_value=vid):
+            cmd = compose.build_command(proj, tl, tmp / "out.mp4")
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        seg = next(p for p in fc.split(";") if p.strip().endswith("[v0]"))
+        after = seg[seg.index("eval=frame") + len("eval=frame"):]
+        self.assertNotIn("format=", after,
+                         "no debe haber 'format' tras 'scale=eval=frame' (congela la escala)")
+
 
 if __name__ == "__main__":
     unittest.main()

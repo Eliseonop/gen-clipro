@@ -802,7 +802,12 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
                 c, W, H, start, base_cs, fx=(fx if fill_pose else ""))
         else:
             cropscale = _fill_base_cropscale(path, c, W, H)
-        if is_still_clip(c) or is_overlay(c) or fill_pose or has_bg:
+        # OJO: 'format' (como cualquier filtro que renegocia el enlace) colocado
+        # DESPUÉS de 'scale=eval=frame' congela el tamaño dinámico en su valor
+        # inicial → el PIP animado se queda pequeño y mal posicionado (marco negro).
+        # En overlay animado el alfa ya se establece con el format=gbrap que va
+        # ANTES del scale (dentro de cropscale), así que NO se vuelve a añadir.
+        if not animated_ov and (is_still_clip(c) or is_overlay(c) or fill_pose or has_bg):
             cropscale = f"{cropscale},format=gbrap"
         fx_part = "" if (animated_ov or fill_pose) else (f",{fx}" if fx else "")
         spd = "" if is_still_clip(c) else video_speed_filters(c)
