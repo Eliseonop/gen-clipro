@@ -168,6 +168,7 @@ export function ImageCard({
   onMenu,
   onDownload,
   onSaveDescription,
+  onPaper,
 }) {
   const title = image.label || image.name || image.filename || 'Imagen'
   const desc = (image.description || '').trim()
@@ -218,6 +219,17 @@ export function ImageCard({
         <button className="ed-add-corner" onClick={(e) => { e.stopPropagation(); onAdd() }} title={addTitle}>
           <Icon name="add" size={16} />
         </button>
+        {onPaper && (
+          <button
+            type="button"
+            className="ed-edit-corner"
+            title="Paper Animator: convertir la imagen en una animación de papel"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onPaper() }}
+          >
+            <Icon name="auto_awesome" size={15} />
+          </button>
+        )}
         {onDownload && (
           <button
             type="button"
