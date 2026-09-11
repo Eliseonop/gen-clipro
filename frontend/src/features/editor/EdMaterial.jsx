@@ -7,6 +7,7 @@ import { analyze, listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryIte
 import MaterialClipGrid, { dragPayload, useToggle, useExclusiveMedia, Empty, ImageCard, MaterialMenuBtn } from './MaterialClipGrid'
 import SfxClassifyModal from './SfxClassifyModal'
 import ImageAddModal from './ImageAddModal'
+import PaperAnimatorModal from './PaperAnimatorModal'
 import EdSettings from './EdSettings'
 import EdFxLibrary from './EdFxLibrary'
 import EdShapes from './EdShapes'
@@ -321,6 +322,7 @@ export default function EdMaterial({
   const [matMenu, setMatMenu] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [imgAddOpen, setImgAddOpen] = useState(false)
+  const [paperImage, setPaperImage] = useState(null)
   const [imgTick, setImgTick] = useState(0)
   const [imgPaneMenu, setImgPaneMenu] = useState(null)
   const imgPendingRef = useRef([])
@@ -1065,6 +1067,7 @@ export default function EdMaterial({
                   di={di}
                   onMenu={(e) => openMatMenu(e, 'images', im)}
                   onSaveDescription={im.scope === 'library' ? undefined : (text) => saveImageDescription(im, text)}
+                  onPaper={im.scope === 'library' ? undefined : () => setPaperImage(im)}
                 />
               ))}
             </div>
@@ -1159,6 +1162,15 @@ export default function EdMaterial({
           pendingRef={imgPendingRef}
           onClose={() => setImgAddOpen(false)}
           onSaved={() => onRefresh?.()}
+        />
+      )}
+
+      {paperImage && (
+        <PaperAnimatorModal
+          projectId={project.id}
+          image={paperImage}
+          onClose={() => setPaperImage(null)}
+          onDone={() => { onRefresh?.(); setMatToast({ type: 'success', message: 'Animación de papel añadida al material.' }) }}
         />
       )}
 
