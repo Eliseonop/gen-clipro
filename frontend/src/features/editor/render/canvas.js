@@ -17,7 +17,8 @@ import { beginMaskLayer, endMaskLayer, maskHandles, strokeMaskShape } from '../.
 import { cssFont } from '../../../lib/textstyles'
 import { keyframesOn, normalizeItems } from '../../../lib/clipKeyframes'
 import {
-  cropWindow, destRectOnFrame, frameRectOf, isFramed, isOverlay, mediaSize, slotAspectOf, sourceCropPx, videosAt,
+  cropWindow, destRectOnFrame, frameRectOf, isOverlay, mediaSize, slotAspectOf, sourceCropPx,
+  srcRectOn, videosAt,
 } from '../../../lib/clipLayout'
 
 // Desplaza geometría (dest / box / handles) del sistema local del recuadro Main
@@ -134,8 +135,9 @@ function overlayDest(ctx, media, clip, srcTime, outW, outH, localT, frame) {
   return { px, dest: destRectOnFrame(posedTransform(clip, localT), px, outW, outH, frame) }
 }
 
-function drawOverlayLayer(ctx, media, clip, srcTime, outW, outH, fx, localT, frame) {
-  const { px, dest } = overlayDest(ctx, media, clip, srcTime, outW, outH, localT, frame)
+function drawOverlayLayer(ctx, media, drawEl, clip, srcTime, outW, outH, fx, localT, frame) {
+  const { px: geo, dest } = overlayDest(ctx, media, clip, srcTime, outW, outH, localT, frame)
+  const px = srcRectOn(drawEl, media, geo)
   const pose = clipPose(clip, localT)
   ctx.save()
   if (fx.wipe != null && fx.wipe < 1) {
@@ -148,7 +150,7 @@ function drawOverlayLayer(ctx, media, clip, srcTime, outW, outH, fx, localT, fra
   ctx.translate(dest.dx + dest.dw / 2 + fx.tx * dest.dw, dest.dy + dest.dh / 2 + fx.ty * dest.dh)
   ctx.rotate((dest.rotation || 0) * Math.PI / 180)
   ctx.scale(fx.scale, fx.scale)
-  try { ctx.drawImage(media, px.sx, px.sy, px.sw, px.sh, -dest.dw / 2, -dest.dh / 2, dest.dw, dest.dh) } catch { /* noop */ }
+  try { ctx.drawImage(drawEl, px.sx, px.sy, px.sw, px.sh, -dest.dw / 2, -dest.dh / 2, dest.dw, dest.dh) } catch { /* noop */ }
   ctx.restore()
   return dest
 }
@@ -214,9 +216,10 @@ function gifLoopDur(clip, el) {
 }
 
 // Fuente de dibujo del clip: fotograma de GIF si toca, y encima el recorte de
-// Eliminar fondo. El resultado siempre tiene el ASPECTO del material, así que la
-// geometría posterior (recorte, pose, máscaras) no cambia. Mismo gancho que ya
-// usaba el GIF: para el resto del dibujo esto "es" la fuente.
+// Eliminar fondo. El resultado conserva el ASPECTO del material pero NO siempre su
+// resolución (el recorte topa el lado mayor), así que quien dibuje debe traducir
+// los píxeles de origen con `srcRectOn`. Mismo gancho que ya usaba el GIF: para el
+// resto del dibujo esto "es" la fuente.
 function drawSourceFor(clip, el, srcTime) {
   const gif = gifDrawable(clip, el, srcTime)
   const base = gif || el
@@ -425,11 +428,12 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
       ? clamp(timelineToSource(clip, head), clip.in_point, clip.out_point)
       : el.currentTime
     // GIF animado + Eliminar fondo: la fuente de dibujo se sustituye por un
-    // canvas de las MISMAS dimensiones, así el recorte/encuadre no cambia.
+    // canvas del MISMO aspecto; la geometría se sigue calculando con `el` (las
+    // dimensiones reales del material), nunca con la del recorte.
     const drawEl = drawSourceFor(clip, el, srcTime)
     const fx = fxForClip(clip, head)
     if (isOverlay(clip)) {
-      const dest = drawOverlayLayer(g, drawEl, clip, srcTime, outW, outH, fx, localT, fr)
+      const dest = drawOverlayLayer(g, el, drawEl, clip, srcTime, outW, outH, fx, localT, fr)
       flush()
       hits.push({ id: clip.id, kind: clip.kind, dest, overlay: true })
       if (selected.has(clip.id)) overlayDestSel = dest
@@ -568,13 +572,12 @@ export function drawMainView(head, env) {
 
   const clip = clipsRef.current.find((c) => c.id === selRef.current)
   // Vista de recorte (fuente completa + recuadro naranja móvil, zonas fuera atenuadas)
-  // cuando el clip está encuadrado con "Fijar vídeo" (llena marco o slot) o cuando se
-  // pulsa "Recortar" sobre un overlay libre. Si no, compuesto (marco fijo). Estable en play.
-  // Con el panel de Máscara abierto siempre se muestra el compuesto: es donde
+  // cuando se pulsa "Recortar" sobre el clip. Si no, compuesto (marco fijo). Estable
+  // en play. Con el panel de Máscara abierto siempre se muestra el compuesto: es donde
   // se manipula la máscara (la vista de recorte no la puede representar).
   const cropEdit = !!(clip && isVisualClip(clip) && !framingModeRef.current
     && !env.maskModeRef?.current
-    && (isFramed(clip) || cropModeRef?.current))
+    && cropModeRef?.current)
 
   // Recorte (fuente + recuadro): Clip Editor, o herramienta Encuadre con un visual seleccionado.
   if (cropEdit && clip && isVisualClip(clip)) {
@@ -680,8 +683,8 @@ export function drawMainView(head, env) {
   ctx.restore()
 }
 
-// Vista de RESULTADO en vivo (composición final 9:16) para el panel lateral mientras se
-// encuadra con Fijar vídeo. Reusa drawComposite en un canvas propio con el aspecto de
+// Vista de RESULTADO en vivo (composición final) para el panel lateral mientras se
+// recorta la fuente. Reusa drawComposite en un canvas propio con el aspecto de
 // salida. Sin selección/handles ni hit-list (no debe interferir con la edición del recorte).
 export function drawResultView(head, env) {
   const { resultCanvasRef, outRef } = env

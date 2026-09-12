@@ -4,7 +4,6 @@ import FlipSelect from '../../components/FlipSelect'
 import { clipPose } from '../../lib/clipAnim'
 import { APPEAR_OPTIONS, COLOR_FX, EXIT_OPTIONS, fxNum } from '../../lib/clipFx'
 import { canKeyframe, kfState } from '../../lib/clipKeyframes'
-import { FRAME_OPTIONS } from '../../lib/clipLayout'
 import { bgCapable } from '../../lib/clipBg'
 import { maskable } from '../../lib/clipMask'
 import { isVisualClip } from './editorModel'
@@ -43,12 +42,8 @@ export default function EdInspector({
   selectedClip,
   textMode,
   audioMode,
-  fijarVideo,
-  onFijarVideo,
   cropping,
   onCropping,
-  frameSlot,
-  onFrameSlot,
   effectsProps,
   shapeProps,
   maskProps,
@@ -133,54 +128,20 @@ export default function EdInspector({
           </div>
         )}
 
-        {hasTarget && activeNav === 'video' && sub === 'basic' && visual && onFijarVideo && (
+        {hasTarget && activeNav === 'video' && sub === 'basic' && visual && onCropping && (
           <div className="ed-insp-tools">
             <label
-              className={`ed-mode-toggle ${fijarVideo ? 'on' : ''}`}
-              title="Fijar vídeo: mueves solo el encuadre (recorte). Apagado: mueves y escalas el vídeo dentro del encuadre."
+              className={`ed-mode-toggle ${cropping ? 'on' : ''}`}
+              title="Recortar: elige qué parte de la fuente se ve (arrastra el recuadro naranja). Luego muévela/escálala libre en el lienzo."
             >
               <input
                 type="checkbox"
-                checked={!!fijarVideo}
-                onChange={(e) => onFijarVideo(e.target.checked)}
+                checked={!!cropping}
+                onChange={(e) => onCropping(e.target.checked)}
               />
-              <Icon name={fijarVideo ? 'lock' : 'open_with'} size={15} />
-              Fijar vídeo
+              <Icon name="crop" size={15} />
+              Recortar
             </label>
-            {!fijarVideo && onCropping && (
-              <label
-                className={`ed-mode-toggle ${cropping ? 'on' : ''}`}
-                title="Recortar: elige qué parte de la fuente se ve (arrastra el recuadro naranja). Luego muévela/escálala libre en el lienzo."
-              >
-                <input
-                  type="checkbox"
-                  checked={!!cropping}
-                  onChange={(e) => onCropping(e.target.checked)}
-                />
-                <Icon name="crop" size={15} />
-                Recortar
-              </label>
-            )}
-          </div>
-        )}
-
-        {hasTarget && activeNav === 'video' && sub === 'basic' && visual && fijarVideo && onFrameSlot && (
-          <div className="ed-insp-pos">
-            <span className="ed-insp-pos-lab">Posición en el 9:16</span>
-            <div className="ed-insp-pos-grid">
-              {FRAME_OPTIONS.map((o) => (
-                <button
-                  key={o.id}
-                  type="button"
-                  className={`ed-pos-btn ${frameSlot === o.id ? 'on' : ''}`}
-                  title={o.label}
-                  onClick={() => onFrameSlot(o.id)}
-                >
-                  <Icon name={o.icon} size={16} />
-                  <em>{o.label.replace('Mitad ', '')}</em>
-                </button>
-              ))}
-            </div>
           </div>
         )}
 

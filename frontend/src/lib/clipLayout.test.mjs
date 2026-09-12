@@ -1,16 +1,16 @@
 import assert from 'node:assert/strict'
 import {
-  applyFrame,
   clampCrop,
   cropSizeFromCorner,
   cropWindow,
   destRect,
   destRectOnCanvas,
-  enableOverlay,
+  freeFrameAt,
   isOverlay,
   mediaSize,
   newTransform,
   sourceCropPx,
+  srcRectOn,
   videosAt,
 } from './clipLayout.js'
 
@@ -110,54 +110,8 @@ const clamped = clampCrop(0.4, 0.3, sized.wf, sized.hf)
 assert.ok(clamped.wf <= 1)
 assert.ok(clamped.cx >= clamped.wf / 2)
 
-// --- Activar overlay captura el encuadre actual y no lo reescribe al escalar ---
-
-const enabled = enableOverlay(fillClip, srcAspect, outAspect, 0, srcW, srcH, outW, outH)
-assert.equal(enabled.layout, 'overlay')
-assert.ok(enabled.reframe.crop_w > 0)
-assert.ok(enabled.reframe.crop_h > 0)
-const cropOnEnable = cropWindow(enabled, srcAspect, outAspect, 0)
-assert.ok(Math.abs(cropOnEnable.wf - fillCrop.wf) < 1e-9)
-assert.ok(Math.abs(cropOnEnable.hf - fillCrop.hf) < 1e-9)
-const afterUserScale = cropWindow(
-  { ...enabled, transform: { ...enabled.transform, scale: enabled.transform.scale * 2 } },
-  srcAspect, outAspect, 0,
-)
-assert.equal(afterUserScale.wf, cropOnEnable.wf)
-assert.equal(afterUserScale.hf, cropOnEnable.hf)
-
 assert.equal(newTransform().scale, 1)
 assert.equal(newTransform().rotation, 0)
-
-// --- Encuadre asistido: Completo / mitad superior / mitad inferior ---
-
-const top = applyFrame(fillClip, 'top', srcAspect, outAspect, 0, srcW, srcH, outW, outH)
-assert.equal(top.layout, 'overlay')
-assert.equal(top.frame, 'top')
-assert.equal(top.reframe.dual_crop, false)
-assert.equal(top.reframe.keyframes.length, fillClip.reframe.keyframes.length)
-const topCrop = cropWindow({ ...fillClip, ...top }, srcAspect, outAspect, 0)
-const topPx = sourceCropPx(topCrop, srcW, srcH)
-const topDest = destRect(top.transform, topPx, outW, outH)
-assert.ok(Math.abs(topDest.dx) < 2)
-assert.ok(Math.abs(topDest.dy) < 2)
-assert.ok(Math.abs(topDest.dw - outW) < 2)
-assert.ok(Math.abs(topDest.dh - outH / 2) < 2)
-
-const bot = applyFrame(fillClip, 'bottom', srcAspect, outAspect, 0, srcW, srcH, outW, outH)
-const botCrop = cropWindow({ ...fillClip, ...bot }, srcAspect, outAspect, 0)
-const botPx = sourceCropPx(botCrop, srcW, srcH)
-const botDest = destRect(bot.transform, botPx, outW, outH)
-assert.ok(Math.abs(botDest.dx) < 2)
-assert.ok(Math.abs(botDest.dy - outH / 2) < 2)
-assert.ok(Math.abs(botDest.dw - outW) < 2)
-assert.ok(Math.abs(botDest.dh - outH / 2) < 2)
-assert.ok(Math.abs((botDest.dy + botDest.dh) - outH) < 2)
-
-const full = applyFrame(top, 'full', srcAspect, outAspect, 0, srcW, srcH, outW, outH)
-assert.equal(full.layout, 'fill')
-assert.equal(full.frame, 'full')
-assert.equal(isOverlay(full), false)
 
 const containClip = {
   layout: 'fill',
@@ -190,5 +144,62 @@ assert.deepEqual(sameTrackFront.map((c) => c.id), ['v', 's', 'm'])
 assert.equal(mediaSize({ videoWidth: 1920, videoHeight: 1080 }).w, 1920)
 assert.equal(mediaSize({ naturalWidth: 800, naturalHeight: 600 }).w, 800)
 assert.equal(mediaSize({ videoWidth: 0, naturalWidth: 400, naturalHeight: 300 }).h, 300)
+
+// --- Eliminar fondo: el recorte se dibuja a menos resolución, la geometría no cambia ---
+// El material es 1920x1080; el recorte de Eliminar fondo topa en 1280x720. El
+// rectángulo de origen se reubica en el lienzo pequeño, pero el destino (y por tanto
+// el tamaño del clip en pantalla) lo decide la geometría del MATERIAL.
+const material = { videoWidth: 1920, videoHeight: 1080 }
+const recorte = { width: 1280, height: 720 }
+const cropPx = sourceCropPx({ cx: 0.5, cy: 0.5, wf: 0.5, hf: 0.5 }, 1920, 1080)
+const enRecorte = srcRectOn(recorte, material, cropPx)
+assert.deepEqual(enRecorte, { sx: 320, sy: 180, sw: 640, sh: 360 })
+// Mismas dimensiones (GIF, o material por debajo del tope) → el rectángulo no se toca.
+assert.equal(srcRectOn({ width: 1920, height: 1080 }, material, cropPx), cropPx)
+assert.equal(srcRectOn(null, material, cropPx), cropPx)
+
+// --- Objeto libre → encuadre equivalente (cx/cy/zoom) ---
+// Un clip 1920x1080 recortado a la ventana 9:16 y escalado hasta llenar el cuadro
+// devuelve el MISMO encuadre del que salió: es la inversa de convertirlo a objeto.
+const fOutW = 720, fOutH = 1280
+const fSrc = { w: 1920, h: 1080 }
+const zoom = 0.7
+const original = { cx: 0.42, cy: 0.55, zoom }
+const framed = {
+  layout: 'fill',
+  start: 0,
+  in_point: 0,
+  out_point: 8,
+  reframe: { zoom, keyframes: [{ t: 0, ...original }] },
+}
+const win = cropWindow(framed, fSrc.w / fSrc.h, fOutW / fOutH, 0, 0)
+const winPx = sourceCropPx(win, fSrc.w, fSrc.h)
+const asFreeObject = {
+  ...framed,
+  layout: 'overlay',
+  frame: 'free',
+  reframe: { ...framed.reframe, crop_w: win.wf, crop_h: win.hf, dual_crop: false },
+  transform: { x: 0.5, y: 0.5, scale: fOutH / winPx.sh, rotation: 0 },
+}
+const back = freeFrameAt(asFreeObject, 0, fSrc.w, fSrc.h, fOutW, fOutH)
+assert.ok(Math.abs(back.zoom - zoom) < 1e-6, `zoom ${back.zoom}`)
+assert.ok(Math.abs(back.cx - win.cx) < 1e-6, `cx ${back.cx}`)
+assert.ok(Math.abs(back.cy - win.cy) < 1e-6, `cy ${back.cy}`)
+
+// Mover el objeto en el lienzo mueve el encuadre al lado contrario: al desplazarlo a
+// la derecha, lo que queda dentro del cuadro es la parte IZQUIERDA de la fuente.
+const shifted = freeFrameAt(
+  { ...asFreeObject, transform: { ...asFreeObject.transform, x: 0.6 } },
+  0, fSrc.w, fSrc.h, fOutW, fOutH,
+)
+assert.ok(shifted.cx < back.cx, `${shifted.cx} < ${back.cx}`)
+assert.ok(Math.abs(shifted.zoom - zoom) < 1e-6)
+
+// Escalar el objeto al doble deja ver la mitad de alto de la fuente.
+const zoomed = freeFrameAt(
+  { ...asFreeObject, transform: { ...asFreeObject.transform, scale: asFreeObject.transform.scale * 2 } },
+  0, fSrc.w, fSrc.h, fOutW, fOutH,
+)
+assert.ok(Math.abs(zoomed.zoom - zoom / 2) < 1e-6, `zoom ${zoomed.zoom}`)
 
 console.log('clipLayout overlay crop/transform ok')

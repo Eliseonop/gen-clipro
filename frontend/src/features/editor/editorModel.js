@@ -817,7 +817,7 @@ export function duplicateClipOntoTrack(clip, trackId, newId) {
 // audio (volume/muted/speed) ni la duración. Así el clip destino conserva su
 // contenido y su posición temporal, y solo cambia su aspecto.
 export const CLIP_VISUAL_KEYS = [
-  'layout',    // 'fill' | 'overlay' → "Fijar vídeo" vs objeto libre
+  'layout',    // 'overlay' (objeto libre); 'fill' solo llega de timelines antiguas
   'frame',     // 'full' | slot ocupado
   'transform', // { x, y, scale, rotation, opacity } → posición/escala/rotación
   'reframe',   // encuadre (zoom, crop, keyframes de paneo, dual_crop, …)

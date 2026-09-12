@@ -166,7 +166,11 @@ function blit(ctx, video, r) {
 // `outAspect` = ancho/alto del formato de salida (9/16, 16/9, 1, …).
 export function drawReframe(ctx, video, reframe, srcTime, outAspect = OUT_RATIO, opts) {
   const c = ctx.canvas
-  const vw = video.videoWidth || video.naturalWidth, vh = video.videoHeight || video.naturalHeight
+  // `video` puede ser un <canvas> (fotograma de GIF, recorte de Eliminar fondo):
+  // ahí las dimensiones están en width/height. El recorte va en FRACCIONES de la
+  // fuente, así que dibujar desde un lienzo de menor resolución no mueve el encuadre.
+  const vw = video.videoWidth || video.naturalWidth || video.width
+  const vh = video.videoHeight || video.naturalHeight || video.height
   if (!vw || !vh) return
   const mode = reframe?.pan_mode || 'smooth'
   // `dest` opcional: región de salida (px). Por defecto, todo el canvas. Permite
