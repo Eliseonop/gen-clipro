@@ -3,10 +3,11 @@ import Icon from '../../components/Icon'
 import { uploadVideo } from '../../services/api'
 import { bustUrl } from './MaterialClipGrid'
 
-// Paper Animator: abre la herramienta (paperima recortado) embebida en un
-// iframe. El editor solo le pasa la imagen seleccionada y recibe de vuelta el
+// Paper Animator: abre la herramienta (motor de paperima recortado, vive en
+// frontend/paper-animator/ y es una entrada más del build de Vite) embebida en
+// un iframe. El editor solo le pasa la imagen seleccionada y recibe de vuelta el
 // vídeo/animación exportado, que sube al material (Vídeos). La imagen original
-// no se toca. Comunicación por postMessage (ver src/modules/embed.js en paperima):
+// no se toca. Comunicación por postMessage (ver paper-animator/modules/embed.js):
 //   iframe -> { source:'paperima', type:'ready' }
 //   host   -> { source:'paperima-host', type:'load-image', blob, name, aspectRatio }
 //   iframe -> { source:'paperima', type:'result', blob, ext, mime, name }

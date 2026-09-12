@@ -138,7 +138,7 @@ function applyAspectRatio(ratio) {
 // aplica en dos pasadas porque scripts.js hace loadPreferences() en su propio
 // DOMContentLoaded y podría pisar el idioma según el orden de los listeners:
 // la segunda pasada, en 'load', va después de todas ellas.
-function useSpanish() {
+function applySpanish() {
     state.language = 'es';
     updateUIText('es');
     relabelExportButtons();
@@ -147,9 +147,9 @@ function useSpanish() {
 function initEmbed() {
     document.body.classList.add('paperima-embed');
     injectEmbedStyles();
-    useSpanish();
+    applySpanish();
     restructurePanels();
-    window.addEventListener('load', useSpanish);
+    window.addEventListener('load', applySpanish);
 
     window.addEventListener('message', async (ev) => {
         const data = ev.data;

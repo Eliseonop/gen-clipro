@@ -1,5 +1,4 @@
-# Build output vendorizado de paperima (ver docs/): se copia entero a public/ por
-# scripts/build-paper-animator.sh. Es bundle minificado + iconos + texturas, no
-# fuente de este repo: mete ruido en el grafo y sus 22 imágenes gastan un
-# subagente de visión cada una en cada update.
+# Texturas de papel que usa Paper Animator en runtime (16 .webp). No son fuente:
+# meten ruido en el grafo y cada imagen gasta un subagente de visión en cada
+# update. El motor en sí (frontend/paper-animator/) sí se indexa.
 frontend/public/paper-animator/
