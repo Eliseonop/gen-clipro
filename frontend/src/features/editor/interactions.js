@@ -2,7 +2,7 @@
 import { clamp, clampCenter, frameAt, zoomFromCorner, isNearCropCorner } from '../../lib/panning'
 import {
   canvasPointer, clampCrop, CLIP_POS_MAX, CLIP_POS_MIN, cropSizeFromCorner, cropWindow, destRectOnCanvas,
-  frameRectOf, hitTransformHandle, isFramed, isOverlay, mediaSize, sourceCropPx,
+  frameRectOf, hitTransformHandle, isOverlay, mediaSize, sourceCropPx,
 } from '../../lib/clipLayout'
 import { canvasToSourceNorm, framingRect, hitFrontmost, pointInDest } from './render/canvas'
 import { snapAlign, textAlignTargets } from '../../lib/alignGuides'
@@ -585,14 +585,13 @@ export function createCanvasDownHandler(ctx) {
     // Con su panel abierto la máscara manda: se edita sobre el compuesto, por
     // delante del recorte y del transform del clip.
     if (handleMaskPointer(e, canvas, ctx)) return
-    // Recorte de fuente cuando el clip está encuadrado (Fijar vídeo: llena marco o
-    // slot) o con "Recortar" sobre un overlay libre. Con el panel de máscara abierto
-    // NO aplica: el lienzo muestra el compuesto y estas coordenadas son las de la
-    // vista de fuente, así que moverían el encuadre a ciegas.
-    // Se usa el clip FRESCO de clipsRef (evita un `selectedClip` desfasado tras aplicar slot).
+    // Recorte de fuente: solo con "Recortar" activo sobre un clip visual. Con el
+    // panel de máscara abierto NO aplica: el lienzo muestra el compuesto y estas
+    // coordenadas son las de la vista de fuente, así que moverían el encuadre a ciegas.
+    // Se usa el clip FRESCO de clipsRef (evita un `selectedClip` desfasado).
     const sel = (clipsRef?.current || []).find((c) => c.id === selectedClip?.id) || selectedClip
     if (!ctx.maskModeRef?.current
-      && sel && isVisualClip(sel) && (isFramed(sel) || cropModeRef?.current)) {
+      && sel && isVisualClip(sel) && cropModeRef?.current) {
       onCropDown(e)
       return
     }

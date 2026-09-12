@@ -5,9 +5,11 @@
 //
 //     const drawEl = cutoutDrawable(clip, el, srcTime) || gifDrawable(...) || el
 //
-// El canvas devuelto conserva el ASPECTO del material, así que toda la geometría
-// posterior (recorte, encuadre, pose, keyframes, máscaras) sigue funcionando sin
-// cambios: para el resto del editor es "la fuente", solo que con agujeros.
+// El canvas devuelto conserva el ASPECTO del material, pero puede tener MENOS
+// resolución (ver los topes de abajo). La geometría posterior (recorte, encuadre,
+// pose, keyframes, máscaras) se calcula siempre con las dimensiones del material
+// original; quien dibuje traduce los píxeles de origen a este lienzo (`srcRectOn`
+// en render/canvas.js). Para el resto del editor es "la fuente", con agujeros.
 //
 // Reparto de trabajo con el backend:
 //   * el backend sirve el matte CRUDO del modelo (nivel 1 de la caché), que es

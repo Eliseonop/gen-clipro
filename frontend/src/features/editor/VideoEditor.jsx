@@ -31,7 +31,7 @@ import { SHAPE_DEFAULT_DUR } from '../../lib/shapes'
 import { MASK_KF_KEYS, clipMasks, defaultMask, maskId, normalizeMask } from '../../lib/clipMask'
 import { autoActive, bgCapable, clipBg, defaultBg, normalizeBg } from '../../lib/clipBg'
 import { resetBgMeta, resetCutout } from './bgCutout'
-import { applyFrame, disableOverlay, enableOverlay, frameOf, isFramed, isOverlay, mediaSize, newTransform, videosAt } from '../../lib/clipLayout'
+import { cropWindow, freeFrameAt, isOverlay, mediaSize, newTransform, sourceCropPx, videosAt } from '../../lib/clipLayout'
 import {
   AUDIO_FX_KEYS, applyVolumeFade, canKeyframe, clipPropsAt, clipVolumeAt, clampVolume, deleteKeyframeItem,
   copyKeyframeAt, disableKeyframes, duplicateKeyframeAt, enableKeyframes, flattenPatch,
@@ -120,19 +120,45 @@ function reframeForCut(reframe, t0, t1) {
   }
 }
 
-// El recorte guardado (cx/cy/zoom) se hornea desde la MISMA fuente de verdad que
-// el preview y el export: `clipPropsAt`. Sirva o no con pose-keyframes (si no hay,
-// devuelve el encuadre de reframe), así "Guardar clip" siempre coincide con lo que
-// se ve en pantalla. Muestrea en tiempo LOCAL (0 = inicio del corte = t de FFmpeg
-// tras -ss); los tiempos NO se vuelven a desplazar.
-function bakedReframeForCut(clip, dur) {
-  const d = Math.max(0.1, dur)
+// Modo libre: el ÚNICO modo de un clip visual desde que no existe "Fijar vídeo".
+// El clip es un objeto suelto sobre el lienzo (se mueve, se escala y se recorta a
+// mano, estilo CapCut). Todo lo que llegue en el layout antiguo — 'fill' (el propio
+// "Fijar vídeo") o un overlay pegado a un hueco — se convierte al entrar.
+// Excepción: el doble encuadre (dual_crop) parte el clip en dos mitades y eso un
+// objeto libre no lo sabe hacer; esas timelines antiguas se dejan como están.
+function needsFreeLayout(c) {
+  if (!isVisualClip(c) || c.reframe?.dual_crop) return false
+  return !(isOverlay(c) && (c.frame || 'free') === 'free')
+}
+
+// Instantes (tiempo LOCAL) en los que se muestrea el encuadre al hornear el corte:
+// los extremos, los pose-keyframes y el paneo del encuadre — que vive en
+// reframe.keyframes en tiempo de FUENTE (seguimiento de cara), así que se traduce.
+function cutSampleTimes(clip, d) {
   const times = new Set([0, +d.toFixed(4)])
   for (const it of normalizeItems(clip.keyframes?.items)) {
     times.add(+clamp(it.t, 0, d).toFixed(4))
   }
-  const keyframes = [...times].sort((a, b) => a - b).map((t) => {
-    const p = clipPropsAt(clip, t)
+  for (const k of clip.reframe?.keyframes || []) {
+    const t = sourceToTimeline(clip, k.t) - (clip.start || 0)
+    if (t >= 0 && t <= d) times.add(+t.toFixed(4))
+  }
+  return [...times].sort((a, b) => a - b)
+}
+
+// El recorte guardado (cx/cy/zoom) se hornea desde la MISMA fuente de verdad que
+// el preview y el export, así "Guardar clip" siempre coincide con lo que se ve en
+// pantalla: `freeFrameAt` para los clips en modo libre (todos, desde que no existe
+// "Fijar vídeo") y `clipPropsAt` para los que aún conservan el encuadre antiguo.
+// Muestrea en tiempo LOCAL (0 = inicio del corte = t de FFmpeg tras -ss); los
+// tiempos NO se vuelven a desplazar.
+function bakedReframeForCut(clip, dur, src, out) {
+  const d = Math.max(0.1, dur)
+  const free = isOverlay(clip) && src?.w > 0 && src?.h > 0
+  const keyframes = cutSampleTimes(clip, d).map((t) => {
+    const p = free
+      ? freeFrameAt(clip, t, src.w, src.h, out.w, out.h)
+      : clipPropsAt(clip, t)
     return {
       id: uid('k'),
       t,
@@ -144,6 +170,10 @@ function bakedReframeForCut(clip, dur) {
   })
   const rf = { ...(clip.reframe || {}), keyframes }
   delete rf.keyframes2
+  // El corte se guarda ya recortado: la ventana de recorte del objeto libre no
+  // debe viajar con él (si no, se aplicaría dos veces al reabrirlo).
+  delete rf.crop_w
+  delete rf.crop_h
   return rf
 }
 
@@ -378,17 +408,17 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     return () => clearTimeout(id)
   }, [timelinePayload, loaded, project.id])
 
-  // Aplica el ajuste base (objeto libre a altura del cuadro) a los clips marcados
-  // `_baseFit` en cuanto su medio tiene dimensiones. Cubre tanto clips recién
-  // añadidos como el toggle "Fijar vídeo → OFF", sin depender del evento de carga.
+  // Todo clip visual acaba en modo libre en cuanto su medio tiene dimensiones,
+  // venga de donde venga (material, arrastre, timeline guardada, tramo preparado).
+  // No depende del evento de carga: los clips que ya tenían el medio en memoria
+  // también pasan por aquí. `applyFreeLayout` los deja en overlay+free → no reentra.
   useEffect(() => {
-    if (!clips.some((c) => c._baseFit)) return
+    if (!clips.some((c) => needsFreeLayout(c))) return
     for (const c of clips) {
-      if (!c._baseFit) continue
+      if (!needsFreeLayout(c)) continue
       const el = mediaEls.current.get(c.id)
-      if (mediaSize(el).h) applyBaseFit(c, el)
+      if (mediaSize(el).h) applyFreeLayout(c, el)
     }
-    // applyBaseFit limpia _baseFit → no reentra en bucle.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clips])
 
@@ -803,7 +833,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     // el encuadre desde clipPropsAt (misma fuente que el preview y compose.py).
     const cutRf = video.reframe?.dual_crop
       ? reframeForCut(video.reframe, video.in_point || 0, video.out_point || (end - start))
-      : bakedReframeForCut(video, end - start)
+      : bakedReframeForCut(video, end - start, mediaSize(mediaEls.current.get(video.id)), { w: outW, h: outH })
     clipSaveCtxRef.current = {
       existingIndex: clipMeta.existingIndex,
       description: (clipMeta.description || '').trim() || null,
@@ -953,11 +983,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     }))
   }
 
-  // Clips nuevos "planos" (sin recorte/paneo horneado) arrancan como objeto libre:
-  // Escala 100% = altura del clip = altura del cuadro naranja, centrado. Los clips
-  // preparados/guardados (con reframe) conservan su encuadre.
+  // Clips nuevos "planos" (sin recorte/paneo horneado) se colocan a altura completa
+  // del cuadro; los que traen encuadre (preparados/guardados) lo conservan tal cual
+  // se ve al convertirlos.
   function wantsBaseFit(clip) {
-    if (!isVisualClip(clip)) return false
     const rf = clip.reframe
     if (!rf) return true
     if (rf.keyframes?.length) return false
@@ -965,25 +994,45 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (rf.zoom != null && Math.abs(rf.zoom - 1) > 0.001) return false
     return true
   }
-  const flagBaseFit = (clip) => (wantsBaseFit(clip) ? { ...clip, _baseFit: true } : clip)
 
-  // Al cargar el medio, coloca el clip nuevo como objeto libre a altura completa del
-  // cuadro (overlay, crop completo, centrado, scale = outH/srcH). Reutiliza la tubería
-  // de overlay → el preview coincide con el export.
-  function applyBaseFit(clip, el) {
-    const { h } = mediaSize(el)
-    if (!h) return
-    const scale = +(outRef.current.h / h).toFixed(5)
+  // Al cargar el medio, deja el clip como objeto libre (overlay + frame 'free'):
+  //   * sin encuadre horneado → centrado y a altura completa del cuadro naranja
+  //     (Escala 100% = altura del clip = altura del cuadro);
+  //   * con encuadre (zoom/paneo de seguimiento) → captura la ventana de recorte
+  //     actual y la escala hasta llenar el cuadro, así en pantalla NO se mueve nada
+  //     y el paneo animado (cx/cy de reframe) se conserva;
+  //   * si ya era un overlay pegado a un hueco → solo suelta el hueco (misma
+  //     geometría: el recorte y la transformación ya son los suyos).
+  function applyFreeLayout(clip, el) {
+    const { w: srcW, h: srcH } = mediaSize(el)
+    if (!srcW || !srcH) return
+    const oW = outRef.current.w
+    const oH = outRef.current.h
     setClips((prev) => prev.map((c) => {
-      if (c.id !== clip.id || !c._baseFit) return c
-      const rest = { ...c }
-      delete rest._baseFit
+      if (c.id !== clip.id || !needsFreeLayout(c)) return c
+      if (isOverlay(c) && c.reframe?.crop_w != null && c.reframe?.crop_h != null) {
+        return { ...c, frame: 'free' }
+      }
+      if (wantsBaseFit(c)) {
+        return {
+          ...c,
+          layout: 'overlay',
+          frame: 'free',
+          reframe: { ...(c.reframe || newReframe()), crop_w: 1, crop_h: 1, dual_crop: false, keyframes: [] },
+          transform: { x: 0.5, y: 0.5, scale: +(oH / srcH).toFixed(5), rotation: 0 },
+        }
+      }
+      const srcT = clamp(timelineToSource(c, playheadRef.current), c.in_point, c.out_point)
+      const localT = Math.max(0, playheadRef.current - (c.start || 0))
+      const crop = cropWindow({ ...c, layout: 'fill' }, srcW / srcH, oW / oH, srcT, localT)
+      const px = sourceCropPx(crop, srcW, srcH)
+      const scale = Math.max(oW / Math.max(1, px.sw), oH / Math.max(1, px.sh))
       return {
-        ...rest,
+        ...c,
         layout: 'overlay',
         frame: 'free',
-        reframe: { ...(c.reframe || newReframe()), crop_w: 1, crop_h: 1, dual_crop: false, keyframes: [] },
-        transform: { x: 0.5, y: 0.5, scale, rotation: 0 },
+        reframe: { ...(c.reframe || newReframe()), crop_w: crop.wf, crop_h: crop.hf, dual_crop: false },
+        transform: { x: 0.5, y: 0.5, scale: +scale.toFixed(5), rotation: 0 },
       }
     }))
   }
@@ -1015,7 +1064,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       : assetKind === 'clips'
         ? ((item.end ?? item.duration ?? 0) - (item.start ?? 0))
         : (item.duration || 0)
-    const clip = flagBaseFit(makeClip(assetKind, item, track.id, at, dur))
+    const clip = makeClip(assetKind, item, track.id, at, dur)
     setClips((prev) => [...prev, clip])
     setSelClipId(clip.id)
     setSelClipIds([clip.id])
@@ -1039,10 +1088,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       animated: payload.animated,
       loop: payload.loop,
     }, trackId, startTime, payload.duration)
-    const dropped = flagBaseFit(clip)
-    setClips((prev) => [...prev, dropped])
-    setSelClipId(dropped.id)
-    setSelClipIds([dropped.id])
+    setClips((prev) => [...prev, clip])
+    setSelClipId(clip.id)
+    setSelClipIds([clip.id])
   }
 
   function splitClip(id, at) {
@@ -1244,8 +1292,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (clip.track_id) setSelTrackId(clip.track_id)
     if (!keepGroup) {
       setFramingMode(null)
-      if (isVisualClip(clip) && !isOverlay(clip)) setCropMode(true)
-      else setCropMode(false)
+      setCropMode(false)
     }
     return next
   }
@@ -1379,72 +1426,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       next = upsertKf(next, t, flattenPatch(patch, 'transform'))
       markKf(next, t)
       return next
-    }))
-  }
-  function applyClipFrame(clip, slot) {
-    if (!clip || !isVisualClip(clip)) return
-    const group = clipsRef.current.filter((c) => selIdsRef.current.includes(c.id) && isVisualClip(c))
-    const targets = group.length ? group : [clip]
-    setClips((prev) => prev.map((c) => {
-      if (!targets.some((t) => t.id === c.id)) return c
-      const el = mediaEls.current.get(c.id)
-      const srcW = mediaSize(el).w || 1920
-      const srcH = mediaSize(el).h || 1080
-      const srcT = clamp(timelineToSource(c, playhead), c.in_point, c.out_point)
-      const clipT = Math.max(0, playhead - (c.start || 0))
-      const patch = applyFrame(c, slot, srcW / srcH, outAspect, srcT, srcW, srcH, outW, outH, clipT)
-      let next = {
-        ...c,
-        layout: patch.layout,
-        frame: patch.frame,
-        transform: patch.transform,
-        reframe: { ...(c.reframe || newReframe()), ...patch.reframe },
-      }
-      if (shouldKeyframe(c, patch.transform || {})) {
-        next = upsertKf(next, clipT, flattenPatch({ ...(patch.transform || {}) }, 'transform'))
-        if (c.id === clip.id) markKf(next, clipT)
-      }
-      return next
-    }))
-  }
-  function toggleOverlay(clip, on) {
-    if (!clip || !isVisualClip(clip)) return
-    if (!on) {
-      setClips((prev) => prev.map((c) => (c.id === clip.id ? { ...c, ...disableOverlay(c) } : c)))
-      return
-    }
-    const el = mediaEls.current.get(clip.id)
-    const srcW = mediaSize(el).w || 1920
-    const srcH = mediaSize(el).h || 1080
-    const srcT = clamp(timelineToSource(clip, playhead), clip.in_point, clip.out_point)
-    const clipT = Math.max(0, playhead - (clip.start || 0))
-    const patch = enableOverlay(clip, srcW / srcH, outAspect, srcT, srcW, srcH, outW, outH, clipT)
-    setClips((prev) => prev.map((c) => (c.id === clip.id ? {
-      ...c,
-      layout: patch.layout,
-      frame: patch.frame,
-      transform: patch.transform,
-      reframe: { ...(c.reframe || newReframe()), ...patch.reframe },
-    } : c)))
-  }
-  // Toggle por-clip "Fijar vídeo": ON = Modo 1 (fill, vídeo fijo + mover encuadre);
-  // OFF = Modo 2 (overlay, mover/escalar el vídeo dentro del encuadre, tipo CapCut).
-  // El estado vive en el clip (layout), no en el editor. Vale en Main y en Clip Editor.
-  function setFijarVideo(clip, fixed) {
-    if (!clip || !isVisualClip(clip)) return
-    setClips((prev) => prev.map((c) => {
-      if (c.id !== clip.id) return c
-      if (fixed) return { ...c, layout: 'fill', frame: 'full' }
-      // Overlay a altura completa; `applyBaseFit` fija la escala exacta (outH/srcH)
-      // cuando el medio tiene dimensiones (evita depender del timing de carga).
-      return {
-        ...c,
-        layout: 'overlay',
-        frame: 'free',
-        _baseFit: true,
-        reframe: { ...(c.reframe || newReframe()), crop_w: 1, crop_h: 1, dual_crop: false },
-        transform: { x: 0.5, y: 0.5, scale: c.transform?.scale ?? 1, rotation: 0 },
-      }
     }))
   }
   function upsertKeyframe(clip, localT, cx, cy, extra = {}) {
@@ -2395,15 +2376,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       clip={c}
       src={mediaUrl(project.id, c)}
       mediaEls={mediaEls}
-      onLoadedMetadata={(e) => { registerMediaMeta(c, e.target); applyBaseFit(c, e.target) }}
+      onLoadedMetadata={(e) => { registerMediaMeta(c, e.target); applyFreeLayout(c, e.target) }}
     />
   ))
 
   const canEditFrame = isVisualClip(selectedClip)
   const overlayOn = isOverlay(selectedClip)
-  // Clip en modo encuadre (Fijar vídeo / Recortar): se muestra la vista de recorte a la
-  // izquierda y la vista de RESULTADO 9:16 en vivo a la derecha.
-  const framingActive = canEditFrame && !framingMode && (isFramed(selectedClip) || cropMode)
+  // Con "Recortar" activo se muestra la vista de recorte de la fuente a la izquierda
+  // y la vista de RESULTADO en vivo a la derecha. Es el único modo que la abre.
+  const framingActive = canEditFrame && !framingMode && cropMode
   // Escala 100% = altura del clip = altura del cuadro: factor = outH / altura de la fuente.
   const selSrcH = selectedClip ? mediaSize(mediaEls.current.get(selectedClip.id)).h : 0
   const heightScale = selSrcH > 0 ? outH / selSrcH : 1
@@ -2698,12 +2679,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           selectedClip={isAudioTrackSel ? (trackAudioClip || { kind: 'audio', volume: 1, muted: false, audio_fx: {}, start: 0 }) : selectedClip}
           textMode={isTextSel ? 'clip' : (isTextTrackSel ? 'track' : null)}
           audioMode={isAudioTrackSel ? 'track' : null}
-          fijarVideo={canEditFrame && isFramed(selectedClip)}
-          onFijarVideo={(on) => selectedClip && setFijarVideo(selectedClip, on)}
           cropping={cropMode}
           onCropping={setCropMode}
-          frameSlot={frameOf(selectedClip)}
-          onFrameSlot={(slot) => selectedClip && applyClipFrame(selectedClip, slot)}
           clipMode={mainColTab === 'clip'}
           effectsProps={{
             clip: isAudioTrackSel ? (trackAudioClip || { kind: 'audio', volume: 1, muted: false, audio_fx: {}, start: 0 }) : selectedClip,
@@ -2720,7 +2697,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             },
             playhead,
             onPose: (patch) => !isAudioTrackSel && selectedClip && commitPose(selectedClip.id, patch),
-            onChangeFrame: (slot) => applyClipFrame(selectedClip, slot),
             selKfId,
             onInterpKf: interpAnimKf,
             fps,

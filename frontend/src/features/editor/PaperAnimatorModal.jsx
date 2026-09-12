@@ -75,7 +75,7 @@ export default function PaperAnimatorModal({ projectId, image, onClose, onDone }
             ref={iframeRef}
             src="/paper-animator/index.html?embed=1"
             title="Paper Animator"
-            style={{ width: '100%', height: '100%', border: 0, borderRadius: 8, background: '#0f172a', display: 'block' }}
+            style={{ width: '100%', height: '100%', border: 0, borderRadius: 8, background: '#0b0e17', display: 'block' }}
           />
           {overlayMsg && (
             <div

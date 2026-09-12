@@ -2,27 +2,22 @@
 // de salida: dos niveles independientes. El editor de clips (compose/slots)
 // no usa este módulo.
 import { clamp, clampCenter, frameAt, geomFor } from './panning.js'
-import { clipEnd, isVisualClip } from '../features/editor/editorModel.js'
-import { clipPose } from './clipAnim.js'
+import { clipEnd, isVisualClip, timelineToSource } from '../features/editor/editorModel.js'
+import { clipPose, posedTransform } from './clipAnim.js'
 import { keyframesOn } from './clipKeyframes.js'
 
 export const newTransform = () => ({ x: 0.5, y: 0.5, scale: 1, rotation: 0 })
 
-/** Huecos asistidos en el canvas de salida (fracción). x/y = centro; w/h = tamaño. */
+// Huecos asistidos en el canvas de salida (fracción). x/y = centro; w/h = tamaño.
+// LEGADO: el editor ya no coloca clips en huecos (todo clip visual es un objeto
+// libre); se conserva para leer el `frame` de timelines antiguas hasta que el
+// editor las convierte.
 export const FRAME_SLOTS = {
   top: { x: 0.5, y: 0.25, w: 1, h: 0.5 },
   bottom: { x: 0.5, y: 0.75, w: 1, h: 0.5 },
   left: { x: 0.25, y: 0.5, w: 0.5, h: 1 },
   right: { x: 0.75, y: 0.5, w: 0.5, h: 1 },
 }
-
-export const FRAME_OPTIONS = [
-  { id: 'full', label: 'Completo', icon: 'crop_free' },
-  { id: 'top', label: 'Mitad superior', icon: 'vertical_align_top' },
-  { id: 'bottom', label: 'Mitad inferior', icon: 'vertical_align_bottom' },
-  { id: 'left', label: 'Mitad izquierda', icon: 'align_horizontal_left' },
-  { id: 'right', label: 'Mitad derecha', icon: 'align_horizontal_right' },
-]
 
 export function frameOf(clip) {
   const f = clip?.frame
@@ -31,8 +26,8 @@ export function frameOf(clip) {
 
 /**
  * Aspecto del slot del clip dentro de la salida. Para `full` = aspecto de salida;
- * para las mitades = (slot.w · outAspect) / slot.h. El recorte (Fijar vídeo) y sus
- * keyframes se hacen respecto a este aspecto.
+ * para las mitades = (slot.w · outAspect) / slot.h. El recorte y sus keyframes se
+ * hacen respecto a este aspecto.
  */
 export function slotAspectOf(clip, outAspect) {
   const slot = FRAME_SLOTS[frameOf(clip)]
@@ -42,13 +37,6 @@ export function slotAspectOf(clip, outAspect) {
 
 export function isOverlay(clip) {
   return clip?.layout === 'overlay'
-}
-
-// Clip "encuadrado" (Fijar vídeo): llena el marco completo (fill) o un slot (overlay en
-// mitad sup/inf/izq/der). Se edita con la vista de recorte. Un overlay libre (frame 'free')
-// NO está encuadrado (se mueve/escala en el compuesto).
-export function isFramed(clip) {
-  return isVisualClip(clip) && (!isOverlay(clip) || !!FRAME_SLOTS[clip?.frame])
 }
 
 // --- Main / workspace (estilo CapCut) ---
@@ -90,6 +78,24 @@ export function mediaSize(el) {
   const w = Number(el.videoWidth || el.naturalWidth || el.width || 0) || 0
   const h = Number(el.videoHeight || el.naturalHeight || el.height || 0) || 0
   return { w, h }
+}
+
+/**
+ * Traduce un recorte en píxeles del MATERIAL a píxeles del lienzo que se va a
+ * dibujar. La fuente de dibujo puede no ser el material: el recorte de Eliminar
+ * fondo conserva su aspecto pero topa la resolución, y ahí los píxeles no son los
+ * mismos. La geometría (recorte, escala, posición) se calcula SIEMPRE con las
+ * dimensiones del material; esto solo reubica el rectángulo de origen. Sin esto,
+ * activar Eliminar fondo encogía el clip en el preview, porque la escala de un
+ * objeto libre es "1 px de fuente → 1 px de salida".
+ */
+export function srcRectOn(drawEl, media, px) {
+  const a = mediaSize(media)
+  const b = mediaSize(drawEl)
+  if (!a.w || !a.h || !b.w || !b.h || (a.w === b.w && a.h === b.h)) return px
+  const kx = b.w / a.w
+  const ky = b.h / a.h
+  return { sx: px.sx * kx, sy: px.sy * ky, sw: px.sw * kx, sh: px.sh * ky }
 }
 
 export function clampCrop(cx, cy, wf, hf) {
@@ -172,56 +178,29 @@ export function destRectOnCanvas(transform, cropPx, outW, outH, canvasW, canvasH
   }
 }
 
-/** Pasa un clip fill a overlay capturando el encuadre actual (sin deformarlo). */
-export function enableOverlay(clip, srcAspect, outAspect, srcTime, srcW, srcH, outW, outH, localT) {
-  const crop = cropWindow({ ...clip, layout: 'fill' }, srcAspect, outAspect, srcTime, localT)
-  const px = sourceCropPx(crop, srcW, srcH)
-  const pipW = 0.44 * outW
-  const pipH = 0.38 * outH
-  const scale = Math.min(pipW / Math.max(1, px.sw), pipH / Math.max(1, px.sh))
-  return {
-    layout: 'overlay',
-    frame: 'free',
-    reframe: {
-      ...(clip.reframe || {}),
-      crop_w: crop.wf,
-      crop_h: crop.hf,
-      dual_crop: false,
-    },
-    transform: { x: 0.5, y: 0.5, scale, rotation: 0 },
-  }
-}
-
-export function disableOverlay(clip) {
-  return { layout: 'fill', frame: 'full', transform: newTransform() }
-}
-
 /**
- * Encuadre asistido: Completo (fill) o mitad superior/inferior (overlay que llena el hueco).
- * El recorte de fuente usa el aspecto del hueco; Main sigue editando qué zona se ve.
+ * Encuadre equivalente (cx/cy/zoom sobre la fuente) de un clip en modo libre, en el
+ * instante LOCAL `t`. Un objeto libre guarda una ventana de recorte más una
+ * transformación en el lienzo; quien solo entiende cx/cy/zoom — guardar un clip
+ * cortado, o el encuadre horneado — necesita la traducción: qué zona de la fuente
+ * cae dentro del cuadro de salida, que es justo lo que se ve.
+ *
+ * La ventana resultante ya tiene el aspecto de la salida (el destino se escala por
+ * igual en ambos ejes), así que `zoom` = su fracción de alto. Sin equivalente
+ * posible: la rotación y las bandas si el clip no llena el cuadro (se recortan).
  */
-export function applyFrame(clip, slot, srcAspect, outAspect, srcTime, srcW, srcH, outW, outH, localT) {
-  if (slot === 'full' || !FRAME_SLOTS[slot]) {
-    return { ...disableOverlay(clip), reframe: { ...(clip.reframe || {}), dual_crop: clip.reframe?.dual_crop } }
-  }
-  const spec = FRAME_SLOTS[slot]
-  const slotAspect = (spec.w * outAspect) / spec.h
-  const crop = cropWindow({ ...clip, layout: 'fill' }, srcAspect, slotAspect, srcTime, localT)
+export function freeFrameAt(clip, t, srcW, srcH, outW, outH) {
+  const srcAspect = srcW / srcH
+  const outAspect = outW / outH
+  const srcTime = clamp(timelineToSource(clip, (clip.start || 0) + t), clip.in_point, clip.out_point)
+  const crop = cropWindow(clip, srcAspect, outAspect, srcTime, t)
   const px = sourceCropPx(crop, srcW, srcH)
-  const slotW = spec.w * outW
-  const slotH = spec.h * outH
-  const scale = Math.min(slotW / Math.max(1, px.sw), slotH / Math.max(1, px.sh))
-  return {
-    layout: 'overlay',
-    frame: slot,
-    reframe: {
-      ...(clip.reframe || {}),
-      crop_w: crop.wf,
-      crop_h: crop.hf,
-      dual_crop: false,
-    },
-    transform: { x: spec.x, y: spec.y, scale, rotation: 0 },
-  }
+  const d = destRect(posedTransform(clip, t), px, outW, outH)
+  if (!(d.dw > 0) || !(d.dh > 0)) return { cx: 0.5, cy: 0.5, zoom: 1 }
+  const zoom = clamp((outH / d.dh) * crop.hf, 0.1, 1)
+  const cx = crop.cx - crop.wf / 2 + ((outW / 2 - d.dx) / d.dw) * crop.wf
+  const cy = crop.cy - crop.hf / 2 + ((outH / 2 - d.dy) / d.dh) * crop.hf
+  return { ...clampCenter(cx, cy, zoom, srcAspect, outAspect), zoom }
 }
 
 /** Clips de vídeo visibles en `head`, de fondo a frente (pista, luego orden en la lista). */

@@ -978,10 +978,10 @@
     "semantic_hash": "cbd4d5d531d0bf8122e31b51dc92914a"
   },
   "frontend/src/features/editor/EdCrops.jsx": {
-    "mtime": 1788631892.6346612,
-    "seen": 1788934972.964193,
-    "ast_hash": "ed7b41be2699329b97fce02db6851410",
-    "semantic_hash": "ed7b41be2699329b97fce02db6851410"
+    "mtime": 1789195120.087854,
+    "seen": 1789207121.9831893,
+    "ast_hash": "daa7476f2aad443f2d08cd5954ad4b02",
+    "semantic_hash": "daa7476f2aad443f2d08cd5954ad4b02"
   },
   "frontend/src/features/editor/EdEffects.jsx": {
     "mtime": 1789096082.9543288,
@@ -1002,10 +1002,10 @@
     "semantic_hash": "06895d48e29fae5568d28c52bfb36b29"
   },
   "frontend/src/features/editor/EdInspector.jsx": {
-    "mtime": 1789051196.7738943,
-    "seen": 1789193054.289069,
-    "ast_hash": "76770b2e8b84e279f5d57d5572a189b7",
-    "semantic_hash": "76770b2e8b84e279f5d57d5572a189b7"
+    "mtime": 1789196642.3497066,
+    "seen": 1789207121.9831893,
+    "ast_hash": "5680a3457567abd719c0e1d487728aba",
+    "semantic_hash": "5680a3457567abd719c0e1d487728aba"
   },
   "frontend/src/features/editor/EdLayer.jsx": {
     "mtime": 1788307809.9247737,
@@ -1056,10 +1056,10 @@
     "semantic_hash": "bd2b27028e0d746bfc22a10e76e6784a"
   },
   "frontend/src/features/editor/EdTransform.jsx": {
-    "mtime": 1788689647.2997782,
-    "seen": 1788934972.964193,
-    "ast_hash": "ba90d14eb0e055c3f88c364138734207",
-    "semantic_hash": "ba90d14eb0e055c3f88c364138734207"
+    "mtime": 1789194844.7413096,
+    "seen": 1789207121.9831893,
+    "ast_hash": "19dea07e3cda7f7b669924f77af28142",
+    "semantic_hash": "19dea07e3cda7f7b669924f77af28142"
   },
   "frontend/src/features/editor/EdViewerTools.jsx": {
     "mtime": 1788687736.0702088,
@@ -1086,10 +1086,10 @@
     "semantic_hash": "b1be3a51e632e25e2cd28368de6497c4"
   },
   "frontend/src/features/editor/VideoEditor.jsx": {
-    "mtime": 1789192467.7685356,
-    "seen": 1789193054.289069,
-    "ast_hash": "1372c94087835edd05339bda156ce870",
-    "semantic_hash": "1372c94087835edd05339bda156ce870"
+    "mtime": 1789197262.638329,
+    "seen": 1789207121.9831893,
+    "ast_hash": "2abaec713da8b73abeed9602fee8377e",
+    "semantic_hash": "2abaec713da8b73abeed9602fee8377e"
   },
   "frontend/src/features/editor/clipProps.test.mjs": {
     "mtime": 1788762396.2334745,
@@ -1110,10 +1110,10 @@
     "semantic_hash": "00f1196614e53fe208371feda66943b7"
   },
   "frontend/src/features/editor/editorModel.js": {
-    "mtime": 1789009723.301303,
-    "seen": 1789193054.289069,
-    "ast_hash": "561426dad3fb0f6284a8be42281ad401",
-    "semantic_hash": "561426dad3fb0f6284a8be42281ad401"
+    "mtime": 1789196863.1167839,
+    "seen": 1789207121.9831893,
+    "ast_hash": "89d8259bfbb7774b8eeb90c5ba0e69f2",
+    "semantic_hash": "89d8259bfbb7774b8eeb90c5ba0e69f2"
   },
   "frontend/src/features/editor/editorModel.test.mjs": {
     "mtime": 1789009859.492802,
@@ -1188,10 +1188,10 @@
     "semantic_hash": "571359fbd7a7689e064eaad39d97c946"
   },
   "frontend/src/features/editor/interactions.js": {
-    "mtime": 1789051196.8232553,
-    "seen": 1789193054.289069,
-    "ast_hash": "3159f43bd37b2084c5fd2458105d4a1d",
-    "semantic_hash": "3159f43bd37b2084c5fd2458105d4a1d"
+    "mtime": 1789196863.1157837,
+    "seen": 1789207121.9831893,
+    "ast_hash": "658c986331aedca856323fdb84457e91",
+    "semantic_hash": "658c986331aedca856323fdb84457e91"
   },
   "frontend/src/features/editor/materialMenu.js": {
     "mtime": 1788739291.7666361,
@@ -1230,10 +1230,10 @@
     "semantic_hash": "e97f08fa8ad37b4dd016b233391adc35"
   },
   "frontend/src/features/editor/render/canvas.js": {
-    "mtime": 1789150044.8475778,
-    "seen": 1789193054.289069,
-    "ast_hash": "a34fbe72562a21d49005aa1635d2743d",
-    "semantic_hash": "a34fbe72562a21d49005aa1635d2743d"
+    "mtime": 1789196996.2356672,
+    "seen": 1789207121.9831893,
+    "ast_hash": "6d0e4d717e5a8816da38ac3b593ff660",
+    "semantic_hash": "6d0e4d717e5a8816da38ac3b593ff660"
   },
   "frontend/src/features/editor/timelineAlign.js": {
     "mtime": 1788325591.4961653,
@@ -1326,28 +1326,28 @@
     "semantic_hash": "cd2a350a23a551755efd8aa5856a559e"
   },
   "frontend/src/lib/clipKeyframes.js": {
-    "mtime": 1788935506.1199155,
-    "seen": 1789193054.289069,
-    "ast_hash": "7834075c07da0c2b43af5eb1d2c84a21",
-    "semantic_hash": "7834075c07da0c2b43af5eb1d2c84a21"
+    "mtime": 1789195168.110315,
+    "seen": 1789207121.9831893,
+    "ast_hash": "c635d382c2b21984d11c392f5184d383",
+    "semantic_hash": "c635d382c2b21984d11c392f5184d383"
   },
   "frontend/src/lib/clipKeyframes.test.mjs": {
-    "mtime": 1788500530.6073046,
-    "seen": 1788934972.964193,
-    "ast_hash": "41f884ccbdf27c890e71415f5aeaba53",
-    "semantic_hash": "41f884ccbdf27c890e71415f5aeaba53"
+    "mtime": 1789195172.4233806,
+    "seen": 1789207121.9831893,
+    "ast_hash": "14b9109dfd67e7195b40d703a008c5d8",
+    "semantic_hash": "14b9109dfd67e7195b40d703a008c5d8"
   },
   "frontend/src/lib/clipLayout.js": {
-    "mtime": 1789009655.9856741,
-    "seen": 1789193054.289069,
-    "ast_hash": "fa715c9010fb19d6714b491044bdcd6f",
-    "semantic_hash": "fa715c9010fb19d6714b491044bdcd6f"
+    "mtime": 1789197112.9914656,
+    "seen": 1789207121.9831893,
+    "ast_hash": "a171bcc1f9395890f45b86b896818cf0",
+    "semantic_hash": "a171bcc1f9395890f45b86b896818cf0"
   },
   "frontend/src/lib/clipLayout.test.mjs": {
-    "mtime": 1788683593.8749654,
-    "seen": 1788934972.964193,
-    "ast_hash": "f3a47fae2eb37e802c78a7e316e5b073",
-    "semantic_hash": "f3a47fae2eb37e802c78a7e316e5b073"
+    "mtime": 1789197105.5355892,
+    "seen": 1789207121.9831893,
+    "ast_hash": "dd26f99cd72e6c36377d51b1f1b43b62",
+    "semantic_hash": "dd26f99cd72e6c36377d51b1f1b43b62"
   },
   "frontend/src/lib/clipMask.js": {
     "mtime": 1788935147.2163334,
@@ -1368,10 +1368,10 @@
     "semantic_hash": "290b30ffbb4276c7c3f19230f88fdbfc"
   },
   "frontend/src/lib/panning.js": {
-    "mtime": 1788684875.130094,
-    "seen": 1788934972.964193,
-    "ast_hash": "3be484e837bda8d54d35f29262d7d75e",
-    "semantic_hash": "3be484e837bda8d54d35f29262d7d75e"
+    "mtime": 1789196623.605008,
+    "seen": 1789207121.9831893,
+    "ast_hash": "868d668fc3c6760e6015e440524527a3",
+    "semantic_hash": "868d668fc3c6760e6015e440524527a3"
   },
   "frontend/src/lib/panning.test.mjs": {
     "mtime": 1788033098.404132,
@@ -1770,22 +1770,22 @@
     "semantic_hash": "cc636d1b184de59ab9f65573f549a105"
   },
   "frontend/src/features/editor/EdMask.jsx": {
-    "mtime": 1788935388.4268274,
-    "seen": 1789193054.289069,
-    "ast_hash": "7f7d9b7dcec131e7755c075ce9ca9b23",
-    "semantic_hash": "7f7d9b7dcec131e7755c075ce9ca9b23"
+    "mtime": 1789194847.2788227,
+    "seen": 1789207121.9831893,
+    "ast_hash": "621a4ad656a7d65ef8625bd21becb04c",
+    "semantic_hash": "621a4ad656a7d65ef8625bd21becb04c"
   },
   "frontend/src/features/editor/PaperAnimatorModal.jsx": {
-    "mtime": 1789101137.5189862,
-    "seen": 1789193054.289069,
-    "ast_hash": "653807878068a8536b5232b733f46433",
-    "semantic_hash": "653807878068a8536b5232b733f46433"
+    "mtime": 1789203936.2559164,
+    "seen": 1789207121.9831893,
+    "ast_hash": "b1809fa5b3667c8acd612b7a25d0ebbd",
+    "semantic_hash": "b1809fa5b3667c8acd612b7a25d0ebbd"
   },
   "frontend/src/features/editor/bgCutout.js": {
-    "mtime": 1789149806.7334847,
-    "seen": 1789193054.289069,
-    "ast_hash": "0737fd85a129a1dae522aaa28afd0697",
-    "semantic_hash": "0737fd85a129a1dae522aaa28afd0697"
+    "mtime": 1789196623.6040075,
+    "seen": 1789207121.9831893,
+    "ast_hash": "b08a8313be434a7c1ab521abccd7df91",
+    "semantic_hash": "b08a8313be434a7c1ab521abccd7df91"
   },
   "frontend/src/features/editor/gifPlayer.js": {
     "mtime": 1789009648.4836264,
@@ -1864,5 +1864,17 @@
     "seen": 1789193054.289069,
     "ast_hash": "efeaddf39c71aec41f0d9b6bef0f5056",
     "semantic_hash": "efeaddf39c71aec41f0d9b6bef0f5056"
+  },
+  "docs/KEYFRAMES_REDISENO.md": {
+    "mtime": 1789195266.8548195,
+    "seen": 1789207121.9831893,
+    "ast_hash": "b0403cd4251c60fb0271b730b421701b",
+    "semantic_hash": "b0403cd4251c60fb0271b730b421701b"
+  },
+  "docs/checklist-editor-capcut.md": {
+    "mtime": 1789195802.8143525,
+    "seen": 1789207121.9831893,
+    "ast_hash": "803027226811a29f4b9dee0eb2a70ac8",
+    "semantic_hash": "803027226811a29f4b9dee0eb2a70ac8"
   }
 }
