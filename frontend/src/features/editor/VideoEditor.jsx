@@ -33,8 +33,10 @@ import { autoActive, bgCapable, clipBg, defaultBg, normalizeBg } from '../../lib
 import { resetBgMeta, resetCutout } from './bgCutout'
 import { applyFrame, disableOverlay, enableOverlay, frameOf, isFramed, isOverlay, mediaSize, newTransform, videosAt } from '../../lib/clipLayout'
 import {
-  AUDIO_FX_KEYS, applyVolumeFade, canKeyframe, clipPropsAt, clipVolumeAt, clampVolume, deleteKeyframeItem, flattenPatch, keyframeIdAt,
-  normalizeItems, patchKeyframe, upsertKeyframeAt,
+  AUDIO_FX_KEYS, applyVolumeFade, canKeyframe, clipPropsAt, clipVolumeAt, clampVolume, deleteKeyframeItem,
+  copyKeyframeAt, disableKeyframes, duplicateKeyframeAt, enableKeyframes, flattenPatch,
+  KF_GROUP_IDS, keyframeIdAt, kfState, normalizeItems, pasteKeyframeAt,
+  patchKeyframe, shouldKeyframe, upsertKeyframeAt,
 } from '../../lib/clipKeyframes'
 import { drawMainView, drawResultView } from './render/canvas'
 import MotionCanvas from '../motion/MotionCanvas'
@@ -158,6 +160,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [selClipIds, setSelClipIds] = useState([])
   const [selTrackId, setSelTrackId] = useState('V1')
   const [selKfId, setSelKfId] = useState(null)
+  // Portapapeles de keyframes (Alt+C / Alt+V), independiente del de clips.
+  const [kfBoard, setKfBoard] = useState(null)
+  const [kfGroups, setKfGroups] = useState(KF_GROUP_IDS)
   const [hiddenKf, setHiddenKf] = useState(() => new Set())
   const [matTab, setMatTab] = useState('video')
   const [mcpAudit, setMcpAudit] = useState({ entries: [], active: [] })
@@ -238,6 +243,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const selRef = useRef(selClipId); selRef.current = selClipId
   const selIdsRef = useRef(selClipIds); selIdsRef.current = selClipIds
   const selKfRef = useRef(selKfId); selKfRef.current = selKfId
+  const kfBoardRef = useRef(kfBoard); kfBoardRef.current = kfBoard
+  const kfOpsRef = useRef({})
+  const kfGroupsRef = useRef(kfGroups); kfGroupsRef.current = kfGroups
   const pendingKfSel = useRef(null)
   const clipClipboardRef = useRef(null)   // [{ clip, offset }] copiados con Ctrl+C
   const hiddenKfRef = useRef(hiddenKf); hiddenKfRef.current = hiddenKf
@@ -1329,11 +1337,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     }
     return next
   }
+  // Mover una propiedad NO la anima: solo escribe su valor estático. El keyframe
+  // aparece cuando el clip ya está animado (o cuando el usuario pulsa el rombo).
+  // La regla vive en `shouldKeyframe`, que también cubre el caso del encuadre.
   function commitPose(id, patch) {
     const ids = new Set(selIdsRef.current.includes(id) ? selIdsRef.current : [id])
     setClips((prev) => prev.map((c) => {
       if (!ids.has(c.id) || !canKeyframe(c)) return c
       let next = applyStaticPose(c, patch)
+      if (!shouldKeyframe(c, patch)) return next
       const t = localTOf(next)
       next = upsertKf(next, t, patch)
       if (c.id === id) markKf(next, t)
@@ -1362,6 +1374,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setClips((prev) => prev.map((c) => {
       if (c.id !== id) return c
       let next = { ...c, frame: 'free', transform: { ...newTransform(), ...c.transform, ...patch } }
+      if (!shouldKeyframe(c, patch)) return next
       const t = localTOf(next)
       next = upsertKf(next, t, flattenPatch(patch, 'transform'))
       markKf(next, t)
@@ -1387,8 +1400,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         transform: patch.transform,
         reframe: { ...(c.reframe || newReframe()), ...patch.reframe },
       }
-      next = upsertKf(next, clipT, flattenPatch({ ...(patch.transform || {}) }, 'transform'))
-      if (c.id === clip.id) markKf(next, clipT)
+      if (shouldKeyframe(c, patch.transform || {})) {
+        next = upsertKf(next, clipT, flattenPatch({ ...(patch.transform || {}) }, 'transform'))
+        if (c.id === clip.id) markKf(next, clipT)
+      }
       return next
     }))
   }
@@ -1475,17 +1490,97 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       return posed
     }))
   }
-  function addKeyframeAtPlayhead() {
+  function srcTOf(c) {
+    return clamp(timelineToSource(c, playheadRef.current), c.in_point, c.out_point)
+  }
+  // Rombo de tres estados: sin animar → activa la animación sembrando el primer
+  // keyframe; animado sin KF aquí → lo crea; con KF aquí → lo quita.
+  function toggleKeyframeAtPlayhead() {
+    const clip = selectedClip
+    if (!clip || !canKeyframe(clip)) return
+    const t = clamp(localTOf(clip), 0, clipDur(clip))
+    const st = kfState(clip, t, fpsRef.current)
+    if (st === 'on') {
+      deleteAnimKf({ id: keyframeIdAt(clip, t, fpsRef.current) })
+      return
+    }
+    setClips((prev) => prev.map((c) => {
+      if (c.id !== clip.id) return c
+      const next = st === 'off' ? enableKeyframes(c, t, srcTOf(c)) : upsertKf(c, t, {})
+      markKf(next, t)
+      return next
+    }))
+  }
+  // Al apagar la animación se hornea el valor visible en el cabezal para que el
+  // clip no salte; los keyframes se conservan por si se vuelve a activar.
+  function setClipAnimated(on) {
     const clip = selectedClip
     if (!clip || !canKeyframe(clip)) return
     setClips((prev) => prev.map((c) => {
       if (c.id !== clip.id) return c
       const t = clamp(localTOf(c), 0, clipDur(c))
-      const next = upsertKf(c, t, {})
+      if (on) {
+        const next = enableKeyframes(c, t, srcTOf(c))
+        markKf(next, t)
+        return next
+      }
+      const props = clipPropsAt(c, t, srcTOf(c))
+      return disableKeyframes(applyStaticMask(applyStaticPose(c, props), props))
+    }))
+    if (!on) setSelKfId(null)
+  }
+
+  // --- Portapapeles de keyframes ---------------------------------------------
+  // `kf` llega desde la lista del panel; sin él se copia el del cabezal.
+  function copyKeyframe(kf) {
+    const clip = selectedClip
+    if (!clip || !canKeyframe(clip)) return false
+    const t = kf?.t != null ? kf.t : clamp(localTOf(clip), 0, clipDur(clip))
+    const board = copyKeyframeAt(clip, t, fpsRef.current)
+    if (!board) return false
+    setKfBoard(board)
+    return true
+  }
+  function pasteKeyframe() {
+    const clip = selectedClip
+    const board = kfBoardRef.current
+    if (!clip || !canKeyframe(clip) || !board) return false
+    const t = clamp(localTOf(clip), 0, clipDur(clip))
+    setClips((prev) => prev.map((c) => {
+      if (c.id !== clip.id) return c
+      const next = pasteKeyframeAt(c, t, board, kfGroupsRef.current, fpsRef.current)
       markKf(next, t)
       return next
     }))
+    return true
   }
+  // Duplicar conserva TODOS los valores del keyframe y solo cambia su instante.
+  function duplicateKeyframe(kf) {
+    const clip = selectedClip
+    const id = kf?.id || selKfRef.current
+    if (!clip || !id) return false
+    const items = normalizeItems(clip.keyframes?.items)
+    const item = items.find((k) => k.id === id)
+    if (!item) return false
+    const dur = clipDur(clip)
+    // Al hueco siguiente: el cabezal si está libre, si no un segundo después.
+    const head = clamp(localTOf(clip), 0, dur)
+    const free = Math.abs(head - item.t) > kfSnap(fpsRef.current)
+    const target = clamp(free ? head : item.t + 1, 0, dur)
+    setClips((prev) => prev.map((c) => {
+      if (c.id !== clip.id) return c
+      const next = duplicateKeyframeAt(c, id, target, fpsRef.current)
+      markKf(next, target)
+      return next
+    }))
+    return true
+  }
+  function toggleKfGroup(gid) {
+    setKfGroups((prev) => (prev.includes(gid) ? prev.filter((g) => g !== gid) : [...prev, gid]))
+  }
+  // El handler de teclado se registra una sola vez: alcanza las versiones
+  // frescas por ref, como hace `histRef`.
+  kfOpsRef.current = { copyKeyframe, pasteKeyframe, duplicateKeyframe }
   function applySelectedFade(side) {
     const ids = new Set(selIdsRef.current)
     setClips((prev) => prev.map((c) => {
@@ -1602,7 +1697,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setClips((prev) => patchClipsStyle(prev, ids, patch).map((c) => {
       if (!ids.includes(c.id)) return c
       const pose = flattenPatch(patch, 'text')
-      if (!Object.keys(pose).length) return c
+      if (!Object.keys(pose).length || !shouldKeyframe(c, pose)) return c
       const t = localTOf(c)
       const next = upsertKf(c, t, pose)
       if (c.id === id) markKf(next, t)
@@ -1615,7 +1710,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       if (!(ids.has(c.id) && c.kind === 'shape')) return c
       let next = { ...c, shape: { ...(c.shape || {}), ...patch } }
       const pose = flattenPatch(patch, 'shape')
-      if (Object.keys(pose).length) {
+      if (Object.keys(pose).length && shouldKeyframe(c, pose)) {
         const t = localTOf(next)
         next = upsertKf(next, t, pose)
         if (c.id === id) markKf(next, t)
@@ -1713,6 +1808,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setClips((prev) => prev.map((c) => {
       if (c.id !== id || !clipMasks(c).length) return c
       let next = applyStaticMask(c, patch)
+      if (!shouldKeyframe(c, patch)) return next
       const t = localTOf(next)
       next = upsertKf(next, t, patch)
       markKf(next, t)
@@ -2256,7 +2352,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         }
         return
       }
-      if (e.altKey) return
+      if (e.altKey) {
+        // Keyframes, no clips: Ctrl+C/V se reservan para copiar clips.
+        const k = e.key.toLowerCase()
+        const ops = kfOpsRef.current
+        if (k === 'c') { if (ops.copyKeyframe()) e.preventDefault() }
+        else if (k === 'v') { if (ops.pasteKeyframe()) e.preventDefault() }
+        else if (k === 'd') { if (ops.duplicateKeyframe()) e.preventDefault() }
+        return
+      }
       if (e.code === 'Space') {
         if (e.repeat) { e.preventDefault(); return }
         e.preventDefault()
@@ -2624,7 +2728,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             audioMode: isAudioTrackSel ? 'track' : null,
             trackLabel: isAudioTrackSel ? selTrackObj.name : null,
             trackEmpty: isAudioTrackSel && !trackAudioClip,
-            onAddKf: isAudioTrackSel ? undefined : addKeyframeAtPlayhead,
+            onAddKf: isAudioTrackSel ? undefined : toggleKeyframeAtPlayhead,
             onFade: isAudioTrackSel ? (side) => fadeTrackAudio(selTrackObj.id, side) : applySelectedFade,
             textEditor: {
               clip: isTextSel ? selectedClip : null,
@@ -2684,7 +2788,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             onDuplicateMask: duplicateMask,
             onChangeMask: (patch) => selectedClip && changeMask(selectedClip.id, patch),
             onCommitMask: (patch) => selectedClip && commitMask(selectedClip.id, patch),
-            onAddKf: addKeyframeAtPlayhead,
+            onAddKf: toggleKeyframeAtPlayhead,
           }}
           shapeProps={isShapeSel ? {
             clip: selectedClip,
@@ -2748,7 +2852,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onRenameTrack={renameTrack}
           onMoveKeyframe={moveKeyframe}
           onSelectKf={selectTimelineKf}
-          onAddKf={addKeyframeAtPlayhead}
+          onAddKf={toggleKeyframeAtPlayhead}
           onDeleteKf={deleteSelectedKeyframe}
           onContextClip={(e, clip) => {
             e.preventDefault()
@@ -2784,7 +2888,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onChangeFx={patchClipFx}
           onPose={(patch) => selectedClip && commitPose(selectedClip.id, patch)}
           onFade={applySelectedFade}
-          onAddKf={addKeyframeAtPlayhead}
+          onAddKf={toggleKeyframeAtPlayhead}
+          onSetAnimated={setClipAnimated}
+          onCopyKf={copyKeyframe}
+          onPasteKf={pasteKeyframe}
+          onDuplicateKf={duplicateKeyframe}
+          kfBoard={kfBoard}
+          kfGroups={kfGroups}
+          onToggleKfGroup={toggleKfGroup}
           onSelectKf={(k) => k && selectTimelineKf(k.id)}
           onDeleteKf={deleteAnimKf}
         />

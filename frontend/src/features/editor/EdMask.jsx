@@ -3,7 +3,7 @@
 import Icon from '../../components/Icon'
 import FlipSelect from '../../components/FlipSelect'
 import { clipMasksAt } from '../../lib/clipAnim'
-import { keyframeIdAt } from '../../lib/clipKeyframes'
+import { kfState } from '../../lib/clipKeyframes'
 import { MASK_FEATHER_MAX, MASK_TYPES } from '../../lib/clipMask'
 import { FONTS } from '../../lib/textstyles'
 import { InspSection, InspSlider, KfDia, NumberStepper } from './EdTransform'
@@ -11,7 +11,7 @@ import { InspSection, InspSlider, KfDia, NumberStepper } from './EdTransform'
 const pct = (v) => `${Math.round(v)}`
 const parsePct = (raw) => parseFloat(String(raw).replace(/[^\d.-]/g, ''))
 
-function MaskXY({ label, value, onChange, onKf, kfOn }) {
+function MaskXY({ label, value, onChange, onKf, kfSt }) {
   return (
     <div className="ed-insp-xy">
       <span>{label}</span>
@@ -22,7 +22,7 @@ function MaskXY({ label, value, onChange, onKf, kfOn }) {
         onChange={(n) => onChange(Number(n))}
         ariaLabel={label}
       />
-      {onKf ? <KfDia on={kfOn} onClick={onKf} /> : <span className="ed-kf-dia spacer" />}
+      {onKf ? <KfDia state={kfSt} onClick={onKf} /> : <span className="ed-kf-dia spacer" />}
     </div>
   )
 }
@@ -34,11 +34,11 @@ export default function EdMask({
   const localT = Math.max(0, (playhead ?? 0) - (clip?.start || 0))
   const mask = clipMasksAt(clip, localT)[0] || null
   const stored = Array.isArray(clip?.masks) ? clip.masks : []
-  const kfOn = !!keyframeIdAt(clip, localT, fps)
+  const kfSt = kfState(clip, localT, fps)
 
   return (
     <>
-      <InspSection title="Máscara" onAddKf={mask ? onAddKf : undefined} kfOn={kfOn}>
+      <InspSection title="Máscara" onAddKf={mask ? onAddKf : undefined} kfSt={kfSt}>
         <div className="ed-insp-pos-lab">Tipo de máscara</div>
         <div className="ed-mask-grid">
           {MASK_TYPES.map((t) => (
@@ -96,7 +96,7 @@ export default function EdMask({
 
             <div className="ed-insp-pair">
               <div className="ed-insp-row-lab">Posición</div>
-              <MaskXY label="X" value={mask.x * 100} onChange={(n) => onCommitMask?.({ mx: n / 100 })} onKf={onAddKf} kfOn={kfOn} />
+              <MaskXY label="X" value={mask.x * 100} onChange={(n) => onCommitMask?.({ mx: n / 100 })} onKf={onAddKf} kfSt={kfSt} />
               <MaskXY label="Y" value={mask.y * 100} onChange={(n) => onCommitMask?.({ my: n / 100 })} />
             </div>
 
@@ -105,12 +105,12 @@ export default function EdMask({
                 <InspSlider
                   label="Ancho" value={Math.round(mask.w * 100)} min={1} max={300} step={1}
                   format={pct} suffix="%" parse={parsePct}
-                  onChange={(v) => onCommitMask?.({ mw: v / 100 })} onKf={onAddKf} kfOn={kfOn} stepper
+                  onChange={(v) => onCommitMask?.({ mw: v / 100 })} onKf={onAddKf} kfSt={kfSt} stepper
                 />
                 <InspSlider
                   label="Alto" value={Math.round(mask.h * 100)} min={1} max={300} step={1}
                   format={pct} suffix="%" parse={parsePct}
-                  onChange={(v) => onCommitMask?.({ mh: v / 100 })} onKf={onAddKf} kfOn={kfOn} stepper
+                  onChange={(v) => onCommitMask?.({ mh: v / 100 })} onKf={onAddKf} kfSt={kfSt} stepper
                 />
               </>
             )}
@@ -118,23 +118,23 @@ export default function EdMask({
             <InspSlider
               label="Escala X" value={Math.round(mask.scale_x * 100)} min={5} max={400} step={1}
               format={pct} suffix="%" parse={parsePct}
-              onChange={(v) => onCommitMask?.({ msx: v / 100 })} onKf={onAddKf} kfOn={kfOn} stepper
+              onChange={(v) => onCommitMask?.({ msx: v / 100 })} onKf={onAddKf} kfSt={kfSt} stepper
             />
             <InspSlider
               label="Escala Y" value={Math.round(mask.scale_y * 100)} min={5} max={400} step={1}
               format={pct} suffix="%" parse={parsePct}
-              onChange={(v) => onCommitMask?.({ msy: v / 100 })} onKf={onAddKf} kfOn={kfOn} stepper
+              onChange={(v) => onCommitMask?.({ msy: v / 100 })} onKf={onAddKf} kfSt={kfSt} stepper
             />
             <InspSlider
               label="Girar" value={+(mask.rotation || 0).toFixed(1)} min={-180} max={180} step={1}
               format={(v) => Number(v).toFixed(1)} suffix="°" parse={parsePct}
-              onChange={(v) => onCommitMask?.({ mrot: v })} onKf={onAddKf} kfOn={kfOn} stepper
+              onChange={(v) => onCommitMask?.({ mrot: v })} onKf={onAddKf} kfSt={kfSt} stepper
             />
             <InspSlider
               label="Pluma" value={Math.round((mask.feather / MASK_FEATHER_MAX) * 100)}
               min={0} max={100} step={1} format={pct} suffix="%" parse={parsePct}
               onChange={(v) => onCommitMask?.({ mfeather: (v / 100) * MASK_FEATHER_MAX })}
-              onKf={onAddKf} kfOn={kfOn} stepper
+              onKf={onAddKf} kfSt={kfSt} stepper
             />
             <InspSlider
               label="Opacidad" value={Math.round(mask.opacity * 100)} min={0} max={100} step={1}
