@@ -1,0 +1,5 @@
+# Build output vendorizado de paperima (ver docs/): se copia entero a public/ por
+# scripts/build-paper-animator.sh. Es bundle minificado + iconos + texturas, no
+# fuente de este repo: mete ruido en el grafo y sus 22 imágenes gastan un
+# subagente de visión cada una en cada update.
+frontend/public/paper-animator/

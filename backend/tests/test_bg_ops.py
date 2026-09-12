@@ -127,7 +127,9 @@ class BgEndpointsTest(unittest.TestCase):
         res = self._client().get("/api/bg/providers")
         self.assertEqual(res.status_code, 200, res.text)
         body = res.json()
-        self.assertEqual({p["id"] for p in body["providers"]}, {"u2net", "u2netp"})
+        ids = {p["id"] for p in body["providers"]}
+        self.assertTrue({"u2net", "u2netp"} <= ids)      # automáticos
+        self.assertTrue({"sam21_base_plus"} <= ids)      # asistido (SAM)
         self.assertIn("onnx_selected", body)
 
     def test_status_de_una_clave_inexistente_es_404(self):

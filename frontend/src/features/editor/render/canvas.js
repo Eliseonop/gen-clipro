@@ -340,15 +340,61 @@ function drawBgBrushCursor(ctx, clip, brush, frame, env, head) {
 // recuadro Main (`frame`, en px del canvas). Lo que sobresale del recuadro se dibuja
 // igualmente (contexto estilo CapCut) y el canvas lo recorta en su borde. Los dest/box/
 // handles de `hits` quedan en coordenadas del canvas.
+// Fondo de vista previa del área exportada (solo preview, no toca el export).
+function drawBackdrop(ctx, ox, oy, cw, ch, env) {
+  const bp = env.bgPreviewRef?.current
+  const mode = bp?.mode || 'normal'
+  if (mode === 'checker') {
+    const s = 12
+    ctx.fillStyle = '#c9ccd3'
+    ctx.fillRect(ox, oy, cw, ch)
+    ctx.fillStyle = '#8b909b'
+    for (let y = 0; y < ch; y += s) {
+      for (let x = 0; x < cw; x += s) {
+        if (((x / s | 0) + (y / s | 0)) & 1) {
+          ctx.fillRect(ox + x, oy + y, Math.min(s, cw - x), Math.min(s, ch - y))
+        }
+      }
+    }
+    return
+  }
+  if (mode === 'solid') {
+    ctx.fillStyle = bp.color || '#000'
+    ctx.fillRect(ox, oy, cw, ch)
+    return
+  }
+  if (mode === 'media') {
+    ctx.fillStyle = '#000'
+    ctx.fillRect(ox, oy, cw, ch)
+    const el = env.bgPreviewElRef?.current
+    if (el) {
+      const { w: mw, h: mh } = mediaSize(el)
+      if (mw && mh) {
+        const scale = Math.max(cw / mw, ch / mh)
+        const dw = mw * scale, dh = mh * scale
+        ctx.save()
+        ctx.beginPath(); ctx.rect(ox, oy, cw, ch); ctx.clip()
+        try { ctx.drawImage(el, ox + (cw - dw) / 2, oy + (ch - dh) / 2, dw, dh) } catch { /* aún no listo */ }
+        ctx.restore()
+      }
+    }
+    return
+  }
+  ctx.fillStyle = '#000'
+  ctx.fillRect(ox, oy, cw, ch)
+}
+
 export function drawComposite(ctx, head, selClipIds, env, frame) {
   const { clipsRef, tracksRef, mediaEls, outRef } = env
   const selected = new Set(Array.isArray(selClipIds) ? selClipIds : (selClipIds ? [selClipIds] : []))
   const fr = frame || { x: 0, y: 0, w: ctx.canvas.width, h: ctx.canvas.height }
   const cw = fr.w, ch = fr.h, ox = fr.x, oy = fr.y
   const outW = outRef.current.w, outH = outRef.current.h
-  // Fondo del área exportada (negro). El fondo del workspace lo pinta drawMainView.
-  ctx.fillStyle = '#000'
-  ctx.fillRect(ox, oy, cw, ch)
+  // Fondo del área exportada. Normalmente negro; el usuario puede cambiarlo por
+  // cuadros (para VER la transparencia), un color o una imagen/vídeo de prueba.
+  // Es SOLO vista previa: no afecta al export. El fondo del workspace lo pinta
+  // drawMainView.
+  drawBackdrop(ctx, ox, oy, cw, ch, env)
 
   let overlayDestSel = null
   let selRender = null

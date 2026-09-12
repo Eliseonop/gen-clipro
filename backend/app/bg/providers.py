@@ -239,6 +239,17 @@ def register(provider: BackgroundRemovalProvider) -> None:
 register(U2NetProvider())
 register(U2NetLiteProvider())
 
+# Proveedores asistidos por puntos (SAM 2.1). Interactivos: el pincel keep/erase
+# es el prompt. Se registran igual que los automáticos; ``service`` los distingue
+# por el atributo ``interactive``.
+from .sam import Sam21Provider  # noqa: E402  (evita ciclo en tiempo de import)
+
+for _bb in ("tiny", "base_plus", "large"):
+    try:
+        register(Sam21Provider(_bb))
+    except Exception:  # noqa: BLE001 - un backbone inválido no debe tumbar el módulo
+        log.warning("No se pudo registrar SAM backbone %s", _bb)
+
 
 def get(provider_id: str) -> BackgroundRemovalProvider:
     from ..clip_bg import DEFAULT_PROVIDER

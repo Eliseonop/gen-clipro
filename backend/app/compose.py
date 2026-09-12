@@ -622,15 +622,26 @@ def _bg_source_chain(clip: TimelineClip, path: Path, spec: Optional[dict],
     if not chroma_on and not matte_on:
         return [], in_label
 
+    from . import clip_bg as _clip_bg
+    from . import detect
     steps: list[str] = []
     last = in_label
     if not matte_on:
-        # Solo croma: cabe en la propia cadena del clip, sin streams extra.
         out = f"bgc{n}"
-        steps.append(f"[{last}]" + ",".join(chroma_filters(bg["chroma"])) + f"[{out}]")
+        chain = ",".join(chroma_filters(bg["chroma"]))
+        _, ch = detect.dims(path)
+        amorph = _clip_bg.chroma_alpha_ffmpeg(bg["chroma"], ch if ch > 0 else 512)
+        if not amorph:
+            # Solo croma: cabe en la propia cadena del clip, sin streams extra.
+            steps.append(f"[{last}]{chain}[{out}]")
+            return steps, out
+        # Con limpieza/expansión del borde: separar el alfa, procesarlo y re-fundir.
+        steps.append(f"[{last}]{chain},format=gbrap[bgck{n}]")
+        steps.append(f"[bgck{n}]split=2[bgck{n}a][bgck{n}b]")
+        steps.append(f"[bgck{n}a]alphaextract,{amorph}[bgcka{n}]")
+        steps.append(f"[bgck{n}b][bgcka{n}]alphamerge[{out}]")
         return steps, out
 
-    from . import detect
     iw, ih = detect.dims(path)
     if iw <= 0 or ih <= 0:
         iw, ih = int(spec.get("width") or 0), int(spec.get("height") or 0)
@@ -653,7 +664,8 @@ def _bg_source_chain(clip: TimelineClip, path: Path, spec: Optional[dict],
         chain = ",".join(chroma_filters(bg["chroma"]))
         steps.append(f"[{last}]{fit},{chain},format=gbrap,fps={fps}[bgk{n}]")
         steps.append(f"[bgk{n}]split=2[bgk{n}a][bgk{n}b]")
-        steps.append(f"[bgk{n}a]alphaextract[bgka{n}]")
+        amorph = _clip_bg.chroma_alpha_ffmpeg(bg["chroma"], ih)
+        steps.append(f"[bgk{n}a]alphaextract{(',' + amorph) if amorph else ''}[bgka{n}]")
         steps.append(f"[bgka{n}][bgm{n}]blend=all_mode=multiply,format=gray[bgmix{n}]")
         steps.append(f"[bgk{n}b][bgmix{n}]alphamerge[bgcut{n}]")
     else:

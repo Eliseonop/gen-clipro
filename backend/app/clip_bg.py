@@ -35,13 +35,38 @@ import cv2
 import numpy as np
 
 # Proveedores de segmentación conocidos (el registro real vive en app/bg).
-BG_PROVIDER_IDS = ("u2net", "u2netp")
+# Automáticos (U²-Net) + asistidos por puntos (SAM 2.1). Los SAM son
+# INTERACTIVOS: los trazos keep/erase son el PROMPT, no una corrección posterior.
+AUTO_PROVIDER_IDS = ("u2net", "u2netp")
+SAM_PROVIDER_IDS = ("sam21_tiny", "sam21_base_plus", "sam21_large")
+BG_PROVIDER_IDS = (*AUTO_PROVIDER_IDS, *SAM_PROVIDER_IDS)
 DEFAULT_PROVIDER = "u2net"
+
+
+def is_interactive_provider(provider_id: Any) -> bool:
+    """True para los proveedores guiados por puntos (SAM): el pincel = prompt."""
+    return str(provider_id or "").startswith("sam")
+
+
+def edits_to_points(edits: list[dict]) -> list[tuple[float, float, int]]:
+    """Trazos keep/erase → puntos (x, y, label) del prompt de SAM.
+
+    keep → 1 (incluir), erase → 0 (excluir). Coordenadas 0-1 de la FUENTE, las
+    mismas que ya guarda el pincel, así que el prompt viaja con el clip.
+    """
+    out: list[tuple[float, float, int]] = []
+    for e in edits or []:
+        lab = 1 if e.get("op") == "keep" else 0
+        for p in e.get("points") or []:
+            out.append((float(p["x"]), float(p["y"]), lab))
+    return out
 
 BG_MODES = ("auto", "chroma")
 BG_KIND_OK = frozenset({"video", "image"})
 
 MATTE_FEATHER_MAX = 0.15        # en unidades de ALTO de la fuente
+MATTE_EXPAND_MAX = 0.06         # tope de expansión/contracción (unidades de ALTO)
+CHROMA_EDGE_MAX = 0.03          # tope de "edge cleanup" del croma (unidades de ALTO)
 MASK_FPS_MIN, MASK_FPS_MAX = 1, 60
 MASK_HEIGHT_MIN, MASK_HEIGHT_MAX = 128, 1080
 DEFAULT_MASK_FPS = 15
@@ -126,9 +151,16 @@ def normalize_auto(raw: Any) -> dict:
         "mask_fps": int(_clamp(_num(a.get("mask_fps"), DEFAULT_MASK_FPS), MASK_FPS_MIN, MASK_FPS_MAX)),
         "mask_height": int(_clamp(_num(a.get("mask_height"), DEFAULT_MASK_HEIGHT),
                                   MASK_HEIGHT_MIN, MASK_HEIGHT_MAX)),
+        # stabilize: suavizado TEMPORAL del matte (anti-parpadeo). Es propiedad
+        # del nivel 1 (se hornea en el matte crudo) → va en base_key.
+        "stabilize": _clamp(_num(a.get("stabilize"), 0.0), 0.0, 1.0),
         "threshold": _clamp(_num(a.get("threshold"), 0.5), 0.0, 1.0),
         "softness": _clamp(_num(a.get("softness"), 0.25), 0.0, 1.0),
         "feather": _clamp(_num(a.get("feather"), 0.0), 0.0, MATTE_FEATHER_MAX),
+        # expansion: >0 dilata el sujeto (crece), <0 lo contrae (encoge).
+        "expansion": _clamp(_num(a.get("expansion"), 0.0), -1.0, 1.0),
+        # opacity: opacidad del sujeto conservado (1 = opaco, 0 = transparente).
+        "opacity": _clamp(_num(a.get("opacity"), 1.0), 0.0, 1.0),
         "invert": bool(a.get("invert")),
         "edits": edits,
     }
@@ -143,6 +175,10 @@ def normalize_chroma(raw: Any) -> dict:
         "similarity": _clamp(_num(c.get("similarity"), 0.20), 1e-5, 1.0),
         "blend": _clamp(_num(c.get("blend"), 0.10), 0.0, 1.0),
         "spill": _clamp(_num(c.get("spill"), 0.0), 0.0, 1.0),
+        # edge: limpieza de bordes (contrae el alfa para quitar residuos finos).
+        "edge": _clamp(_num(c.get("edge"), 0.0), 0.0, 1.0),
+        # shrink: expansión (>0) / contracción (<0) del alfa del croma.
+        "shrink": _clamp(_num(c.get("shrink"), 0.0), -1.0, 1.0),
     }
 
 
@@ -260,6 +296,23 @@ def feather_alpha(alpha: np.ndarray, sigma: float) -> np.ndarray:
     return cv2.GaussianBlur(alpha, (0, 0), sigma)
 
 
+def expand_alpha(alpha: np.ndarray, expansion: float, height: int) -> np.ndarray:
+    """Dilata (``expansion``>0) o contrae (<0) el alfa (0-1) por su borde.
+
+    En vez de morfología (imposible de igualar bit a bit entre cv2 y el canvas),
+    se usa el MISMO par de primitivas que la pluma: difuminar y volver a acotar.
+    Cerca de un borde el alfa difuminado sube en rampa; sumarle un sesgo mueve el
+    cruce y el ``clip`` lo vuelve a endurecer → el contorno crece o encoge. Es la
+    misma aproximación (y la misma paridad) que ``feather_alpha``.
+    """
+    e = float(expansion)
+    if abs(e) < 1e-4:
+        return alpha
+    sigma = abs(e) * MATTE_EXPAND_MAX * float(height)
+    b = feather_alpha(alpha, sigma) if sigma > 0.3 else alpha
+    return np.clip(b + e * 0.5, 0.0, 1.0)
+
+
 def paint_edit(img: np.ndarray, edit: dict) -> None:
     """Rasteriza un trazo del pincel en ``img`` (uint8, 0/255) sobre su lienzo."""
     h, w = img.shape[:2]
@@ -309,16 +362,25 @@ def derive_matte(matte: np.ndarray, auto: dict) -> np.ndarray:
     src = matte[:, :, 0] if matte.ndim == 3 else matte
     a = cv2.LUT(np.ascontiguousarray(src, dtype=np.uint8), matte_lut(auto))
     h, w = a.shape
+    expansion = float(auto.get("expansion", 0.0))
+    opacity = float(auto.get("opacity", 1.0))
+    # En SAM los edits son el prompt (ya consumido al generar el matte), no una
+    # corrección: aquí NO se vuelven a pintar, o se aplicarían dos veces.
+    interactive = is_interactive_provider(auto.get("provider"))
+    keep = None if interactive else edits_alpha(auto["edits"], w, h, "keep")
+    erase = None if interactive else edits_alpha(auto["edits"], w, h, "erase")
+    if (float(auto["feather"]) <= 0.0 and abs(expansion) < 1e-4
+            and opacity >= 1.0 and keep is None and erase is None):
+        return a          # sin ajustes espaciales la LUT ya es el resultado exacto
     out = a.astype(np.float32) / 255.0
+    out = expand_alpha(out, expansion, h)
     out = feather_alpha(out, float(auto["feather"]) * h)
-    keep = edits_alpha(auto["edits"], w, h, "keep")
     if keep is not None:
         out = np.maximum(out, keep)
-    erase = edits_alpha(auto["edits"], w, h, "erase")
     if erase is not None:
         out = np.minimum(out, 1.0 - erase)
-    if float(auto["feather"]) <= 0.0 and keep is None and erase is None:
-        return a          # sin pluma ni pincel la LUT ya es el resultado exacto
+    if opacity < 1.0:
+        out = out * opacity
     return np.clip(out * 255.0 + 0.5, 0, 255).astype(np.uint8)
 
 
@@ -391,6 +453,38 @@ def despill_rgb(r: int, g: int, b: int, chroma: dict) -> tuple[int, int, int]:
     return int(rf * 255.0), int(gf * 255.0), int(bf * 255.0)
 
 
+def chroma_morph_params(chroma: dict) -> tuple[float, float]:
+    """(sigma_frac, bias) para limpiar/expandir el alfa del croma. (0,0) = nada.
+
+    ``sigma_frac`` es fracción del ALTO (se pasa a px donde se aplique). ``bias``
+    en [-1,1]: negativo contrae (limpia residuos), positivo dilata. Misma
+    aproximación blur+sesgo que ``expand_alpha`` del matte, para que el preview
+    (canvas) y el export (ffmpeg gblur) den un borde equivalente.
+    """
+    edge = float(chroma.get("edge", 0.0))
+    shrink = float(chroma.get("shrink", 0.0))
+    if edge < 1e-4 and abs(shrink) < 1e-4:
+        return 0.0, 0.0
+    sigma_frac = max(edge * CHROMA_EDGE_MAX, abs(shrink) * MATTE_EXPAND_MAX)
+    bias = shrink * 0.5 - edge * 0.5
+    return sigma_frac, bias
+
+
+def chroma_alpha_ffmpeg(chroma: dict, height: int) -> str:
+    """Filtros ffmpeg que procesan un stream GRAY (el alfa del croma). '' si nada."""
+    sigma_frac, bias = chroma_morph_params(chroma)
+    if sigma_frac <= 0.0 and abs(bias) < 1e-4:
+        return ""
+    parts: list[str] = []
+    sigma = sigma_frac * float(height)
+    if sigma > 0.3:
+        parts.append(f"gblur=sigma={sigma:.4f}")
+    if abs(bias) > 1e-4:
+        k = int(round(bias * 255.0))
+        parts.append(f"lutyuv=y=clip(val+{k}\\,0\\,255)")
+    return ",".join(parts)
+
+
 def chroma_filters(chroma: dict) -> list[str]:
     """Filtros FFmpeg del chroma key, en orden. Vacío si está apagado.
 
@@ -428,13 +522,33 @@ def base_key(source_id: str, auto: dict, model_version: str) -> str:
     No incluye threshold/softness/feather/invert/edits: eso es derivado barato y
     mover un slider no debe volver a ejecutar el modelo.
     """
-    return _digest({
+    payload = {
         "src": str(source_id),
         "provider": auto["provider"],
         "model": str(model_version),
         "fps": int(auto["mask_fps"]),
         "h": int(auto["mask_height"]),
-    })
+        "stab": stabilize_window(auto),
+    }
+    # En SAM el matte SÍ depende de los puntos (son el prompt) → van en base_key.
+    # En U²-Net los edits son corrección barata (nivel 2) y NO entran aquí.
+    if is_interactive_provider(auto["provider"]):
+        payload["pts"] = auto["edits"]
+    return _digest(payload)
+
+
+def stabilize_window(auto: dict) -> int:
+    """Tamaño (impar) de la ventana del suavizado temporal. 1 = desactivado.
+
+    Mediana temporal: quita fotogramas atípicos (parpadeo) sin arrastrar el
+    borde como haría una media exponencial.
+    """
+    s = _clamp(_num((auto or {}).get("stabilize"), 0.0), 0.0, 1.0)
+    if s <= 1e-4:
+        return 1
+    if s <= 0.5:
+        return 3
+    return 5
 
 
 def derive_key(base: str, auto: dict) -> str:
@@ -444,6 +558,8 @@ def derive_key(base: str, auto: dict) -> str:
         "thr": round(float(auto["threshold"]), 5),
         "soft": round(float(auto["softness"]), 5),
         "fea": round(float(auto["feather"]), 5),
+        "exp": round(float(auto.get("expansion", 0.0)), 5),
+        "op": round(float(auto.get("opacity", 1.0)), 5),
         "inv": bool(auto["invert"]),
         "edits": auto["edits"],
     })

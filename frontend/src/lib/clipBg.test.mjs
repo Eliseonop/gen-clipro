@@ -18,8 +18,8 @@ const golden = JSON.parse(readFileSync(
 const COLORS = golden.colors
 
 // --- Catálogo y modelo -----------------------------------------------------
-assert.equal(BG_PROVIDERS.length, 2)
-assert.deepEqual(BG_PROVIDER_IDS, ['u2net', 'u2netp'])
+assert.ok(BG_PROVIDER_IDS.includes('u2net') && BG_PROVIDER_IDS.includes('u2netp'))
+assert.ok(BG_PROVIDER_IDS.includes('sam21_base_plus'))   // asistido (SAM)
 assert.ok(BG_PROVIDERS.every((p) => p.label && p.hint))
 assert.equal(DEFAULT_PROVIDER, 'u2net')
 assert.deepEqual(BG_MODES, ['auto', 'chroma'])
