@@ -1,0 +1,2232 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+    /* La herramienta va embebida en el editor: usamos la pila del sistema en
+       vez de empaquetar la Inter variable (856 KB). */
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --bg-dark: #0f172a;
+    --bg-panel: #1e293b;
+    --bg-header: #243143;
+    --border-color: #334155;
+    --border-color-light: #475569;
+    --text-primary: #f8fafc;
+    --text-secondary: #e2e8f0;
+    --text-muted: #94a3b8;
+    --accent-color: #3b82f6;
+    --accent-color-hover: #1f5bde;
+    --danger-color: #ef4444;
+    --danger-color-hover: #dc2626;
+    --red-accent-bg: #fee2e2;
+    --red-accent-text: #ef4444;
+    --red-accent-border: #fca5a5;
+}
+
+body {
+    /* La herramienta va embebida en el editor: usamos la pila del sistema en
+       vez de empaquetar la Inter variable (856 KB). */
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background-color: var(--bg-dark);
+    color: var(--text-secondary);
+    overflow: hidden;
+    --panel-width: 25vw;
+    --panel-handle-display: flex;
+    --mobile-footer-display: none;
+    --export-header-btn-display: flex;
+    --panel-transform: translateX(100%);
+}
+
+.controls-panel::-webkit-scrollbar {
+    width: 8px;
+}
+
+.controls-panel::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.controls-panel::-webkit-scrollbar-thumb {
+    background: var(--border-color-light);
+}
+
+.slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 6px;
+    background: var(--border-color);
+    outline: none;
+    transition: background 0.3s;
+}
+
+.slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    background: var(--text-primary);
+    cursor: pointer;
+    border: 3px solid var(--accent-color);
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
+    border-radius: 0;
+}
+
+.slider::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    background: var(--text-primary);
+    cursor: pointer;
+    border: 3px solid var(--accent-color);
+    border-radius: 0;
+}
+
+/* Custom-drawn slider skin */
+.custom-slider {
+    position: relative;
+    height: 6px;
+    flex: 1;
+    background: transparent;
+    display: flex;
+    align-items: center;
+    user-select: none;
+}
+
+.timeline-wrapper > .custom-slider {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+    background: transparent;
+}
+
+.custom-slider__track,
+.custom-slider__fill {
+    position: absolute;
+    top: 50%;
+    height: 6px;
+    transform: translateY(-50%);
+    border-radius: 0;
+    pointer-events: none;
+}
+
+.custom-slider__track {
+    left: 0;
+    width: 100%;
+    background: var(--border-color);
+}
+
+.custom-slider__fill {
+    left: 0;
+    width: var(--custom-range-pct, 0%);
+    background: var(--accent-color);
+}
+
+.custom-slider__thumb {
+    position: absolute;
+    top: 50%;
+    left: var(--custom-range-pct, 0%);
+    width: 20px;
+    height: 20px;
+    transform: translate(-50%, -50%);
+    background: var(--text-primary);
+    border: 3px solid var(--accent-color);
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
+    border-radius: 0;
+    pointer-events: auto;
+    cursor: pointer;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    z-index: 2;
+}
+
+.custom-slider-input {
+    opacity: 0;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    margin: 0;
+    padding: 0;
+    z-index: -1;
+}
+
+.custom-slider:focus-within {
+    outline: 2px solid var(--accent-color);
+    outline-offset: 2px;
+}
+
+.is-disabled,
+.controls-disabled-for-bg,
+.controls-disabled-for-overlay {
+    opacity: 0.5;
+    pointer-events: none;
+    user-select: none;
+}
+
+.drag-over {
+    border-color: var(--accent-color) !important;
+    background-color: rgba(59, 130, 246, 0.1);
+}
+
+.number-input-uniform {
+    width: 5rem;
+    text-align: center;
+}
+
+.popup-overlay {
+    position: fixed;
+    inset: 0;
+    background-color: rgba(15, 23, 42, 0.8);
+    z-index: 1000;
+    backdrop-filter: blur(5px);
+}
+
+#export-settings-popup>div,
+#confirmation-popup>div,
+#license-popup>div {
+    max-height: 80vh;
+}
+
+#license-content {
+    max-height: 50vh;
+    overflow-y: auto;
+}
+
+#license-content::-webkit-scrollbar {
+    width: 8px;
+}
+
+#license-content::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+#license-content::-webkit-scrollbar-thumb {
+    background: var(--border-color-light);
+    border-radius: 4px;
+}
+
+#license-content::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
+
+#export-progress-popup h3 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    margin-bottom: 1rem;
+}
+
+#export-progress-popup p {
+    font-size: 1rem;
+    color: var(--text-secondary);
+}
+
+#progress-bar-container {
+    width: 50%;
+    max-width: 500px;
+    height: 12px;
+    background-color: var(--border-color);
+    margin-top: 1.5rem;
+    overflow: hidden;
+    border-radius: 0;
+}
+
+#progress-bar-fill {
+    width: 0%;
+    height: 100%;
+    background-color: var(--accent-color);
+    transition: width 0.1s linear;
+    text-align: center;
+    line-height: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+    flex-shrink: 0;
+}
+
+.switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--border-color-light);
+    transition: .4s;
+    border-radius: 0;
+}
+
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .4s;
+    border-radius: 0;
+}
+
+input:checked+.toggle-slider {
+    background-color: var(--accent-color);
+}
+
+input:checked+.toggle-slider:before {
+    transform: translateX(20px);
+}
+
+.accordion-section {
+    border-radius: 0;
+}
+
+.accordion-open>.accordion-header .accordion-chevron {
+    transform: rotate(180deg);
+    color: var(--text-primary);
+}
+
+.accordion-open>.accordion-header {
+    background-color: rgba(51, 65, 85, 0.3);
+}
+
+.reset-section-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    padding: 0.25rem;
+    margin-right: 0.5rem;
+    transition: color 0.2s;
+}
+
+.reset-section-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    padding: 0.375rem;
+    margin-right: 0.5rem;
+    transition: color 0.2s, background-color 0.2s;
+}
+
+.reset-section-btn:hover {
+    color: var(--text-primary);
+    background-color: var(--border-color-light);
+}
+
+.eraser-reset-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    padding: 0.375rem;
+    margin-right: 0.5rem;
+    transition: color 0.2s, background-color 0.2s;
+}
+
+.eraser-reset-btn:hover {
+    color: var(--text-primary);
+    background-color: var(--border-color-light);
+}
+
+.btn-group-toggle button {
+    border-radius: 0;
+}
+
+.btn-group-toggle button:hover {
+    border-color: var(--accent-color);
+    color: var(--text-muted);
+}
+
+.btn-group-toggle .active {
+    border-color: var(--accent-color);
+    color: var(--text-primary);
+    background-color: rgba(59, 130, 246, 0.1);
+}
+
+#canvas-wrapper {
+    aspect-ratio: 16 / 9;
+    line-height: 0;
+    background-color: var(--bg-header);
+    box-sizing: border-box;
+    width: 100%;
+}
+
+#main-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    cursor: default;
+    border-radius: 0;
+}
+
+#edit-mode-overlay {
+    z-index: 1200;
+}
+
+#edit-mode-overlay.hidden {
+    display: none;
+}
+
+.edit-mode-panel {
+    max-height: 92vh;
+}
+
+.edit-canvas-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 240px;
+    max-height: 56vh;
+    overflow: hidden;
+    background-color: #0f172a;
+    background-image:
+        linear-gradient(45deg, #1e293b 25%, transparent 25%, transparent 75%, #1e293b 75%),
+        linear-gradient(45deg, #1e293b 25%, transparent 25%, transparent 75%, #1e293b 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 10px 10px;
+    border: 1px solid var(--border-color);
+}
+
+#edit-canvas {
+    display: block;
+    max-width: 100%;
+    max-height: 56vh;
+    touch-action: none;
+}
+
+#edit-mode-btns button.active {
+    border-color: var(--accent-color);
+    color: var(--text-primary);
+    background-color: rgba(59, 130, 246, 0.1);
+}
+
+#edit-tolerance-control.hidden {
+    display: none;
+}
+
+#edit-tolerance-control:not(.hidden) {
+    display: flex;
+}
+
+body.edit-mode-open {
+    overflow: hidden;
+}
+
+.drop-zone-delete-btn {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    z-index: 10;
+    padding: 0.25rem;
+    background-color: rgba(239, 68, 68, 0.8);
+    color: white;
+    transition: background-color 0.15s ease-in-out;
+    line-height: 1;
+    border-radius: 0;
+}
+
+.drop-zone-delete-btn svg {
+    width: 1rem;
+    height: 1rem;
+}
+
+.drop-zone-delete-btn:hover {
+    background-color: rgba(220, 38, 38, 0.9);
+}
+
+.drop-zone-action-btn {
+    position: absolute;
+    top: 0.5rem;
+    right: 2.5rem;
+    z-index: 10;
+    padding: 0.25rem;
+    background-color: rgba(59, 130, 246, 0.8);
+    color: white;
+    transition: background-color 0.15s ease-in-out;
+    line-height: 1;
+    border-radius: 0;
+}
+
+.drop-zone-action-btn svg {
+    width: 1rem;
+    height: 1rem;
+}
+
+.drop-zone-action-btn:hover {
+    background-color: rgba(37, 99, 235, 0.9);
+}
+
+#settings-panel-wrapper {
+    transform: var(--panel-transform);
+    width: var(--panel-width);
+    max-width: var(--panel-width);
+    border-radius: 0;
+}
+
+#settings-panel-wrapper.panel-open {
+    transform: translateX(0);
+}
+
+.main-handle,
+.tab-handle {
+    position: absolute;
+    left: -48px;
+    width: 48px;
+    height: 63px;
+    display: var(--panel-handle-display);
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-color);
+    border-right: none;
+    cursor: pointer;
+    transition: background-color 0.3s, color 0.3s, transform 0.3s ease-in-out;
+    background-color: var(--bg-header);
+    color: var(--text-muted);
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+}
+
+.main-handle {
+    top: 0;
+}
+
+#handle-object {
+    top: 63px;
+}
+
+#handle-background {
+    top: 126px;
+}
+
+#handle-animasi {
+    top: 187px;
+}
+
+#handle-info {
+    top: 250px;
+}
+
+.tab-handle {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s 0.1s, transform 0.3s ease-in-out;
+}
+
+#settings-panel-wrapper.panel-open .tab-handle {
+    opacity: 1;
+    pointer-events: auto;
+    transition-delay: 0.1s;
+}
+
+.main-handle:hover,
+.tab-handle:hover {
+    color: #FFFFFF;
+    background-color: var(--bg-header);
+}
+
+.tab-handle.active {
+    background-color: var(--bg-panel);
+    color: var(--text-primary);
+    transform: translateX(2px);
+}
+
+.tab-handle.active:hover {
+    background-color: var(--bg-panel);
+}
+
+#settings-panel-wrapper.panel-open #handle-icon-open {
+    display: block;
+}
+
+#settings-panel-wrapper.panel-open #handle-icon-closed {
+    display: none;
+}
+
+#settings-panel-wrapper:not(.panel-open) #handle-icon-open {
+    display: none;
+}
+
+#settings-panel-wrapper:not(.panel-open) #handle-icon-closed {
+    display: block;
+}
+
+#export-video-btn-header {
+    display: var(--export-header-btn-display);
+    border-radius: 0;
+}
+
+/* ========================================
+           UI Size: COMPACT
+           ======================================== */
+[data-ui-size="compact"] {
+
+    /* Spacing */
+    .controls-panel {
+        --p: 0.6rem;
+        padding-bottom: 5rem;
+    }
+
+    .p-4,
+    .md\:p-4 {
+        padding: 0.6rem;
+    }
+
+    .px-4 {
+        padding-left: 0.6rem;
+        padding-right: 0.6rem;
+    }
+
+    .py-2\.5 {
+        padding-top: 0.375rem;
+        padding-bottom: 0.375rem;
+    }
+
+    .px-2\.5 {
+        padding-left: 0.375rem;
+        padding-right: 0.375rem;
+    }
+
+    .space-y-4>*:not([hidden])~*:not([hidden]),
+    .md\:space-y-4>*:not([hidden])~*:not([hidden]) {
+        margin-top: 0.75rem;
+    }
+
+    .space-y-2>*:not([hidden])~*:not([hidden]),
+    .md\:space-y-2>*:not([hidden])~*:not([hidden]) {
+        margin-top: 0.375rem;
+    }
+
+    .gap-2,
+    .md\:gap-2 {
+        gap: 0.25rem;
+    }
+
+    .gap-3,
+    .md\:gap-3 {
+        gap: 0.5rem;
+    }
+
+    /* Accordion */
+    .accordion-section .accordion-header {
+        padding: 0.6rem;
+    }
+
+    .accordion-section .accordion-body {
+        padding: 0.6rem;
+    }
+
+    /* Drop zones */
+    #drop-zone,
+    #background-drop-zone {
+        height: 90px;
+    }
+
+    .drop-zone-delete-btn {
+        top: 0.25rem;
+        right: 0.25rem;
+        padding: 0.125rem;
+    }
+
+    .drop-zone-action-btn {
+        top: 0.25rem;
+        right: 2rem;
+        padding: 0.125rem;
+    }
+
+    /* Popups */
+    #export-settings-popup>div,
+    #confirmation-popup>div,
+    #license-popup>div {
+        padding: 1.5rem;
+    }
+
+    #export-progress-popup h3 {
+        font-size: 1.25rem;
+        margin-bottom: 0.75rem;
+    }
+
+    #export-progress-popup p {
+        font-size: 0.875rem;
+    }
+
+    #progress-bar-container {
+        margin-top: 1rem;
+    }
+
+    /* Buttons */
+    .reset-all-btn,
+    #reset-preferences-btn {
+        padding: 0.5rem 1rem;
+        font-size: 0.875rem;
+    }
+
+    #export-video-btn-header {
+        padding: 0.5rem 0.75rem;
+        font-size: 0.875rem;
+    }
+
+    #mobile-export-btn {
+        padding: 0.5rem 1rem;
+        font-size: 0.875rem;
+    }
+
+    .btn-group-toggle button {
+        padding: 0.375rem 0.5rem;
+        font-size: 0.75rem;
+    }
+
+    .btn-group-toggle button.p-2\.5 {
+        padding: 0.375rem 0.5rem !important;
+    }
+
+    /* Input fields */
+    .number-input-uniform {
+        padding: 0.375rem 0.5rem;
+        font-size: 0.75rem;
+    }
+
+    input[type="number"].py-1 {
+        padding-top: 0.375rem;
+        padding-bottom: 0.375rem;
+    }
+
+    input[type="number"].px-2 {
+        padding-left: 0.5rem;
+        padding-right: 0.5rem;
+    }
+
+    select {
+        padding: 0.375rem 0.5rem;
+        font-size: 0.75rem;
+        height: 2rem;
+    }
+
+    /* Typography */
+    #panel-title {
+        font-size: 1rem;
+    }
+
+    .text-lg,
+    .md\:text-lg {
+        font-size: 1rem;
+    }
+
+    .text-base {
+        font-size: 0.875rem;
+    }
+
+    .text-sm,
+    .md\:text-sm {
+        font-size: 0.8rem;
+    }
+
+    .text-xs {
+        font-size: 0.75rem;
+    }
+
+    /* Icons */
+    .w-6,
+    .h-6 {
+        width: 1.25rem;
+        height: 1.25rem;
+    }
+
+    .w-7,
+    .h-7 {
+        width: 1.5rem;
+        height: 1.5rem;
+    }
+
+    /* Layout */
+    #settings-panel .desktop-header {
+        height: 3rem;
+    }
+
+    #mobile-panel-header {
+        height: 2.5rem;
+        font-size: 0.8rem;
+    }
+
+    #mobile-footer {
+        height: 3.5rem;
+    }
+}
+
+@media (min-width: 769px) {
+
+    [data-ui-size="compact"] #drop-zone,
+    [data-ui-size="compact"] #background-drop-zone {
+        height: 120px;
+    }
+}
+
+/* ========================================
+           UI Size: NORMAL (Default)
+           ======================================== */
+[data-ui-size="normal"] {
+
+    /* Buttons */
+    .reset-all-btn,
+    #reset-preferences-btn {
+        padding: 0.75rem 1.25rem;
+    }
+
+    /* Layout */
+    #settings-panel .desktop-header {
+        height: 4rem;
+    }
+
+    #mobile-panel-header {
+        height: 3rem;
+        font-size: 0.9rem;
+    }
+
+    #mobile-footer {
+        height: 4rem;
+    }
+
+    .controls-panel {
+        padding-bottom: 6rem;
+    }
+}
+
+/* ========================================
+           UI Size: WIDE (Spacious)
+           ======================================== */
+[data-ui-size="wide"] {
+
+    /* Spacing */
+    .controls-panel {
+        padding-bottom: 7rem;
+    }
+
+    .p-4,
+    .md\:p-4 {
+        padding: 1.5rem;
+    }
+
+    .px-4 {
+        padding-left: 1.5rem;
+        padding-right: 1.5rem;
+    }
+
+    .py-2\.5 {
+        padding-top: 1rem;
+        padding-bottom: 1rem;
+    }
+
+    .px-2\.5 {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+
+    .space-y-4>*:not([hidden])~*:not([hidden]),
+    .md\:space-y-4>*:not([hidden])~*:not([hidden]) {
+        margin-top: 1.5rem;
+    }
+
+    .space-y-2>*:not([hidden])~*:not([hidden]),
+    .md\:space-y-2>*:not([hidden])~*:not([hidden]) {
+        margin-top: 0.75rem;
+    }
+
+    .gap-2,
+    .md\:gap-2 {
+        gap: 0.75rem;
+    }
+
+    .gap-3,
+    .md\:gap-3 {
+        gap: 1rem;
+    }
+
+    /* Accordion */
+    .accordion-section .accordion-header {
+        padding: 1.5rem;
+    }
+
+    .accordion-section .accordion-body {
+        padding: 1.5rem;
+    }
+
+    /* Drop zones */
+    #drop-zone,
+    #background-drop-zone {
+        height: 160px;
+    }
+
+    .overlay-drop-zone {
+        height: 120px;
+    }
+
+    .drop-zone-delete-btn {
+        top: 0.75rem;
+        right: 0.75rem;
+        padding: 0.5rem;
+    }
+
+    .drop-zone-action-btn {
+        top: 0.75rem;
+        right: 3.25rem;
+        padding: 0.5rem;
+    }
+
+    /* Popups */
+    #export-settings-popup>div,
+    #confirmation-popup>div,
+    #license-popup>div {
+        padding: 2.5rem;
+    }
+
+    #export-progress-popup h3 {
+        font-size: 2rem;
+        margin-bottom: 1.25rem;
+    }
+
+    #export-progress-popup p {
+        font-size: 1.125rem;
+    }
+
+    #progress-bar-container {
+        margin-top: 2rem;
+    }
+
+    /* Buttons */
+    .reset-all-btn,
+    #reset-preferences-btn {
+        padding: 1rem 1.5rem;
+        font-size: 1rem;
+    }
+
+    #export-video-btn-header {
+        padding: 0.75rem 1.25rem;
+        font-size: 1rem;
+    }
+
+    #mobile-export-btn {
+        padding: 0.75rem 1.5rem;
+        font-size: 1rem;
+    }
+
+    .btn-group-toggle button {
+        padding: 0.875rem 1rem;
+        font-size: 1rem;
+    }
+
+    .btn-group-toggle button.p-2\.5 {
+        padding: 0.875rem 1rem !important;
+    }
+
+    /* Input fields */
+    .number-input-uniform {
+        padding: 0.875rem 1rem;
+        font-size: 1rem;
+    }
+
+    input[type="number"].py-1 {
+        padding-top: 0.875rem;
+        padding-bottom: 0.875rem;
+    }
+
+    input[type="number"].px-2 {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+
+    select {
+        padding: 0.875rem 1rem;
+        font-size: 1rem;
+        height: 3.5rem;
+    }
+
+    /* Typography */
+    #panel-title {
+        font-size: 1.25rem;
+    }
+
+    .text-lg,
+    .md\:text-lg {
+        font-size: 1.25rem;
+    }
+
+    .text-base {
+        font-size: 1.125rem;
+    }
+
+    .text-sm,
+    .md\:text-sm {
+        font-size: 1rem;
+    }
+
+    .text-xs {
+        font-size: 0.875rem;
+    }
+
+    /* Icons */
+    .w-6,
+    .h-6 {
+        width: 1.75rem;
+        height: 1.75rem;
+    }
+
+    .w-7,
+    .h-7 {
+        width: 2rem;
+        height: 2rem;
+    }
+
+    /* Layout */
+    #settings-panel .desktop-header {
+        height: 5rem;
+    }
+
+    #mobile-panel-header {
+        height: 3.5rem;
+        font-size: 1.1rem;
+    }
+
+    #mobile-footer {
+        height: 5rem;
+    }
+}
+
+@media (min-width: 769px) {
+
+    [data-ui-size="compact"] #drop-zone,
+    [data-ui-size="compact"] #background-drop-zone {
+        height: 120px;
+    }
+}
+
+#mobile-footer .mobile-tab-btn {
+    border: 2px solid transparent;
+    border-radius: 0;
+    transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+}
+
+#mobile-footer .mobile-tab-btn.active {
+    background-color: rgba(59, 130, 246, 0.1);
+    border-color: var(--accent-color);
+    color: var(--accent-color);
+}
+
+#mobile-panel-header {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    background-color: var(--bg-header);
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+    cursor: ns-resize;
+}
+
+@media (max-width: 768px) {
+    body:not(.force-desktop) {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        overflow: hidden;
+        --panel-handle-display: none;
+        --mobile-footer-display: flex;
+        --export-header-btn-display: none;
+        --panel-transform: none;
+    }
+
+    body:not(.force-desktop) #canvas-container {
+        flex-basis: 100%;
+        width: 100%;
+        flex-shrink: 0;
+        padding: 0.5rem;
+        box-sizing: border-box;
+        overflow: hidden;
+        border-bottom: 1px solid var(--border-color);
+    }
+
+    body:not(.force-desktop) #main-canvas {
+        max-width: 100%;
+        max-height: 100%;
+    }
+
+    body:not(.force-desktop) #settings-panel-wrapper {
+        position: relative;
+        flex-basis: 0%;
+        width: 100vw;
+        max-width: 100vw;
+        transform: none !important;
+        transition: none;
+        border-top: none;
+        inset: auto;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    body:not(.force-desktop) #settings-panel {
+        height: 100%;
+        border-left: none;
+        border-bottom: none;
+        display: flex;
+        flex-direction: column;
+    }
+
+    body:not(.force-desktop) #settings-panel .desktop-header {
+        display: none;
+    }
+
+    body:not(.force-desktop) #mobile-panel-header {
+        display: flex;
+    }
+
+    body:not(.force-desktop) .controls-panel {
+        flex-grow: 1;
+        overflow-y: auto;
+        padding-bottom: 5rem;
+    }
+
+    body:not(.force-desktop) #mobile-footer {
+        display: var(--mobile-footer-display);
+    }
+
+    .desktop-only {
+        display: none;
+    }
+
+    .number-input-uniform {
+        width: 4rem;
+        flex-shrink: 0;
+    }
+
+}
+
+body.force-mobile {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+    --panel-handle-display: none;
+    --mobile-footer-display: flex;
+    --export-header-btn-display: none;
+    --panel-transform: none;
+}
+
+body.force-mobile #canvas-container {
+    flex-basis: 50%;
+    width: 100%;
+    flex-shrink: 0;
+    padding: 0.5rem;
+    box-sizing: border-box;
+    overflow: hidden;
+    border-bottom: 1px solid var(--border-color);
+}
+
+body.force-mobile #main-canvas {
+    max-width: 100%;
+    max-height: 100%;
+}
+
+body.force-mobile #settings-panel-wrapper {
+    position: relative;
+    flex-basis: 50%;
+    width: 100vw;
+    max-width: 100vw;
+    transform: none !important;
+    transition: none;
+    border-top: none;
+    inset: auto;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+body.force-mobile #settings-panel-wrapper.panel-open {
+    transform: none !important;
+}
+
+body.force-mobile #settings-panel {
+    height: 100%;
+    border-left: none;
+    border-bottom: none;
+    display: flex;
+    flex-direction: column;
+}
+
+body.force-mobile #settings-panel .desktop-header {
+    display: none;
+}
+
+body.force-mobile #mobile-panel-header {
+    display: flex;
+}
+
+body.force-mobile .controls-panel {
+    flex-grow: 1;
+    overflow-y: auto;
+    padding-bottom: 6rem;
+}
+
+body.force-mobile #mobile-footer {
+    display: var(--mobile-footer-display);
+}
+
+body.force-desktop {
+    --panel-width: 24rem;
+    --panel-handle-display: flex;
+    --mobile-footer-display: none;
+    --export-header-btn-display: flex;
+    --panel-transform: translateX(100%);
+}
+
+body.force-desktop #settings-panel-wrapper {
+    inset: 0 0 0 auto;
+    height: 100%;
+    border-radius: 0;
+}
+
+body.force-desktop #settings-panel {
+    border-left: 1px solid var(--border-color);
+    border-top: none;
+    border-bottom: 1px solid var(--border-color);
+}
+
+body.force-desktop #settings-panel-wrapper.panel-open {
+    transform: translateX(0);
+}
+
+#top-notification-popup {
+    position: fixed;
+    top: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    width: calc(100% - 2rem);
+    max-width: 500px;
+    background-color: var(--red-accent-bg);
+    color: var(--red-accent-text);
+    border: 1px solid var(--red-accent-border);
+    padding: 1rem 1.5rem;
+    border-radius: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s ease-in-out, visibility 0.3s ease-in-out;
+    z-index: 1001;
+}
+
+#top-notification-popup.show {
+    opacity: 1;
+    visibility: visible;
+}
+
+#top-notification-popup .close-btn {
+    background: none;
+    border: none;
+    color: var(--red-accent-text);
+    font-size: 1.25rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0.25rem;
+    margin-left: 1rem;
+    border-radius: 0;
+}
+
+#top-notification-popup .close-btn:hover {
+    background-color: rgba(239, 68, 68, 0.1);
+}
+
+.info-tooltip-trigger .info-tooltip {
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity 0.3s ease, visibility 0.3s;
+    pointer-events: none;
+}
+
+/* Show tooltip when JavaScript adds this class */
+.info-tooltip.tooltip-visible {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.rounded-md,
+.rounded-lg,
+.rounded-full {
+    border-radius: 0;
+}
+
+/* Move animation keyframes */
+@keyframes move-from-left {
+    from {
+        transform: translateX(-100%);
+    }
+
+    to {
+        transform: translateX(0);
+    }
+}
+
+@keyframes move-to-left {
+    from {
+        transform: translateX(0);
+    }
+
+    to {
+        transform: translateX(-100%);
+    }
+}
+
+@keyframes move-from-right {
+    from {
+        transform: translateX(100%);
+    }
+
+    to {
+        transform: translateX(0);
+    }
+}
+
+@keyframes move-to-right {
+    from {
+        transform: translateX(0);
+    }
+
+    to {
+        transform: translateX(100%);
+    }
+}
+
+@keyframes move-from-top {
+    from {
+        transform: translateY(-100%);
+    }
+
+    to {
+        transform: translateY(0);
+    }
+}
+
+@keyframes move-to-top {
+    from {
+        transform: translateY(0);
+    }
+
+    to {
+        transform: translateY(-100%);
+    }
+}
+
+@keyframes move-from-bottom {
+    from {
+        transform: translateY(100%);
+    }
+
+    to {
+        transform: translateY(0);
+    }
+}
+
+@keyframes move-to-bottom {
+    from {
+        transform: translateY(0);
+    }
+
+    to {
+        transform: translateY(100%);
+    }
+}
+
+/* Zoom animation keyframes */
+@keyframes zoom-in {
+    from {
+        transform: scale(var(--anim-scale-start, 0));
+    }
+
+    to {
+        transform: scale(1);
+    }
+}
+
+@keyframes zoom-out {
+    from {
+        transform: scale(1);
+    }
+
+    to {
+        transform: scale(var(--anim-scale-end, 0));
+    }
+}
+
+#filename-container input:focus {
+    outline: none;
+    box-shadow: none;
+}
+
+.timeline-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+    height: 20px;
+}
+
+#timeline-slider {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    z-index: 1;
+}
+
+#keyframe-markers-container {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 2;
+    pointer-events: none;
+}
+
+.keyframe-marker {
+    position: absolute;
+    top: 50%;
+    width: 22px;
+    height: 22px;
+    background: transparent;
+    border: 1.5px solid var(--accent-color);
+    border-radius: 0;
+    left: calc(10px + (var(--kf-pos) * (100% - 20px)));
+    transform: translate(-50%, -50%);
+}
+
+/* Duration bar container for simple mode */
+#simple-anim-markers-container {
+    left: 10px;
+    right: 10px;
+    top: 0;
+    bottom: 0;
+    z-index: 1;
+    pointer-events: none;
+}
+
+.simple-anim-marker {
+    position: absolute;
+    top: 50%;
+    height: 22px;
+    background: transparent;
+    border: 1.5px solid var(--accent-color);
+    border-radius: 0;
+    transform: translateY(-50%);
+    box-sizing: border-box;
+}
+
+#timeline-slider {
+    z-index: 1;
+}
+
+/* Easing Functions */
+.anim-linear {
+    animation-timing-function: linear;
+}
+
+.anim-ease-in {
+    animation-timing-function: ease-in;
+}
+
+.anim-ease-out {
+    animation-timing-function: ease-out;
+}
+
+.anim-back-in {
+    animation-timing-function: cubic-bezier(0.36, 0, 0.66, -0.56);
+}
+
+.anim-back-out {
+    animation-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+#canvas-container {
+    transition: width 0.3s ease-out;
+}
+
+body.desktop-panel-open:not(.force-mobile) #canvas-container {
+    width: calc(100vw - var(--panel-width));
+}
+
+.desktop-only {
+    display: none;
+}
+
+@media (min-width: 769px) {
+    .desktop-only {
+        display: inline;
+    }
+}
+
+#debug-screen {
+    position: fixed;
+    top: 0.5rem;
+    left: 0.5rem;
+    background-color: rgba(15, 23, 42, 0.85);
+    color: var(--text-primary);
+    padding: 0.25rem 0.5rem;
+    font-family: monospace;
+    font-size: 8px;
+    line-height: 1.2;
+    z-index: 9999;
+    pointer-events: none;
+    white-space: pre;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s, visibility 0.3s;
+}
+
+#debug-screen:not(.hidden) {
+    opacity: 1;
+    visibility: visible;
+}
+
+#processing-notification {
+    position: fixed;
+    top: 0.5rem;
+    left: 0.5rem;
+    background-color: rgba(15, 23, 42, 0.85);
+    color: var(--text-primary);
+    padding: 0.25rem 0.5rem;
+    font-family: monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    z-index: 9998;
+    pointer-events: none;
+    white-space: pre;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s, visibility 0.3s;
+}
+
+#desktop-resizer {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: var(--panel-width);
+    width: 4px;
+    transform: translateX(50%);
+    cursor: ew-resize;
+    -webkit-tap-highlight-color: transparent;
+}
+
+#desktop-resizer::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 2px;
+    height: 100%;
+    background-color: var(--border-color-light);
+    border-radius: 2px;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+#desktop-resizer:hover::after,
+body.is-resizing #desktop-resizer::after {
+    opacity: 1;
+}
+
+body:not(.desktop-panel-open) #desktop-resizer {
+    opacity: 0;
+    pointer-events: none;
+}
+
+body.desktop-panel-open #desktop-resizer {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+#desktop-resizer:hover {
+    background-color: var(--border-color-light);
+}
+
+body.is-resizing {
+    cursor: ew-resize !important;
+    user-select: none !important;
+}
+
+body.force-mobile #desktop-resizer {
+    display: none !important;
+}
+/* ==========================================================================
+   EMBED THEME — "AGY Video YT"
+   Solo se aplica cuando Paperima corre dentro del editor (?embed=1, que anade
+   la clase .paperima-embed al <body> desde src/modules/embed.js). La app
+   standalone no cambia.
+
+   Dos objetivos:
+     1) Que la herramienta use la misma paleta / radios / sombras que el editor
+        (tokens de frontend/src/styles/App.css: --card, --line, --accent...).
+     2) Que quepa en el iframe del modal (~1200x630 utiles) sin romperse:
+        metricas compactas, panel mas estrecho y menos padding muerto.
+   ========================================================================== */
+
+body.paperima-embed {
+    /* --- tokens del editor, remapeados sobre los de Paperima --- */
+    --bg-dark: #0b0e17;
+    --bg-panel: #141724;
+    --bg-header: #1b2032;
+    --bg-input: #242b42;
+    --border-color: rgba(255, 255, 255, 0.08);
+    --border-color-light: rgba(255, 255, 255, 0.16);
+    --text-primary: #f1f5f9;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
+    --accent-color: #ff3b5c;
+    --accent-color-hover: #ff6b3d;
+    --accent-gradient: linear-gradient(135deg, #ff3b5c 0%, #ff6b3d 100%);
+    --accent-soft: rgba(255, 59, 92, 0.14);
+    --accent-glow: rgba(255, 59, 92, 0.35);
+    --danger-color: #ef4444;
+    --danger-color-hover: #dc2626;
+    --ok-color: #10b981;
+
+    /* radios del design system del editor */
+    --r-lg: 16px;
+    --r-md: 10px;
+    --r-sm: 8px;
+
+    /* panel: ancho acotado para que el canvas no se quede sin sitio */
+    --panel-width: clamp(248px, 30vw, 330px) !important;
+
+    background-color: var(--bg-dark);
+    background-image: radial-gradient(circle at 50% 0%, #171b2d 0%, #090b11 70%);
+    color: var(--text-secondary);
+}
+
+/* --------------------------------------------------------------------------
+   1. Utilidades de color de Tailwind usadas en el markup -> tokens del editor
+   -------------------------------------------------------------------------- */
+body.paperima-embed .bg-slate-900 { background-color: var(--bg-input); }
+body.paperima-embed .bg-slate-800 { background-color: var(--bg-panel); }
+body.paperima-embed .bg-slate-700 { background-color: var(--bg-input); }
+body.paperima-embed .bg-slate-600 { background-color: #2b3350; }
+body.paperima-embed .hover\:bg-slate-800:hover { background-color: #1f2438; }
+body.paperima-embed .hover\:bg-slate-600:hover,
+body.paperima-embed .hover\:bg-slate-500:hover { background-color: #3a4468; }
+body.paperima-embed .border-slate-700,
+body.paperima-embed .border-slate-500 { border-color: var(--border-color-light); }
+body.paperima-embed .text-slate-100 { color: var(--text-primary); }
+body.paperima-embed .text-slate-200,
+body.paperima-embed .text-slate-300 { color: var(--text-secondary); }
+body.paperima-embed .text-slate-500 { color: var(--text-muted); }
+body.paperima-embed .text-green-500 { color: var(--ok-color); }
+body.paperima-embed .text-red-400 { color: var(--danger-color); }
+body.paperima-embed .hover\:text-white:hover { color: var(--text-primary); }
+
+/* --------------------------------------------------------------------------
+   2. Superficies: panel, cabecera, acordeones, canvas
+   -------------------------------------------------------------------------- */
+body.paperima-embed #settings-panel {
+    background-color: var(--bg-panel);
+    border-left: 1px solid var(--border-color);
+    box-shadow: -16px 0 40px rgba(0, 0, 0, 0.45);
+}
+
+body.paperima-embed #panel-title {
+    font-weight: 700;
+    letter-spacing: -0.2px;
+}
+
+body.paperima-embed .accordion-section {
+    background-color: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border-color);
+    border-radius: var(--r-md);
+    overflow: hidden;
+}
+
+body.paperima-embed .accordion-header:hover {
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+body.paperima-embed .accordion-open > .accordion-header {
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+body.paperima-embed .accordion-open > .accordion-header .accordion-chevron {
+    color: var(--accent-color);
+}
+
+body.paperima-embed #canvas-wrapper {
+    border-width: 1px;
+    border-color: var(--border-color-light);
+    border-radius: var(--r-md);
+    background-color: #0d1018;
+    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.55);
+    overflow: hidden;
+}
+
+body.paperima-embed #main-canvas { border-radius: inherit; }
+
+/* --------------------------------------------------------------------------
+   3. Controles: botones, inputs, toggles, sliders
+   -------------------------------------------------------------------------- */
+body.paperima-embed button,
+body.paperima-embed select,
+body.paperima-embed input:not([type="range"]):not([type="checkbox"]) {
+    border-radius: var(--r-sm);
+}
+
+body.paperima-embed select,
+body.paperima-embed input[type="number"],
+body.paperima-embed input[type="text"] {
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+}
+
+body.paperima-embed select:focus,
+body.paperima-embed input[type="number"]:focus,
+body.paperima-embed input[type="text"]:focus {
+    outline: none;
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+body.paperima-embed input[type="color"] {
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-input);
+}
+
+body.paperima-embed input[type="checkbox"] { accent-color: var(--accent-color); }
+
+/* boton principal "Guardar en el editor" = .primary del editor */
+body.paperima-embed #export-video-btn-header,
+body.paperima-embed #mobile-export-btn,
+body.paperima-embed #start-export-with-settings-btn {
+    background: var(--accent-gradient);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: var(--r-md);
+    box-shadow: 0 4px 16px var(--accent-glow);
+    font-weight: 600;
+}
+
+body.paperima-embed #export-video-btn-header:hover,
+body.paperima-embed #mobile-export-btn:hover,
+body.paperima-embed #start-export-with-settings-btn:hover {
+    background: var(--accent-gradient);
+    filter: brightness(1.06);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(255, 59, 92, 0.5);
+}
+
+/* grupos de toggle (aspect ratio, modos...) */
+body.paperima-embed .btn-group-toggle button {
+    border-radius: var(--r-sm);
+    border-width: 1px;
+}
+
+body.paperima-embed .btn-group-toggle button:hover {
+    border-color: var(--border-color-light);
+    color: var(--text-secondary);
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+body.paperima-embed .btn-group-toggle .active,
+body.paperima-embed #edit-mode-btns button.active {
+    border-color: var(--accent-color);
+    color: var(--text-primary);
+    background-color: var(--accent-soft);
+}
+
+body.paperima-embed .reset-section-btn,
+body.paperima-embed .eraser-reset-btn { border-radius: var(--r-sm); }
+
+body.paperima-embed .reset-section-btn:hover,
+body.paperima-embed .eraser-reset-btn:hover {
+    color: var(--text-primary);
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+/* switches */
+body.paperima-embed .toggle-slider {
+    border-radius: 999px;
+    background-color: #39415f;
+}
+body.paperima-embed .toggle-slider:before { border-radius: 999px; }
+body.paperima-embed input:checked + .toggle-slider { background: var(--accent-gradient); }
+
+/* sliders nativos y "custom" */
+body.paperima-embed .slider,
+body.paperima-embed .custom-slider__track {
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.1);
+}
+body.paperima-embed .custom-slider__fill {
+    border-radius: 999px;
+    background: var(--accent-gradient);
+}
+body.paperima-embed .slider::-webkit-slider-thumb,
+body.paperima-embed .custom-slider__thumb {
+    border-radius: 999px;
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+}
+body.paperima-embed .slider::-moz-range-thumb {
+    border-radius: 999px;
+    border-color: var(--accent-color);
+}
+body.paperima-embed .custom-slider:focus-within { outline-color: var(--accent-color); }
+
+/* timeline / keyframes */
+body.paperima-embed .keyframe-marker,
+body.paperima-embed .simple-anim-marker {
+    border-radius: 4px;
+    border-color: var(--accent-color);
+}
+
+/* --------------------------------------------------------------------------
+   4. Drop zones
+   -------------------------------------------------------------------------- */
+body.paperima-embed #drop-zone,
+body.paperima-embed #background-drop-zone,
+body.paperima-embed .overlay-drop-zone {
+    border-radius: var(--r-md);
+    border-width: 1px;
+    background-color: rgba(255, 255, 255, 0.02);
+}
+
+body.paperima-embed #drop-zone:hover,
+body.paperima-embed #background-drop-zone:hover,
+body.paperima-embed .overlay-drop-zone:hover {
+    border-color: var(--border-color-light);
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+body.paperima-embed .drag-over {
+    border-color: var(--accent-color) !important;
+    background-color: var(--accent-soft);
+}
+
+body.paperima-embed .drop-zone-delete-btn,
+body.paperima-embed .drop-zone-action-btn { border-radius: var(--r-sm); }
+
+body.paperima-embed .drop-zone-action-btn { background-color: rgba(255, 59, 92, 0.85); }
+body.paperima-embed .drop-zone-action-btn:hover { background-color: var(--accent-color); }
+
+/* --------------------------------------------------------------------------
+   5. Popups / overlays
+   -------------------------------------------------------------------------- */
+body.paperima-embed .popup-overlay {
+    background-color: rgba(4, 6, 12, 0.85);
+    backdrop-filter: blur(8px);
+}
+
+body.paperima-embed #export-settings-popup > div,
+body.paperima-embed #confirmation-popup > div,
+body.paperima-embed #license-popup > div,
+body.paperima-embed .edit-mode-panel {
+    background-color: var(--bg-panel);
+    border: 1px solid var(--border-color-light);
+    border-radius: var(--r-lg);
+    box-shadow: 0 16px 50px rgba(0, 0, 0, 0.65);
+}
+
+body.paperima-embed #progress-bar-container {
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.1);
+}
+body.paperima-embed #progress-bar-fill {
+    border-radius: 999px;
+    background: var(--accent-gradient);
+}
+
+body.paperima-embed #top-notification-popup {
+    background-color: var(--bg-panel);
+    color: var(--text-primary);
+    border: 1px solid rgba(239, 68, 68, 0.5);
+    border-left: 3px solid var(--danger-color);
+    border-radius: var(--r-md);
+    box-shadow: 0 16px 50px rgba(0, 0, 0, 0.6);
+}
+body.paperima-embed #top-notification-popup .close-btn {
+    color: var(--text-muted);
+    border-radius: var(--r-sm);
+}
+body.paperima-embed #top-notification-popup .close-btn:hover {
+    color: var(--text-primary);
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+body.paperima-embed .edit-canvas-wrap {
+    border-radius: var(--r-md);
+    border-color: var(--border-color);
+    background-color: #0d1018;
+    background-image:
+        linear-gradient(45deg, #1b2032 25%, transparent 25%, transparent 75%, #1b2032 75%),
+        linear-gradient(45deg, #1b2032 25%, transparent 25%, transparent 75%, #1b2032 75%);
+}
+
+/* --------------------------------------------------------------------------
+   6. Layout partido: cada pestana en su propio panel fijo
+   embed.js saca #background-tab-content / #object-tab-content /
+   #animasi-tab-content del panel lateral y los mete en tres paneles fijos
+   (Fondo izquierda, Objeto derecha, Animacion abajo en una sola fila), y marca
+   el <body> con .paperima-split. El panel original queda vacio y se oculta.
+   Solo en >=769px: por debajo embed.js no reestructura nada y manda el layout
+   movil original (panel con pestanas + footer de pestanas).
+   -------------------------------------------------------------------------- */
+body.paperima-embed {
+    --pa-header: 44px;
+    --pa-left: 252px;
+    --pa-right: 272px;
+    --pa-bottom: 182px;
+    --pa-gap: 10px;
+}
+
+/* header: barra de lado a lado con la marca y la accion principal */
+body.paperima-embed #paperima-dock-top {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--pa-header);
+    z-index: 41;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 0 10px;
+    background: linear-gradient(180deg, #20263c 0%, var(--bg-header) 100%);
+    border-bottom: 1px solid var(--border-color);
+}
+body.paperima-embed .paperima-brand {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+/* los tres paneles */
+body.paperima-embed .paperima-panel {
+    position: fixed;
+    z-index: 38;
+    display: flex;
+    flex-direction: column;
+    background-color: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    overflow: hidden;
+}
+body.paperima-embed #paperima-panel-left {
+    top: var(--pa-header);
+    left: 0;
+    bottom: var(--pa-bottom);
+    width: var(--pa-left);
+    border-left: none;
+    border-top: none;
+}
+body.paperima-embed #paperima-panel-right {
+    top: var(--pa-header);
+    right: 0;
+    bottom: var(--pa-bottom);
+    width: var(--pa-right);
+    border-right: none;
+    border-top: none;
+}
+body.paperima-embed #paperima-panel-bottom {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: var(--pa-bottom);
+    border-bottom: none;
+    border-left: none;
+    border-right: none;
+}
+
+/* cabecera de cada panel */
+body.paperima-embed .paperima-panel-title {
+    flex: 0 0 auto;
+    padding: 7px 10px;
+    background-color: var(--bg-header);
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-primary);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+/* el contenido de la pestana: ocupa el resto y scrollea.
+   showTab() sigue poniendo .hidden a las dos que no son la activa, asi que hay
+   que anularlo aqui o solo se veria un panel de los tres. */
+body.paperima-embed .paperima-panel > .tab-content {
+    display: block !important;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0.6rem;
+}
+
+/* Animacion: en una sola fila. El contenido viene envuelto en un div con
+   space-y-*, asi que la fila se monta sobre ese envoltorio y se anulan los
+   margenes verticales que Tailwind pone entre hermanos. */
+body.paperima-embed #paperima-panel-bottom > .tab-content {
+    display: flex !important;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+/* los envoltorios intermedios dejan de ser cajas: sus hijos pasan a ser celdas
+   de la fila. Sin esto quedarian apilados dentro de una sola celda. */
+body.paperima-embed #paperima-panel-bottom > .tab-content > div { display: contents; }
+body.paperima-embed #paperima-panel-bottom > .tab-content > *,
+body.paperima-embed #paperima-panel-bottom > .tab-content > div > * {
+    margin-top: 0 !important;
+    flex: 0 0 auto;
+    max-height: 100%;
+    overflow-y: auto;
+}
+/* el titulo "Animacion del objeto" lo da ya la cabecera del panel */
+body.paperima-embed #paperima-panel-bottom > .tab-content > div > h2 { display: none; }
+body.paperima-embed #paperima-panel-bottom #animation-timeline {
+    flex: 1 1 300px;
+    min-width: 250px;
+    border-top: none;
+    padding-top: 0;
+}
+body.paperima-embed #paperima-panel-bottom #animation-mode-btns { min-width: 150px; }
+/* el "Restablecer todo" trae w-full: como celda de la fila se comeria el resto
+   del ancho, asi que se ajusta al contenido y se va al final */
+body.paperima-embed #paperima-panel-bottom #reset-settings-btn-animasi {
+    width: auto;
+    margin-left: auto;
+    align-self: flex-start;
+    padding: 0.4rem 0.8rem;
+    background-color: transparent;
+    border: 1px solid rgba(239, 68, 68, 0.45);
+    color: #f87171;
+}
+body.paperima-embed #paperima-panel-bottom #reset-settings-btn-animasi:hover {
+    background-color: rgba(239, 68, 68, 0.15);
+    border-color: var(--danger-color);
+    color: #fff;
+}
+body.paperima-embed #paperima-panel-bottom #animation-simple-controls { flex: 0 1 280px; min-width: 220px; }
+body.paperima-embed #paperima-panel-bottom #animation-advanced-controls { flex: 1 1 340px; min-width: 270px; }
+
+/* el panel lateral original se queda sin contenido: fuera */
+body.paperima-embed.paperima-split #settings-panel-wrapper,
+body.paperima-embed.paperima-split #desktop-resizer { display: none !important; }
+
+/* el lienzo se encoge para no quedar debajo de ningun panel.
+   updateCanvasDisplaySize() lee este padding, asi que el preview se recalcula
+   solo y nunca se solapa. */
+body.paperima-embed.paperima-split #canvas-container {
+    padding:
+        calc(var(--pa-header) + var(--pa-gap))
+        calc(var(--pa-right) + var(--pa-gap))
+        calc(var(--pa-bottom) + var(--pa-gap))
+        calc(var(--pa-left) + var(--pa-gap));
+}
+
+/* el toggle del panel sigue oculto en embed (embed.js), pero por si acaso */
+body.paperima-embed .main-handle {
+    left: -42px;
+    width: 42px;
+    height: 46px;
+    top: 0;
+    background-color: rgba(27, 32, 50, 0.92);
+    border: 1px solid var(--border-color);
+    border-right: none;
+    border-top-left-radius: var(--r-md);
+    border-bottom-left-radius: var(--r-md);
+}
+
+/* en movil embed.js no parte nada: mandan el panel con pestanas y su footer.
+   El header sobra ahi (taparia el lienzo y su boton de exportar ya esta oculto
+   por --export-header-btn-display; el del footer hace ese trabajo). */
+@media (max-width: 768px) {
+    body.paperima-embed:not(.force-desktop) #paperima-dock-top { display: none; }
+}
+body.paperima-embed.force-mobile #paperima-dock-top { display: none; }
+
+body.paperima-embed #mobile-footer {
+    background-color: var(--bg-header);
+    border-top: 1px solid var(--border-color);
+}
+body.paperima-embed #mobile-footer .mobile-tab-btn {
+    border-radius: var(--r-md);
+    border-width: 1px;
+}
+body.paperima-embed #mobile-footer .mobile-tab-btn.active {
+    background-color: var(--accent-soft);
+    border-color: var(--accent-color);
+    color: var(--accent-color);
+}
+
+body.paperima-embed #mobile-panel-header {
+    background-color: var(--bg-header);
+    border-bottom: 1px solid var(--border-color);
+}
+body.paperima-embed #mobile-panel-header::after {
+    content: "";
+    width: 40px;
+    height: 4px;
+    border-radius: 999px;
+    background-color: var(--border-color-light);
+}
+
+
+/* --------------------------------------------------------------------------
+   7. Scrollbars como las del editor
+   -------------------------------------------------------------------------- */
+body.paperima-embed * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+body.paperima-embed .controls-panel::-webkit-scrollbar,
+body.paperima-embed #license-content::-webkit-scrollbar { width: 7px; }
+body.paperima-embed .controls-panel::-webkit-scrollbar-thumb,
+body.paperima-embed #license-content::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 999px;
+}
+body.paperima-embed .controls-panel:hover::-webkit-scrollbar-thumb,
+body.paperima-embed #license-content:hover::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.28);
+}
+
+/* --------------------------------------------------------------------------
+   8. Densidad: compacto por defecto dentro del iframe.
+   El tab de preferencias esta oculto en embed, asi que fijamos aqui las
+   metricas en vez de depender de [data-ui-size]. Solo se tocan paddings,
+   huecos y tipografias: ningun display/position/flex, para no romper layout.
+   -------------------------------------------------------------------------- */
+/* el lienzo se encoge lo justo para no quedar debajo de los docks: header
+   arriba, pastilla de Animacion abajo y las de Objeto/Fondo a los lados.
+   updateCanvasDisplaySize() lee este padding, asi que el preview se recalcula
+   solo y nunca se solapa. */
+body.paperima-embed #canvas-container { padding: 54px 104px 52px; }
+
+body.paperima-embed .controls-panel {
+    padding: 0.65rem;
+    padding-bottom: 1.25rem;
+}
+
+body.paperima-embed .p-4,
+body.paperima-embed .md\:p-4 { padding: 0.65rem; }
+body.paperima-embed .px-4 { padding-left: 0.65rem; padding-right: 0.65rem; }
+body.paperima-embed .py-2\.5 { padding-top: 0.375rem; padding-bottom: 0.375rem; }
+body.paperima-embed .px-2\.5 { padding-left: 0.5rem; padding-right: 0.5rem; }
+
+body.paperima-embed .space-y-4 > *:not([hidden]) ~ *:not([hidden]),
+body.paperima-embed .md\:space-y-4 > *:not([hidden]) ~ *:not([hidden]) { margin-top: 0.65rem; }
+body.paperima-embed .space-y-2 > *:not([hidden]) ~ *:not([hidden]),
+body.paperima-embed .md\:space-y-2 > *:not([hidden]) ~ *:not([hidden]) { margin-top: 0.375rem; }
+body.paperima-embed .gap-2,
+body.paperima-embed .md\:gap-2 { gap: 0.3rem; }
+body.paperima-embed .gap-3,
+body.paperima-embed .md\:gap-3 { gap: 0.5rem; }
+body.paperima-embed .mt-4 { margin-top: 0.75rem; }
+body.paperima-embed .pt-4 { padding-top: 0.75rem; }
+body.paperima-embed .mb-6 { margin-bottom: 1rem; }
+body.paperima-embed .mt-6 { margin-top: 1rem; }
+
+body.paperima-embed .accordion-section .accordion-header,
+body.paperima-embed .accordion-section .accordion-body { padding: 0.65rem; }
+
+body.paperima-embed #export-video-btn-header {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+
+/* tipografia un punto mas pequena, sin bajar de lo legible */
+body.paperima-embed #panel-title,
+body.paperima-embed .text-lg,
+body.paperima-embed .md\:text-lg { font-size: 0.95rem; }
+body.paperima-embed .text-xl { font-size: 1.05rem; }
+body.paperima-embed .text-base { font-size: 0.85rem; }
+body.paperima-embed .text-sm,
+body.paperima-embed .md\:text-sm { font-size: 0.78rem; }
+body.paperima-embed .text-xs { font-size: 0.7rem; }
+
+body.paperima-embed .btn-group-toggle button {
+    padding: 0.3rem 0.35rem;
+    font-size: 0.72rem;
+    line-height: 1.2;
+}
+body.paperima-embed .btn-group-toggle button.p-2\.5 { padding: 0.3rem 0.35rem !important; }
+
+body.paperima-embed select {
+    padding: 0.35rem 0.5rem;
+    font-size: 0.75rem;
+    height: 2rem;
+}
+body.paperima-embed .number-input-uniform {
+    width: 4.25rem;
+    padding: 0.3rem 0.4rem;
+    font-size: 0.72rem;
+}
+body.paperima-embed input[type="number"].py-1 { padding-top: 0.3rem; padding-bottom: 0.3rem; }
+body.paperima-embed input[type="color"] { height: 2rem; }
+
+/* iconos de los acordeones / cabeceras */
+body.paperima-embed .controls-panel .w-8,
+body.paperima-embed .controls-panel .h-8 { width: 1.5rem; height: 1.5rem; }
+body.paperima-embed .controls-panel .w-10,
+body.paperima-embed .controls-panel .h-10 { width: 1.75rem; height: 1.75rem; }
+
+/* drop zones: alto fijo recortado (las clases h-32 de Tailwind dan 8rem) */
+body.paperima-embed #drop-zone,
+body.paperima-embed #background-drop-zone { height: 84px; }
+body.paperima-embed .overlay-drop-zone { height: 72px; }
+
+/* popups mas contenidos para que quepan en el alto del iframe */
+body.paperima-embed #export-settings-popup > div,
+body.paperima-embed #confirmation-popup > div,
+body.paperima-embed #license-popup > div {
+    padding: 1.15rem;
+    max-height: 86vh;
+    overflow-y: auto;
+}
+body.paperima-embed #license-content { max-height: 40vh; }
+body.paperima-embed #export-progress-popup h3 { font-size: 1.15rem; margin-bottom: 0.6rem; }
+body.paperima-embed #export-progress-popup p { font-size: 0.82rem; }
+body.paperima-embed #progress-bar-container { margin-top: 1rem; }
+body.paperima-embed .reset-all-btn,
+body.paperima-embed #reset-preferences-btn { padding: 0.45rem 0.9rem; font-size: 0.8rem; }
+body.paperima-embed .edit-canvas-wrap { min-height: 180px; max-height: 46vh; }
+body.paperima-embed #edit-canvas { max-height: 46vh; }
+
+/* si el iframe se estrecha y entra el modo movil, devolvemos el hueco que
+   necesita el footer fijo bajo la lista de controles */
+@media (max-width: 768px) {
+    body.paperima-embed .controls-panel { padding-bottom: 4.25rem; }
+    /* sin docks (los oculta la seccion 6) el lienzo recupera su margen normal */
+    body.paperima-embed:not(.force-desktop) #canvas-container { padding: 0.5rem; }
+}
+body.paperima-embed.force-mobile #canvas-container { padding: 0.5rem; }

@@ -1,0 +1,24 @@
+Paperima
+Copyright (c) 2026 Dayverse.id
+
+This product includes software developed by open-source projects.
+
+---
+
+Remixicon
+Copyright (c) 2020 Remix Design
+Licensed under the Apache License, Version 2.0
+https://remixicon.com/
+
+---
+
+Mediabunny
+Copyright (c) 2024 Mediabunny
+Licensed under the Mozilla Public License, Version 2.0
+https://mediabunny.dev/
+
+---
+
+Esta copia ha sido modificada para video-yt: motor recortado a su uso embebido
+(sin PWA, sin fuente empaquetada, sin el idioma 'id'), con el puente de embed
+en src/modules/embed.js. Ver README.md.
