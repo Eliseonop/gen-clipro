@@ -246,6 +246,32 @@ export function upsertKeyframeAt(clip, localT, propPatch = {}, interpolation, fp
   return { ...clip, keyframes: { enabled: true, items } }
 }
 
+// El encuadre no tiene campo estático: sus keyframes SON el almacenamiento
+// (ver `snapshotProps` → `frameAt`). Mover el recorte escribe keyframe siempre.
+export const CROP_KEYS = ['cx', 'cy']
+
+/**
+ * Regla "mover ≠ animar": un cambio de propiedad solo aterriza como keyframe si
+ * el clip YA está animado. Si devuelve false el llamante escribe únicamente el
+ * valor estático, y la animación queda para cuando el usuario la active.
+ */
+export function shouldKeyframe(clip, patch) {
+  if (keyframesEnabled(clip)) return true
+  return CROP_KEYS.some((k) => patch?.[k] != null)
+}
+
+/**
+ * Estado del rombo de una propiedad, como en After Effects / CapCut:
+ *  - 'off'   la propiedad NO está animada; moverla solo cambia su valor estático.
+ *  - 'empty' está animada pero no hay keyframe en el cabezal.
+ *  - 'on'    hay keyframe en el cabezal (modificarla lo actualiza, no duplica).
+ */
+export function kfState(clip, localT, fps) {
+  const here = !!keyframeIdAt(clip, localT, fps)
+  if (here) return 'on'
+  return keyframesEnabled(clip) ? 'empty' : 'off'
+}
+
 export function keyframeIdAt(clip, localT, fps) {
   const t = +snapToFrame(localT, fps).toFixed(6)
   const snap = kfSnap(fps)
@@ -345,4 +371,61 @@ export function targetInterpItem(clip, selKfId, localT, fps) {
   if (sel) return sel
   const t = num(localT, 0)
   return items.find((k) => k.t > t + kfSnap(fps) / 2) || items[items.length - 1]
+}
+
+// --- Portapapeles de keyframes ---------------------------------------------
+// Copiar / pegar / duplicar keyframes, con selección por grupo de propiedades
+// para poder llevarse solo la Transformación, solo el Audio, etc.
+
+export const KF_GROUPS = [
+  { id: 'transform', label: 'Transformación', keys: ['x', 'y', 'scale', 'rotation', 'opacity'] },
+  { id: 'crop', label: 'Encuadre', keys: ['cx', 'cy', 'zoom'] },
+  { id: 'mask', label: 'Máscara', keys: [...MASK_KF_KEYS] },
+  { id: 'audio', label: 'Audio', keys: ['volume', ...AUDIO_FX_KEYS] },
+]
+
+export const KF_GROUP_IDS = KF_GROUPS.map((g) => g.id)
+
+/** Subconjunto de `props` que pertenece a los grupos dados. */
+export function pickProps(props, groupIds) {
+  // `null`/ausente = todos los grupos; lista vacía = ninguno (el usuario los
+  // desmarcó todos y pegar no debe tocar nada).
+  const ids = groupIds == null ? KF_GROUP_IDS : groupIds
+  const keys = new Set(KF_GROUPS.filter((g) => ids.includes(g.id)).flatMap((g) => g.keys))
+  const out = {}
+  for (const key of KF_PROP_KEYS) {
+    if (keys.has(key) && props?.[key] != null && Number.isFinite(Number(props[key]))) {
+      out[key] = Number(props[key])
+    }
+  }
+  return out
+}
+
+/** Contenido del portapapeles a partir del keyframe que hay en `localT`. */
+export function copyKeyframeAt(clip, localT, fps) {
+  const t = +snapToFrame(localT, fps).toFixed(6)
+  const item = normalizeItems(clip?.keyframes?.items).find((k) => Math.abs(k.t - t) < kfSnap(fps))
+  if (!item) return null
+  return {
+    type: 'keyframe',
+    props: { ...clipPropsAt(clip, item.t) },
+    interpolation: normalizeInterp(item.interpolation),
+    srcKind: clip?.kind || null,
+  }
+}
+
+/** Pega el portapapeles en `localT`. Si ya hay keyframe ahí, lo actualiza. */
+export function pasteKeyframeAt(clip, localT, board, groupIds, fps) {
+  if (!board || board.type !== 'keyframe') return clip
+  const props = pickProps(board.props, groupIds)
+  if (!Object.keys(props).length) return clip
+  return upsertKeyframeAt(clip, localT, props, board.interpolation, fps)
+}
+
+/** Copia un keyframe existente a otro instante conservando todos sus valores. */
+export function duplicateKeyframeAt(clip, id, targetT, fps) {
+  const item = normalizeItems(clip?.keyframes?.items).find((k) => k.id === id)
+  if (!item) return clip
+  const props = { ...clipPropsAt(clip, item.t) }
+  return upsertKeyframeAt(clip, targetT, props, item.interpolation, fps)
 }

@@ -273,6 +273,9 @@
   transform: rotate(45deg); cursor: pointer; border-radius: 1px;
 }
 .ed-kf-dia:hover { border-color: #fff; }
+/* off: sin animar (contorno apagado) · empty: animada, sin KF aquí (contorno
+   de acento) · on: KF en el cabezal (relleno). */
+.ed-kf-dia.empty { border-color: var(--accent); }
 .ed-kf-dia.on { background: var(--accent); border-color: var(--accent); }
 .ed-kf-dia:disabled { opacity: 0.35; cursor: default; }
 .ed-kf-dia.spacer { visibility: hidden; pointer-events: none; }
@@ -1088,8 +1091,16 @@ body.ed-zooming, body.ed-zooming * { cursor: ew-resize !important; user-select: 
   background: var(--card-3); color: #fff; font-size: 12px; font-weight: 700;
 }
 .ed-vol-num em { font-style: normal; color: var(--text); }
-.ed-crops-add { padding: 4px 8px 10px; }
+.ed-crops-add { padding: 4px 8px 10px; display: flex; flex-wrap: wrap; gap: 6px; }
 .ed-crops-add .ed-mute { grid-column: auto; }
+/* Filtro de qué grupos de propiedades se pegan del keyframe copiado. */
+.ed-crops-groups {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+  padding: 0 8px 10px; font-size: 11px; color: var(--text-secondary);
+}
+.ed-crops-groups-lab { color: var(--muted); }
+.ed-crops-group { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.ed-crops-group input { accent-color: var(--accent); margin: 0; }
 .ed-clip-vol {
   position: absolute; inset: 0; width: 100%; height: 100%;
   pointer-events: none; z-index: 2;

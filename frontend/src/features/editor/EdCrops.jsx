@@ -5,7 +5,7 @@ import { SPEED_MAX, SPEED_MIN, SPEED_PRESETS, clipKeepPitch, clipSpeed, isVisual
 import EdLayer from './EdLayer'
 import { VolumePanel } from './EdEffects'
 import {
-  canKeyframe, clampVolume, hasVolumeControls, keyframesEnabled, normalizeItems,
+  canKeyframe, clampVolume, hasVolumeControls, KF_GROUPS, keyframesEnabled, normalizeItems,
 } from '../../lib/clipKeyframes'
 import { fmtRuler } from './timelineScale'
 import { frameDuration } from '../../lib/projectFps'
@@ -31,7 +31,8 @@ function kfTime(clip, k, snapshots) {
 // Panel junto a la timeline: keyframes numerados y velocidad del clip.
 export default function EdCrops({
   clip, selKfId, onChangeFx, layer, onMoveLayer,
-  onSelectKf, onDeleteKf, fps = 30, onAddKf,
+  onSelectKf, onDeleteKf, fps = 30, onAddKf, onSetAnimated,
+  onCopyKf, onPasteKf, onDuplicateKf, kfBoard, kfGroups, onToggleKfGroup,
   playhead, onPose, onFade, hideVolume = false,
 }) {
   const [tab, setTab] = useState('kf')
@@ -43,11 +44,10 @@ export default function EdCrops({
   const snapshots = keyframesEnabled(clip) || (clip?.keyframes?.items || []).length > 0
   const items = kfList(clip)
   const propsTab = isText ? 'Capas' : 'Clip'
-  const kfEmpty = isAudio
-    ? 'Ajusta el volumen o pulsa Agregar keyframe en el cabezal.'
-    : isText
-      ? 'Mueve el texto en el canvas para crear un keyframe en el cabezal.'
-      : 'Mueve el clip en el canvas para crear un keyframe en el cabezal.'
+  // Mover una propiedad ya no crea keyframes: la animación se activa a mano y, a
+  // partir de ahí, los cambios aterrizan como keyframe en el cabezal.
+  const kfSubject = isAudio ? 'el volumen' : isText ? 'el texto' : 'el clip'
+  const kfEmpty = `Pulsa Animar para crear el primer keyframe. Después, mover ${kfSubject} creará keyframes en el cabezal.`
 
   useEffect(() => {
     if (clip?.kind === 'audio') setTab('props')
@@ -146,7 +146,7 @@ export default function EdCrops({
             {kfEmpty}
             {canKeyframe(clip) && (
               <button type="button" className="ed-mute" style={{ marginTop: 10 }} onClick={() => onAddKf?.()}>
-                Agregar keyframe
+                Animar
               </button>
             )}
           </div>
@@ -171,6 +171,18 @@ export default function EdCrops({
                         : ''}
                     </span>
                   </div>
+                  {onCopyKf && (
+                    <button className="icon-btn" title="Copiar keyframe (Alt+C)"
+                      onClick={(e) => { e.stopPropagation(); onSelectKf?.(k); onCopyKf(k) }}>
+                      <Icon name="content_copy" size={14} />
+                    </button>
+                  )}
+                  {onDuplicateKf && (
+                    <button className="icon-btn" title="Duplicar en el cabezal (Alt+D)"
+                      onClick={(e) => { e.stopPropagation(); onDuplicateKf(k) }}>
+                      <Icon name="library_add" size={14} />
+                    </button>
+                  )}
                   <button className="icon-btn" title="Eliminar keyframe"
                     onClick={(e) => { e.stopPropagation(); onDeleteKf?.(k) }}>
                     <Icon name="delete" size={14} />
@@ -183,6 +195,37 @@ export default function EdCrops({
                 <button type="button" className="ed-mute" onClick={() => onAddKf?.()}>
                   Agregar keyframe
                 </button>
+                {kfBoard && onPasteKf && (
+                  <button type="button" className="ed-mute" title="Pegar en el cabezal (Alt+V)"
+                    onClick={() => onPasteKf()}>
+                    Pegar keyframe
+                  </button>
+                )}
+                {keyframesEnabled(clip) && onSetAnimated && (
+                  <button
+                    type="button"
+                    className="ed-mute"
+                    title="Congela el valor del cabezal y deja de animar (los keyframes se conservan)"
+                    onClick={() => onSetAnimated(false)}
+                  >
+                    Desactivar animación
+                  </button>
+                )}
+              </div>
+            )}
+            {kfBoard && onToggleKfGroup && (
+              <div className="ed-crops-groups">
+                <span className="ed-crops-groups-lab">Pegar solo:</span>
+                {KF_GROUPS.map((g) => (
+                  <label key={g.id} className="ed-crops-group">
+                    <input
+                      type="checkbox"
+                      checked={(kfGroups || []).includes(g.id)}
+                      onChange={() => onToggleKfGroup(g.id)}
+                    />
+                    <span>{g.label}</span>
+                  </label>
+                ))}
               </div>
             )}
           </>

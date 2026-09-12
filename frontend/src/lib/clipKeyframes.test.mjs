@@ -3,6 +3,7 @@ import {
   easeT, interpItems, enableKeyframes, upsertKeyframeAt, clipPropsAt, keyframesOn,
   deleteKeyframeItem, normalizeInterp, keyframeIdAt,
   canKeyframe, opensEffectsOnSelect, clipVolumeAt, applyVolumeFade, sampleVolumeCurve,
+  shouldKeyframe, kfState, copyKeyframeAt, pasteKeyframeAt, duplicateKeyframeAt, pickProps, KF_GROUP_IDS, normalizeItems,
 } from './clipKeyframes.js'
 
 assert.equal(normalizeInterp('direct'), 'hold')
@@ -113,5 +114,71 @@ assert.ok(Math.abs(clipVolumeAt(faded, 0.5) - 1) < 1e-9)
 const curve = sampleVolumeCurve(volClip, 5, 10)
 assert.ok(curve.length >= 3)
 assert.ok(Math.abs(curve[0].v - 1) < 1e-9)
+
+// --- Regla "mover ≠ animar" -------------------------------------------------
+const plain = { kind: 'shape', start: 0, shape: { x: 0.2, y: 0.4, scale: 1, rotation: 0, opacity: 1 } }
+
+// Sin animar: mover una propiedad NO debe crear keyframe…
+assert.equal(shouldKeyframe(plain, { x: 0.9 }), false)
+assert.equal(shouldKeyframe(plain, { scale: 2, rotation: 45 }), false)
+// …salvo el encuadre, cuyo único almacenamiento son los keyframes.
+assert.equal(shouldKeyframe(plain, { cx: 0.3 }), true)
+assert.equal(shouldKeyframe(plain, { cy: 0.3 }), true)
+// Ya animado: cualquier cambio sí aterriza como keyframe.
+const animated = enableKeyframes(plain, 0)
+assert.equal(shouldKeyframe(animated, { x: 0.9 }), true)
+// Un clip con items pero con la animación apagada sigue siendo estático.
+assert.equal(shouldKeyframe(deleteKeyframeItem(animated, animated.keyframes.items[0].id), { x: 0.9 }), false)
+
+// Estados del rombo.
+assert.equal(kfState(plain, 0, 30), 'off')
+assert.equal(kfState(animated, 0, 30), 'on')
+assert.equal(kfState(animated, 5, 30), 'empty')
+
+// Activar la animación siembra UN keyframe con los valores estáticos actuales.
+assert.equal(animated.keyframes.items.length, 1)
+assert.equal(animated.keyframes.items[0].props.x, 0.2)
+assert.equal(animated.keyframes.items[0].props.y, 0.4)
+
+// Estando sobre un keyframe existente se actualiza, no se duplica.
+const twice = upsertKeyframeAt(upsertKeyframeAt(animated, 2, { x: 0.5 }), 2, { x: 0.7 })
+assert.equal(twice.keyframes.items.length, 2)
+assert.equal(twice.keyframes.items[1].props.x, 0.7)
+
+// --- Portapapeles de keyframes ----------------------------------------------
+const src = upsertKeyframeAt(
+  upsertKeyframeAt(animated, 0, { x: 0.1, scale: 1, volume: 0.4 }),
+  3, { x: 0.9, scale: 2, volume: 1 },
+)
+const board = copyKeyframeAt(src, 3, 30)
+assert.equal(board.type, 'keyframe')
+assert.ok(Math.abs(board.props.x - 0.9) < 1e-9)
+assert.ok(Math.abs(board.props.scale - 2) < 1e-9)
+// Sin keyframe en ese instante no hay nada que copiar.
+assert.equal(copyKeyframeAt(src, 1.5, 30), null)
+
+// Pegar en un instante libre crea un keyframe con los valores copiados.
+const pasted = pasteKeyframeAt(src, 5, board, KF_GROUP_IDS, 30)
+assert.equal(pasted.keyframes.items.length, 3)
+assert.ok(Math.abs(clipPropsAt(pasted, 5).x - 0.9) < 1e-9)
+
+// Pegar solo un grupo deja el resto intacto.
+const onlyTransform = pasteKeyframeAt(src, 0, board, ['transform'], 30)
+assert.ok(Math.abs(clipPropsAt(onlyTransform, 0).x - 0.9) < 1e-9)      // sí viaja
+assert.ok(Math.abs(clipPropsAt(onlyTransform, 0).volume - 0.4) < 1e-9) // el audio no
+assert.equal(onlyTransform.keyframes.items.length, 2)                  // y no duplica
+
+// Sin ningún grupo marcado, pegar no toca el clip.
+assert.equal(pasteKeyframeAt(src, 5, board, [], 30), src)
+assert.deepEqual(pickProps({ x: 1, volume: 0.5 }, []), {})
+assert.deepEqual(pickProps({ x: 1, volume: 0.5 }, ['audio']), { volume: 0.5 })
+assert.deepEqual(pickProps({ x: 1, volume: 0.5 }, null), { x: 1, volume: 0.5 })
+
+// Duplicar conserva todos los valores y solo cambia el instante.
+const kf0 = normalizeItems(src.keyframes.items)[0]
+const dup = duplicateKeyframeAt(src, kf0.id, 7, 30)
+assert.equal(dup.keyframes.items.length, 3)
+assert.ok(Math.abs(clipPropsAt(dup, 7).x - clipPropsAt(src, kf0.t).x) < 1e-9)
+assert.ok(Math.abs(clipPropsAt(dup, 7).volume - clipPropsAt(src, kf0.t).volume) < 1e-9)
 
 console.log('clipKeyframes ok')

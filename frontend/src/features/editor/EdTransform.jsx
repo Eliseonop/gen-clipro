@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import Icon from '../../components/Icon'
 import { clipPose } from '../../lib/clipAnim'
-import { canKeyframe, keyframeIdAt } from '../../lib/clipKeyframes'
+import { canKeyframe, kfState } from '../../lib/clipKeyframes'
 import { CLIP_POS_MAX, CLIP_POS_MIN, isOverlay } from '../../lib/clipLayout'
 import { clamp } from '../../lib/panning'
 import { isVisualClip } from './editorModel'
@@ -18,19 +18,27 @@ function scaleToZoom(scale) {
   return +clamp(1 / s, 0.1, 1).toFixed(4)
 }
 
-export function KfDia({ on, onClick, title = 'Keyframe en el cabezal' }) {
+const KF_TITLES = {
+  off: 'Animar esta propiedad (crea el primer keyframe)',
+  empty: 'Añadir keyframe en el cabezal',
+  on: 'Quitar el keyframe del cabezal',
+}
+
+/** `state`: 'off' (sin animar) · 'empty' (animada, sin KF aquí) · 'on' (KF aquí). */
+export function KfDia({ state = 'off', onClick, title }) {
+  const st = state === true ? 'on' : (state || 'off')
   return (
     <button
       type="button"
-      className={`ed-kf-dia${on ? ' on' : ''}`}
-      title={title}
+      className={`ed-kf-dia ${st}`}
+      title={title || KF_TITLES[st]}
       onClick={onClick}
       disabled={!onClick}
     />
   )
 }
 
-export function InspSection({ title, children, defaultOpen = true, onReset, kfOn, onAddKf }) {
+export function InspSection({ title, children, defaultOpen = true, onReset, kfSt, onAddKf }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
     <section className={`ed-insp-sec${open ? ' open' : ''}`}>
@@ -45,7 +53,7 @@ export function InspSection({ title, children, defaultOpen = true, onReset, kfOn
               <Icon name="restart_alt" size={15} />
             </button>
           )}
-          {onAddKf && <KfDia on={kfOn} onClick={onAddKf} />}
+          {onAddKf && <KfDia state={kfSt} onClick={onAddKf} />}
         </span>
       </div>
       {open && <div className="ed-insp-sec-b">{children}</div>}
@@ -97,7 +105,7 @@ export function NumberStepper({ value, min, max, step = 1, format, parse, suffix
   )
 }
 
-export function InspSlider({ label, value, min, max, step, format, parse, suffix, onChange, onKf, kfOn, stepper }) {
+export function InspSlider({ label, value, min, max, step, format, parse, suffix, onChange, onKf, kfSt, stepper }) {
   return (
     <div className="ed-insp-row">
       <div className="ed-insp-row-lab">{label}</div>
@@ -140,13 +148,13 @@ export function InspSlider({ label, value, min, max, step, format, parse, suffix
             {suffix ? <em className="ed-insp-suf">{suffix}</em> : null}
           </>
         )}
-        {onKf ? <KfDia on={kfOn} onClick={onKf} /> : <span className="ed-kf-dia spacer" />}
+        {onKf ? <KfDia state={kfSt} onClick={onKf} /> : <span className="ed-kf-dia spacer" />}
       </div>
     </div>
   )
 }
 
-function InspXY({ label, value, onChange, onKf, kfOn }) {
+function InspXY({ label, value, onChange, onKf, kfSt }) {
   return (
     <div className="ed-insp-xy">
       <span>{label}</span>
@@ -157,7 +165,7 @@ function InspXY({ label, value, onChange, onKf, kfOn }) {
         onChange={(n) => onChange(Number(n))}
         ariaLabel={label}
       />
-      {onKf ? <KfDia on={kfOn} onClick={onKf} /> : <span className="ed-kf-dia spacer" />}
+      {onKf ? <KfDia state={kfSt} onClick={onKf} /> : <span className="ed-kf-dia spacer" />}
     </div>
   )
 }
@@ -188,7 +196,7 @@ export default function EdTransform({
   // puede salir del cuadro (animar entradas/salidas).
   const posMin = fill ? 0 : CLIP_POS_MIN
   const posMax = fill ? 1 : CLIP_POS_MAX
-  const kfOn = !!keyframeIdAt(clip, localT, fps)
+  const kfSt = kfState(clip, localT, fps)
   const rawScale = showZoomScale
     ? zoomToScale(pose.zoom)
     : heightFit ? ((pose.scale || 0) / hs) : (pose.scale || 1)
@@ -202,7 +210,7 @@ export default function EdTransform({
   }
 
   return (
-    <InspSection title="Transformación" onReset={reset} kfOn={kfOn} onAddKf={onAddKf}>
+    <InspSection title="Transformación" onReset={reset} kfSt={kfSt} onAddKf={onAddKf}>
       {(showScale || showZoomScale) && (
         <InspSlider
           label="Escala"
@@ -220,7 +228,7 @@ export default function EdTransform({
             else onPose?.({ scale: +clamp(s, 0.05, 8).toFixed(4) })
           }}
           onKf={onAddKf}
-          kfOn={kfOn}
+          kfSt={kfSt}
           stepper
         />
       )}
@@ -238,7 +246,7 @@ export default function EdTransform({
             value={panX * 100}
             onChange={(n) => setPan(clamp(n / 100, posMin, posMax), panY)}
             onKf={onAddKf}
-            kfOn={kfOn}
+            kfSt={kfSt}
           />
           <InspXY
             label="Y"
@@ -259,7 +267,7 @@ export default function EdTransform({
           parse={(raw) => parseFloat(String(raw).replace(/[^\d.-]/g, ''))}
           onChange={(rotation) => onPose?.({ rotation })}
           onKf={onAddKf}
-          kfOn={kfOn}
+          kfSt={kfSt}
           stepper
         />
       )}

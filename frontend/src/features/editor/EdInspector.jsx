@@ -3,7 +3,7 @@ import Icon from '../../components/Icon'
 import FlipSelect from '../../components/FlipSelect'
 import { clipPose } from '../../lib/clipAnim'
 import { APPEAR_OPTIONS, COLOR_FX, EXIT_OPTIONS, fxNum } from '../../lib/clipFx'
-import { canKeyframe, keyframeIdAt } from '../../lib/clipKeyframes'
+import { canKeyframe, kfState } from '../../lib/clipKeyframes'
 import { FRAME_OPTIONS } from '../../lib/clipLayout'
 import { bgCapable } from '../../lib/clipBg'
 import { maskable } from '../../lib/clipMask'
@@ -65,7 +65,7 @@ export default function EdInspector({
   const activeNav = navs.includes(nav) ? nav : (navs[0] || 'video')
   const p = effectsProps || {}
   const localT = Math.max(0, (p.playhead ?? 0) - (clip?.start || 0))
-  const kfOn = !!(clip && canKeyframe(clip) && keyframeIdAt(clip, localT, p.fps || 30))
+  const kfSt = clip && canKeyframe(clip) ? kfState(clip, localT, p.fps || 30) : 'off'
   const effects = clip?.effects && typeof clip.effects === 'object' ? clip.effects : {}
   const canMask = !!(maskProps && maskable(clip))
   const canBg = !!(bgProps && bgCapable(clip))
@@ -198,7 +198,7 @@ export default function EdInspector({
             />
             )}
             {canKeyframe(clip) && clip?.kind !== 'audio' && (
-              <InspSection title="Mezcla" kfOn={kfOn} onAddKf={p.onAddKf}>
+              <InspSection title="Mezcla" kfSt={kfSt} onAddKf={p.onAddKf}>
                 <InspSlider
                   label="Opacidad"
                   value={Math.round(opacityOf(clip, p.playhead) * 100)}
@@ -210,7 +210,7 @@ export default function EdInspector({
                   parse={(raw) => parseFloat(String(raw).replace(/[^\d.-]/g, ''))}
                   onChange={(pct) => p.onPose?.({ opacity: pct / 100 })}
                   onKf={p.onAddKf}
-                  kfOn={kfOn}
+                  kfSt={kfSt}
                 />
               </InspSection>
             )}
