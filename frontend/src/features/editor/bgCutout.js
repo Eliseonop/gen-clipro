@@ -17,7 +17,8 @@
 //     Python), la pluma y las correcciones del pincel.
 // El export hace exactamente lo mismo sobre los mismos PNG, de ahí la paridad.
 import {
-  applyChromaKey, applyMatteLevels, autoActive, chromaActive, clipBg, matteIndexFor,
+  applyChromaKey, applyMatteLevels, autoActive, chromaActive, chromaMorphParams,
+  clipBg, matteIndexFor, MATTE_EXPAND_MAX,
 } from '../../lib/clipBg'
 import { mediaSize } from '../../lib/clipLayout'
 
@@ -36,6 +37,7 @@ const metas = new Map()       // baseKey -> meta | 'loading' | 'error'
 const alphaCache = new Map()  // clipId -> { sig, canvas }
 const cutCache = new Map()    // clipId -> { sig, canvas }
 const blurCache = new Map()   // clipId -> { sig, canvas } (auxiliar de la pluma)
+const grayCache = new Map()   // clipId -> { sig, canvas } (alfa como gris, croma)
 
 function evict(map, max) {
   while (map.size > max) {
@@ -139,6 +141,74 @@ function paintEdits(ctx, edits, w, h) {
   }
 }
 
+/** Difumina el alfa del canvas EN SITIO (mismo gancho que la pluma). */
+function blurCanvasInPlace(entry, clip, w, h, sigma) {
+  const blur = scratch(blurCache, clip.id, w, h)
+  if (!blur) return
+  const bctx = blur.canvas.getContext('2d')
+  bctx.setTransform(1, 0, 0, 1, 0, 0)
+  bctx.globalCompositeOperation = 'source-over'
+  bctx.globalAlpha = 1
+  bctx.clearRect(0, 0, w, h)
+  bctx.filter = `blur(${sigma.toFixed(2)}px)`
+  bctx.drawImage(entry.canvas, 0, 0)
+  bctx.filter = 'none'
+  const ctx = entry.canvas.getContext('2d', { willReadFrequently: true })
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.globalCompositeOperation = 'source-over'
+  ctx.globalAlpha = 1
+  ctx.filter = 'none'
+  ctx.clearRect(0, 0, w, h)
+  ctx.drawImage(blur.canvas, 0, 0)
+}
+
+/** Limpia/expande SOLO el canal alfa del croma (blur del alfa + sesgo + clamp).
+ *
+ * El blur del canvas afecta a todos los canales, así que el alfa se vuelca a un
+ * canvas gris opaco, se difumina ahí y se devuelve al alfa — el RGB no se toca.
+ * Espejo de ``chroma_alpha_ffmpeg`` (alphaextract → gblur → lut) del export.
+ */
+function morphChromaAlpha(ctx, clip, w, h, sigma, bias) {
+  const src = ctx.getImageData(0, 0, w, h)
+  const k = Math.round(bias * 255)
+  if (sigma > 0.3) {
+    const gray = scratch(grayCache, clip.id, w, h)
+    const blur = scratch(blurCache, clip.id, w, h)
+    if (gray && blur) {
+      const gctx = gray.canvas.getContext('2d', { willReadFrequently: true })
+      gctx.setTransform(1, 0, 0, 1, 0, 0)
+      const gi = gctx.createImageData(w, h)
+      for (let i = 0; i < src.data.length; i += 4) {
+        const a = src.data[i + 3]
+        gi.data[i] = a; gi.data[i + 1] = a; gi.data[i + 2] = a; gi.data[i + 3] = 255
+      }
+      gctx.putImageData(gi, 0, 0)
+      const bctx = blur.canvas.getContext('2d', { willReadFrequently: true })
+      bctx.setTransform(1, 0, 0, 1, 0, 0)
+      bctx.globalCompositeOperation = 'source-over'
+      bctx.globalAlpha = 1
+      bctx.clearRect(0, 0, w, h)
+      bctx.filter = `blur(${sigma.toFixed(2)}px)`
+      bctx.drawImage(gray.canvas, 0, 0)
+      bctx.filter = 'none'
+      const bd = bctx.getImageData(0, 0, w, h)
+      for (let i = 0; i < src.data.length; i += 4) {
+        const v = bd.data[i] + k       // canal R = alfa difuminado
+        src.data[i + 3] = v < 0 ? 0 : v > 255 ? 255 : v
+      }
+      ctx.putImageData(src, 0, 0)
+      return
+    }
+  }
+  if (k) {
+    for (let i = 3; i < src.data.length; i += 4) {
+      const v = src.data[i] + k
+      src.data[i] = v < 0 ? 0 : v > 255 ? 255 : v
+    }
+    ctx.putImageData(src, 0, 0)
+  }
+}
+
 /** Canvas cuyo ALFA es el matte final del clip (niveles+invertir, pluma, pincel). */
 function matteAlphaCanvas(clip, auto, meta, srcTime, w, h, loopDur) {
   const idx = matteIndexFor(meta, srcTime, loopDur)
@@ -151,7 +221,8 @@ function matteAlphaCanvas(clip, auto, meta, srcTime, w, h, loopDur) {
   if (!img) return null
 
   const sig = [auto.base_key, idx, auto.threshold, auto.softness, auto.feather,
-    auto.invert ? 1 : 0, editsSig(auto.edits), `${w}x${h}`].join('|')
+    auto.expansion, auto.opacity, auto.invert ? 1 : 0, editsSig(auto.edits),
+    `${w}x${h}`].join('|')
   const entry = scratch(alphaCache, clip.id, w, h)
   if (!entry) return null
   if (entry.sig === sig) return entry.canvas
@@ -167,27 +238,32 @@ function matteAlphaCanvas(clip, auto, meta, srcTime, w, h, loopDur) {
   const data = ctx.getImageData(0, 0, w, h)
   applyMatteLevels(data.data, auto)
   ctx.putImageData(data, 0, 0)
-  // Pluma: equivalente a la gaussiana de cv2 (misma convención que clipMask).
-  // El desenfoque necesita un canvas aparte (no se puede difuminar en sitio);
-  // se reutiliza uno cacheado en vez de crear uno por fotograma.
-  const sigma = auto.feather * h
-  if (sigma > 0.3) {
-    const blur = scratch(blurCache, clip.id, w, h)
-    if (blur) {
-      const bctx = blur.canvas.getContext('2d')
-      bctx.setTransform(1, 0, 0, 1, 0, 0)
-      bctx.globalCompositeOperation = 'source-over'
-      bctx.globalAlpha = 1
-      bctx.clearRect(0, 0, w, h)
-      bctx.filter = `blur(${sigma.toFixed(2)}px)`
-      bctx.drawImage(entry.canvas, 0, 0)
-      bctx.filter = 'none'
-      ctx.clearRect(0, 0, w, h)
-      ctx.filter = 'none'
-      ctx.drawImage(blur.canvas, 0, 0)
+  // Expansión/contracción: difuminar el alfa y sesgarlo (espejo de expand_alpha).
+  // Cerca del borde el alfa difuminado sube en rampa; sumarle un sesgo mueve el
+  // cruce y el clamp lo endurece → el contorno crece (>0) o encoge (<0).
+  const expansion = auto.expansion || 0
+  if (Math.abs(expansion) > 1e-4) {
+    const se = Math.abs(expansion) * MATTE_EXPAND_MAX * h
+    if (se > 0.3) blurCanvasInPlace(entry, clip, w, h, se)
+    const d = ctx.getImageData(0, 0, w, h)
+    const k = Math.round(expansion * 0.5 * 255)
+    for (let i = 3; i < d.data.length; i += 4) {
+      const v = d.data[i] + k
+      d.data[i] = v < 0 ? 0 : v > 255 ? 255 : v
     }
+    ctx.putImageData(d, 0, 0)
   }
+  // Pluma: equivalente a la gaussiana de cv2 (misma convención que clipMask).
+  const sigma = auto.feather * h
+  if (sigma > 0.3) blurCanvasInPlace(entry, clip, w, h, sigma)
   if (auto.edits.length) paintEdits(ctx, auto.edits, w, h)
+  // Opacidad del sujeto: escala el alfa final (espejo de out*opacity en Python).
+  const opacity = auto.opacity ?? 1
+  if (opacity < 1) {
+    const d = ctx.getImageData(0, 0, w, h)
+    for (let i = 3; i < d.data.length; i += 4) d.data[i] = Math.floor(d.data[i] * opacity + 0.5)
+    ctx.putImageData(d, 0, 0)
+  }
   entry.sig = sig
   return entry.canvas
 }
@@ -227,6 +303,7 @@ export function cutoutDrawable(clip, el, srcTime, loopDur = 0) {
 
   const chromaSig = wantChroma
     ? `${bg.chroma.color}:${bg.chroma.similarity}:${bg.chroma.blend}:${bg.chroma.spill}`
+      + `:${bg.chroma.edge}:${bg.chroma.shrink}`
     : ''
   const alphaSig = alpha ? alphaCache.get(clip.id)?.sig || '' : ''
   const sig = [`${w}x${h}`, chromaSig, alphaSig, wantChroma ? srcTime.toFixed(4) : ''].join('#')
@@ -245,6 +322,8 @@ export function cutoutDrawable(clip, el, srcTime, loopDur = 0) {
     const data = ctx.getImageData(0, 0, w, h)
     applyChromaKey(data.data, bg.chroma)
     ctx.putImageData(data, 0, 0)
+    const [sf, bias] = chromaMorphParams(bg.chroma)
+    if (sf > 0 || Math.abs(bias) > 1e-4) morphChromaAlpha(ctx, clip, w, h, sf * h, bias)
   }
   if (alpha) {
     // destination-in multiplica el alfa: el del croma y el del matte se combinan
@@ -263,6 +342,7 @@ export function resetCutout(clipId) {
     alphaCache.clear()
     cutCache.clear()
     blurCache.clear()
+    grayCache.clear()
     matteImgs.clear()
     metas.clear()
     return
@@ -270,6 +350,7 @@ export function resetCutout(clipId) {
   alphaCache.delete(clipId)
   cutCache.delete(clipId)
   blurCache.delete(clipId)
+  grayCache.delete(clipId)
 }
 
 /** Invalida los metadatos de una base_key (tras ampliar el rango del matte). */

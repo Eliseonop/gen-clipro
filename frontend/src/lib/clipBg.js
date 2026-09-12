@@ -25,16 +25,27 @@ const num = (v, d) => {
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
 export const BG_PROVIDERS = [
-  { id: 'u2net', label: 'U²-Net (calidad)', hint: 'Mejor borde. ~0,35 s/fotograma en CPU.' },
-  { id: 'u2netp', label: 'U²-Net lite (rápido)', hint: 'Modelo de 4,7 MB. ~0,05 s/fotograma.' },
+  { id: 'u2net', label: 'U²-Net (automático)', hint: 'Detecta el sujeto solo. Mejor borde.' },
+  { id: 'u2netp', label: 'U²-Net lite (rápido)', hint: 'Modelo de 4,7 MB, más rápido.' },
+  { id: 'sam21_base_plus', label: 'SAM 2.1 (asistido)', hint: 'Marca el sujeto con puntos. Calidad alta.', interactive: true },
+  { id: 'sam21_large', label: 'SAM 2.1 large', hint: 'Asistido, máxima calidad (más lento).', interactive: true },
+  { id: 'sam21_tiny', label: 'SAM 2.1 tiny', hint: 'Asistido y ligero.', interactive: true },
 ]
 export const BG_PROVIDER_IDS = BG_PROVIDERS.map((p) => p.id)
+export const SAM_PROVIDER_IDS = BG_PROVIDERS.filter((p) => p.interactive).map((p) => p.id)
 export const DEFAULT_PROVIDER = 'u2net'
+
+/** True para proveedores asistidos por puntos (SAM): el pincel = prompt. */
+export function isInteractiveProvider(id) {
+  return String(id || '').startsWith('sam')
+}
 
 export const BG_MODES = ['auto', 'chroma']
 export const BG_KIND_OK = ['video', 'image']
 
 export const MATTE_FEATHER_MAX = 0.15
+export const MATTE_EXPAND_MAX = 0.06
+export const CHROMA_EDGE_MAX = 0.03
 export const MASK_FPS_MIN = 1
 export const MASK_FPS_MAX = 60
 export const MASK_HEIGHT_MIN = 128
@@ -91,9 +102,15 @@ export function normalizeAuto(raw) {
     error: a.error ? String(a.error) : null,
     mask_fps: Math.round(clamp(num(a.mask_fps, DEFAULT_MASK_FPS), MASK_FPS_MIN, MASK_FPS_MAX)),
     mask_height: Math.round(clamp(num(a.mask_height, DEFAULT_MASK_HEIGHT), MASK_HEIGHT_MIN, MASK_HEIGHT_MAX)),
+    // stabilize: suavizado temporal (anti-parpadeo), propiedad del nivel 1.
+    stabilize: clamp(num(a.stabilize, 0), 0, 1),
     threshold: clamp(num(a.threshold, 0.5), 0, 1),
     softness: clamp(num(a.softness, 0.25), 0, 1),
     feather: clamp(num(a.feather, 0), 0, MATTE_FEATHER_MAX),
+    // expansion: >0 dilata el sujeto (crece), <0 lo contrae (encoge).
+    expansion: clamp(num(a.expansion, 0), -1, 1),
+    // opacity: opacidad del sujeto conservado (1 = opaco, 0 = transparente).
+    opacity: clamp(num(a.opacity, 1), 0, 1),
     invert: !!a.invert,
     edits: (Array.isArray(a.edits) ? a.edits : []).map(normalizeEdit).filter(Boolean),
   }
@@ -108,6 +125,10 @@ export function normalizeChroma(raw) {
     similarity: clamp(num(c.similarity, 0.20), 1e-5, 1),
     blend: clamp(num(c.blend, 0.10), 0, 1),
     spill: clamp(num(c.spill, 0), 0, 1),
+    // edge: limpieza de bordes (contrae el alfa para quitar residuos finos).
+    edge: clamp(num(c.edge, 0), 0, 1),
+    // shrink: expansión (>0) / contracción (<0) del alfa del croma.
+    shrink: clamp(num(c.shrink, 0), -1, 1),
   }
 }
 
@@ -349,9 +370,20 @@ export function applyChromaKey(data, chroma) {
   return data
 }
 
+/** (sigmaFrac, bias) para limpiar/expandir el alfa del croma. Espejo de Python.
+ *  sigmaFrac es fracción del ALTO; bias en [-1,1] (negativo contrae). */
+export function chromaMorphParams(chroma) {
+  const edge = chroma?.edge || 0
+  const shrink = chroma?.shrink || 0
+  if (edge < 1e-4 && Math.abs(shrink) < 1e-4) return [0, 0]
+  const sigmaFrac = Math.max(edge * CHROMA_EDGE_MAX, Math.abs(shrink) * MATTE_EXPAND_MAX)
+  const bias = shrink * 0.5 - edge * 0.5
+  return [sigmaFrac, bias]
+}
+
 // --- Claves de caché (espejo de Python, para saber si hay que re-pedir) -----
 
 /** Firma de los ajustes que SÍ obligan a re-ejecutar el modelo. */
 export function baseSignature(auto) {
-  return [auto.provider, auto.mask_fps, auto.mask_height].join('|')
+  return [auto.provider, auto.mask_fps, auto.mask_height, auto.stabilize].join('|')
 }

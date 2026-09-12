@@ -205,6 +205,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [bgJob, setBgJob] = useState(null)
   const [bgInfo, setBgInfo] = useState({ providers: [], device: '' })
   const [chromaPick, setChromaPick] = useState(false)
+  // Fondo de vista previa (solo preview): normal|checker|solid|media.
+  const [bgPreview, setBgPreview] = useState({ mode: 'normal', color: '#3B82F6', kind: '' })
   const [clipZoom, setClipZoom] = useState(1)
   const viewZoom = mainColTab === 'clip' ? clipZoom : mainZoom
   const setViewZoom = mainColTab === 'clip' ? setClipZoom : setMainZoom
@@ -245,6 +247,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const maskModeRef = useRef(false); maskModeRef.current = maskMode
   const maskDrawRef = useRef(false); maskDrawRef.current = maskDraw
   const bgBrushRef = useRef(bgBrush); bgBrushRef.current = bgBrush
+  const bgPreviewRef = useRef(bgPreview); bgPreviewRef.current = bgPreview
+  const bgPreviewElRef = useRef(null)   // <img>/<video> del fondo de reemplazo
+  const bgPreviewUrlRef = useRef('')    // objectURL a revocar al reemplazar
   const chromaPickRef = useRef(false); chromaPickRef.current = chromaPick
   const viewZoomRef = useRef(1); viewZoomRef.current = viewZoom
   const previewVolRef = useRef(previewVol); previewVolRef.current = previewVol
@@ -352,8 +357,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     try { localStorage.setItem(PREVIEW_VOL_KEY, String(n)) } catch { /* noop */ }
   }
 
+  // OJO: solo se autoguarda en modo Main. En Clip y en Motion, `tracks`/`clips`
+  // NO son la timeline del proyecto (son el tramo del clip, o las capas de la
+  // composición convertidas a clips por motionLayersToTimeline): guardarlas aquí
+  // sobrescribiría el proyecto entero con el contenido de esos editores.
   useEffect(() => {
-    if (!loaded || clipModeRef.current) return
+    if (!loaded || clipModeRef.current || motionModeRef.current) return
     const id = setTimeout(() => {
       saveTimeline(project.id, timelinePayload()).catch(() => {})
       setSavedLabel('Guardado')
@@ -385,8 +394,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     try {
       const tl = await getTimeline(project.id)
       if (!tl) return
-      setTracks(tl.tracks || [])
-      setClips((tl.clips || []).map((c) => ({
+      const nextTracks = tl.tracks || []
+      const nextClips = (tl.clips || []).map((c) => ({
         ...c,
         reframe: isVisualClip(c) ? withKfIds(c.reframe || newReframe()) : null,
         appear: c.appear || 'none',
@@ -401,7 +410,26 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         speed_curve: c.speed_curve || null,
         frame: c.frame || (c.layout === 'overlay' ? 'free' : 'full'),
         ...(c.kind === 'text' ? { text_role: textRole(c) } : {}),
-      })))
+      }))
+      // En Clip/Motion el editor muestra OTRA timeline: volcar aquí la del proyecto
+      // la pisaría (es lo que hacía que Motion Studio "saltara" al editor principal
+      // al terminar "Agregar al proyecto" o un reload del chat IA). Se refresca el
+      // snapshot para que al volver a "Main" ya aparezca actualizada.
+      if (clipModeRef.current || motionModeRef.current) {
+        const prev = projectTlRef.current
+        if (prev) {
+          projectTlRef.current = {
+            ...prev,
+            tracks: nextTracks,
+            clips: nextClips,
+            outW: tl.width || prev.outW,
+            outH: tl.height || prev.outH,
+          }
+        }
+        return
+      }
+      setTracks(nextTracks)
+      setClips(nextClips)
       if (tl.width) setOutW(tl.width)
       if (tl.height) setOutH(tl.height)
       if (tl.fps) setFps(normalizeFps(tl.fps))
@@ -433,7 +461,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       clipsRef, tracksRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
       playingRef, framingModeRef, mainCanvasRef, mainStageRef, resultCanvasRef, mainTextBox, topVideoAt, alignGuidesRef,
       clipModeRef, cropModeRef, croppingRef, fpsRef, hitListRef, viewZoomRef,
-      maskModeRef, maskDrawRef, bgBrushRef,
+      maskModeRef, maskDrawRef, bgBrushRef, bgPreviewRef, bgPreviewElRef,
     }
     const tick = () => {
       const total = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
@@ -1730,7 +1758,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (!clip || !bgCapable(clip)) return
     const bg = clipBg(clip) || defaultBg()
     patchBgAuto(clip.id, { enabled: true, status: 'running', error: null })
-    createBgRemovalJob(projectId, {
+    createBgRemovalJob(project.id, {
       clip_id: clip.id,
       kind: clip.kind,
       asset_kind: clip.asset_kind,
@@ -1758,8 +1786,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const changeBgAuto = (patch) => {
     const clip = selectedClip
     if (!clip) return
-    // Cambiar de modelo obliga a recalcular: el matte cacheado es de otro modelo.
-    const resets = patch.provider !== undefined
+    // Cambiar de modelo o la estabilización obliga a recalcular: el matte
+    // cacheado es de otra base_key.
+    const resets = (patch.provider !== undefined || patch.stabilize !== undefined)
       ? { base_key: '', status: 'idle', error: null }
       : {}
     patchBgAuto(clip.id, { ...patch, ...resets })
@@ -1836,6 +1865,38 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       setBgBrush((b) => (b.on ? { ...b, on: false } : b))
       setChromaPick(false)
     }
+  }, [])
+
+  // Fondo de vista previa (solo preview). `file` carga imagen/vídeo de prueba.
+  const onBgPreview = useCallback((patch) => {
+    if (patch?.file) {
+      const isVideo = /^video\//.test(patch.file.type || '')
+      const url = URL.createObjectURL(patch.file)
+      if (bgPreviewUrlRef.current) URL.revokeObjectURL(bgPreviewUrlRef.current)
+      bgPreviewUrlRef.current = url
+      if (isVideo) {
+        const v = document.createElement('video')
+        v.src = url; v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true
+        v.play?.().catch(() => {})
+        bgPreviewElRef.current = v
+      } else {
+        const img = new Image()
+        img.src = url
+        bgPreviewElRef.current = img
+      }
+      setBgPreview((p) => ({ ...p, mode: 'media', kind: isVideo ? 'video' : 'image' }))
+      return
+    }
+    if (patch?.mode && patch.mode !== 'media') {
+      if (bgPreviewUrlRef.current) { URL.revokeObjectURL(bgPreviewUrlRef.current); bgPreviewUrlRef.current = '' }
+      bgPreviewElRef.current = null
+    }
+    setBgPreview((p) => ({ ...p, ...patch }))
+  }, [])
+
+  // Revocar el objectURL del fondo de prueba al desmontar.
+  useEffect(() => () => {
+    if (bgPreviewUrlRef.current) URL.revokeObjectURL(bgPreviewUrlRef.current)
   }, [])
 
   // Cursor del pincel sobre el lienzo (el círculo lo dibuja drawComposite).
@@ -2609,6 +2670,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             onChangeChroma: changeBgChroma,
             onResetChroma: resetBgChroma,
             onPickColor: onPickChroma,
+            bgPreview,
+            onBgPreview,
           }}
           maskProps={{
             maskMode,

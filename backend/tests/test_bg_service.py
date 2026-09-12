@@ -67,6 +67,7 @@ class CacheBase(unittest.TestCase):
             patch.object(bg_service, "CACHE_ROOT", self.td / "bgcache"),
             patch.object(bg_service, "MATTE_ROOT", self.td / "bgcache" / "matte"),
             patch.object(bg_service, "MASK_ROOT", self.td / "bgcache" / "mask"),
+            patch.object(bg_service, "EMBED_ROOT", self.td / "bgcache" / "embed"),
             patch.object(bg_providers, "PROVIDERS", {"u2net": self.prov}),
             patch.object(bg_providers, "_device_setting", return_value="cpu"),
         ]
@@ -211,6 +212,23 @@ class BuildMatteTest(CacheBase):
         antes = self.prov.calls
         bg_service.build_matte(src, self._auto(mask_fps=20), 0.0, 1.0)
         self.assertGreater(self.prov.calls, antes)
+
+    def test_estabilizar_relanza_y_escribe_todo_el_rango(self):
+        src = self._video(1.0)
+        bg_service.build_matte(src, self._auto(), 0.0, 1.0)
+        antes = self.prov.calls
+        meta = bg_service.build_matte(src, self._auto(stabilize=0.9), 0.0, 1.0)
+        self.assertGreater(self.prov.calls, antes, "estabilizar debe recalcular")
+        lo, hi = meta["range"]
+        for i in range(lo, hi + 1):
+            self.assertTrue(bg_service.frame_path(
+                bg_service.matte_dir(meta["base_key"]), i).exists(), i)
+
+    def test_mediana_temporal_quita_el_destello(self):
+        a = np.zeros((4, 4), np.uint8)
+        b = np.full((4, 4), 255, np.uint8)      # fotograma "destello" atípico
+        out = bg_service._temporal_median([a, b, a], 3)
+        self.assertEqual(int(out[1][0, 0]), 0)  # la mediana descarta el destello
 
     def test_imagen_fija_es_un_solo_fotograma(self):
         meta = bg_service.build_matte(self._image(), self._auto(), 0.0, 0.0, still=True)
@@ -377,13 +395,90 @@ class ClipSpecTest(CacheBase):
         self.assertEqual(bg_service.build_timeline_bg_masks(tl, 30), {})
 
 
+class FakeSam:
+    """SAM falso: encode cuenta llamadas; decode devuelve todo-sujeto si hay keep."""
+
+    interactive = True
+    id = "sam21_base_plus"
+    label = "fake sam"
+    model_version = "fakesam-1"
+
+    def __init__(self):
+        self.enc = 0
+        self.dec = 0
+
+    def available(self):
+        return True
+
+    def unavailable_reason(self):
+        return ""
+
+    def ensure_ready(self, on_progress=None):
+        pass
+
+    def encode(self, frame):
+        self.enc += 1
+        return {"image_embed": np.zeros((1, 4), np.float32)}
+
+    def decode(self, embeds, points, orig_hw):
+        self.dec += 1
+        h, w = orig_hw
+        m = np.zeros((h, w), np.uint8)
+        if any(lab == 1 for _, _, lab in points):
+            m[:] = 255
+        return m
+
+
+class SamAssistedTest(CacheBase):
+    def setUp(self):
+        super().setUp()
+        self.sam = FakeSam()
+        bg_providers.PROVIDERS["sam21_base_plus"] = self.sam
+
+    def _sam_auto(self, **kw):
+        return clip_bg.normalize_auto({"provider": "sam21_base_plus", "mask_fps": 10,
+                                       "mask_height": 64, **kw})
+
+    def test_los_puntos_generan_el_matte(self):
+        src = self._video(1.0)
+        keep = {"op": "keep", "size": 0.1, "points": [{"x": 0.5, "y": 0.5}]}
+        meta = bg_service.build_matte(src, self._sam_auto(edits=[keep]), 0.0, 1.0)
+        lo, hi = meta["range"]
+        self.assertGreater(self.sam.enc, 0)
+        self.assertGreater(self.sam.dec, 0)
+        m = bg_service.read_matte_frame(meta["base_key"], lo)
+        self.assertEqual(int(m[10, 10]), 255)   # keep → sujeto
+
+    def test_sin_puntos_matte_vacio(self):
+        src = self._video(0.5)
+        meta = bg_service.build_matte(src, self._sam_auto(edits=[]), 0.0, 0.5)
+        m = bg_service.read_matte_frame(meta["base_key"], meta["range"][0])
+        self.assertEqual(int(m.max()), 0)
+
+    def test_cambiar_puntos_reusa_embeddings(self):
+        """Cambiar el prompt re-decodifica, pero NO re-encodea (caché nivel 1)."""
+        src = self._video(1.0)
+        p1 = {"op": "keep", "size": 0.1, "points": [{"x": 0.4, "y": 0.5}]}
+        bg_service.build_matte(src, self._sam_auto(edits=[p1]), 0.0, 1.0)
+        enc_after_first = self.sam.enc
+        p2 = {"op": "keep", "size": 0.1, "points": [{"x": 0.6, "y": 0.5}]}
+        bg_service.build_matte(src, self._sam_auto(edits=[p2]), 0.0, 1.0)
+        self.assertEqual(self.sam.enc, enc_after_first, "re-encodeó: no reusó embeddings")
+        self.assertGreater(self.sam.dec, enc_after_first, "no re-decodificó con el nuevo prompt")
+
+
 class ProviderRegistryTest(unittest.TestCase):
-    def test_el_registro_trae_la_familia_u2net(self):
+    def test_el_registro_trae_la_familia_u2net_y_sam(self):
         ids = {p["id"] for p in bg_providers.catalog()}
-        self.assertEqual(ids, {"u2net", "u2netp"})
+        self.assertTrue({"u2net", "u2netp"} <= ids)      # automáticos
+        self.assertTrue({"sam21_base_plus"} <= ids)      # asistido (SAM)
         for info in bg_providers.catalog():
             self.assertIn("available", info)
             self.assertIn("model_version", info)
+
+    def test_sam_es_interactivo(self):
+        self.assertTrue(getattr(bg_providers.get("sam21_base_plus"), "interactive", False))
+        self.assertFalse(getattr(bg_providers.get("u2net"), "interactive", False))
 
     def test_id_desconocido_cae_al_de_por_defecto(self):
         self.assertEqual(bg_providers.get("inexistente").id, clip_bg.DEFAULT_PROVIDER)

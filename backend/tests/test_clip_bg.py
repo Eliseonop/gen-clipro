@@ -153,6 +153,15 @@ class FrameIndexTest(unittest.TestCase):
         k2 = clip_bg.base_key("a.mp4:100:5", auto, "u2net-1")
         self.assertEqual(k1, k2)
 
+    def test_estabilizar_cambia_la_ventana_y_la_clave_base(self):
+        off = clip_bg.normalize_auto({})
+        med = clip_bg.normalize_auto({"stabilize": 0.3})
+        big = clip_bg.normalize_auto({"stabilize": 0.9})
+        self.assertEqual(clip_bg.stabilize_window(off), 1)
+        self.assertEqual(clip_bg.stabilize_window(med), 3)
+        self.assertEqual(clip_bg.stabilize_window(big), 5)
+        self.assertNotEqual(clip_bg.base_key("s", off, "m"), clip_bg.base_key("s", med, "m"))
+
     def test_la_clave_base_cambia_con_fuente_modelo_o_cadencia(self):
         auto = clip_bg.normalize_auto({"mask_fps": 15, "mask_height": 512})
         base = clip_bg.base_key("a.mp4:100:5", auto, "u2net-1")
@@ -253,6 +262,27 @@ class DeriveMatteTest(unittest.TestCase):
         self.assertEqual(len(np.unique(duro)), 2)
         self.assertGreater(len(np.unique(blando)), 10)
 
+    def test_expandir_positivo_crece_el_sujeto(self):
+        raw = np.zeros((128, 128), np.uint8)
+        raw[:, 64:] = 255                       # mitad derecha = sujeto
+        base = clip_bg.derive_matte(raw, self._auto())
+        crecido = clip_bg.derive_matte(raw, self._auto(expansion=0.8))
+        encogido = clip_bg.derive_matte(raw, self._auto(expansion=-0.8))
+        self.assertGreater(int(crecido.sum()), int(base.sum()))
+        self.assertLess(int(encogido.sum()), int(base.sum()))
+
+    def test_opacidad_escala_el_alfa(self):
+        raw = np.full((16, 16), 255, np.uint8)
+        out = clip_bg.derive_matte(raw, self._auto(opacity=0.5))
+        self.assertTrue(120 <= int(out[8, 8]) <= 135)  # ~127
+
+    def test_expansion_y_opacidad_mueven_la_clave_derivada(self):
+        base = "b0"
+        self.assertNotEqual(clip_bg.derive_key(base, self._auto()),
+                            clip_bg.derive_key(base, self._auto(expansion=0.3)))
+        self.assertNotEqual(clip_bg.derive_key(base, self._auto()),
+                            clip_bg.derive_key(base, self._auto(opacity=0.7)))
+
     def test_el_trazo_se_escala_con_el_lienzo(self):
         """Las coordenadas son normalizadas: el resultado no depende del tamaño."""
         auto = self._auto(edits=[{"op": "keep", "size": 0.5,
@@ -351,6 +381,25 @@ class ChromaKeyParityTest(unittest.TestCase):
                                                  {**chroma, "similarity": 0.01,
                                                   "blend": 0.0}), 0)
         self.assertEqual(clip_bg.chroma_alpha8(0, 255, 0, chroma), 0)
+
+
+class ChromaMorphTest(unittest.TestCase):
+    def test_sin_edge_ni_shrink_no_hay_filtros(self):
+        chroma = clip_bg.normalize_chroma({"enabled": True, "color": "#00FF00"})
+        self.assertEqual(clip_bg.chroma_morph_params(chroma), (0.0, 0.0))
+        self.assertEqual(clip_bg.chroma_alpha_ffmpeg(chroma, 720), "")
+
+    def test_edge_contrae_shrink_dilata(self):
+        edge = clip_bg.normalize_chroma({"enabled": True, "edge": 0.5})
+        self.assertLess(clip_bg.chroma_morph_params(edge)[1], 0)   # sesgo negativo
+        grow = clip_bg.normalize_chroma({"enabled": True, "shrink": 0.5})
+        self.assertGreater(clip_bg.chroma_morph_params(grow)[1], 0)
+
+    def test_filtro_ffmpeg_lleva_gblur_y_lut(self):
+        chroma = clip_bg.normalize_chroma({"enabled": True, "shrink": 0.8})
+        f = clip_bg.chroma_alpha_ffmpeg(chroma, 720)
+        self.assertIn("gblur=sigma=", f)
+        self.assertIn("lutyuv=y=clip(val+", f)
 
 
 class GoldenFixtureTest(unittest.TestCase):

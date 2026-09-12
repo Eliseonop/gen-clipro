@@ -46,6 +46,10 @@ log = logging.getLogger("videoyt.bg")
 CACHE_ROOT = config.DATA_DIR / "bgcache"
 MATTE_ROOT = CACHE_ROOT / "matte"
 MASK_ROOT = CACHE_ROOT / "mask"
+# Embeddings del encoder SAM (nivel 1 de la vía asistida): caros y, sobre todo,
+# INDEPENDIENTES de los puntos → se cachean por fotograma y se reutilizan cuando
+# el usuario cambia el prompt; solo el decoder (barato) se vuelve a lanzar.
+EMBED_ROOT = CACHE_ROOT / "embed"
 
 # Tope de fotogramas por matte (mismo espíritu que MAX_MASK_FRAMES de clip_mask).
 MAX_MATTE_FRAMES = 9000
@@ -279,6 +283,62 @@ def _iter_frames(path: Path, t0: float, count: int, mask_fps: int,
             pass
 
 
+# Tope de fotogramas que se retienen en RAM para la mediana temporal. Por
+# encima, el suavizado se omite (raro: son clips larguísimos a mask_fps).
+SMOOTH_FRAME_CAP = 1500
+
+
+def _temporal_median(frames: list[np.ndarray], window: int) -> list[np.ndarray]:
+    """Mediana temporal por fotograma con ventana centrada (anti-parpadeo).
+
+    La mediana descarta fotogramas atípicos (el destello de un frame suelto) sin
+    arrastrar el contorno, que es lo que pasaría con una media exponencial.
+    """
+    if window <= 1 or len(frames) < 2:
+        return frames
+    arr = np.stack(frames, 0)              # [T, H, W] uint8
+    t = arr.shape[0]
+    half = window // 2
+    out = np.empty_like(arr)
+    for i in range(t):
+        lo = max(0, i - half)
+        hi = min(t, i + half + 1)
+        out[i] = np.median(arr[lo:hi], axis=0).astype(np.uint8)
+    return [out[i] for i in range(t)]
+
+
+# --- Vía asistida (SAM): embeddings cacheados por fotograma -----------------
+
+def _embed_key(src_id: str, provider, mask_fps: int, height: int) -> str:
+    """Clave de los embeddings: fuente + backbone + cadencia/alto. SIN puntos."""
+    return clip_bg._digest({
+        "src": str(src_id),
+        "enc": getattr(provider, "id", ""),
+        "ver": getattr(provider, "model_version", ""),
+        "fps": int(mask_fps),
+        "h": int(height),
+    })
+
+
+def _embeddings(provider, embed_key: str, index: int, frame: np.ndarray) -> dict:
+    """Embeddings del fotograma ``index`` (cacheados en disco). Encode si faltan."""
+    folder = EMBED_ROOT / embed_key
+    folder.mkdir(parents=True, exist_ok=True)
+    p = folder / f"{int(index) + 1:06d}.npz"
+    if p.exists():
+        try:
+            with np.load(p) as data:
+                return {k: data[k] for k in data.files}
+        except Exception:  # noqa: BLE001 - npz corrupto → recalcular
+            pass
+    emb = provider.encode(frame)
+    try:
+        np.savez(p, **emb)
+    except Exception:  # noqa: BLE001 - sin disco → seguir sin cachear
+        pass
+    return emb
+
+
 # --- Nivel 1: matte crudo del modelo ---------------------------------------
 
 def build_matte(path: Path, auto: dict, t0: float, t1: float, still: bool = False,
@@ -313,21 +373,39 @@ def build_matte(path: Path, auto: dict, t0: float, t1: float, still: bool = Fals
     if total:
         log.info("Eliminar fondo: %d fotograma(s) con %s en %s (%dx%d @ %d fps)",
                  total, provider.id, device, width, height, mask_fps)
+    window = clip_bg.stabilize_window(auto)
+    # Vía asistida (SAM): el matte sale de encode (cacheado) + decode(puntos).
+    interactive = bool(getattr(provider, "interactive", False))
+    points = clip_bg.edits_to_points(auto["edits"]) if interactive else []
+    embed_key = _embed_key(source_id(path), provider, mask_fps, height) if interactive else ""
     done = 0
     t_start = time.time()
     for a, b in todo:
         count = b - a + 1
-        if still and src_dur <= 0.0:
+        is_still = still and src_dur <= 0.0
+        if is_still:
             frames = iter([_still_frame(path, height)])
         else:
             frames = _iter_frames(path, clip_bg.matte_frame_time(a, mask_fps), count,
                                   mask_fps, width, height, cancel)
+        # Suavizado temporal: se retiene el tramo en RAM, se calcula la mediana
+        # centrada y se escribe. Se omite en imágenes fijas y en tramos enormes.
+        smooth = window > 1 and not is_still and count <= SMOOTH_FRAME_CAP
+        buffered: list[np.ndarray] = []
         idx = a
         for frame in frames:
             if cancel and cancel():
                 raise BgCancelled("cancelado")
-            cv2.imwrite(str(frame_path(folder, idx)), provider.matte(frame))
-            idx += 1
+            if interactive:
+                emb = _embeddings(provider, embed_key, idx if not smooth else a + len(buffered), frame)
+                m = provider.decode(emb, points, (height, width))
+            else:
+                m = provider.matte(frame)
+            if smooth:
+                buffered.append(m)
+            else:
+                cv2.imwrite(str(frame_path(folder, idx)), m)
+                idx += 1
             done += 1
             if on_progress and total:
                 rate = done / max(0.01, time.time() - t_start)
@@ -335,6 +413,9 @@ def build_matte(path: Path, auto: dict, t0: float, t1: float, still: bool = Fals
                 on_progress(min(0.99, done / total),
                             f"Separando sujeto y fondo ({done}/{total}) · {device}"
                             f" · queda ~{int(left)}s")
+        if smooth:
+            for k, m in enumerate(_temporal_median(buffered, window)):
+                cv2.imwrite(str(frame_path(folder, a + k)), m)
     prev = covered_range(key)
     want_lo = min(i0, prev[0]) if prev else i0
     real = _contiguous_range(key, want_lo, max(i1, prev[1] if prev else i1))

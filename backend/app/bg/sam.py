@@ -53,19 +53,48 @@ class ProviderUnavailable(RuntimeError):
     """SAM no puede trabajar (falta modelo, falta onnxruntime…)."""
 
 
+_LABELS = {
+    "tiny": "SAM 2.1 tiny (rápido)",
+    "small": "SAM 2.1 small",
+    "base_plus": "SAM 2.1 (calidad)",
+    "large": "SAM 2.1 large (máxima)",
+}
+
+
 class Sam21Provider:
-    """Segmentador asistido SAM 2.1 (encoder + decoder ONNX)."""
+    """Segmentador asistido SAM 2.1 (encoder + decoder ONNX).
+
+    INTERACTIVO: no produce un matte de un frame por sí solo, necesita puntos.
+    ``service.build_matte`` lo detecta por ``interactive`` y usa encode/decode en
+    vez del contrato ``matte(frame)`` de los proveedores automáticos.
+    """
+
+    interactive = True
 
     def __init__(self, backbone: str = "base_plus") -> None:
         if backbone not in _BACKBONES:
             raise ValueError(f"Backbone SAM desconocido: {backbone}")
         self.backbone = backbone
         self.id = f"sam21_{backbone}"
+        self.label = _LABELS.get(backbone, f"SAM 2.1 {backbone}")
         self.model_version = f"sam21-{backbone}-1"
         self._enc = None
         self._dec = None
         self._device = "cpu"
         self._lock = threading.Lock()
+
+    def info(self) -> dict:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "model_version": self.model_version,
+            "available": self.available(),
+            "reason": self.unavailable_reason(),
+            "interactive": True,
+        }
+
+    def matte(self, frame: np.ndarray) -> np.ndarray:  # pragma: no cover
+        raise NotImplementedError("SAM es interactivo: usa encode()/decode() con puntos.")
 
     # -- rutas --------------------------------------------------------------
     @property
