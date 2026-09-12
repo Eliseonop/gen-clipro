@@ -1,3 +1,12 @@
+// Borrado destructivo sobre la imagen fuente de Paper Animator.
+// Portado tal cual de paper-animator/modules/erase-utils.js (ya era puro).
+//
+// OJO — no confundir con `features/editor/bgCutout.js`, que hace algo parecido
+// pero con otro modelo: allí los trazos son una LISTA no destructiva guardada en
+// el clip (se replican en el export con FFmpeg). Aquí el alfa se hornea en la
+// imagen porque el borde rasgado y las máscaras de papel se calculan a partir de
+// ella; deshacerlo es cosa del undo del estado, no de recomponer trazos.
+
 export function parseClampedInt(raw, min, max, fallback) {
     const n = parseInt(raw, 10);
     if (Number.isNaN(n)) return fallback;

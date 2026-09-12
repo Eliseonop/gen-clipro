@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-export function useEditorHistory(tracks, clips, enabled) {
+/**
+ * Undo/redo por instantáneas JSON con debounce.
+ *
+ * `snapshot` es cualquier valor serializable: el editor pasa `{tracks, clips}` y
+ * Paper Animator su propio estado. `undo()`/`redo()` devuelven el valor
+ * deserializado (o `null` si no hay nada), y quien llama decide cómo aplicarlo.
+ *
+ * `enabled` apaga el registro: así pueden convivir varias instancias (una por
+ * modo del editor) sin que la inactiva acumule historia.
+ */
+export function useEditorHistory(snapshot, enabled) {
   const past = useRef([])
   const future = useRef([])
   const last = useRef(null)
@@ -20,7 +30,7 @@ export function useEditorHistory(tracks, clips, enabled) {
   useEffect(() => {
     if (!enabled) return undefined
     const id = setTimeout(() => {
-      const snap = JSON.stringify({ tracks, clips })
+      const snap = JSON.stringify(snapshot)
       if (skip.current) {
         skip.current = false
         last.current = snap
@@ -39,7 +49,7 @@ export function useEditorHistory(tracks, clips, enabled) {
       setCanRedo(false)
     }, 320)
     return () => clearTimeout(id)
-  }, [tracks, clips, enabled])
+  }, [snapshot, enabled])
 
   const undo = useCallback(() => {
     if (!past.current.length || last.current == null) return null

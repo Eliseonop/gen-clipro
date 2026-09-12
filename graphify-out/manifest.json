@@ -882,16 +882,16 @@
     "semantic_hash": "d2345f0b00c7b0b5dae6f0b40806ce09"
   },
   "frontend/.oxlintrc.json": {
-    "mtime": 1787855168.95689,
-    "seen": 1788934972.964193,
-    "ast_hash": "5e6e3cea3e89137071c142dd7835b0ef",
-    "semantic_hash": "5e6e3cea3e89137071c142dd7835b0ef"
+    "mtime": 1789209415.116876,
+    "seen": 1789232178.5355482,
+    "ast_hash": "0d1cc83704218da581137af326a7538d",
+    "semantic_hash": "0d1cc83704218da581137af326a7538d"
   },
   "frontend/package.json": {
-    "mtime": 1787861888.4608388,
-    "seen": 1788934972.964193,
-    "ast_hash": "ba6ec83603f9e9801ac5ed22af907422",
-    "semantic_hash": "ba6ec83603f9e9801ac5ed22af907422"
+    "mtime": 1789230282.9594686,
+    "seen": 1789232178.5355482,
+    "ast_hash": "5971aeb6566b269550e09d3d0708d802",
+    "semantic_hash": "5971aeb6566b269550e09d3d0708d802"
   },
   "frontend/src/App.jsx": {
     "mtime": 1788454838.0464685,
@@ -1014,10 +1014,10 @@
     "semantic_hash": "0e64c80cb4d954edefe58bcf85771d13"
   },
   "frontend/src/features/editor/EdMaterial.jsx": {
-    "mtime": 1789101197.8052738,
-    "seen": 1789193054.289069,
-    "ast_hash": "05403cd3e61c62938c8a2cb5ef777d31",
-    "semantic_hash": "05403cd3e61c62938c8a2cb5ef777d31"
+    "mtime": 1789230219.6431298,
+    "seen": 1789232178.5355482,
+    "ast_hash": "5fdc312edfbf8cc09830629ceb5d96aa",
+    "semantic_hash": "5fdc312edfbf8cc09830629ceb5d96aa"
   },
   "frontend/src/features/editor/EdSettings.jsx": {
     "mtime": 1788982472.6317918,
@@ -1086,10 +1086,10 @@
     "semantic_hash": "b1be3a51e632e25e2cd28368de6497c4"
   },
   "frontend/src/features/editor/VideoEditor.jsx": {
-    "mtime": 1789197262.638329,
-    "seen": 1789207121.9831893,
-    "ast_hash": "2abaec713da8b73abeed9602fee8377e",
-    "semantic_hash": "2abaec713da8b73abeed9602fee8377e"
+    "mtime": 1789230494.466765,
+    "seen": 1789232178.5355482,
+    "ast_hash": "cfe70dedf181c7852473165ca712d8a9",
+    "semantic_hash": "cfe70dedf181c7852473165ca712d8a9"
   },
   "frontend/src/features/editor/clipProps.test.mjs": {
     "mtime": 1788762396.2334745,
@@ -1146,10 +1146,10 @@
     "semantic_hash": "177ba94b0e218b4d52bd01ee59ca9e06"
   },
   "frontend/src/features/editor/hooks/useEditorHistory.js": {
-    "mtime": 1788631858.6410987,
-    "seen": 1788934972.964193,
-    "ast_hash": "224069925778dcea77dc831965715ca8",
-    "semantic_hash": "224069925778dcea77dc831965715ca8"
+    "mtime": 1789229564.1582274,
+    "seen": 1789232178.5355482,
+    "ast_hash": "fbd8c15bb6c336e7daa10b63cbaf9351",
+    "semantic_hash": "fbd8c15bb6c336e7daa10b63cbaf9351"
   },
   "frontend/src/features/editor/hooks/useExportJob.js": {
     "mtime": 1788382357.1564827,
@@ -1500,10 +1500,10 @@
     "semantic_hash": "3f2069f2444cbafe6f378271054b93da"
   },
   "frontend/vite.config.js": {
-    "mtime": 1787855196.6048708,
-    "seen": 1788934972.964193,
-    "ast_hash": "d6c639746e226c7a7e33417a16a83688",
-    "semantic_hash": "d6c639746e226c7a7e33417a16a83688"
+    "mtime": 1789230282.938727,
+    "seen": 1789232178.5365517,
+    "ast_hash": "0e4421bbc96e1eab4a71a3b85fae120a",
+    "semantic_hash": "0e4421bbc96e1eab4a71a3b85fae120a"
   },
   "shared/fragmentation_cases.json": {
     "mtime": 1788078183.2742698,
@@ -1775,12 +1775,6 @@
     "ast_hash": "621a4ad656a7d65ef8625bd21becb04c",
     "semantic_hash": "621a4ad656a7d65ef8625bd21becb04c"
   },
-  "frontend/src/features/editor/PaperAnimatorModal.jsx": {
-    "mtime": 1789203936.2559164,
-    "seen": 1789207121.9831893,
-    "ast_hash": "b1809fa5b3667c8acd612b7a25d0ebbd",
-    "semantic_hash": "b1809fa5b3667c8acd612b7a25d0ebbd"
-  },
   "frontend/src/features/editor/bgCutout.js": {
     "mtime": 1789196623.6040075,
     "seen": 1789207121.9831893,
@@ -1847,12 +1841,6 @@
     "ast_hash": "9d7abe83cc75eb67181a9286573f1ba1",
     "semantic_hash": "9d7abe83cc75eb67181a9286573f1ba1"
   },
-  "scripts/build-paper-animator.sh": {
-    "mtime": 1789101387.5037322,
-    "seen": 1789193054.289069,
-    "ast_hash": "dd5ab861ba0d31b56beea2677aa7f116",
-    "semantic_hash": "dd5ab861ba0d31b56beea2677aa7f116"
-  },
   "shared/bg_chroma_golden.json": {
     "mtime": 1789051196.8692663,
     "seen": 1789193054.289069,
@@ -1876,5 +1864,95 @@
     "seen": 1789207121.9831893,
     "ast_hash": "803027226811a29f4b9dee0eb2a70ac8",
     "semantic_hash": "803027226811a29f4b9dee0eb2a70ac8"
+  },
+  "frontend/src/features/paper/PaperCanvas.jsx": {
+    "mtime": 1789229696.0775118,
+    "seen": 1789232178.5365517,
+    "ast_hash": "b4bb704b604bf566b8210a3d72e67c32",
+    "semantic_hash": "b4bb704b604bf566b8210a3d72e67c32"
+  },
+  "frontend/src/features/paper/PaperEditLayer.jsx": {
+    "mtime": 1789230767.1472495,
+    "seen": 1789232178.5365517,
+    "ast_hash": "bd512879740ae560d9f5e8ec8836bdba",
+    "semantic_hash": "bd512879740ae560d9f5e8ec8836bdba"
+  },
+  "frontend/src/features/paper/PaperElements.jsx": {
+    "mtime": 1789229834.2673376,
+    "seen": 1789232178.5365517,
+    "ast_hash": "55e8123e609baaf2e6989172b2df0320",
+    "semantic_hash": "55e8123e609baaf2e6989172b2df0320"
+  },
+  "frontend/src/features/paper/PaperProps.jsx": {
+    "mtime": 1789229804.423002,
+    "seen": 1789232178.5365517,
+    "ast_hash": "04c18fbce0a43ad6b4e2152dde27de49",
+    "semantic_hash": "04c18fbce0a43ad6b4e2152dde27de49"
+  },
+  "frontend/src/features/paper/paperAssets.js": {
+    "mtime": 1789230624.0127132,
+    "seen": 1789232178.5365517,
+    "ast_hash": "09208b70e1f2c3d29d3bf32893b51690",
+    "semantic_hash": "09208b70e1f2c3d29d3bf32893b51690"
+  },
+  "frontend/src/features/paper/paperErase.js": {
+    "mtime": 1789229417.8338962,
+    "seen": 1789232178.5365517,
+    "ast_hash": "5e29c31f72b219d65c1feeee1dc50cdf",
+    "semantic_hash": "5e29c31f72b219d65c1feeee1dc50cdf"
+  },
+  "frontend/src/features/paper/paperExport.js": {
+    "mtime": 1789230405.438928,
+    "seen": 1789232178.5365517,
+    "ast_hash": "1eea39a29297afbfffbd373d4f3e2d25",
+    "semantic_hash": "1eea39a29297afbfffbd373d4f3e2d25"
+  },
+  "frontend/src/features/paper/paperImage.js": {
+    "mtime": 1789229911.162916,
+    "seen": 1789232178.5365517,
+    "ast_hash": "f4aac95893a8c09d60b65f4c7ce51cf8",
+    "semantic_hash": "f4aac95893a8c09d60b65f4c7ce51cf8"
+  },
+  "frontend/src/features/paper/paperModel.js": {
+    "mtime": 1789229390.254504,
+    "seen": 1789232178.5365517,
+    "ast_hash": "16e1dff9abf732517a23d80c6f579350",
+    "semantic_hash": "16e1dff9abf732517a23d80c6f579350"
+  },
+  "frontend/src/features/paper/paperModel.test.mjs": {
+    "mtime": 1789230652.1222112,
+    "seen": 1789232178.5365517,
+    "ast_hash": "2367f3518c1d63525e7d9eaa5e217ee2",
+    "semantic_hash": "2367f3518c1d63525e7d9eaa5e217ee2"
+  },
+  "frontend/src/features/paper/paperRender.js": {
+    "mtime": 1789230624.025716,
+    "seen": 1789232178.5365517,
+    "ast_hash": "b0464e8b9837d22397fb91e973aa579f",
+    "semantic_hash": "b0464e8b9837d22397fb91e973aa579f"
+  },
+  "frontend/src/features/paper/paperTimeline.js": {
+    "mtime": 1789229878.3251996,
+    "seen": 1789232178.5365517,
+    "ast_hash": "1545e9dc635bd4a1c2298968f1cd5de2",
+    "semantic_hash": "1545e9dc635bd4a1c2298968f1cd5de2"
+  },
+  "frontend/src/features/paper/paperTransforms.js": {
+    "mtime": 1789230624.0402312,
+    "seen": 1789232178.5365517,
+    "ast_hash": "b7be64be0c7aa84699c4474ab09ea8e9",
+    "semantic_hash": "b7be64be0c7aa84699c4474ab09ea8e9"
+  },
+  "frontend/src/features/paper/usePaperComp.js": {
+    "mtime": 1789230754.4314952,
+    "seen": 1789232178.5365517,
+    "ast_hash": "ddc9a3e8d43ef184127f4a153b1682d6",
+    "semantic_hash": "ddc9a3e8d43ef184127f4a153b1682d6"
+  },
+  "docs/PAPER_ANIMATOR_MIGRACION.md": {
+    "mtime": 1789230850.3251946,
+    "seen": 1789232178.5365517,
+    "ast_hash": "51363f81c64cb1b8939890bc8607e623",
+    "semantic_hash": "51363f81c64cb1b8939890bc8607e623"
   }
 }

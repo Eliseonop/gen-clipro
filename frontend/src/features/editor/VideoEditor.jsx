@@ -42,6 +42,12 @@ import { drawMainView, drawResultView } from './render/canvas'
 import MotionCanvas from '../motion/MotionCanvas'
 import MotionProps from '../motion/MotionProps'
 import { useMotionComp } from '../motion/useMotionComp'
+import PaperCanvas from '../paper/PaperCanvas'
+import PaperEditLayer from '../paper/PaperEditLayer'
+import PaperProps from '../paper/PaperProps'
+import { usePaperComp } from '../paper/usePaperComp'
+import { isPaperFoldClip, paperStateToTimeline, paperTimelineSig, PAPER_OBJECT_CLIP } from '../paper/paperTimeline'
+import { isOverlayTool as isPaperOverlayTool } from '../paper/paperModel'
 import { useExportJob } from './hooks/useExportJob'
 import { useSubtitles } from './hooks/useSubtitles'
 import { useFavorites } from './hooks/useFavorites'
@@ -225,6 +231,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const motionControlsRef = useRef(null)
   const [motionTime, setMotionTime] = useState(0)
   const [motionPlaying, setMotionPlaying] = useState(false)
+  // Paper Animator, mismo esquema que Motion: estado en un hook, el canvas central
+  // es su lienzo, el inspector sus propiedades y la timeline real proyecta su
+  // animación (adapter en paper/paperTimeline). Antes vivía en un iframe + modal.
+  const paper = usePaperComp(project?.id, {
+    format: { width: outW, height: outH, fps },
+    onUploaded: () => onChange?.(),
+  })
+  const paperRef = useRef(paper); paperRef.current = paper
+  const paperModeRef = useRef(false)
   const [cropMode, setCropMode] = useState(false)
   // Zoom SOLO visual del canvas (aleja/acerca la vista para ver alrededor del encuadre).
   // No toca el clip ni el export. Independiente por editor (Main vs Clip).
@@ -304,7 +319,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const duration = clips.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
   durationRef.current = duration
   const selectedClip = clips.find((c) => c.id === selClipId) || null
-  const hist = useEditorHistory(tracks, clips, loaded)
+  const histSnap = useMemo(() => ({ tracks, clips }), [tracks, clips])
+  const hist = useEditorHistory(histSnap, loaded)
   const histRef = useRef(hist)
   histRef.current = hist
   const mcpBusyIds = useMemo(
@@ -395,12 +411,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     try { localStorage.setItem(PREVIEW_VOL_KEY, String(n)) } catch { /* noop */ }
   }
 
-  // OJO: solo se autoguarda en modo Main. En Clip y en Motion, `tracks`/`clips`
-  // NO son la timeline del proyecto (son el tramo del clip, o las capas de la
-  // composición convertidas a clips por motionLayersToTimeline): guardarlas aquí
-  // sobrescribiría el proyecto entero con el contenido de esos editores.
+  // OJO: solo se autoguarda en modo Main. En Clip, Motion y Paper, `tracks`/`clips`
+  // NO son la timeline del proyecto (son el tramo del clip, las capas de la
+  // composición convertidas a clips por motionLayersToTimeline, o la animación de
+  // papel por paperStateToTimeline): guardarlas aquí sobrescribiría el proyecto
+  // entero con el contenido de esos editores.
   useEffect(() => {
-    if (!loaded || clipModeRef.current || motionModeRef.current) return
+    if (!loaded || clipModeRef.current || motionModeRef.current || paperModeRef.current) return
     const id = setTimeout(() => {
       saveTimeline(project.id, timelinePayload()).catch(() => {})
       setSavedLabel('Guardado')
@@ -449,11 +466,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         frame: c.frame || (c.layout === 'overlay' ? 'free' : 'full'),
         ...(c.kind === 'text' ? { text_role: textRole(c) } : {}),
       }))
-      // En Clip/Motion el editor muestra OTRA timeline: volcar aquí la del proyecto
+      // En Clip/Motion/Paper el editor muestra OTRA timeline: volcar aquí la del proyecto
       // la pisaría (es lo que hacía que Motion Studio "saltara" al editor principal
       // al terminar "Agregar al proyecto" o un reload del chat IA). Se refresca el
       // snapshot para que al volver a "Main" ya aparezca actualizada.
-      if (clipModeRef.current || motionModeRef.current) {
+      if (clipModeRef.current || motionModeRef.current || paperModeRef.current) {
         const prev = projectTlRef.current
         if (prev) {
           projectTlRef.current = {
@@ -666,6 +683,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     applyTl(projectTlRef.current)
     clipModeRef.current = false
     motionModeRef.current = false
+    paperModeRef.current = false
+    paper.setActive(false)
     setCropMode(false)
     hist.reset()
     setLinkPick(null)
@@ -677,6 +696,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (mainColTab === 'main') projectTlRef.current = snapshotTl()
     clipModeRef.current = true
     motionModeRef.current = false
+    paperModeRef.current = false
+    paper.setActive(false)
     setCropMode(false)
     hist.reset()
     setLinkPick(null)
@@ -692,6 +713,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setLinkPick(null)
     clipModeRef.current = false
     motionModeRef.current = true
+    paperModeRef.current = false
+    paper.setActive(false)
     setCropMode(false)
     hist.reset()
     setMainColTab('motion')
@@ -703,6 +726,112 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     // Volver a la pantalla inicial de creación (sin composición cargada).
     motion.close()
     applyMotionTimeline(null)
+  }
+
+  // Proyecta el estado de Paper Animator como timeline (objeto + keyframes →
+  // pista/clip), reusando EdTimeline igual que hace Motion.
+  function applyPaperTimeline(st) {
+    const { tracks: pt, clips: pc } = paperStateToTimeline(st)
+    setTracks(pt)
+    setClips(pc)
+    setPlayhead(0)
+    playheadRef.current = 0
+    setSelTrackId(pt[0]?.id || null)
+    // El clip del objeto va seleccionado de entrada: EdTimeline solo dibuja los
+    // puntos de keyframe del clip seleccionado.
+    setSelClipId(pc[0]?.id || null)
+    setSelClipIds(pc[0] ? [pc[0].id] : [])
+    setSelKfId(null)
+  }
+
+  function goPaperTab() {
+    if (mainColTab === 'paper') return
+    stopPlayback()
+    if (mainColTab === 'main') projectTlRef.current = snapshotTl()
+    else if (mainColTab === 'clip') clipTlRef.current = snapshotTl()
+    setLinkPick(null)
+    clipModeRef.current = false
+    motionModeRef.current = false
+    paperModeRef.current = true
+    setCropMode(false)
+    hist.reset()
+    setMainColTab('paper')
+    paper.setActive(true)
+    applyPaperTimeline(paper.st)
+  }
+
+  // Sync estado → TIMELINE. Se re-deriva por FIRMA (duración, modo, keyframes),
+  // no en cada cambio de propiedad: tocar el slider de la sombra no tiene por qué
+  // rehacer las pistas.
+  const paperSigRef = useRef('')
+  useEffect(() => {
+    if (!paperModeRef.current) { paperSigRef.current = ''; return }
+    const sig = paperTimelineSig(paper.st)
+    if (sig === paperSigRef.current) return
+    paperSigRef.current = sig
+    const { tracks: pt, clips: pc } = paperStateToTimeline(paper.st)
+    setTracks(pt)
+    setClips(pc)
+    setSelTrackId((cur) => (pt.some((t) => t.id === cur) ? cur : (pt[0]?.id || null)))
+    setSelClipId((cur) => (pc.some((c) => c.id === cur) ? cur : (pc[0]?.id || null)))
+    setSelClipIds((cur) => {
+      const keep = cur.filter((id) => pc.some((c) => c.id === id))
+      return keep.length ? keep : (pc[0] ? [pc[0].id] : [])
+    })
+  }, [paper.st])
+
+  // Sync reloj de Paper → cabezal. Solo se escribe el REF: el valor que se PINTA
+  // se pasa directamente a EdTimeline (`paperMode ? paper.time : playhead`). Si
+  // además hiciéramos setPlayhead, cada fotograma re-renderizaría el editor entero
+  // dos veces en vez de una.
+  useEffect(() => {
+    if (!paperModeRef.current) return
+    playheadRef.current = paper.time
+  }, [paper.time])
+
+  // --- Handlers de la timeline en modo Paper --------------------------------
+  // EdTimeline es genérico: habla de clips y keyframes. Aquí se traduce a las
+  // acciones de Paper Animator, y lo que no aplica (cortar, duplicar, arrastrar
+  // material, pistas nuevas) llega como `undefined` y la barra lo deshabilita.
+  const paperMode = mainColTab === 'paper'
+
+  // Estirar el clip del objeto = cambiar la duración de la animación.
+  // Las bandas de papel (apertura/cierre) tienen tiempos fijos: se ignoran.
+  function paperMutateClip(clipId, patch) {
+    if (isPaperFoldClip(clipId)) return
+    if (clipId !== PAPER_OBJECT_CLIP) return
+    const span = Number(patch?.out_point) - Number(patch?.in_point ?? 0)
+    if (Number.isFinite(span) && span > 0) paper.setDuration(span)
+  }
+
+  function paperMoveKeyframe(clipId, kfId, t) {
+    if (clipId !== PAPER_OBJECT_CLIP) return
+    paper.moveKeyframe(kfId, t)
+  }
+
+  // El botón "+" de la timeline añade un keyframe; en modo simple no hay
+  // keyframes, así que primero cambia a avanzado (es lo que el usuario quiere al
+  // pulsarlo).
+  function paperAddKf() {
+    if (paper.st.object.animation.mode !== 'advanced') {
+      paper.patch('object.animation.mode', 'advanced')
+      return
+    }
+    paper.addKeyframe()
+  }
+
+  function paperDeleteKf() {
+    const id = paper.st.object.animation.activeKeyframeId
+    if (id) paper.removeKeyframe(id)
+  }
+
+  // Borrar en la timeline de Paper: el clip del objeto quita la imagen entera
+  // (con sus transformaciones y su animación); las bandas de papel apagan su
+  // animación. La selección la limpia el efecto que re-deriva las pistas, porque
+  // el clip deja de existir en la proyección.
+  function paperDeleteClip(clipId) {
+    const ids = clipId ? [clipId] : selIdsRef.current
+    for (const id of ids) paper.removeTimelineClip(id)
   }
 
   // Sync TIMELINE → composición: al mover/estirar un clip en modo motion, actualiza
@@ -2316,6 +2445,37 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     }
     function onKey(e) {
       if (typingTarget(document.activeElement) || typingTarget(e.target)) return
+      // Paper Animator tiene su propio estado y su propio historial: solo comparte
+      // los atajos que significan lo mismo (deshacer, play, mover el cabezal).
+      // Cortar/duplicar/pegar clips no aplican a un objeto único.
+      if (paperModeRef.current) {
+        const pp = paperRef.current
+        if (e.ctrlKey || e.metaKey) {
+          const k = e.key.toLowerCase()
+          if (k === 'z') { e.preventDefault(); pp.applyHist(e.shiftKey ? pp.hist.redo() : pp.hist.undo()) }
+          else if (k === 'y') { e.preventDefault(); pp.applyHist(pp.hist.redo()) }
+          return
+        }
+        if (e.code === 'Space') {
+          if (e.repeat) { e.preventDefault(); return }
+          e.preventDefault()
+          pp.togglePlay()
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault()
+          pp.seek(playheadRef.current - (e.shiftKey ? 1 : 0.1))
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault()
+          pp.seek(playheadRef.current + (e.shiftKey ? 1 : 0.1))
+        } else if (e.key === 'Delete' || e.key === 'Backspace') {
+          e.preventDefault()
+          const id = pp.stRef.current.object.animation.activeKeyframeId
+          // Con un keyframe seleccionado manda el keyframe; si no, se borra el
+          // clip seleccionado de la timeline (imagen o banda de papel).
+          if (id) pp.removeKeyframe(id)
+          else for (const cid of selIdsRef.current) pp.removeTimelineClip(cid)
+        }
+        return
+      }
       if (e.ctrlKey || e.metaKey) {
         const k = e.key.toLowerCase()
         if (k === 'z') {
@@ -2414,7 +2574,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   return (
     <div
       ref={panels.editorRef}
-      className={`veditor${mainColTab === 'clip' ? ' clip-mode' : ''}${mainColTab === 'motion' ? ' motion-mode' : ''}${linkPick ? ' link-picking' : ''}${panels.dragging ? ` is-resizing is-rs-${panels.dragging}` : ''}`}
+      className={`veditor${mainColTab === 'clip' ? ' clip-mode' : ''}${mainColTab === 'motion' ? ' motion-mode' : ''}${mainColTab === 'paper' ? ' paper-mode' : ''}${linkPick ? ' link-picking' : ''}${panels.dragging ? ` is-resizing is-rs-${panels.dragging}` : ''}`}
       style={panels.vars}
     >
       <div className="ed-hidden-media">{mediaPool}</div>
@@ -2422,11 +2582,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       <EdTopBar
         projectName={project.name}
         savedLabel={savedLabel}
-        canUndo={hist.canUndo}
-        canRedo={hist.canRedo}
+        canUndo={paperMode ? paper.hist.canUndo : hist.canUndo}
+        canRedo={paperMode ? paper.hist.canRedo : hist.canRedo}
         onBack={onBack}
-        onUndo={() => applyHistSnap(hist.undo())}
-        onRedo={() => applyHistSnap(hist.redo())}
+        onUndo={() => (paperMode ? paper.applyHist(paper.hist.undo()) : applyHistSnap(hist.undo()))}
+        onRedo={() => (paperMode ? paper.applyHist(paper.hist.redo()) : applyHistSnap(hist.redo()))}
         onHelp={() => setClipToast({ type: 'success', message: 'Espacio: play · S: dividir · Supr: borrar · Ctrl+Z: deshacer' })}
         onSettings={() => setMatTab('settings')}
         onChat={() => setMatTab('chat')}
@@ -2476,6 +2636,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           motionFormat={{ width: outW, height: outH, fps }}
           onGoMotion={() => goMotionTab(null)}
           onMotionBack={goMotionBlank}
+          paper={paper}
+          onGoPaper={goPaperTab}
         />
         <EdSplit axis="x" kind="materials" label="Redimensionar materiales" onDown={panels.begin('materials')} />
 
@@ -2502,7 +2664,48 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             >
               Motion Studio
             </button>
+            <button
+              type="button"
+              className={`ed-tab ${mainColTab === 'paper' ? 'on' : ''}`}
+              onClick={goPaperTab}
+            >
+              Paper Animator
+            </button>
           </div>
+          {mainColTab === 'paper' && (
+            <div className="ed-paper-canvas">
+              <PaperCanvas paper={paper} format={{ width: outW, height: outH, fps }}>
+                {isPaperOverlayTool(paper.st.edit.tool) && <PaperEditLayer paper={paper} />}
+              </PaperCanvas>
+              <div className="ed-transport">
+                <button className="icon-btn big" type="button" title="Reproducir / Pausa"
+                  onClick={paper.togglePlay} disabled={!paper.st.hasImage}>
+                  <Icon name={paper.playing ? 'pause_circle' : 'play_circle'} size={24} />
+                </button>
+                <button className="icon-btn" type="button" title="Al inicio"
+                  onClick={() => paper.seek(0)}><Icon name="first_page" size={18} /></button>
+                <div className="ed-scrub" onPointerDown={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  const doSeek = (cx) => paper.seek(((cx - rect.left) / rect.width) * paper.duration)
+                  doSeek(e.clientX)
+                  const mv = (ev) => doSeek(ev.clientX)
+                  const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up) }
+                  window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up)
+                }}>
+                  <div className="ed-scrub-fill" style={{ width: `${paper.duration ? (paper.time / paper.duration) * 100 : 0}%` }} />
+                  <div className="ed-scrub-knob" style={{ left: `${paper.duration ? (paper.time / paper.duration) * 100 : 0}%` }} />
+                </div>
+                <span className="ed-time">{paper.time.toFixed(2)} / {paper.duration.toFixed(2)}s</span>
+                <EdViewerTools
+                  zoom={viewZoom}
+                  onZoom={setViewZoom}
+                  formatId={curFormat}
+                  onFormat={setFormat}
+                  formatCustomLabel={`${outW}×${outH}`}
+                />
+              </div>
+            </div>
+          )}
           {mainColTab === 'motion' && (
             <div className="ed-motion-canvas">
               {motion.comp ? (
@@ -2668,7 +2871,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         </div>
         <EdSplit axis="x" kind="inspector" label="Redimensionar inspector" onDown={panels.begin('inspector')} />
 
-        {mainColTab === 'motion' ? (
+        {mainColTab === 'paper' ? (
+          <PaperProps
+            paper={paper}
+            format={{ width: outW, height: outH, fps }}
+          />
+        ) : mainColTab === 'motion' ? (
           <aside className="ed-inspector motion-props-panel">
             <div className="motion-panel-title">Propiedades</div>
             <MotionProps comp={motion.comp} layer={motion.selLayer}
@@ -2790,14 +2998,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       <div className={`veditor-bottom${mainColTab === 'clip' ? ' clip-mode' : ''}`} ref={panels.bottomRef}>
         <EdTimeline
           tracks={tracks} clips={clips} pps={pps} setPps={setPps} fps={fps}
-          duration={duration} playhead={playhead} rowH={rowH} setRowH={setRowH}
+          duration={duration} playhead={paperMode ? paper.time : playhead} rowH={rowH} setRowH={setRowH}
           selectedClipId={mainColTab === 'motion' ? motion.selLayerId : selClipId} selectedClipIds={mainColTab === 'motion' ? (motion.selLayerId ? [motion.selLayerId] : []) : selClipIds} selectedTrackId={selTrackId}
-          selectedClip={selectedClip} selKfId={selKfId} dragInfo={dragInfo}
+          selectedClip={selectedClip} selKfId={paperMode ? paper.st.object.animation.activeKeyframeId : selKfId} dragInfo={dragInfo}
           mcpBusyIds={mcpBusyIds}
-          onSeek={seek}
-          onScrub={scrub}
+          onSeek={paperMode ? paper.seek : seek}
+          onScrub={paperMode ? paper.seek : scrub}
           onSelectClip={mainColTab === 'motion' ? ((clip) => motion.setSelLayerId(clip.id)) : handleSelectClip}
-          onMarqueeSelect={mainColTab === 'motion' ? undefined : selectClipIds}
+          onMarqueeSelect={mainColTab === 'motion' || paperMode ? undefined : selectClipIds}
           onSelectTrack={selectTrack}
           onDoubleClip={(clip) => {
             if (clip.kind === 'motion' && (clip.composition_id || clip.asset_id)) {
@@ -2809,28 +3017,28 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             setSelClipIds([clip.id])
             setSelKfId(null)
           }}
-          onMutateClip={mutateClip}
-          onMoveGroup={moveGroup}
-          onMatchDuration={matchSelectedDurations}
-          onSplit={splitClip}
-          onDuplicate={duplicateSelected}
+          onMutateClip={paperMode ? paperMutateClip : mutateClip}
+          onMoveGroup={paperMode ? undefined : moveGroup}
+          onMatchDuration={paperMode ? undefined : matchSelectedDurations}
+          onSplit={paperMode ? undefined : splitClip}
+          onDuplicate={paperMode ? undefined : duplicateSelected}
           onFaceTrack={mainColTab === 'clip' ? startFaceTrack : undefined}
           faceTrackBusy={!!faceBusy}
           faceTrackDisabled={!clipMeta.url || clipMeta.preparing}
-          onDeleteClip={deleteClip}
+          onDeleteClip={paperMode ? paperDeleteClip : deleteClip}
           previewVol={previewVol}
           onPreviewVol={setListenVolume}
-          onDropAsset={dropAsset}
-          onTrackToggle={trackToggle}
-          onTrackCompact={compactTrack}
-          onAddTrack={addTrack}
-          onAddTextTrack={addTextTrack}
-          onRenameTrack={renameTrack}
-          onMoveKeyframe={moveKeyframe}
-          onSelectKf={selectTimelineKf}
-          onAddKf={toggleKeyframeAtPlayhead}
-          onDeleteKf={deleteSelectedKeyframe}
-          onContextClip={(e, clip) => {
+          onDropAsset={paperMode ? undefined : dropAsset}
+          onTrackToggle={paperMode ? undefined : trackToggle}
+          onTrackCompact={paperMode ? undefined : compactTrack}
+          onAddTrack={paperMode ? undefined : addTrack}
+          onAddTextTrack={paperMode ? undefined : addTextTrack}
+          onRenameTrack={paperMode ? undefined : renameTrack}
+          onMoveKeyframe={paperMode ? paperMoveKeyframe : moveKeyframe}
+          onSelectKf={paperMode ? paper.selectKeyframe : selectTimelineKf}
+          onAddKf={paperMode ? paperAddKf : toggleKeyframeAtPlayhead}
+          onDeleteKf={paperMode ? paperDeleteKf : deleteSelectedKeyframe}
+          onContextClip={paperMode ? undefined : (e, clip) => {
             e.preventDefault()
             if (!selIdsRef.current.includes(clip.id)) {
               setSelClipId(clip.id)
@@ -2840,7 +3048,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             }
             setCtxMenu({ x: e.clientX, y: e.clientY, clip })
           }}
-          onContextTrack={(e, track) => {
+          onContextTrack={paperMode ? undefined : (e, track) => {
             e.preventDefault()
             setLinkPick(null)
             setCtxMenu(null)
@@ -2852,7 +3060,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onCopyDesc={copyClipDescription}
           audioMaterials={project.audios}
         />
+        {!paperMode && (
         <EdSplit axis="x" kind="crops" label="Redimensionar keyframes" onDown={panels.begin('crops')} />
+        )}
+        {!paperMode && (
         <EdCrops
           clip={selectedClip}
           selKfId={selKfId}
@@ -2875,6 +3086,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onSelectKf={(k) => k && selectTimelineKf(k.id)}
           onDeleteKf={deleteAnimKf}
         />
+        )}
       </div>
 
       {/* Menú contextual (click derecho en clip) */}

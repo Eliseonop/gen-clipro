@@ -4,10 +4,10 @@ import Icon from '../../components/Icon'
 import { fmt, parseTime } from '../../lib/utils'
 import { FAV_CAT } from '../../lib/favorites'
 import { analyze, listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryItem, unsaveLibraryItem, uploadImages, uploadVideo, uploadAudio, getSettings, putSettings, deleteMaterial, updateMaterial, fetchRemoteImage } from '../../services/api'
-import MaterialClipGrid, { dragPayload, useToggle, useExclusiveMedia, Empty, ImageCard, MaterialMenuBtn } from './MaterialClipGrid'
+import MaterialClipGrid, { bustUrl, dragPayload, useToggle, useExclusiveMedia, Empty, ImageCard, MaterialMenuBtn } from './MaterialClipGrid'
 import SfxClassifyModal from './SfxClassifyModal'
 import ImageAddModal from './ImageAddModal'
-import PaperAnimatorModal from './PaperAnimatorModal'
+import PaperElements from '../paper/PaperElements'
 import EdSettings from './EdSettings'
 import EdFxLibrary from './EdFxLibrary'
 import EdShapes from './EdShapes'
@@ -279,6 +279,7 @@ const MAT_NAV = [
   { id: 'text', icon: 'title', label: 'Texto' },
   { id: 'transitions', icon: 'animation', label: 'Transiciones' },
   { id: 'motion', icon: 'animation', label: 'Motion', sep: true },
+  { id: 'paper', icon: 'draw', label: 'Paper' },
   { id: 'settings', icon: 'settings', label: 'Configuración', sep: true },
   { id: 'chat', icon: 'forum', label: 'Chat IA' },
 ]
@@ -292,6 +293,7 @@ export default function EdMaterial({
   audioDb, onAudioDb,
   aiContext, onReloadTimeline, timelineClips, onMcpAudit,
   motion, motionFormat, onGoMotion, onMotionBack,
+  paper, onGoPaper,
 }) {
   const [tabState, setTabState] = useState('video')
   const tab = matTab ?? tabState
@@ -322,7 +324,6 @@ export default function EdMaterial({
   const [matMenu, setMatMenu] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [imgAddOpen, setImgAddOpen] = useState(false)
-  const [paperImage, setPaperImage] = useState(null)
   const [imgTick, setImgTick] = useState(0)
   const [imgPaneMenu, setImgPaneMenu] = useState(null)
   const imgPendingRef = useRef([])
@@ -1067,7 +1068,10 @@ export default function EdMaterial({
                   di={di}
                   onMenu={(e) => openMatMenu(e, 'images', im)}
                   onSaveDescription={im.scope === 'library' ? undefined : (text) => saveImageDescription(im, text)}
-                  onPaper={im.scope === 'library' ? undefined : () => setPaperImage(im)}
+                  onPaper={im.scope === 'library' || !paper ? undefined : () => {
+                    onGoPaper?.()
+                    paper.loadImage(bustUrl(im.url, im), im.label || im.name || im.filename)
+                  }}
                 />
               ))}
             </div>
@@ -1146,6 +1150,9 @@ export default function EdMaterial({
         <MotionElements pid={project.id} m={motion} format={motionFormat}
           onReloadTimeline={onReloadTimeline} onBack={onMotionBack} />
       )}
+      {tab === 'paper' && paper && (
+        <PaperElements project={project} paper={paper} onGoPaper={onGoPaper} />
+      )}
       {tab === 'settings' && <EdSettings onExportFps={onExportFps} audioDb={audioDb} onAudioDb={onAudioDb} />}
       <div
         className={tab === 'chat' ? 'ed-mat-list pinned' : 'ed-hidden-panel'}
@@ -1162,15 +1169,6 @@ export default function EdMaterial({
           pendingRef={imgPendingRef}
           onClose={() => setImgAddOpen(false)}
           onSaved={() => onRefresh?.()}
-        />
-      )}
-
-      {paperImage && (
-        <PaperAnimatorModal
-          projectId={project.id}
-          image={paperImage}
-          onClose={() => setPaperImage(null)}
-          onDone={() => { onRefresh?.(); setMatToast({ type: 'success', message: 'Animación de papel añadida al material.' }) }}
         />
       )}
 

@@ -2027,3 +2027,157 @@ body.ed-zooming, body.ed-zooming * { cursor: ew-resize !important; user-select: 
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 10px 2px;
 }
 .ed-bg-preview-modes .ed-btn { flex: 1 1 auto; justify-content: center; }
+
+/* --- PAPER ANIMATOR -------------------------------------------------------
+   Paper Animator como MODO del editor (antes: iframe dentro de un modal).
+   Aquí solo van las piezas propias del lienzo y de la capa de edición: los
+   paneles reutilizan los bloques del inspector (.ed-insp-sec / .ed-insp-row /
+   .ed-mode-toggle / .ed-fx-chip / .ed-btn), así que no se repiten estilos. */
+
+/* En modo paper el stage del editor cede el sitio al lienzo de papel, y el
+   transporte de vídeo se oculta (paper tiene el suyo dentro de su columna),
+   exactamente igual que en modo motion. */
+.veditor.paper-mode .ed-canvas-stage { display: none; }
+.veditor.paper-mode .ed-canvas-col > .ed-transport { display: none; }
+
+.ed-paper-canvas {
+  flex: 1; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column;
+}
+
+.paper-stage {
+  flex: 1; min-height: 0; min-width: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 10px; overflow: hidden;
+}
+.paper-defs { position: absolute; width: 0; height: 0; pointer-events: none; }
+.paper-stage-wrap {
+  position: relative;
+  max-width: 100%; max-height: 100%;
+  /* aspect-ratio lo pone el componente con el formato del proyecto */
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+  background: repeating-conic-gradient(#1b2032 0% 25%, #151a28 0% 50%) 50% / 18px 18px;
+  touch-action: none;
+}
+.paper-canvas { display: block; width: 100%; height: 100%; }
+
+/* Marco de transformación del objeto: mismo naranja que el del compuesto del
+   editor (render/canvas.js), pero en DOM — lo que se pintara en el lienzo de
+   Paper acabaría dentro del vídeo exportado. */
+.paper-frame {
+  position: absolute; z-index: 3;
+  border: 2px solid #ff8c1a;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+  cursor: move; touch-action: none;
+}
+.paper-frame.locked { cursor: default; border-style: dashed; opacity: 0.55; }
+.paper-handle {
+  position: absolute; width: 12px; height: 12px;
+  background: #fff; border: 2px solid #ff8c1a; border-radius: 2px;
+  touch-action: none;
+}
+.paper-handle.corner.nw { left: -7px; top: -7px; cursor: nwse-resize; }
+.paper-handle.corner.ne { right: -7px; top: -7px; cursor: nesw-resize; }
+.paper-handle.corner.sw { left: -7px; bottom: -7px; cursor: nesw-resize; }
+.paper-handle.corner.se { right: -7px; bottom: -7px; cursor: nwse-resize; }
+.paper-handle.rotate {
+  left: 50%; top: -26px; margin-left: -6px; border-radius: 50%; cursor: grab;
+}
+.paper-handle.rotate::after {
+  content: ''; position: absolute; left: 50%; top: 100%;
+  width: 2px; height: 14px; margin-left: -1px; background: #ff8c1a;
+}
+.paper-stage-note {
+  position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
+  padding: 4px 10px; border-radius: 999px; font-size: 11px;
+  background: rgba(9, 11, 17, 0.82); color: var(--muted); pointer-events: none;
+}
+.paper-tools { margin-bottom: 2px; }
+.paper-stage-empty {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  padding: 20px; color: var(--muted); font-size: 12.5px;
+}
+
+/* Panel derecho: misma caja que EdInspector, con su propio scroll. */
+.paper-props { display: flex; flex-direction: column; min-height: 0; }
+.paper-props-body { flex: 1; min-height: 0; overflow-y: auto; }
+.paper-color-row { flex-direction: row; align-items: center; justify-content: space-between; }
+.paper-color-row input[type="color"] {
+  width: 42px; height: 22px; padding: 0; border: 1px solid var(--line);
+  border-radius: 4px; background: none; cursor: pointer;
+}
+.paper-actions {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 2px 0;
+}
+.paper-actions.out { padding: 8px 10px; border-top: 1px solid var(--line); }
+.paper-actions .ed-bg-status { margin: 0; flex: 1; min-width: 0; }
+.ed-insp-num.wide { flex: 1; min-width: 0; }
+
+/* Lista de keyframes (era una lista con innerHTML y clases de Tailwind). */
+.paper-kf-list { display: flex; flex-direction: column; gap: 3px; }
+.paper-kf-item {
+  display: flex; align-items: center; gap: 5px;
+  padding: 3px 6px; border-radius: 5px; cursor: pointer;
+  background: var(--card-2); border: 1px solid transparent;
+  font-size: 11px; color: var(--text-secondary);
+}
+.paper-kf-item:hover { border-color: var(--line-bright); color: var(--text); }
+.paper-kf-item.on { border-color: var(--accent); background: rgba(255, 59, 92, 0.12); color: var(--text); }
+.paper-kf-item .material-icons { color: var(--muted); flex-shrink: 0; }
+.paper-kf-n { font-weight: 700; min-width: 12px; }
+.paper-kf-item input {
+  width: 48px; margin-left: auto; padding: 2px 4px; font-size: 11px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
+  color: var(--text); font-variant-numeric: tabular-nums;
+}
+.paper-kf-item em { font-style: normal; color: var(--muted); font-size: 10px; }
+.paper-kf-del {
+  background: none; border: none; padding: 1px; cursor: pointer;
+  color: var(--muted); display: inline-flex; border-radius: 4px;
+}
+.paper-kf-del:hover:not(:disabled) { color: #fca5a5; background: rgba(220, 38, 38, 0.16); }
+.paper-kf-del:disabled { opacity: 0.3; cursor: default; }
+.paper-kf-title { font-size: 11px; font-weight: 700; color: var(--text-secondary); margin-right: auto; }
+
+/* Panel izquierdo (tab "Paper" del material). */
+.paper-elements { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; }
+.paper-current {
+  display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+  background: var(--card-2); border: 1px solid var(--line); border-radius: 6px;
+}
+.paper-current .material-icons { color: var(--accent-2, #fdba74); }
+.paper-current-name {
+  flex: 1; min-width: 0; font-size: 12px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.paper-img-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px;
+}
+.paper-img-cell {
+  display: flex; flex-direction: column; gap: 3px; padding: 0;
+  background: var(--card-2); border: 1px solid var(--line); border-radius: 6px;
+  cursor: pointer; overflow: hidden; text-align: left;
+}
+.paper-img-cell:hover { border-color: var(--accent); }
+.paper-img-cell img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+.paper-img-cell span {
+  padding: 0 4px 4px; font-size: 10px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Capa de edición: cubre el stage en lugar de abrir un overlay a pantalla
+   completa (que era un modal dentro del modal). */
+.paper-edit-layer {
+  position: absolute; inset: 0; z-index: 4;
+  display: flex; flex-direction: column;
+  background: rgba(9, 11, 17, 0.92);
+}
+.paper-edit-bar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 6px 8px; border-bottom: 1px solid var(--line);
+  background: var(--card-2); flex-shrink: 0;
+}
+.paper-edit-hint { font-size: 10.5px; color: var(--muted); flex: 1; min-width: 90px; }
+.paper-edit-wrap { flex: 1; min-height: 0; position: relative; }
+.paper-edit-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
