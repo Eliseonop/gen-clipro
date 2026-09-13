@@ -85,7 +85,21 @@
     el.style.lineHeight = s.lineHeight != null ? String(s.lineHeight) : '1.1';
     el.style.letterSpacing = s.letterSpacing != null ? px(s.letterSpacing) : '0';
     if (s.textTransform) el.style.textTransform = s.textTransform;
-    if (s.background) { el.style.background = s.background; el.style.padding = px(s.padding != null ? s.padding : 16); }
+    // Efecto: relleno degradado (background-clip:text).
+    if (s.gradientFrom && s.gradientTo) {
+      var ang = s.gradientAngle != null ? s.gradientAngle : 90;
+      el.style.backgroundImage = 'linear-gradient(' + ang + 'deg,' + s.gradientFrom + ',' + s.gradientTo + ')';
+      el.style.webkitBackgroundClip = 'text';
+      el.style.backgroundClip = 'text';
+      el.style.webkitTextFillColor = 'transparent';
+      el.style.color = 'transparent';
+    } else if (s.background) {
+      // Efecto: resaltado (pastilla de color detrás del texto).
+      el.style.background = s.background;
+      el.style.padding = px(s.padding != null ? s.padding : 16);
+    }
+    // Efecto: contorno (text-stroke).
+    if (s.outlineWidth) el.style.webkitTextStroke = px(s.outlineWidth) + ' ' + (s.outlineColor || '#0f172a');
     if (s.borderRadius) el.style.borderRadius = px(s.borderRadius);
     if (s.shadow) el.style.textShadow = s.shadow;
     if (layer.width) el.style.width = px(layer.width);
@@ -93,8 +107,16 @@
   }
 
   function shapeColor(s, prefer) {
-    if (prefer === 'stroke') return (s.stroke && s.stroke !== 'none') ? s.stroke : (s.fill || '#39d0ff');
-    return (s.fill && s.fill !== 'none') ? s.fill : (s.stroke && s.stroke !== 'none' ? s.stroke : '#39d0ff');
+    if (prefer === 'stroke') return (s.stroke && s.stroke !== 'none') ? s.stroke : (s.fill || '#64748b');
+    return (s.fill && s.fill !== 'none') ? s.fill : (s.stroke && s.stroke !== 'none' ? s.stroke : '#64748b');
+  }
+
+  // Sombra de una forma: `shadow` (CSS box-shadow, look suave) tiene prioridad;
+  // `glow` se mantiene por compatibilidad con composiciones antiguas.
+  function shapeShadow(s) {
+    if (s.shadow) return s.shadow;
+    if (s.glow) return '0 0 ' + px(s.glow) + ' ' + shapeColor(s);
+    return '';
   }
 
   function styleCircle(anim, layer) {
@@ -106,7 +128,8 @@
     el.style.height = px(2 * r);
     el.style.background = (s.fill && s.fill !== 'none') ? s.fill : 'transparent';
     if (s.stroke && s.stroke !== 'none') el.style.border = px(s.thickness || 3) + ' solid ' + s.stroke;
-    if (s.glow) el.style.boxShadow = '0 0 ' + px(s.glow) + ' ' + shapeColor(s);
+    var sh = shapeShadow(s);
+    if (sh) el.style.boxShadow = sh;
     anim.appendChild(el);
   }
 
@@ -117,8 +140,10 @@
     el.style.width = px(s.width != null ? s.width : 80);
     el.style.height = px(s.height != null ? s.height : 80);
     el.style.background = (s.fill && s.fill !== 'none') ? s.fill : 'transparent';
-    if (s.stroke && s.stroke !== 'none') el.style.border = px(s.thickness || 3) + ' solid ' + s.stroke;
-    if (s.glow) el.style.boxShadow = '0 0 ' + px(s.glow) + ' ' + shapeColor(s);
+    if (s.stroke && s.stroke !== 'none') el.style.border = px(s.thickness || 1) + ' solid ' + s.stroke;
+    if (s.borderRadius != null) el.style.borderRadius = px(s.borderRadius);
+    var sh = shapeShadow(s);
+    if (sh) el.style.boxShadow = sh;
     anim.appendChild(el);
   }
 
@@ -144,6 +169,57 @@
     outer.appendChild(wrap);
     stage.appendChild(outer);
     return { anim: wrap, bar: bar, isLine: true, length: length, angle: angle, thick: thick };
+  }
+
+  // Bloque HTML+GSAP avanzado. Ocupa todo el lienzo por defecto; el markup del
+  // bloque se posiciona dentro. El ``js`` es el CUERPO de una función
+  // (tl, root, gsap, ctx) que añade tweens a una timeline HIJA (seekable), que se
+  // anida en la master en ``start`` → sigue siendo determinista con __seek(t).
+  function buildHtmlLayer(layer) {
+    var start = layer.start || 0;
+    var end = layer.end != null ? layer.end : COMP.duration;
+    var opacity = layer.opacity != null ? layer.opacity : 1;
+
+    var outer = document.createElement('div');
+    outer.className = 'mg-layer mg-html';
+    outer.style.left = px(layer.x || 0);
+    outer.style.top = px(layer.y || 0);
+    outer.style.width = px(layer.width || COMP.width);
+    outer.style.height = px(layer.height || COMP.height);
+    outer.style.zIndex = String(layer.z_index || 0);
+    if (layer.css) {
+      var st = document.createElement('style');
+      st.textContent = layer.css;
+      outer.appendChild(st);
+    }
+    var root = document.createElement('div');
+    root.className = 'mg-html-root';
+    root.style.position = 'relative';
+    root.style.width = '100%';
+    root.style.height = '100%';
+    root.innerHTML = layer.html || '';
+    outer.appendChild(root);
+    stage.appendChild(outer);
+
+    gsap.set(outer, { autoAlpha: 0 });
+    tl.set(outer, { autoAlpha: 0 }, 0);
+    tl.set(outer, { autoAlpha: opacity }, start);
+
+    var child = gsap.timeline();
+    if (layer.js) {
+      var ctx = {
+        width: COMP.width, height: COMP.height, duration: COMP.duration,
+        start: start, end: end, life: Math.max(0.1, end - start),
+        theme: (COMP.metadata || {}).theme || {},
+      };
+      try {
+        (new Function('tl', 'root', 'gsap', 'ctx', layer.js))(child, root, gsap, ctx);
+      } catch (e) { /* bloque con JS inválido: se muestra estático */ }
+    }
+    tl.add(child, start);
+    tl.set(outer, { autoAlpha: 0 }, end);
+
+    NODES.push({ id: layer.id, layer: layer, info: { anim: outer, bar: null, isLine: false } });
   }
 
   function buildLayer(layer) {
@@ -228,6 +304,7 @@
 
     (COMP.layers || []).forEach(function (layer) {
       if (layer.visible === false) return;
+      if (layer.type === 'html') { buildHtmlLayer(layer); return; }
       var info = buildLayer(layer);
       NODES.push({ id: layer.id, layer: layer, info: info });
       var anim = info.anim;
@@ -343,19 +420,34 @@
     return clamped;
   };
 
+  function hasHtmlLayer() {
+    return (COMP.layers || []).some(function (l) { return l.type === 'html' && l.visible !== false; });
+  }
+
+  // Reinicio LIMPIO desde t=0. Las capas html animan con un timeline hijo escrito
+  // por plantillas/IA; si usan gsap.from() (no seekable hacia atrás) el rebobinado
+  // deja elementos invisibles. Reconstruir garantiza que la 2ª reproducción sea
+  // idéntica a la 1ª sea cual sea el bloque. El render no usa esta ruta (solo seek
+  // hacia delante con una única build → paridad intacta).
+  function restart() {
+    if (hasHtmlLayer()) { buildAll(COMP); }
+    window.__seek(0);
+  }
+
   // Reproducción de preview (no usada por el render).
   var raf = null, playStart = 0, playFrom = 0, playing = false;
   window.__isPlaying = function () { return playing; };
   window.__play = function (fromT) {
     window.__pause();
     playFrom = fromT != null ? fromT : (tl.time() >= COMP.duration - 1e-3 ? 0 : tl.time());
+    if (playFrom <= 1e-3) restart();
     playStart = performance.now();
     playing = true;
     var loop = function (now) {
       if (!playing) return;
       var t = playFrom + (now - playStart) / 1000;
       if (t >= COMP.duration) {
-        if (window.__loop) { playFrom = 0; playStart = now; t = 0; }
+        if (window.__loop) { restart(); playFrom = 0; playStart = now; t = 0; }
         else { window.__seek(COMP.duration); playing = false; return; }
       }
       window.__seek(t);

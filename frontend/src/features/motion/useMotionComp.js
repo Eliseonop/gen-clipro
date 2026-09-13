@@ -80,9 +80,9 @@ export function useMotionComp(pid, { onReloadTimeline } = {}) {
     } catch (e) { setError(e.message); return null }
   }, [pid])
 
-  const createFromTemplate = useCallback(async (key) => {
+  const createFromTemplate = useCallback(async (key, params = {}) => {
     try {
-      const c = await createMotion(pid, { template: key })
+      const c = await createMotion(pid, { template: key, params })
       dirtyRef.current = false
       setComp(c)
       setSelLayerId(c.layers?.[0]?.id || null)

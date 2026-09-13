@@ -26,7 +26,7 @@ import { BG_PROVIDERS, isInteractiveProvider } from '../../lib/clipBg'
 import { InspSection, InspSlider } from '../editor/EdTransform'
 import {
   BLEND_MODES, EASING_OPTIONS, EXPORT_FORMATS, LIMITS, PAPER_ANIMS, PREVIEW_SCALES,
-  TOOL, VIDEO_FORMATS, hasContent, imageEdited,
+  TOOL, VIDEO_FORMATS, hasContent, imageEdited, paperExportName,
 } from './paperModel'
 import { elementLabel } from './paperText.js'
 
@@ -637,6 +637,7 @@ function OutputPanel({ paper, format }) {
             className="ed-insp-num wide"
             type="text"
             value={st.export.filename}
+            placeholder={paperExportName(st)}
             onChange={(e) => patch('export.filename', e.target.value)}
           />
         </label>

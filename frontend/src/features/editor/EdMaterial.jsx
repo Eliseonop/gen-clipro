@@ -292,7 +292,7 @@ export default function EdMaterial({
   audioDb, onAudioDb,
   aiContext, onReloadTimeline, timelineClips, onMcpAudit,
   motion, motionFormat, onGoMotion, onMotionBack,
-  paper, onGoPaper,
+  paper, onGoPaper, onExitStudio, onGeneratePaper,
 }) {
   const [tabState, setTabState] = useState('video')
   const tab = matTab ?? tabState
@@ -321,6 +321,7 @@ export default function EdMaterial({
   const [importMsg, setImportMsg] = useState('')
   const [vidOver, setVidOver] = useState(false)
   const [matMenu, setMatMenu] = useState(null)
+  const [matMenuPaper, setMatMenuPaper] = useState(false) // submenú "Generar Paper Animation"
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [imgAddOpen, setImgAddOpen] = useState(false)
   const [imgTick, setImgTick] = useState(0)
@@ -469,6 +470,7 @@ export default function EdMaterial({
   function openMatMenu(e, kind, item) {
     e.preventDefault()
     e.stopPropagation()
+    setMatMenuPaper(false)
     setMatMenu({
       x: e.clientX,
       y: e.clientY,
@@ -478,6 +480,24 @@ export default function EdMaterial({
     })
     setImgPaneMenu(null)
   }
+
+  function closeMatMenu() {
+    setMatMenu(null)
+    setMatMenuPaper(false)
+  }
+
+  // "Generar Paper Animation" desde el menú contextual de una imagen del proyecto:
+  // carga la imagen en Paper Animator y le prepara la animación elegida.
+  function runGeneratePaper(mode) {
+    const item = matMenu?.item
+    closeMatMenu()
+    if (item) onGeneratePaper?.(item, mode)
+  }
+
+  // El menú de una imagen del proyecto (no de la biblioteca) ofrece Paper Animation.
+  const canGeneratePaper = Boolean(
+    onGeneratePaper && paper && matMenu?.kind === 'images' && matMenu.item?.scope !== 'library',
+  )
 
   async function copyAudioDescription(audio) {
     const text = clipCopyText(audio)
@@ -849,7 +869,14 @@ export default function EdMaterial({
                   aria-label={item.id === 'chat' && chatBusy ? `${label} (trabajando)` : label}
                   aria-current={tab === item.id ? 'page' : undefined}
                   onMouseEnter={(e) => openNavTip(e, item.id === 'chat' && chatBusy ? `${label} (trabajando)` : label)}
-                  onClick={() => { setTab(item.id); if (item.id === 'motion') onGoMotion?.() }}
+                  onClick={() => {
+                    setTab(item.id)
+                    // Motion y Paper son estudios: elegir su pestaña entra en el
+                    // workspace correspondiente. Cualquier otra saca del estudio.
+                    if (item.id === 'motion') onGoMotion?.()
+                    else if (item.id === 'paper') onGoPaper?.()
+                    else onExitStudio?.()
+                  }}
                 >
                   <Icon name={item.icon} size={20} />
                 </button>
@@ -1147,7 +1174,8 @@ export default function EdMaterial({
       )}
       {tab === 'motion' && motion && (
         <MotionElements pid={project.id} m={motion} format={motionFormat}
-          onReloadTimeline={onReloadTimeline} onBack={onMotionBack} />
+          onReloadTimeline={onReloadTimeline} onBack={onMotionBack}
+          timelineCompIds={new Set((timelineClips || []).filter((c) => c.kind === 'motion').map((c) => c.composition_id))} />
       )}
       {tab === 'paper' && paper && (
         <PaperElements project={project} paper={paper} onGoPaper={onGoPaper} />
@@ -1190,45 +1218,75 @@ export default function EdMaterial({
         <>
           <div
             className="ed-ctx-backdrop"
-            onPointerDown={() => setMatMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setMatMenu(null) }}
+            onPointerDown={closeMatMenu}
+            onContextMenu={(e) => { e.preventDefault(); closeMatMenu() }}
           />
           <AnchoredMenu className="ed-ctx-menu" x={matMenu.x} y={matMenu.y}>
-            {materialMenuItems({
-              saved: matMenu.saved,
-              canDelete: canDeleteMaterial(matMenu.item),
-              canDownload: canDownloadMaterial(matMenu.item),
-            }).map((it) => (
-              <button
-                key={it.id}
-                type="button"
-                className={it.danger ? 'danger' : undefined}
-                onClick={async () => {
-                  const { kind, item } = matMenu
-                  setMatMenu(null)
-                  if (it.id === 'save') {
-                    const resource = kind === 'clips' ? 'clip' : kind === 'images' ? 'image' : 'audio'
-                    toggleSave(resource, item)
-                    return
-                  }
-                  if (it.id === 'download') {
-                    try {
-                      await downloadMaterialFile(item)
-                    } catch (err) {
-                      setMatToast({ type: 'error', message: err.message || 'No se pudo descargar.' })
-                    }
-                    return
-                  }
-                  if (it.id === 'delete') setDeleteTarget({ kind, item })
-                }}
-              >
-                <Icon
-                  name={it.id === 'save' ? (matMenu.saved ? 'bookmark' : 'bookmark_border') : (it.id === 'download' ? 'download' : 'delete')}
-                  size={15}
-                />
-                {it.label}
-              </button>
-            ))}
+            {matMenuPaper ? (
+              <>
+                <button type="button" className="ed-ctx-back" onClick={() => setMatMenuPaper(false)}>
+                  <Icon name="chevron_left" size={16} /> Paper Animation
+                </button>
+                <div className="ed-ctx-sep" />
+                <button type="button" onClick={() => runGeneratePaper('open')}>
+                  <Icon name="login" size={15} /> Inicio (entrada)
+                </button>
+                <button type="button" onClick={() => runGeneratePaper('close')}>
+                  <Icon name="logout" size={15} /> Final (salida)
+                </button>
+                <button type="button" onClick={() => runGeneratePaper('both')}>
+                  <Icon name="swap_horiz" size={15} /> Ambos
+                </button>
+              </>
+            ) : (
+              <>
+                {canGeneratePaper && (
+                  <>
+                    <button type="button" className="accent" onClick={() => setMatMenuPaper(true)}>
+                      <Icon name="draw" size={15} />
+                      <span>Generar Paper Animation</span>
+                      <span className="ed-ctx-chev"><Icon name="chevron_right" size={16} /></span>
+                    </button>
+                    <div className="ed-ctx-sep" />
+                  </>
+                )}
+                {materialMenuItems({
+                  saved: matMenu.saved,
+                  canDelete: canDeleteMaterial(matMenu.item),
+                  canDownload: canDownloadMaterial(matMenu.item),
+                }).map((it) => (
+                  <button
+                    key={it.id}
+                    type="button"
+                    className={it.danger ? 'danger' : undefined}
+                    onClick={async () => {
+                      const { kind, item } = matMenu
+                      closeMatMenu()
+                      if (it.id === 'save') {
+                        const resource = kind === 'clips' ? 'clip' : kind === 'images' ? 'image' : 'audio'
+                        toggleSave(resource, item)
+                        return
+                      }
+                      if (it.id === 'download') {
+                        try {
+                          await downloadMaterialFile(item)
+                        } catch (err) {
+                          setMatToast({ type: 'error', message: err.message || 'No se pudo descargar.' })
+                        }
+                        return
+                      }
+                      if (it.id === 'delete') setDeleteTarget({ kind, item })
+                    }}
+                  >
+                    <Icon
+                      name={it.id === 'save' ? (matMenu.saved ? 'bookmark' : 'bookmark_border') : (it.id === 'download' ? 'download' : 'delete')}
+                      size={15}
+                    />
+                    {it.label}
+                  </button>
+                ))}
+              </>
+            )}
           </AnchoredMenu>
         </>
       )}

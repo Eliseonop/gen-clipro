@@ -618,6 +618,26 @@ def motion_templates(project_id: str) -> dict:
     return {"templates": motion_templates.list_templates()}
 
 
+@app.get("/api/projects/{project_id}/motion/templates/{key}/preview.html")
+def motion_template_preview(project_id: str, key: str, theme: str | None = None,
+                            accent: str | None = None, w: int | None = None,
+                            h: int | None = None) -> Response:
+    """HTML autocontenido de una PLANTILLA instanciada con parámetros por defecto
+    (para la galería de plantillas: iframe con el motor real, sin guardar nada)."""
+    from .motion import templates as motion_templates
+    from .motion.generator import generate_html
+    params: dict = {"theme": theme, "accent": accent}
+    if w:
+        params["width"] = int(w)
+    if h:
+        params["height"] = int(h)
+    try:
+        comp = motion_templates.instantiate(key, "preview", params)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Plantilla desconocida.")
+    return Response(content=generate_html(comp), media_type="text/html; charset=utf-8")
+
+
 # "Generar Motion": contexto COMPACTO de un tramo. Van antes de /motion/{comp_id}
 # para que "segment-context" y "focus" no se interpreten como id de composición.
 @app.get("/api/projects/{project_id}/motion/segment-context")
@@ -639,6 +659,44 @@ def motion_focus(project_id: str, body: dict = Body(...)) -> dict:
                                          clip_id=body.get("clip_id"))
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=f"Foco inválido: {exc}")
+
+
+@app.post("/api/projects/{project_id}/motion/generate/propose")
+async def motion_generate_propose(project_id: str, body: dict = Body(default={})) -> StreamingResponse:
+    """Fase de PROPUESTA de 'Generar Motion': la IA propone una idea (JSON) para un
+    tramo. Devuelve eventos SSE (start/text/tool_*/proposal/error/done). No toca la
+    timeline. El contexto se reconstruye desde la timeline guardada (fuente de verdad)."""
+    from .motion import generate, segment_context
+    proj = _project_or_404(project_id)
+    body = body or {}
+    ctx = segment_context.build_segment_context(
+        proj, body.get("start"), body.get("end"), body.get("playhead"), body.get("clip_id"))
+    stream = generate.sse(project_id, ctx=ctx, hint=(body.get("hint") or ""),
+                          frames=bool(body.get("frames")))
+    return StreamingResponse(stream, media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/projects/{project_id}/motion/generate/create")
+async def motion_generate_create(project_id: str, body: dict = Body(default={})) -> StreamingResponse:
+    """Fase de GENERACIÓN de 'Generar Motion': la IA crea el BORRADOR de composición
+    (con preview) para el tramo, a partir de la idea aprobada. Eventos SSE
+    (start/text/tool_*/created/error/done). ``variant_of`` regenera el mismo borrador."""
+    from .motion import generate, segment_context
+    from .motion import service as motion_service
+    proj = _project_or_404(project_id)
+    body = body or {}
+    proposal = body.get("proposal")
+    if not isinstance(proposal, dict):
+        raise HTTPException(status_code=400, detail="Falta 'proposal'.")
+    # Limpieza oportunista de borradores huérfanos anteriores.
+    motion_service.cleanup_generate_drafts(project_id)
+    ctx = segment_context.build_segment_context(
+        proj, body.get("start"), body.get("end"), body.get("playhead"), body.get("clip_id"))
+    stream = generate.create_sse(project_id, ctx=ctx, proposal=proposal,
+                                 variant_of=body.get("variant_of"))
+    return StreamingResponse(stream, media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.post("/api/projects/{project_id}/motion")
@@ -721,6 +779,20 @@ def motion_preview(project_id: str, comp_id: str) -> Response:
     return Response(content=html, media_type="text/html; charset=utf-8")
 
 
+@app.get("/api/projects/{project_id}/motion/{comp_id}/asset")
+def motion_asset(project_id: str, comp_id: str) -> FileResponse:
+    """WebM (con alfa) renderizado de la versión ACTUAL de la composición, para que el
+    preview principal muestre el clip motion. 404 si aún no se ha renderizado."""
+    from .motion import service as motion_service
+    comp = motion_service.get_composition(project_id, comp_id)
+    if comp is None:
+        raise HTTPException(status_code=404, detail="Composición no encontrada.")
+    path = motion_service.asset_path(project_id, comp)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="El motion graphic aún no está renderizado.")
+    return FileResponse(path, media_type="video/webm")
+
+
 @app.post("/api/projects/{project_id}/motion/{comp_id}/render", response_model=Job)
 def motion_render(project_id: str, comp_id: str) -> Job:
     from .motion import service as motion_service
@@ -739,9 +811,14 @@ def motion_add_to_timeline(project_id: str, comp_id: str, body: dict = Body(defa
     if motion_service.get_composition(project_id, comp_id) is None:
         raise HTTPException(status_code=404, detail="Composición no encontrada.")
     body = body or {}
+    mode = body.get("mode") or "add"
+    if mode not in ("add", "replace"):
+        raise HTTPException(status_code=400, detail="mode debe ser 'add' o 'replace'.")
     job = jobs.create_job()
     jobs.start_motion_add_job(job, project_id, comp_id,
-                              body.get("track_id"), float(body.get("start") or 0.0))
+                              body.get("track_id"), float(body.get("start") or 0.0),
+                              end=body.get("end"), mode=mode,
+                              replace_clip_ids=body.get("replace_clip_ids"))
     return job
 
 

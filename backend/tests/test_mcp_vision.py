@@ -39,8 +39,8 @@ class VisionTest(unittest.TestCase):
                 stderr = ""
             return R()
 
-        with patch("app.mcp_server.tools_vision.shutil.which", return_value="ffmpeg"), \
-             patch("app.mcp_server.tools_vision.subprocess.run", side_effect=fake_run):
+        with patch("app.frame_grab.shutil.which", return_value="ffmpeg"), \
+             patch("app.frame_grab.subprocess.run", side_effect=fake_run):
             out = tools_vision.get_frame(self.pid, "0")
         self.assertEqual(out["clip_index"], 0)
         self.assertEqual(out["mime"], "image/jpeg")

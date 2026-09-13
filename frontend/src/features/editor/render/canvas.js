@@ -169,24 +169,63 @@ function drawTransformHandles(ctx, dest) {
   const { dx, dy, dw, dh } = dest
   const hs = 5
   ctx.save()
-  ctx.strokeStyle = '#ff3b5c'
-  ctx.lineWidth = 1.6
+  // Marco de selección: línea blanca fina (sustituye al rojo grueso anterior).
+  ctx.strokeStyle = 'rgba(255,255,255,0.95)'
+  ctx.lineWidth = 1.2
   ctx.strokeRect(dx, dy, dw, dh)
+  // Manijas de escala: círculos blancos. Una sombra suave las mantiene visibles
+  // sobre cualquier fondo (claro u oscuro) sin necesidad de borde de color.
+  ctx.shadowColor = 'rgba(0,0,0,0.45)'
+  ctx.shadowBlur = 3
   ctx.fillStyle = '#fff'
-  ctx.strokeStyle = '#ff3b5c'
   ;[[dx, dy], [dx + dw, dy], [dx, dy + dh], [dx + dw, dy + dh]].forEach(([x, y]) => {
-    ctx.fillRect(x - hs, y - hs, hs * 2, hs * 2)
-    ctx.strokeRect(x - hs, y - hs, hs * 2, hs * 2)
+    ctx.beginPath()
+    ctx.arc(x, y, hs, 0, Math.PI * 2)
+    ctx.fill()
   })
+  // Vástago hacia el control de rotación.
+  ctx.shadowBlur = 0
   const rx = dx + dw / 2, ry = dy - 22
+  ctx.strokeStyle = 'rgba(255,255,255,0.95)'
+  ctx.lineWidth = 1.2
   ctx.beginPath()
   ctx.moveTo(dx + dw / 2, dy)
   ctx.lineTo(rx, ry)
   ctx.stroke()
+  drawRotateHandle(ctx, rx, ry, 7)
+  ctx.restore()
+}
+
+// Control de rotación: círculo blanco con una flecha circular (icono de giro)
+// dibujada dentro para que se lea de un vistazo qué hace.
+function drawRotateHandle(ctx, rx, ry, rr) {
+  ctx.save()
+  ctx.shadowColor = 'rgba(0,0,0,0.45)'
+  ctx.shadowBlur = 3
   ctx.beginPath()
-  ctx.arc(rx, ry, 6, 0, Math.PI * 2)
-  ctx.fillStyle = '#ff3b5c'
+  ctx.arc(rx, ry, rr, 0, Math.PI * 2)
+  ctx.fillStyle = '#fff'
   ctx.fill()
+  ctx.shadowBlur = 0
+  // Flecha circular en gris oscuro sobre el disco blanco.
+  const ir = rr - 2.5
+  const a0 = -Math.PI * 0.55, a1 = Math.PI * 0.95
+  ctx.strokeStyle = '#22242e'
+  ctx.lineWidth = 1.2
+  ctx.lineCap = 'round'
+  ctx.beginPath()
+  ctx.arc(rx, ry, ir, a0, a1)
+  ctx.stroke()
+  // Punta de flecha en el extremo del arco, apuntando en el sentido del trazo.
+  const ax = rx + ir * Math.cos(a1), ay = ry + ir * Math.sin(a1)
+  const back = a1 + Math.PI / 2 + Math.PI // sentido contrario a la tangente
+  const ah = 2.8, spread = 0.6
+  ctx.beginPath()
+  ctx.moveTo(ax, ay)
+  ctx.lineTo(ax + ah * Math.cos(back - spread), ay + ah * Math.sin(back - spread))
+  ctx.moveTo(ax, ay)
+  ctx.lineTo(ax + ah * Math.cos(back + spread), ay + ah * Math.sin(back + spread))
+  ctx.stroke()
   ctx.restore()
 }
 
@@ -673,10 +712,12 @@ export function drawMainView(head, env) {
   if (framingModeRef.current) drawFramingOverlay(ctx, frame.w, frame.h, framingModeRef.current)
   drawAlignGuides(ctx, frame.w, frame.h, alignGuidesRef?.current)
   ctx.restore()
-  // Borde naranja fijo = límite del área que se exporta.
+  // Borde fijo = límite del área que se exporta. Línea fina y neutra (blanco muy
+  // tenue) para no teñir los colores del material; el atenuado exterior ya marca
+  // el recuadro, así que basta un contorno sutil.
   ctx.save()
-  ctx.strokeStyle = '#ff8c1a'
-  ctx.lineWidth = Math.max(2, cw * 0.004)
+  ctx.strokeStyle = 'rgba(255,255,255,0.32)'
+  ctx.lineWidth = Math.max(1, dpr)
   const lw = ctx.lineWidth
   ctx.strokeRect(frame.x + lw / 2, frame.y + lw / 2, frame.w - lw, frame.h - lw)
   ctx.restore()

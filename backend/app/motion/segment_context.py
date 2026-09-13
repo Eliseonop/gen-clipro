@@ -317,6 +317,35 @@ def timeline_context(proj, start: float, end: float, playhead: float | None,
     }
 
 
+# --- Fotogramas de la fuente (para "Generar Motion" con visión) ----------------
+
+def top_video_source_at(proj, t: float):
+    """Clip de vídeo superior visible en el instante ``t`` (tiempo de timeline).
+
+    Devuelve ``(material_clip, source_time)`` para extraer un fotograma de la
+    FUENTE (sin overlays ni textos), o ``None`` si no hay vídeo en pantalla.
+    """
+    tl = proj.timeline
+    if tl is None:
+        return None
+    hidden = {t_.id for t_ in tl.tracks if t_.hidden}
+    order = _video_track_order(tl)
+    by_index = {str(m.index): m for m in (proj.clips or [])}
+    on_screen = [c for c in tl.clips
+                 if c.kind == "video" and c.track_id not in hidden
+                 and float(c.start or 0.0) - 1e-3 <= t < _clip_end(c)]
+    if not on_screen:
+        return None
+    on_screen.sort(key=lambda c: order.get(c.track_id, -1))
+    c = on_screen[-1]
+    mat = by_index.get(str(c.asset_id))
+    if mat is None:
+        return None
+    speed = clip_speed(c)
+    src_t = float(c.in_point or 0.0) + max(0.0, t - float(c.start or 0.0)) * speed
+    return mat, round(src_t, 3)
+
+
 # --- Assets y estilo ------------------------------------------------------------
 
 def available_assets(proj, terms: list[str]) -> list[dict]:

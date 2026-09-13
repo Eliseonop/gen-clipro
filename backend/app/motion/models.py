@@ -16,9 +16,11 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 # Tipos de capa soportados. text + shape (círculo/línea) permiten nodos y
-# conexiones (p.ej. redes neuronales). image/svg/video/lottie: extensión futura.
-LAYER_TYPES = ("text", "image", "shape", "svg", "video", "lottie")
-MVP_LAYER_TYPES = ("text", "shape")
+# conexiones (p.ej. redes neuronales). "html" = bloque avanzado HTML+GSAP escrito
+# por la IA (conteos, barras que se llenan, stagger por letra, flip…) que las
+# primitivas no cubren. image/svg/video/lottie: extensión futura.
+LAYER_TYPES = ("text", "image", "shape", "svg", "video", "lottie", "html")
+MVP_LAYER_TYPES = ("text", "shape", "html")
 
 # Figuras vectoriales de una capa shape.
 SHAPE_KINDS = ("circle", "line", "rect")
@@ -75,7 +77,8 @@ class MotionEffect(BaseModel):
 
 class MotionShape(BaseModel):
     """Figura vectorial. circle/rect se dibujan en (x,y) con size; line va de
-    (x,y) a (x2,y2). ``glow`` añade halo luminoso (motion graphics tecnológico)."""
+    (x,y) a (x2,y2). Para tarjetas limpias usa ``borderRadius`` + ``shadow``
+    (sombra suave); ``glow`` (halo luminoso) se mantiene por compatibilidad."""
     kind: str = "circle"                 # circle | line | rect
     radius: float = 40.0                 # circle: radio (px)
     width: Optional[float] = None        # rect: ancho
@@ -83,9 +86,11 @@ class MotionShape(BaseModel):
     x2: Optional[float] = None           # line: punto final
     y2: Optional[float] = None
     thickness: float = 3.0               # line/rect: grosor de línea/borde
-    fill: str = "#39d0ff"                # relleno (circle/rect); "none" = sin relleno
+    fill: str = "#4f46e5"                # relleno (circle/rect); "none" = sin relleno
     stroke: str = "none"                 # borde/color de línea
-    glow: float = 0.0                    # 0 = sin glow; >0 = radio del halo (px)
+    borderRadius: Optional[float] = None  # rect: radio de esquina (px) → tarjetas
+    shadow: Optional[str] = None          # box-shadow CSS (sombra suave); prioritaria sobre glow
+    glow: float = 0.0                    # 0 = sin glow; >0 = radio del halo (px, neón; legado)
 
 
 class MotionLayer(BaseModel):
@@ -112,6 +117,13 @@ class MotionLayer(BaseModel):
     visible: bool = True
     style: dict[str, Any] = Field(default_factory=dict)   # font, color, fontSize, fontWeight, align, bg, padding…
     shape: Optional[MotionShape] = None                    # (type=shape) figura vectorial
+    # Bloque HTML+GSAP avanzado (type=html). ``html`` = markup (sin <script>),
+    # ``css`` = estilos del bloque, ``js`` = CUERPO de una función
+    # (tl, root, gsap, ctx) que añade tweens a la timeline ``tl`` del bloque
+    # (seekable/determinista). Por defecto ocupa todo el lienzo.
+    html: Optional[str] = None
+    css: Optional[str] = None
+    js: Optional[str] = None
     animation: MotionAnimation = Field(default_factory=MotionAnimation)
     effect: MotionEffect = Field(default_factory=MotionEffect)   # efecto continuo (loop)
 

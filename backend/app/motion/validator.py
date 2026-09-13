@@ -45,6 +45,14 @@ def _check_layer(layer: MotionLayer, comp: MotionComposition, seen_ids: set[str]
                         f"(válidas: {', '.join(SHAPE_KINDS)}).")
         elif layer.shape.kind == "line" and (layer.shape.x2 is None or layer.shape.y2 is None):
             errs.append(f"Capa de línea '{lid}': faltan x2/y2 (punto final).")
+    if layer.type == "html":
+        if not ((layer.html or "").strip() or (layer.js or "").strip()):
+            errs.append(f"Capa html '{lid}': falta 'html' o 'js'.")
+        if layer.html and "<script" in layer.html.lower():
+            errs.append(f"Capa html '{lid}': no pongas <script> en 'html'; el GSAP va en 'js'.")
+        for fld, val in (("html", layer.html), ("css", layer.css), ("js", layer.js)):
+            if val and len(val) > 20000:
+                errs.append(f"Capa html '{lid}': '{fld}' demasiado grande (>20000 chars).")
     if layer.effect and layer.effect.type not in EFFECT_TYPES:
         errs.append(f"Capa '{lid}': efecto '{layer.effect.type}' no válido "
                     f"(válidos: {', '.join(EFFECT_TYPES)}).")

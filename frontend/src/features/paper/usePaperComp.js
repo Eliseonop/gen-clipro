@@ -26,9 +26,9 @@ import {
 import {
   DEFAULT_OBJECT, DEFAULT_TEXT, TOOL, VIDEO_FORMATS, activeKeyframe, addKeyframe as addKf,
   cropSig, extendDuration, hasContent, hasText, isObjectPath, keyframeClipboardOf,
-  newPaperState, normalizeCrop, patchKeyframe as patchKf, removeKeyframe as removeKf,
-  resetPath, selectedObject, setDuration as setDur, setPath, setPaths, sortedKeyframes,
-  viewOf, withSelectedObject,
+  newPaperState, normalizeCrop, paperExportName, patchKeyframe as patchKf,
+  removeKeyframe as removeKf, resetPath, selectedObject, setDuration as setDur,
+  setPath, setPaths, sortedKeyframes, viewOf, withSelectedObject,
 } from './paperModel.js'
 import { createPaperRenderer } from './paperRender.js'
 import {
@@ -665,7 +665,10 @@ export function usePaperComp(projectId, { format, onUploaded } = {}) {
       }
 
       setExportJob({ progress: 1, message: 'Guardando en el material…', status: 'running' })
-      const base = (cur.export.filename || 'paper').replace(/\.[^.]+$/, '')
+      // Nombre reconocible: el que escriba el usuario o, si lo dejó en blanco,
+      // el automático `paper-animation <imagen/texto>` (ver paperExportName).
+      const custom = (cur.export.filename || '').trim().replace(/\.[^.]+$/, '')
+      const base = custom && custom !== 'paper' ? custom : paperExportName(cur)
       const file = new File([blob], `${base}${ext}`, { type: mime })
       // Un PNG/JPG va a Imágenes, no a Vídeos: si no, el material quedaría con un
       // "vídeo" que no se puede reproducir.

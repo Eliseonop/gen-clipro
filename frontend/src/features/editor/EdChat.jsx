@@ -96,6 +96,9 @@ export default function EdChat({ project, context, onReload, onBusy, clips, onMc
   const convRef = useRef(null)
   const ctxRef = useRef(context)
   const scrollRef = useRef(null)
+  // ts de la última escritura MCP EXTERNA vista (Claude por mcp-remote, no este chat).
+  // undefined = aún sin línea base (primer sondeo no recarga).
+  const lastExtWriteRef = useRef(undefined)
 
   useEffect(() => { ctxRef.current = context }, [context])
   useEffect(() => {
@@ -121,12 +124,22 @@ export default function EdChat({ project, context, onReload, onBusy, clips, onMc
         setAudit(entries || [])
         setLive(active || [])
         onMcpAudit?.({ entries: entries || [], active: active || [] })
+        // Escritura MCP EXTERNA (no de este chat) → recarga la timeline para no
+        // pisar con el autoguardado lo que insertó Claude por MCP.
+        const ext = (entries || []).filter(
+          (e) => (e.access === 'write' || e.access === 'destructive') && e.source !== 'ai_chat')
+        const newest = ext.reduce((m, e) => (e.ts > m ? e.ts : m), '')
+        if (lastExtWriteRef.current === undefined) lastExtWriteRef.current = newest
+        else if (newest && newest > lastExtWriteRef.current) {
+          lastExtWriteRef.current = newest
+          onReload?.()
+        }
       } catch { /* el panel de log no debe romper el chat */ }
     }
     load()
     const id = setInterval(load, 1000)
     return () => { alive = false; clearInterval(id) }
-  }, [project?.id, onMcpAudit])
+  }, [project?.id, onMcpAudit, onReload])
 
   // Cargar el último chat guardado del proyecto.
   useEffect(() => {

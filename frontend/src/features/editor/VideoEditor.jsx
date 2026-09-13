@@ -4,7 +4,7 @@ import ConfirmModal from '../../components/ConfirmModal'
 import Toast from '../../components/Toast'
 import { fmt } from '../../lib/utils'
 import { getTimeline, saveTimeline, prepareReframe, getJob, createClipJob, getSettings,
-  createBgRemovalJob, listBgProviders, cancelJob } from '../../services/api'
+  createBgRemovalJob, listBgProviders, cancelJob, addMotionToTimeline } from '../../services/api'
 import { clamp } from '../../lib/panning'
 import { defaultTextStyle, subtitleStyle, wrappedText, ensureEditorFonts, selectedSubtitleThemeId, clearTextTheme, effectiveTextStyle } from '../../lib/textstyles'
 import { applyThemeToStyle, wordsPerBoxOptions, activeWordsPerBox, splitCaptionWords } from '../../lib/textKaraoke'
@@ -59,6 +59,7 @@ import { createCanvasDownHandler } from './interactions'
 import { kfSnap, normalizeFps, snapToFrame } from '../../lib/projectFps'
 import { fmtRuler, tickStep } from './timelineScale'
 import EdMaterial from './EdMaterial'
+import { bustUrl } from './MaterialClipGrid'
 import EdTimeline from './EdTimeline'
 import EdTopBar from './EdTopBar'
 import EdViewerTools from './EdViewerTools'
@@ -97,9 +98,10 @@ function HiddenMedia({ clip, src, mediaEls, onLoadedMetadata }) {
     return <img alt="" loading="eager" decoding="async" src={src} ref={ref} onLoad={onLoadedMetadata} />
   }
   const mediaProps = { src, ref, preload: 'auto', onLoadedMetadata }
-  return clip.kind === 'video'
-    ? <video {...mediaProps} playsInline />
-    : <audio {...mediaProps} />
+  // Motion: WebM con alfa → <video muted> (no lleva audio); se dibuja como overlay.
+  if (clip.kind === 'video' || clip.kind === 'motion')
+    return <video {...mediaProps} playsInline muted={clip.kind === 'motion'} />
+  return <audio {...mediaProps} />
 }
 
 function shiftKfs(kfs, t0, t1) {
@@ -709,6 +711,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setSelClipIds([])
     setSelKfId(null)
   }
+  // Las pestañas de Motion Studio y Paper Animator tienen SU pestaña de material
+  // (Motion / Paper); Main y Clip trabajan con las pestañas normales. Al cambiar
+  // de workspace se sincroniza el material: entrar en un estudio abre su tab, y
+  // volver a Main/Clip saca de esas tabs (a Video) — así no queda el material
+  // mostrando Motion/Paper mientras se edita el vídeo, ni al revés.
+  const backToMaterialTab = () => setMatTab((t) => (t === 'motion' || t === 'paper' ? 'video' : t))
   function goMainTab() {
     if (mainColTab === 'main') return
     if (!projectTlRef.current) return
@@ -723,6 +731,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     hist.reset()
     setLinkPick(null)
     setMainColTab('main')
+    backToMaterialTab()
   }
   function goClipTab() {
     if (mainColTab === 'clip') return
@@ -736,8 +745,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     hist.reset()
     setLinkPick(null)
     setMainColTab('clip')
+    backToMaterialTab()
     if (clipTlRef.current) applyTl(clipTlRef.current)
     else applyEmptyClipTl()
+  }
+  // Volver a Main desde un estudio (Motion/Paper) cuando el material cambia a una
+  // pestaña normal: sirve para que elegir "Video/Imagen/Audio…" saque del estudio.
+  function leaveStudioForMaterial() {
+    if (mainColTab === 'motion' || mainColTab === 'paper') goMainTab()
   }
   async function goMotionTab(compId = null) {
     stopPlayback()
@@ -752,6 +767,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setCropMode(false)
     hist.reset()
     setMainColTab('motion')
+    setMatTab('motion')
     let c = motion.comp
     if (compId) c = await motion.loadComp(compId)
     applyMotionTimeline(c)
@@ -797,6 +813,41 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setGenMotion(target)
   }
 
+  // "Agregar al timeline" desde el modal de Generar Motion: guarda la timeline,
+  // lanza el job de inserción (renderiza + coloca el clip motion), recarga y
+  // selecciona el clip nuevo con el cursor a su inicio.
+  async function addMotionDraftToTimeline({ draftId, target }) {
+    if (!draftId) return
+    if (clipModeRef.current || motionModeRef.current || paperModeRef.current) return
+    setClipToast({ type: 'info', message: 'Insertando motion…' })
+    try {
+      try { await saveTimeline(project.id, timelinePayload()) } catch { /* usa lo guardado */ }
+      let job = await addMotionToTimeline(project.id, draftId,
+        { start: target.start, end: target.end, mode: 'add' })
+      while (job.status !== 'done' && job.status !== 'error') {
+        await new Promise((r) => setTimeout(r, 400))
+        job = await getJob(job.id)
+        setClipToast({ type: 'info', message: job.message || 'Insertando motion…' })
+      }
+      if (job.status === 'error') {
+        setClipToast({ type: 'error', message: job.error || 'No se pudo insertar el motion.' })
+        return
+      }
+      onChange?.()          // el motion es ahora un vídeo del material: refresca Materiales
+      await reloadTimeline()
+      const info = job.motion_add
+      if (info?.clip_id) {
+        setSelTrackId(info.track_id)
+        setSelClipId(info.clip_id)
+        setSelClipIds([info.clip_id])
+        if (Number.isFinite(info.start)) seek(info.start)
+      }
+      setClipToast({ type: 'success', message: 'Motion añadido como vídeo (editable) a la timeline' })
+    } catch (e) {
+      setClipToast({ type: 'error', message: e.message || 'No se pudo insertar el motion.' })
+    }
+  }
+
   // Proyecta el estado de Paper Animator como timeline (objeto + keyframes →
   // pista/clip), reusando EdTimeline igual que hace Motion.
   function applyPaperTimeline(st) {
@@ -831,8 +882,28 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setCropMode(false)
     hist.reset()
     setMainColTab('paper')
+    setMatTab('paper')
     paper.setActive(true)
     applyPaperTimeline(paper.raw)
+  }
+
+  // Carga una imagen del material en Paper Animator y le prepara una animación
+  // simple de entrada (open), salida (close) o ambas. Es el "Generar Paper
+  // Animation" del menú contextual de una imagen.
+  async function generatePaperFromImage(image, mode = 'both') {
+    if (!image) return
+    goPaperTab()
+    setMatTab('paper')
+    await paper.loadImage(
+      bustUrl(image.url, image),
+      image.label || image.name || image.filename,
+      { asset_id: String(image.id), filename: image.filename },
+    )
+    paper.patchMany({
+      'object.animation.mode': 'simple',
+      'object.animation.simple.open': mode !== 'close',
+      'object.animation.simple.close': mode !== 'open',
+    })
   }
 
   // Sync estado → TIMELINE. Se re-deriva por FIRMA (duración, modo, keyframes),
@@ -2806,6 +2877,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onMotionBack={goMotionBlank}
           paper={paper}
           onGoPaper={goPaperTab}
+          onExitStudio={leaveStudioForMaterial}
+          onGeneratePaper={generatePaperFromImage}
         />
         <EdSplit axis="x" kind="materials" label="Redimensionar materiales" onDown={panels.begin('materials')} />
 
@@ -3386,6 +3459,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           target={genMotion}
           onChangeTarget={setGenMotion}
           onClose={() => setGenMotion(null)}
+          onEditInStudio={(cid) => { setGenMotion(null); goMotionTab(cid) }}
+          onAddToTimeline={addMotionDraftToTimeline}
         />
       )}
 

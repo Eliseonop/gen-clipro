@@ -13,8 +13,20 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 
 
 def _even(n: float) -> int:
+    """Redondea a par un TAMAÑO (ancho/alto): nunca por debajo de 2."""
     n = int(round(n))
     return n - (n % 2) if n >= 2 else 2
+
+
+def _even_pos(n: float) -> int:
+    """Redondea a par una POSICIÓN de overlay.
+
+    A diferencia de ``_even``, admite valores negativos o menores que 2: la
+    esquina de un objeto libre movido hacia arriba o a la izquierda cae fuera
+    del lienzo (x/y < 0) y FFmpeg recorta lo que sobra. Clamparla a 2 —como
+    hace ``_even`` para los tamaños— pegaba el clip a la esquina y descartaba
+    el desplazamiento (un paper a pantalla completa subido salía centrado)."""
+    return int(round(n / 2)) * 2
 
 
 def new_transform() -> dict:
@@ -50,4 +62,4 @@ def dest_rect(transform: Optional[dict], crop_sw: float, crop_sh: float,
 def dest_rect_even(transform: Optional[dict], crop_sw: float, crop_sh: float,
                    out_w: int, out_h: int) -> tuple[int, int, int, int, float]:
     dx, dy, dw, dh, rot = dest_rect(transform, crop_sw, crop_sh, out_w, out_h)
-    return _even(dx), _even(dy), max(2, _even(dw)), max(2, _even(dh)), rot
+    return _even_pos(dx), _even_pos(dy), max(2, _even(dw)), max(2, _even(dh)), rot

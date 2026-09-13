@@ -1,4 +1,5 @@
-import { ENTRANCE_TYPES, EXIT_TYPES, SLIDE_DIRS, EASES, EFFECT_TYPES } from './motionModel'
+import { ENTRANCE_TYPES, EXIT_TYPES, SLIDE_DIRS, EASES, EFFECT_TYPES,
+         FONTS, TEXT_EFFECTS, textEffectPatch, textEffectOf } from './motionModel'
 
 // Propiedades de la capa de Motion seleccionada. Va en el panel derecho del editor
 // (equivalente a "Motion · Propiedades"). onChange recibe un patch (deepMerge en updateLayer).
@@ -26,15 +27,48 @@ export default function MotionProps({ comp, layer, onChange }) {
         <label className="motion-field">Opacidad<input type="number" step="0.05" min="0" max="1" value={layer.opacity} onChange={(e) => onChange({ opacity: num(e.target.value) })} /></label>
       </div>
       {layer.type === 'text' && (
-        <div className="motion-field-row">
-          <label className="motion-field">Tamaño<input type="number" value={layer.style?.fontSize || 96} onChange={(e) => onChange({ style: { fontSize: num(e.target.value) } })} /></label>
-          <label className="motion-field">Color<input type="color" value={layer.style?.color || '#ffffff'} onChange={(e) => onChange({ style: { color: e.target.value } })} /></label>
-        </div>
+        <>
+          <label className="motion-field wide">Fuente
+            <select value={layer.style?.font || FONTS[0].value}
+              onChange={(e) => onChange({ style: { font: e.target.value } })}>
+              {FONTS.every((f) => f.value !== layer.style?.font) && layer.style?.font && (
+                <option value={layer.style.font}>Actual (plantilla)</option>
+              )}
+              {FONTS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+            </select>
+          </label>
+          <div className="motion-field-row">
+            <label className="motion-field">Tamaño<input type="number" value={layer.style?.fontSize || 96} onChange={(e) => onChange({ style: { fontSize: num(e.target.value) } })} /></label>
+            <label className="motion-field">Color<input type="color" value={layer.style?.color || '#ffffff'} onChange={(e) => onChange({ style: { color: e.target.value } })} /></label>
+          </div>
+          <label className="motion-field wide">Efecto de texto
+            <select value={textEffectOf(layer.style)}
+              onChange={(e) => onChange({ style: textEffectPatch(e.target.value, layer) })}>
+              {TEXT_EFFECTS.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </label>
+          {textEffectOf(layer.style) === 'degradado' && (
+            <div className="motion-field-row">
+              <label className="motion-field">Color 1<input type="color" value={layer.style?.gradientFrom || '#4f46e5'} onChange={(e) => onChange({ style: { gradientFrom: e.target.value } })} /></label>
+              <label className="motion-field">Color 2<input type="color" value={layer.style?.gradientTo || '#06b6d4'} onChange={(e) => onChange({ style: { gradientTo: e.target.value } })} /></label>
+              <label className="motion-field">Ángulo<input type="number" value={layer.style?.gradientAngle ?? 90} onChange={(e) => onChange({ style: { gradientAngle: num(e.target.value) } })} /></label>
+            </div>
+          )}
+          {textEffectOf(layer.style) === 'contorno' && (
+            <div className="motion-field-row">
+              <label className="motion-field">Grosor<input type="number" value={layer.style?.outlineWidth ?? 3} onChange={(e) => onChange({ style: { outlineWidth: num(e.target.value) } })} /></label>
+              <label className="motion-field">Color<input type="color" value={layer.style?.outlineColor || '#0f172a'} onChange={(e) => onChange({ style: { outlineColor: e.target.value } })} /></label>
+            </div>
+          )}
+          {textEffectOf(layer.style) === 'resaltado' && (
+            <label className="motion-field wide">Color del resaltado<input type="color" value={layer.style?.background && layer.style.background.startsWith('#') ? layer.style.background : '#fde047'} onChange={(e) => onChange({ style: { background: e.target.value } })} /></label>
+          )}
+        </>
       )}
       {layer.type === 'shape' && layer.shape?.kind === 'circle' && (
         <div className="motion-field-row">
           <label className="motion-field">Radio<input type="number" value={layer.shape?.radius ?? 40} onChange={(e) => onChange({ shape: { radius: num(e.target.value) } })} /></label>
-          <label className="motion-field">Relleno<input type="color" value={layer.shape?.fill && layer.shape.fill !== 'none' ? layer.shape.fill : '#39d0ff'} onChange={(e) => onChange({ shape: { fill: e.target.value } })} /></label>
+          <label className="motion-field">Relleno<input type="color" value={layer.shape?.fill && layer.shape.fill !== 'none' ? layer.shape.fill : '#4f46e5'} onChange={(e) => onChange({ shape: { fill: e.target.value } })} /></label>
           <label className="motion-field">Glow<input type="number" value={layer.shape?.glow ?? 0} onChange={(e) => onChange({ shape: { glow: num(e.target.value) } })} /></label>
         </div>
       )}
@@ -46,7 +80,7 @@ export default function MotionProps({ comp, layer, onChange }) {
           </div>
           <div className="motion-field-row">
             <label className="motion-field">Grosor<input type="number" value={layer.shape?.thickness ?? 2} onChange={(e) => onChange({ shape: { thickness: num(e.target.value) } })} /></label>
-            <label className="motion-field">Color<input type="color" value={layer.shape?.stroke && layer.shape.stroke !== 'none' ? layer.shape.stroke : '#2b6cff'} onChange={(e) => onChange({ shape: { stroke: e.target.value } })} /></label>
+            <label className="motion-field">Color<input type="color" value={layer.shape?.stroke && layer.shape.stroke !== 'none' ? layer.shape.stroke : '#4f46e5'} onChange={(e) => onChange({ shape: { stroke: e.target.value } })} /></label>
             <label className="motion-field">Glow<input type="number" value={layer.shape?.glow ?? 0} onChange={(e) => onChange({ shape: { glow: num(e.target.value) } })} /></label>
           </div>
         </>

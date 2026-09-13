@@ -211,7 +211,8 @@ export function videosAt(head, clips, tracks) {
   const index = new Map(list.map((c, i) => [c.id, i]))
   return list
     .filter((c) => {
-      if (!isVisualClip(c) && c.kind !== 'shape') return false
+      // motion se dibuja (overlay con alfa) pero NO es "visual" editable (sin recorte/reframe).
+      if (!isVisualClip(c) && c.kind !== 'shape' && c.kind !== 'motion') return false
       const track = (tracks || []).find((t) => t.id === c.track_id)
       if (!track || track.hidden) return false
       return head >= c.start - 0.02 && head < clipEnd(c)

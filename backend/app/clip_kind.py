@@ -97,7 +97,10 @@ def ffmpeg_input_args(clip, path, fps: int) -> list[str]:
     """
     p = str(path if isinstance(path, Path) else path)
     kind = clip.get("kind") if isinstance(clip, dict) else getattr(clip, "kind", None)
-    if kind == "motion":
+    # WebM VP9 con alfa (motion graphics, Paper transparente, o un motion ya "horneado"
+    # a vídeo del material): el decoder VP9 por defecto NO expone el plano alfa, así que
+    # la zona transparente saldría negra al componer. Forzar libvpx-vp9 lo arregla.
+    if kind == "motion" or p.lower().endswith(".webm"):
         return ["-c:v", "libvpx-vp9", "-i", p]
     if is_still_clip(clip):
         _, dur = ffmpeg_trim_window(clip)

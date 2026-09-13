@@ -128,12 +128,12 @@ export const deleteConversation = (pid, cid) => del(`/api/ai/conversations/${pid
 export const getMcpAudit = (pid, limit = 60) =>
   get(`/api/mcp/audit?limit=${limit}${pid ? `&project_id=${encodeURIComponent(pid)}` : ''}`)
 
-// Streaming SSE: llama onEvent(ev) por cada evento del agente.
-export async function aiChat({ projectId, message, conversationId, context, signal }, onEvent) {
-  const res = await fetch('/api/ai/chat', {
+// Streaming SSE genérico: POST + parse de eventos `data: {json}`. Llama onEvent(ev) por evento.
+export async function streamSSE(url, body, onEvent, signal) {
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ project_id: projectId, message, conversation_id: conversationId, context }),
+    body: JSON.stringify(body || {}),
     signal,
   })
   if (!res.ok || !res.body) {
@@ -161,6 +161,13 @@ export async function aiChat({ projectId, message, conversationId, context, sign
   }
 }
 
+// Streaming SSE: llama onEvent(ev) por cada evento del agente.
+export async function aiChat({ projectId, message, conversationId, context, signal }, onEvent) {
+  await streamSSE('/api/ai/chat',
+    { project_id: projectId, message, conversation_id: conversationId, context },
+    onEvent, signal)
+}
+
 // --- Motion Studio (motion graphics editables) ---
 export const listMotion = (pid) => get(`/api/projects/${pid}/motion`)
 export const listMotionTemplates = (pid) => get(`/api/projects/${pid}/motion/templates`)
@@ -170,6 +177,16 @@ export const updateMotion = (pid, cid, composition) => put(`/api/projects/${pid}
 export const deleteMotion = (pid, cid) => del(`/api/projects/${pid}/motion/${cid}`)
 export const motionPreviewUrl = (pid, cid, version) =>
   `/api/projects/${pid}/motion/${cid}/preview.html${version != null ? `?v=${version}` : ''}`
+// Preview en vivo de una PLANTILLA (motor real, sin guardar) para la galería.
+export const motionTemplatePreviewUrl = (pid, key, { theme, accent, w, h } = {}) => {
+  const q = new URLSearchParams()
+  if (theme) q.set('theme', theme)
+  if (accent) q.set('accent', accent)
+  if (w) q.set('w', String(w))
+  if (h) q.set('h', String(h))
+  const s = q.toString()
+  return `/api/projects/${pid}/motion/templates/${key}/preview.html${s ? `?${s}` : ''}`
+}
 export const renderMotion = (pid, cid) => post(`/api/projects/${pid}/motion/${cid}/render`, {})
 export const addMotionToTimeline = (pid, cid, body) =>
   post(`/api/projects/${pid}/motion/${cid}/add-to-timeline`, body || {})
@@ -184,6 +201,16 @@ export const getMotionSegmentContext = (pid, { start, end, playhead, clipId } = 
 }
 export const setMotionFocus = (pid, { start, end, playhead, clipId } = {}) =>
   post(`/api/projects/${pid}/motion/focus`, { start, end, playhead, clip_id: clipId || null })
+// "Generar Motion" (fase propuesta): SSE con eventos text/proposal/error.
+export const proposeMotion = (pid, { start, end, playhead, clipId, hint, frames } = {}, onEvent, signal) =>
+  streamSSE(`/api/projects/${pid}/motion/generate/propose`,
+    { start, end, playhead, clip_id: clipId || null, hint: hint || '', frames: !!frames },
+    onEvent, signal)
+// "Generar Motion" (fase generación): SSE con eventos tool_*/created/error. Crea un borrador.
+export const createMotionDraft = (pid, { start, end, playhead, clipId, proposal, variantOf } = {}, onEvent, signal) =>
+  streamSSE(`/api/projects/${pid}/motion/generate/create`,
+    { start, end, playhead, clip_id: clipId || null, proposal, variant_of: variantOf || null },
+    onEvent, signal)
 
 // --- Sound Effects ---
 export const listSfx = (q = '', category = '') =>

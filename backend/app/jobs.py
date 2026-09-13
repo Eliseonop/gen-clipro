@@ -540,8 +540,39 @@ def start_motion_render_job(job: Job, pid: str, cid: str) -> None:
     thread.start()
 
 
-def _run_motion_add(job_id: str, pid: str, cid: str, track_id, start: float) -> None:
-    """Renderiza la composición y la inserta en la timeline como clip 'motion'."""
+MOTION_TRACK_NAME = "Motion"
+
+
+def _clip_tl_end(c) -> float:
+    from .clip_speed import clip_timeline_duration
+    return float(c.start or 0.0) + clip_timeline_duration(c)
+
+
+def _pick_motion_track(tl, start: float, end: float, mode: str) -> str | None:
+    """Pista 'Motion' (arriba del todo = último track de vídeo → compone encima).
+    En modo 'add', si la pista Motion ya tiene un clip en el tramo, devuelve None
+    para crear otra encima. Devuelve el id de una pista reutilizable o None."""
+    tracks = getattr(tl, "tracks", None) or []
+    clips = getattr(tl, "clips", None) or []
+    for t in tracks:
+        if t.kind != "video" or (t.name or "") != MOTION_TRACK_NAME:
+            continue
+        if mode == "replace":
+            return t.id
+        occupied = any(c.track_id == t.id and float(c.start or 0.0) < end and _clip_tl_end(c) > start
+                       for c in clips)
+        if not occupied:
+            return t.id
+    return None
+
+
+def _run_motion_add(job_id: str, pid: str, cid: str, track_id, start: float,
+                    end: float | None = None, mode: str = "add",
+                    replace_clip_ids=None) -> None:
+    """Renderiza la composición y la inserta en la timeline como clip 'motion'.
+
+    ``mode='replace'`` borra antes ``replace_clip_ids``. Sin ``track_id`` usa (o crea)
+    una pista 'Motion' arriba del todo; 'add' sobre una pista ocupada → pista nueva."""
     job = _jobs[job_id]
     job.status = JobStatus.running
 
@@ -552,39 +583,68 @@ def _run_motion_add(job_id: str, pid: str, cid: str, track_id, start: float) -> 
         job.message = message
 
     try:
-        from . import timeline_store
-        from .clip_kind import track_kind_for_clip
+        from . import timeline_store, videos as video_mod
         from .motion import service as motion_service
 
+        proj = projects.get_project(pid)
+        if proj is None:
+            raise RuntimeError("Proyecto no encontrado.")
         comp = motion_service.get_composition(pid, cid)
         if comp is None:
             raise RuntimeError("Composición no encontrada.")
         asset = motion_service.render_composition(pid, cid, on_progress)
 
+        start = float(start)
+        dur = round(float(comp.duration), 3)
+        end = start + dur   # la duración manda: coincide con el rango (for_range)
+        name = f"motion_{int(start):03d}_{int(round(end)):03d}"
+
+        # El motion se convierte en un VÍDEO del material (WebM con alfa), igual que
+        # Paper Animator: así en la timeline es un clip de vídeo NORMAL (se ve, se
+        # mueve, se escala, se corta) y al ser alfa se superpone sin pasos extra.
+        job.message = "Guardando el motion en materiales…"
+        info = video_mod.import_video(proj, f"{name}.webm", asset.read_bytes(),
+                                      label=comp.name, origin="motion", source="motion")
+
+        if mode == "replace" and replace_clip_ids:
+            for rid in replace_clip_ids:
+                try:
+                    timeline_store.apply_op(pid, "remove_clip", {"clip_id": rid})
+                except Exception:  # noqa: BLE001  (el clip pudo desaparecer)
+                    pass
+
         tid = track_id
         if not tid:
-            proj = projects.get_project(pid)
-            tl = getattr(proj, "timeline", None)
-            existing = next((t for t in (tl.tracks if tl else []) if t.kind == "video"), None)
-            if existing is None:
-                tr = timeline_store.apply_op(pid, "add_track", {"kind": track_kind_for_clip("motion")})
+            tl = getattr(projects.get_project(pid), "timeline", None)
+            tid = _pick_motion_track(tl, start, end, mode)
+            if not tid:
+                tr = timeline_store.apply_op(pid, "add_track", {"kind": "video", "name": MOTION_TRACK_NAME})
                 tid = tr["changed"][0]
-            else:
-                tid = existing.id
 
+        # Clip de VÍDEO normal (objeto libre, overlay con alfa): editable como cualquiera.
         clip = {
-            "track_id": tid, "kind": "motion", "asset_kind": "motion",
-            "asset_id": cid, "composition_id": cid,
-            "filename": asset.name, "name": comp.name,
-            "start": float(start), "in_point": 0.0,
-            "out_point": round(float(comp.duration), 3),
-            "source_duration": round(float(comp.duration), 3),
-            "layout": "overlay",
+            "track_id": tid, "kind": "video", "asset_kind": "clips",
+            "asset_id": str(info.index), "filename": info.filename, "name": name,
+            "media_version": info.id,
+            "start": start, "in_point": 0.0,
+            "out_point": dur, "source_duration": dur,
+            "layout": "overlay", "frame": "free",
             "transform": {"x": 0.5, "y": 0.5, "scale": 1.0, "rotation": 0.0},
         }
-        timeline_store.apply_op(pid, "add_clip", {"clip": clip})
+        res = timeline_store.apply_op(pid, "add_clip", {"clip": clip})
+
+        # La composición deja de ser borrador (queda como "fuente" regenerable en Motion).
+        meta = dict(comp.metadata or {})
+        if meta.pop("draft", None) is not None:
+            try:
+                motion_service.save_composition(pid, comp.model_copy(update={"metadata": meta}), bump=False)
+            except Exception:  # noqa: BLE001
+                pass
+
+        job.motion_add = {"clip_id": (res.get("changed") or [None])[0], "track_id": tid,
+                          "composition_id": cid, "material_index": info.index, "start": start}
         job.progress = 1.0
-        job.message = "Motion graphic añadido a la timeline."
+        job.message = "Motion añadido como vídeo a la timeline."
         job.status = JobStatus.done
     except Exception as exc:  # noqa: BLE001
         job.status = JobStatus.error
@@ -592,8 +652,13 @@ def _run_motion_add(job_id: str, pid: str, cid: str, track_id, start: float) -> 
         job.message = "Error añadiendo el motion graphic a la timeline."
 
 
-def start_motion_add_job(job: Job, pid: str, cid: str, track_id, start: float) -> None:
-    thread = threading.Thread(target=_run_motion_add, args=(job.id, pid, cid, track_id, start), daemon=True)
+def start_motion_add_job(job: Job, pid: str, cid: str, track_id, start: float,
+                         end: float | None = None, mode: str = "add",
+                         replace_clip_ids=None) -> None:
+    thread = threading.Thread(
+        target=_run_motion_add,
+        args=(job.id, pid, cid, track_id, start, end, mode, replace_clip_ids),
+        daemon=True)
     thread.start()
 
 

@@ -544,7 +544,7 @@ button.select.flip-select::after {
    ========================================================================== */
 
 .progress {
-  height: 10px;
+  height: 8px;
   background: var(--card-3);
   border-radius: 20px;
   overflow: hidden;
@@ -555,8 +555,7 @@ button.select.flip-select::after {
   height: 100%;
   background: var(--accent-gradient);
   border-radius: 20px;
-  transition: width 0.4s ease;
-  box-shadow: 0 0 8px var(--accent-glow);
+  transition: width 0.35s ease;
 }
 .progress.indeterminate span {
   width: 38%;

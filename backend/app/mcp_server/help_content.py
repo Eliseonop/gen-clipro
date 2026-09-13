@@ -80,6 +80,7 @@ TOOL_DOMAINS: dict[str, str] = {
     "restore_checkpoint": "history",
     # motion graphics (Motion Studio / Generar Motion)
     "motion_segment_context": "motion",
+    "motion_segment_frames": "motion",
     "motion_list_templates": "motion",
     "motion_get_composition": "motion",
     "motion_get_frame": "motion",
@@ -275,6 +276,9 @@ HELP: dict[str, str] = {
         "(formato, fuente/acento de subtítulos, avoidY = franja de subtítulos que no "
         "hay que tapar). Sin tiempos usa el rango marcado en el editor (teclas I/O). "
         "No pidas get_timeline para esto.\n"
+        "1b. (opcional) motion_segment_frames(project_id, start?, end?, n?): un montage "
+        "de fotogramas de la FUENTE del vídeo del tramo (sin overlays) para VER qué se "
+        "muestra antes de proponer. Sin tiempos usa el rango marcado.\n"
         "2. motion_create_composition(project_id, composition | template+params): "
         "duration = fin − inicio EXACTO del tramo; width/height/fps = style.format.\n"
         "3. motion_get_frame(project_id, composition_id, n?): mírala antes de insertar.\n"
@@ -286,21 +290,41 @@ HELP: dict[str, str] = {
         "'transparent' | '#rrggbb', layers: [...]}. Cada layer: {id único, type: 'text' | "
         "'shape', x, y (CENTRO en px del lienzo), start, end (s, end ≤ duration), opacity, "
         "scale, rotation, z_index, animation: {entrance, exit}, effect}.\n"
-        "- text: content + style {font (familia CSS, p.ej. \"'Segoe UI', Arial, sans-serif\"), "
-        "fontSize, fontWeight, color, letterSpacing, lineHeight, background, padding, "
-        "borderRadius, shadow}.\n"
-        "- shape: shape {kind: 'circle' (radius, fill, stroke, thickness, glow) | 'rect' "
-        "(width, height, fill, stroke) | 'line' (x2, y2, thickness, stroke, glow; va de x,y "
-        "a x2,y2)}. fill 'none' = solo contorno.\n"
+        "- text: content + style {font (familia CSS; disponibles: Inter, Poppins, Montserrat, "
+        "Oswald, 'Bebas Neue', 'Playfair Display', Caveat/Kalam (manuscrita), Pacifico (script), "
+        "'JetBrains Mono'), fontSize, fontWeight, color, letterSpacing, lineHeight, textTransform, "
+        "shadow}. Efectos de texto: degradado (gradientFrom+gradientTo+gradientAngle), contorno "
+        "(outlineWidth+outlineColor), resaltado (background+padding+borderRadius).\n"
+        "- shape: shape {kind: 'circle' (radius, fill, stroke, thickness) | 'rect' "
+        "(width, height, fill, stroke, borderRadius, shadow) | 'line' (x2, y2, thickness, "
+        "stroke; va de x,y a x2,y2)}. fill 'none' = solo contorno. Para TARJETAS limpias usa "
+        "rect con fill=surface, stroke=border, borderRadius y shadow (sombra CSS suave).\n"
         "- entrance/exit: {type: fade | slide | scale | zoom | rotate | draw (líneas), "
         "direction (slide: left/right/up/down), distance (px), from_scale, degrees, "
         "duration ≤ vida de la capa, delay, ease (power1-4.in/out/inOut, back.*, "
         "elastic.*, bounce.*, sine.*, expo.out, circ.out, none)}.\n"
         "- effect (continuo): {type: pulse (amount) | glow | flow (punto que recorre una "
         "línea; duration = periodo), delay}.\n"
-        "DISEÑO: minimalista (1 color de acento, fuentes limpias, líneas finas), texto "
-        "breve, jerarquía clara, respeta style.avoidY. Para diagramas con muchos elementos "
-        "repetidos usa un template (motion_list_templates) en vez de un JSON enorme."
+        "PLANTILLAS pulidas (motion_list_templates): pro_title (antetítulo+título+subrayado), "
+        "title (título simple), bullet_list (lista escalonada), quote (cita), stat (número "
+        "grande con conteo), bar_chart (barras que crecen + conteo), lower-third, subscribe, "
+        "neural_network. Acepta params theme ('light' por defecto|'dark'|'editorial') y accent "
+        "(#rrggbb). PREFIÉRELAS: se ven mejor que un JSON a mano.\n"
+        "CAPA type:'html' (bloque HTML+GSAP) para efectos ricos que las primitivas no cubren "
+        "(números que cuentan, barras que se llenan, aparición por letras, flip, reveals): "
+        "{type:'html', html (markup SIN <script>), css, js}. 'js' = CUERPO de una función "
+        "(tl, root, gsap, ctx) que añade tweens a la timeline 'tl' del bloque (seekable). "
+        "ctx={width,height,duration,life,start,end,theme}. USA SIEMPRE tl.fromTo(el,{ini},{fin}) "
+        "y NUNCA tl.from()/tl.to() (con .from() el preview se rebobina mal y en la 2ª "
+        "reproducción los elementos quedan invisibles). NADA de Date.now/Math.random; para "
+        "contar anima un proxy con fromTo({v:0},{v:target,onUpdate...}) y escribe textContent en "
+        "onUpdate; envuelve <img>/<video> en un <div> y anima el <div>.\n"
+        "DISEÑO (minimalista tipo Tailwind UI): un solo protagonista por plano, superficies "
+        "limpias y neutras (tarjetas con borde fino + sombra suave; formas rect con "
+        "borderRadius+shadow), UN acento sobrio, mucho espacio, tipografía Inter con "
+        "jerarquía. NADA de neón/glow ni colores saturados. Movimiento SUTIL: fade + "
+        "desplazamiento corto con power2.out/power3.out; NUNCA back/elastic/bounce; stagger "
+        "0.08–0.15s. Respeta style.avoidY. Para diagramas complejos usa un template."
     ),
 }
 

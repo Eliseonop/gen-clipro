@@ -8,15 +8,12 @@ sin pisar la descripción manual del usuario.
 from __future__ import annotations
 
 import base64
-import shutil
-import subprocess
-import tempfile
 from pathlib import Path
 
-from .. import projects, storage
+from .. import frame_grab, projects, storage
 from .registry import tool
 
-MAX_FRAME_PX = 768
+MAX_FRAME_PX = frame_grab.MAX_FRAME_PX
 
 
 def _project_or_raise(project_id: str):
@@ -50,24 +47,7 @@ def get_frame(project_id: str, clip_index: str, at_time: float | None = None) ->
     dur = max(0.0, (clip.end or 0.0) - (clip.start or 0.0))
     t = dur / 2 if at_time is None else max(0.0, min(float(at_time), max(0.0, dur - 0.05)))
 
-    exe = shutil.which("ffmpeg")
-    if not exe:
-        raise ValueError("ffmpeg no está disponible para extraer el fotograma.")
-    tmp = Path(tempfile.gettempdir()) / f"videoyt_frame_{clip.index}_{int(t * 1000)}.jpg"
-    cmd = [exe, "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", str(path),
-           "-frames:v", "1",
-           "-vf", f"scale='min({MAX_FRAME_PX},iw)':'min({MAX_FRAME_PX},ih)':force_original_aspect_ratio=decrease",
-           "-q:v", "4", str(tmp)]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if r.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
-            raise ValueError(f"No se pudo extraer el fotograma: {r.stderr[-200:]}")
-        data = tmp.read_bytes()
-    finally:
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception:  # noqa: BLE001
-            pass
+    data = frame_grab.extract_frame(path, t, max_px=MAX_FRAME_PX)
     return {
         "clip_index": clip.index,
         "at_time": round(t, 2),

@@ -751,6 +751,9 @@ function withMediaVersion(url, clip) {
 // URL del medio de un clip (vídeo/audio/sfx) para el elemento <video>/<audio>.
 export function mediaUrl(pid, clip) {
   if (clip.media_url) return clip.media_url
+  // Motion: WebM (con alfa) renderizado de la composición actual (no vive en /api/media).
+  if (clip.kind === 'motion' && clip.composition_id)
+    return withMediaVersion(`/api/projects/${pid}/motion/${clip.composition_id}/asset`, clip)
   if (clip.asset_kind === 'sfx') return `/api/sfx/file/${clip.filename.split('/').map(encodeURIComponent).join('/')}`
   const kind = clip.asset_kind === 'audios' ? 'audio'
     : (clip.asset_kind === 'images' || clip.kind === 'image') ? 'image'

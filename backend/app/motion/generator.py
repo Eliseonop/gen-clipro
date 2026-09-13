@@ -63,9 +63,26 @@ html,body{{background:transparent;overflow:hidden;}}
 .mg-circle{{border-radius:50%;}}
 .mg-linewrap{{position:absolute;top:0;left:0;}}
 .mg-line{{display:block;border-radius:2px;}}
-.mg-dot{{position:absolute;top:0;left:0;border-radius:50%;background:#fff;
-  box-shadow:0 0 10px #bfefff;}}
+.mg-dot{{position:absolute;top:0;left:0;border-radius:50%;background:#4f46e5;
+  box-shadow:0 0 8px rgba(79,70,229,.45);}}
+.mg-html{{position:absolute;overflow:hidden;}}
+.mg-html-root,.mg-html-root *{{box-sizing:border-box;}}
 """
+
+
+# Fuentes de calidad para motion graphics (display + cuerpo). Van por CDN de Google
+# (mismo enfoque que kits tipo HyperFrames); si no hay red, caen a la pila del sistema.
+# display=block evita el "flash" de fuente durante el render (espera a la real).
+_FONTS_LINK = (
+    '<link rel="preconnect" href="https://fonts.googleapis.com">'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
+    'family=Inter:wght@400;500;600;700;800;900&family=Oswald:wght@500;600;700&'
+    'family=Montserrat:wght@600;700;800&family=Poppins:wght@500;600;700;800&'
+    'family=Playfair+Display:wght@600;700;800&family=Bebas+Neue&'
+    'family=Caveat:wght@500;600;700&family=Kalam:wght@700&family=Pacifico&'
+    'family=JetBrains+Mono:wght@500;700&display=block">'
+)
 
 
 def generate_html(comp: MotionComposition) -> str:
@@ -77,6 +94,7 @@ def generate_html(comp: MotionComposition) -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{comp.name}</title>
+{_FONTS_LINK}
 <style>{_css(comp)}</style>
 </head>
 <body>

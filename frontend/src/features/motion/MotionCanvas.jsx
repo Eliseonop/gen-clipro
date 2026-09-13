@@ -5,6 +5,15 @@ import { motionPreviewUrl } from '../../services/api'
 // usa el render → paridad) en un iframe y lo reconstruye en vivo con __rebuild(comp)
 // al editar, sin recargar GSAP/fuente. Encima dibuja una capa de selección/arrastre
 // (como un editor gráfico) que lee __hitboxes() del runtime. Expone seek/play/pause.
+// Fondos disponibles para el lienzo de resultado (los motion son transparentes;
+// el fondo ayuda a VER el resultado según sea claro u oscuro).
+const BACKDROPS = [
+  { key: 'white', label: 'Blanco' },
+  { key: 'gray', label: 'Gris' },
+  { key: 'dark', label: 'Negro' },
+  { key: 'checker', label: 'Transparencia (cuadros)' },
+]
+
 export default function MotionCanvas({
   projectId, comp, onTime, onControls,
   selLayerId = null, onSelectLayer, onMoveLayer,
@@ -14,6 +23,13 @@ export default function MotionCanvas({
   const [ready, setReady] = useState(false)
   const [scale, setScale] = useState(1)
   const [boxes, setBoxes] = useState([])
+  const [backdrop, setBackdrop] = useState(() => {
+    try { return localStorage.getItem('motionBackdrop') || 'white' } catch { return 'white' }
+  })
+  const pickBackdrop = useCallback((k) => {
+    setBackdrop(k)
+    try { localStorage.setItem('motionBackdrop', k) } catch { /* noop */ }
+  }, [])
   const compRef = useRef(comp)
   compRef.current = comp
   const scaleRef = useRef(1)
@@ -140,6 +156,13 @@ export default function MotionCanvas({
 
   return (
     <div className="motion-canvas-wrap" ref={wrapRef}>
+      <div className="motion-backdrop-switch">
+        {BACKDROPS.map((b) => (
+          <button key={b.key} type="button" title={`Fondo: ${b.label}`}
+            className={`motion-backdrop-sw ${b.key} ${backdrop === b.key ? 'on' : ''}`}
+            onClick={() => pickBackdrop(b.key)} />
+        ))}
+      </div>
       <div
         className="motion-canvas-frame"
         style={{
@@ -147,6 +170,7 @@ export default function MotionCanvas({
           transform: `scale(${scale})`,
         }}
       >
+        <div className={`motion-canvas-bg ${backdrop}`} />
         <iframe
           ref={frameRef}
           title="Motion preview"

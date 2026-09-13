@@ -458,5 +458,8 @@ class Job(BaseModel):
     # Eliminar fondo: resultado del matte (clave de caché, modelo, rango). El
     # editor lo aplica a SU copia del clip, así que el autosave no lo pisa.
     bg_removal: Optional[dict] = None
+    # "Generar Motion" / add_to_timeline: clip insertado (id/track/comp) para que el
+    # editor lo seleccione y ponga el cursor a su inicio tras recargar.
+    motion_add: Optional[dict] = None
     error: Optional[str] = None
     cancel_requested: bool = False        # cancelación cooperativa (best-effort)

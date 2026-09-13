@@ -11,6 +11,47 @@ export const EASES = [
   'elastic.out', 'bounce.out', 'sine.inOut', 'expo.out', 'none',
 ]
 
+// Familias tipográficas disponibles (cargadas por CDN en generator._FONTS_LINK).
+// value = stack CSS completo (con fallback); label = nombre para el selector.
+export const FONTS = [
+  { label: 'Inter (moderna)', value: "'Inter', system-ui, sans-serif" },
+  { label: 'Poppins (redondeada)', value: "'Poppins', system-ui, sans-serif" },
+  { label: 'Montserrat', value: "'Montserrat', system-ui, sans-serif" },
+  { label: 'Oswald (condensada)', value: "'Oswald', sans-serif" },
+  { label: 'Bebas Neue (titular)', value: "'Bebas Neue', Impact, sans-serif" },
+  { label: 'Playfair (serif)', value: "'Playfair Display', Georgia, serif" },
+  { label: 'Caveat (manuscrita)', value: "'Caveat', cursive" },
+  { label: 'Kalam (manuscrita)', value: "'Kalam', cursive" },
+  { label: 'Pacifico (script)', value: "'Pacifico', cursive" },
+  { label: 'JetBrains Mono (código)', value: "'JetBrains Mono', ui-monospace, monospace" },
+]
+
+// Efectos de texto seleccionables en Propiedades. Cada uno devuelve un patch de
+// `style` (limpia los campos de los otros efectos para poder cambiar entre ellos).
+export const TEXT_EFFECTS = ['ninguno', 'degradado', 'contorno', 'resaltado', 'sombra']
+
+const _CLEAR_FX = { gradientFrom: null, gradientTo: null, outlineWidth: null, outlineColor: null, background: null, shadow: null }
+
+export function textEffectPatch(kind, layer) {
+  const color = layer?.style?.color || '#4f46e5'
+  switch (kind) {
+    case 'degradado': return { ...( _CLEAR_FX ), gradientFrom: color, gradientTo: '#06b6d4' }
+    case 'contorno': return { ..._CLEAR_FX, outlineWidth: 3, outlineColor: '#0f172a' }
+    case 'resaltado': return { ..._CLEAR_FX, background: '#fde047', padding: 14, borderRadius: 10 }
+    case 'sombra': return { ..._CLEAR_FX, shadow: '0 6px 20px rgba(15,23,42,.35)' }
+    default: return { ..._CLEAR_FX }
+  }
+}
+
+// Deriva qué efecto está activo a partir del `style` (para el valor del selector).
+export function textEffectOf(style = {}) {
+  if (style.gradientFrom && style.gradientTo) return 'degradado'
+  if (style.outlineWidth) return 'contorno'
+  if (style.background) return 'resaltado'
+  if (style.shadow) return 'sombra'
+  return 'ninguno'
+}
+
 let _seq = 0
 export function newLayerId(prefix = 'layer') {
   _seq += 1
@@ -34,10 +75,10 @@ export function newTextLayer(comp, overrides = {}) {
     start: 0,
     end: null,
     visible: true,
-    style: { font: 'Anton', fontSize: 96, color: '#ffffff', fontWeight: '700', align: 'center' },
+    style: { font: "'Inter', system-ui, sans-serif", fontSize: 96, color: '#ffffff', fontWeight: '800', align: 'center', letterSpacing: -1 },
     animation: {
-      entrance: { type: 'fade', direction: 'right', duration: 0.6, delay: 0, ease: 'power3.out' },
-      exit: { type: 'fade', direction: 'left', duration: 0.4, delay: 0, ease: 'power2.in' },
+      entrance: { type: 'fade', direction: 'up', duration: 0.6, delay: 0, ease: 'power3.out' },
+      exit: { type: 'fade', direction: 'down', duration: 0.4, delay: 0, ease: 'power2.in' },
     },
     ...overrides,
   }
@@ -51,9 +92,9 @@ export function newCircleLayer(comp, overrides = {}) {
     x: cx, y: cy, scale: 1, rotation: 0, opacity: 1, anchor: 'center',
     z_index: (comp?.layers?.length || 0) + 1, start: 0, end: null, visible: true,
     style: {},
-    shape: { kind: 'circle', radius: 40, fill: '#39d0ff', stroke: 'none', thickness: 3, glow: 16 },
-    animation: { entrance: { type: 'scale', duration: 0.5, ease: 'back.out' }, exit: { type: 'fade', duration: 0.4 } },
-    effect: { type: 'pulse', duration: 1.4, delay: 0 },
+    shape: { kind: 'circle', radius: 40, fill: '#4f46e5', stroke: 'none', thickness: 3, glow: 0 },
+    animation: { entrance: { type: 'scale', from_scale: 0.6, duration: 0.5, ease: 'power2.out' }, exit: { type: 'fade', duration: 0.4 } },
+    effect: { type: 'none', duration: 1.4, delay: 0 },
     ...overrides,
   }
 }
@@ -66,9 +107,9 @@ export function newLineLayer(comp, overrides = {}) {
     x: Math.round(w * 0.25), y: cy, scale: 1, rotation: 0, opacity: 1, anchor: 'center',
     z_index: (comp?.layers?.length || 0) + 1, start: 0, end: null, visible: true,
     style: {},
-    shape: { kind: 'line', x2: Math.round(w * 0.75), y2: cy, thickness: 2, stroke: '#2b6cff', fill: 'none', glow: 6 },
+    shape: { kind: 'line', x2: Math.round(w * 0.75), y2: cy, thickness: 4, stroke: '#4f46e5', fill: 'none', glow: 0 },
     animation: { entrance: { type: 'draw', duration: 0.6, ease: 'power2.out' }, exit: { type: 'fade', duration: 0.3 } },
-    effect: { type: 'flow', duration: 1.2, delay: 0 },
+    effect: { type: 'none', duration: 1.2, delay: 0 },
     ...overrides,
   }
 }

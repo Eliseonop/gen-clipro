@@ -34,6 +34,20 @@ class OverlayIndependenceTest(unittest.TestCase):
         self.assertEqual(h % 2, 0)
         self.assertAlmostEqual(w, 750, delta=2)
 
+    def test_offscreen_corner_keeps_negative_position(self):
+        # Un objeto a pantalla completa (720x1280) subido: su esquina cae fuera
+        # del lienzo (y < 0) y FFmpeg recorta lo que sobra. La posición NO debe
+        # clamparse a 2 — si no, el clip queda centrado en vez de arriba.
+        x, y, w, h, _ = dest_rect_even({"x": 0.4879, "y": 0.196, "scale": 1}, 720, 1280, 720, 1280)
+        self.assertEqual(w, 720)
+        self.assertEqual(h, 1280)
+        self.assertLess(y, 0)
+        self.assertEqual(x % 2, 0)
+        self.assertEqual(y % 2, 0)
+        # 0.196*1280 - 1280/2 = -389.1 → par más cercano
+        self.assertAlmostEqual(y, -390, delta=2)
+        self.assertAlmostEqual(x, -8, delta=2)
+
 
 if __name__ == "__main__":
     unittest.main()

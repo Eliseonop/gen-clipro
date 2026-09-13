@@ -199,7 +199,9 @@ export const DEFAULT_PAPER_STATE = {
   erased: false,     // pincel / borrado por color (destructivo sobre los píxeles)
   bgRemoved: false,  // matte de IA aplicado (mismo motor que Eliminar fondo del editor)
   background: DEFAULT_BACKGROUND,
-  export: { duration: 5, fps: 24, filename: 'paper', format: 'webm', jpgQuality: 95, transparentBackground: true },
+  // filename vacío = nombre automático (`paperExportName`): `paper-animation` +
+  // la imagen/texto que representa. El usuario puede escribir uno propio.
+  export: { duration: 5, fps: 24, filename: '', format: 'webm', jpgQuality: 95, transparentBackground: true },
   // Herramienta activa del lienzo. No entra en el historial (son ajustes de
   // herramienta: deshacer no debe cambiarle el pincel al usuario).
   edit: { tool: TOOL.none, brushSize: 20, colorTolerance: 32, bgProvider: 'u2net' },
@@ -227,6 +229,45 @@ export function hasText(st) {
 /** Hay algo que animar: imagen, texto o ambos. */
 export function hasContent(st) {
   return !!st?.hasImage || hasText(st)
+}
+
+/** Prefijo fijo de todo Paper Animation exportado; lo hace reconocible de un vistazo. */
+export const PAPER_EXPORT_PREFIX = 'paper-animation'
+const PAPER_NAME_MAXLEN = 48
+
+/**
+ * La parte del nombre que dice QUÉ representa el Paper Animation: el nombre de la
+ * imagen (sin extensión) o, si no hay imagen, el texto de la frase. '' si no hay
+ * ninguno de los dos (entonces `paperExportName` cae en una marca de tiempo).
+ */
+export function paperExportDescriptor(st) {
+  if (st?.hasImage) {
+    const name = String(st.imageName || '').replace(/\.[^.]+$/, '').trim()
+    if (name) return name.slice(0, PAPER_NAME_MAXLEN).trim()
+  }
+  if (hasText(st)) {
+    const text = String(st?.text?.content || '').replace(/\s+/g, ' ').trim()
+    if (text) return text.slice(0, PAPER_NAME_MAXLEN).trim()
+  }
+  return ''
+}
+
+function paperTimeStamp(now) {
+  const p = (n) => String(n).padStart(2, '0')
+  return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())} `
+    + `${p(now.getHours())}${p(now.getMinutes())}`
+}
+
+/**
+ * Nombre descriptivo del vídeo/imagen que exporta un Paper Animation. Siempre
+ * empieza por `paper-animation` y añade de qué imagen (o texto) se trata, para
+ * poder identificarlo en el material y la timeline —antes todos se llamaban
+ * "paper" y eran indistinguibles—. Si no hay imagen con nombre ni texto, usa una
+ * marca de tiempo para que el elemento siga siendo único e identificable.
+ */
+export function paperExportName(st, now = new Date()) {
+  const descriptor = paperExportDescriptor(st) || paperTimeStamp(now)
+  return `${PAPER_EXPORT_PREFIX} ${descriptor}`.trim()
 }
 
 /** Índice del elemento de texto seleccionado, o -1 si es la imagen. */

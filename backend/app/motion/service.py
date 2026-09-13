@@ -61,6 +61,31 @@ def delete_composition(project_id: str, comp_id: str) -> bool:
     return projects.delete_motion_composition(project_id, comp_id)
 
 
+def cleanup_generate_drafts(project_id: str, *, max_age_s: float = 7200.0) -> list[str]:
+    """Borra borradores de 'Generar Motion' huérfanos: los que quedaron sin insertar
+    (metadata.draft) más antiguos que ``max_age_s`` y que NINGÚN clip de la timeline
+    usa (composition_id). Devuelve los ids borrados. Idempotente."""
+    import time
+    proj = projects.get_project(project_id)
+    if not proj:
+        return []
+    in_use = {c.composition_id for c in (getattr(proj.timeline, "clips", None) or [])
+              if getattr(c, "composition_id", None)}
+    now = time.time()
+    removed: list[str] = []
+    for c in list(proj.motion_compositions or []):
+        meta = c.get("metadata") or {}
+        if not meta.get("draft") or meta.get("source") != "generate_motion":
+            continue
+        if c.get("id") in in_use:
+            continue
+        if now - float(meta.get("created_at") or 0.0) < max_age_s:
+            continue
+        if projects.delete_motion_composition(project_id, c["id"]):
+            removed.append(c["id"])
+    return removed
+
+
 def preview_html(project_id: str, comp_id: str) -> str | None:
     comp = get_composition(project_id, comp_id)
     return generate_html(comp) if comp else None

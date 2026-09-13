@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import {
   addKeyframe, activeKeyframe, cropSig, DEFAULT_OBJECT, DEFAULT_PAPER_STATE,
   extendDuration, getPath, hasCrop, imageEdited, isOverlayTool, keyframeClipboardOf,
-  LIMITS, newPaperState, normalizeCrop, patchKeyframe, removeKeyframe,
+  LIMITS, newPaperState, normalizeCrop, patchKeyframe, paperExportName, removeKeyframe,
   resetPath, setDuration, setPath, setPaths, sortedKeyframes, TOOL,
 } from './paperModel.js'
 import { getAdvancedTransform, getVisualStateAtTime, objectFrame, transformAt } from './paperTransforms.js'
@@ -317,6 +317,34 @@ import {
   assert.equal(transformAt(0, obj).scale, 50)
   assert.equal(transformAt(0.5, obj).scale, 65)
   assert.equal(transformAt(1, obj).scale, 80)
+}
+
+// paperExportName: prefijo fijo + imagen/texto, y fallback obligatorio
+{
+  const FIXED = new Date(2026, 8, 13, 4, 5) // 2026-09-13 04:05
+
+  // Imagen con nombre → se usa sin extensión
+  const img = setPaths(newPaperState(), { hasImage: true, imageName: 'Gato jugando.png' })
+  assert.equal(paperExportName(img, FIXED), 'paper-animation Gato jugando')
+
+  // Sin imagen pero con texto → se usa el texto de la frase
+  const txt = setPaths(newPaperState(), {
+    'text.content': '200', 'text.elements': [{ id: 'e1', from: 0, to: 2, object: DEFAULT_OBJECT }],
+  })
+  assert.equal(paperExportName(txt, FIXED), 'paper-animation 200')
+
+  // La imagen manda sobre el texto (representa "la imagen que utiliza")
+  const both = setPaths(img, {
+    'text.content': 'hola', 'text.elements': [{ id: 'e1', from: 0, to: 3, object: DEFAULT_OBJECT }],
+  })
+  assert.equal(paperExportName(both, FIXED), 'paper-animation Gato jugando')
+
+  // Sin nombre ni texto → nombre descriptivo obligatorio (marca de tiempo)
+  const empty = setPaths(newPaperState(), { hasImage: true, imageName: '' })
+  assert.equal(paperExportName(empty, FIXED), 'paper-animation 2026-09-13 0405')
+
+  // Siempre empieza por el prefijo identificable
+  assert.ok(paperExportName(newPaperState(), FIXED).startsWith('paper-animation'))
 }
 
 console.log('paper ok')
