@@ -14,11 +14,19 @@
 // renderer sirve al preview y al export, y lo que se dibujara aquí acabaría
 // dentro del vídeo.
 //
+// Con una herramienta de imagen activa (recorte · pincel · por color) el stage se
+// parte en dos, igual que "Recortar" en el editor: `PaperEditLayer` a la
+// izquierda y este lienzo, etiquetado como Resultado, a la derecha.
+//
+// Con texto hay un marco por elemento (letra, grupo o frase): el seleccionado
+// lleva tiradores y el resto es un contorno tenue que se selecciona con un clic.
+//
 // El tamaño en pantalla lo resuelve un ResizeObserver + `object-fit: contain`
 // por CSS, en lugar del `updateCanvasDisplaySize` imperativo del original.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
-import { LIMITS, TOOL, clamp } from './paperModel'
+import PaperEditLayer from './PaperEditLayer'
+import { LIMITS, TOOL, clamp, hasContent, isOverlayTool, selectedObject } from './paperModel'
 import { objectFrame, transformAt } from './paperTransforms'
 
 const PREVIEW_MAX = 1280 // el preview nunca pasa de aquí aunque el proyecto sea 4K
@@ -46,10 +54,10 @@ function TornFilterDefs({ ids }) {
   )
 }
 
-export default function PaperCanvas({ paper, format, children }) {
+export default function PaperCanvas({ paper, format }) {
   const {
-    st, stRef, viewRef, bgRef, assetsRef, renderer, clockRef, active, time, viewSize,
-    patchMany, selKf, patchKeyframe, pause,
+    st, raw, stRef, bgRef, assetsRef, renderer, clockRef, active, time, viewSize,
+    patchMany, selKf, patchKeyframe, pause, renderItems, textSlots, select,
   } = paper
   const canvasRef = useRef(null)
   const wrapRef = useRef(null)
@@ -70,7 +78,8 @@ export default function PaperCanvas({ paper, format, children }) {
   // --- bucle de pintado -----------------------------------------------------
   // Independiente del reloj: el reloj lo lleva usePaperComp; aquí solo se pinta
   // cuando hay algo nuevo que pintar (needsRedraw), como en el motor original.
-  // Lo que se dibuja es la VISTA (`viewRef`): la imagen con su recorte aplicado.
+  // Lo que se dibuja son los items de `renderItems`: la VISTA de la imagen (con
+  // su recorte aplicado) y el bitmap de cada elemento de texto.
   useEffect(() => {
     if (!active) return undefined
     const canvas = canvasRef.current
@@ -81,47 +90,58 @@ export default function PaperCanvas({ paper, format, children }) {
       if (renderer.needsRedraw) {
         renderer.clearRedraw()
         renderer.draw(ctx, canvas, stRef.current, clockRef.current, {
-          imageEl: viewRef.current,
+          items: renderItems(stRef.current),
           bgEl: bgRef.current,
           assets: assetsRef.current,
-          imageSig: stRef.current.imageSig,
         })
       }
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [active, renderer, stRef, viewRef, bgRef, assetsRef, clockRef])
+  }, [active, renderer, stRef, renderItems, bgRef, assetsRef, clockRef])
 
   // Repinta al cambiar cualquier propiedad (el estado es la única fuente).
   useEffect(() => { renderer.requestRedraw() }, [st, renderer])
 
   // --- marco de transformación ----------------------------------------------
-  // Dónde cae el objeto AHORA, en fracciones del stage (el lienzo y su envoltorio
+  // Dónde cae cada objeto AHORA, en fracciones del stage (el lienzo y su envoltorio
   // tienen el mismo aspecto, así que valen las mismas fracciones). Se recalcula
   // con `time` para que en modo avanzado el marco siga a los keyframes.
   const advanced = st.object.animation.mode === 'advanced'
-  const frame = useMemo(() => {
-    if (!st.hasImage || !viewSize?.w) return null
-    const f = objectFrame(outW, outH, viewSize.w, viewSize.h, transformAt(time, st.object))
-    return {
+  const frames = useMemo(() => {
+    const toPct = (id, f) => ({
+      id,
       left: ((f.cx - f.w / 2) / outW) * 100,
       top: ((f.cy - f.h / 2) / outH) * 100,
       width: (f.w / outW) * 100,
       height: (f.h / outH) * 100,
       rotation: f.rotation,
+    })
+    const out = []
+    if (raw.hasImage && viewSize?.w) {
+      out.push(toPct('image', objectFrame(outW, outH, viewSize.w, viewSize.h, transformAt(time, raw.object))))
     }
-  }, [st.hasImage, st.object, time, outW, outH, viewSize])
+    for (const el of raw.text.elements) {
+      const slot = textSlots.get(el.id)
+      if (slot) out.push(toPct(el.id, objectFrame(outW, outH, 1, 1, transformAt(time, el.object), slot)))
+    }
+    return out
+  }, [raw.hasImage, raw.object, raw.text.elements, textSlots, time, outW, outH, viewSize])
+  const frame = frames.find((f) => f.id === raw.selected) || null
+  const others = frames.filter((f) => f !== frame)
+  const anything = hasContent(raw)
 
   // Qué se está editando al arrastrar: los sliders (simple) o el keyframe activo
   // (avanzado). Sin keyframe seleccionado no hay destino: mover "la animación
   // entera" no significaría nada.
   const target = advanced ? selKf : 'simple'
-  const canEdit = !!(st.hasImage && st.edit.tool === TOOL.none && target)
+  const canEdit = !!(frame && st.edit.tool === TOOL.none && target)
 
   const writePose = useCallback((pose) => {
-    if (stRef.current.object.animation.mode === 'advanced') {
-      const id = stRef.current.object.animation.activeKeyframeId
+    const obj = selectedObject(stRef.current)
+    if (obj.animation.mode === 'advanced') {
+      const id = obj.animation.activeKeyframeId
       if (id) patchKeyframe(id, pose)
       return
     }
@@ -141,7 +161,7 @@ export default function PaperCanvas({ paper, format, children }) {
     e.stopPropagation()
     e.currentTarget.setPointerCapture?.(e.pointerId)
     pause()
-    const from = transformAt(time, stRef.current.object)
+    const from = transformAt(time, selectedObject(stRef.current))
     // Centro del objeto en píxeles de pantalla: el origen de las cuentas de
     // escala y giro.
     const cx = rect.left + ((frame.left + frame.width / 2) / 100) * rect.width
@@ -167,7 +187,7 @@ export default function PaperCanvas({ paper, format, children }) {
       // píxeles de pantalla se normaliza por el tamaño mostrado. Y arriba es positivo.
       const dx = ((e.clientX - d.x0) / d.rect.width) * 100
       const dy = -((e.clientY - d.y0) / d.rect.height) * 100
-      const lim = stRef.current.object.animation.mode === 'advanced' ? LIMITS.kfOffset : LIMITS.imageOffset
+      const lim = selectedObject(stRef.current).animation.mode === 'advanced' ? LIMITS.kfOffset : LIMITS.imageOffset
       writePose({
         x: +clamp(d.from.x + dx, lim.min, lim.max).toFixed(1),
         y: +clamp(d.from.y + dy, lim.min, lim.max).toFixed(1),
@@ -189,15 +209,18 @@ export default function PaperCanvas({ paper, format, children }) {
     // esté el objeto girado o no.
     if (d.dist0 < 4) return
     const k = Math.hypot(e.clientX - d.cx, e.clientY - d.cy) / d.dist0
-    const lim = stRef.current.object.animation.mode === 'advanced' ? LIMITS.kfScale : LIMITS.imageSize
+    const lim = selectedObject(stRef.current).animation.mode === 'advanced' ? LIMITS.kfScale : LIMITS.imageSize
     writePose({ scale: Math.round(clamp(d.from.scale * k, lim.min, lim.max)) })
   }, [stRef, writePose])
 
   const endDrag = useCallback(() => { dragRef.current = null }, [])
 
+  const toolOn = raw.hasImage && raw.selected === 'image' && isOverlayTool(st.edit.tool)
+
   return (
-    <div className="paper-stage">
+    <div className={`paper-stage${toolOn ? ' split' : ''}`}>
       <TornFilterDefs ids={renderer.filterIds} />
+      {toolOn && <PaperEditLayer paper={paper} />}
       <div
         ref={wrapRef}
         className="paper-stage-wrap"
@@ -207,6 +230,23 @@ export default function PaperCanvas({ paper, format, children }) {
         onPointerCancel={endDrag}
       >
         <canvas ref={canvasRef} className="paper-canvas" />
+        {toolOn && <span className="ed-result-label">Resultado</span>}
+
+        {st.edit.tool === TOOL.none && others.map((f) => (
+          <div
+            key={f.id}
+            className="paper-frame peer"
+            title="Seleccionar"
+            style={{
+              left: `${f.left}%`,
+              top: `${f.top}%`,
+              width: `${f.width}%`,
+              height: `${f.height}%`,
+              transform: `rotate(${f.rotation}deg)`,
+            }}
+            onPointerDown={(e) => { e.stopPropagation(); select(f.id) }}
+          />
+        ))}
 
         {frame && st.edit.tool === TOOL.none && (
           <div
@@ -240,14 +280,12 @@ export default function PaperCanvas({ paper, format, children }) {
           </div>
         )}
 
-        {children}
-
-        {!st.hasImage && (
+        {!anything && (
           <div className="paper-stage-empty">
-            <p>Elige una imagen en <b>Paper</b> (panel izquierdo) para animarla.</p>
+            <p>Elige una imagen o escribe un texto en <b>Paper</b> (panel izquierdo) para animarlo.</p>
           </div>
         )}
-        {st.hasImage && advanced && !selKf && st.edit.tool === TOOL.none && (
+        {frame && advanced && !selKf && st.edit.tool === TOOL.none && (
           <div className="paper-stage-note">
             Selecciona un keyframe para mover, escalar o girar el objeto.
           </div>

@@ -12,12 +12,11 @@ Pipeline YouTube → short:
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Callable
 from urllib.parse import quote
 
 from . import compose, heatmap, projects, storage, timeline_store, transcribe, transcribe_settings
-from .schemas import CropMode, Timeline
+from .schemas import CropMode
 
 ProgressCb = Callable[[float, str], None]
 

@@ -1,7 +1,6 @@
 """Fase 3: errores estructurados. Verifica que por el camino MCP las tools
 devuelven is_error + JSON {"error":{code,message,retryable,param?,hint?}}."""
 import asyncio
-import json
 import shutil
 import tempfile
 import unittest

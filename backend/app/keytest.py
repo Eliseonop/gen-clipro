@@ -7,7 +7,6 @@ evitar bloqueos WAF (p.ej. Cloudflare 1010 de Groq con el UA por defecto).
 """
 from __future__ import annotations
 
-import json
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor

@@ -1,7 +1,7 @@
 import Icon from '../../components/Icon'
 import FlipSelect from '../../components/FlipSelect'
 import { fmt } from '../../lib/utils'
-import { FONTS, FONT_SIZES, FONT_SIZE_REF, cssFont, selectedSubtitleThemeId } from '../../lib/textstyles'
+import { FONTS, FONT_SIZES, FONT_SIZE_REF, cssFont, selectedSubtitleThemeId, themePreviewStyle } from '../../lib/textstyles'
 import { SUBTITLE_THEMES, WORD_FX_OPTIONS, BLOCK_APPEAR_OPTIONS, WORDS_PER_BOX } from '../../lib/subtitleThemes'
 import { hasWordFx, toggleWordFx, styleOpacity, splitCaptionWords, wordsPerBoxOptions, activeWordsPerBox } from '../../lib/textKaraoke'
 import { isFreeText } from '../../lib/textRole'
@@ -9,21 +9,6 @@ import { isFreeText } from '../../lib/textRole'
 function sizeToNearestPx(size) {
   const px = Math.round((size ?? 0.009375) * FONT_SIZE_REF)
   return FONT_SIZES.reduce((a, b) => Math.abs(b - px) < Math.abs(a - px) ? b : a)
-}
-
-function themePreviewStyle(theme) {
-  const s = theme.style || {}
-  return {
-    fontFamily: cssFont(s.font),
-    fontWeight: s.bold ? 800 : 600,
-    color: s.color,
-    background: s.bg && s.bg !== 'none' ? s.bg : 'transparent',
-    textShadow: s.glow
-      ? `0 0 8px ${s.shadow_color || s.highlight_color}`
-      : s.border_width
-        ? `0 1px 0 ${s.border_color || '#000'}, 0 -1px 0 ${s.border_color || '#000'}, 1px 0 0 ${s.border_color || '#000'}, -1px 0 0 ${s.border_color || '#000'}`
-        : 'none',
-  }
 }
 
 export function TextFxPanel({ section = 'look', style, mode = 'clip', onChangeStyle, onApplyPreset }) {
@@ -187,7 +172,7 @@ function WordsPerBox({ options, value, onChange, onFragment, disableFragment, hi
 }
 
 export default function EdText({
-  mode = 'segment', clip, style, onChangeText, onChangeStyle, onApplyPreset, onChangeDur,
+  mode = 'segment', clip, style, onChangeText, onChangeStyle, onChangeDur,
   onApplyAsGlobalTemplate, framing, onStartFraming, onSaveFraming, onCancelFraming,
   textFavorites, onSaveFavorite, onApplyFavorite, onDeleteFavorite, onFragment,
   selectionCount = 1,

@@ -42,7 +42,7 @@ function outputCanvas(width, height) {
  * @returns {Promise<{blob: Blob, ext: string, mime: string}>}
  */
 export async function exportPaperVideo({
-  st, renderer, imageEl, bgEl, assets, width, height, onProgress, shouldCancel,
+  st, renderer, items, bgEl, assets, width, height, onProgress, shouldCancel,
 }) {
   const fmt = FORMATS[st.export.format] || FORMATS.webm
   const duration = st.export.duration
@@ -56,7 +56,7 @@ export async function exportPaperVideo({
   renderer.resize(canvas, canvas.width, canvas.height)
   // La caché de bordes se calcula a la resolución de la imagen, no del lienzo,
   // así que vale la misma que ya tiene el preview. Solo se fuerza si falta.
-  await renderer.generateTornCache(imageEl, st, st.imageSig)
+  await renderer.prepare(items)
 
   const output = new Output({ format: new fmt.Format(), target: new BufferTarget() })
   const source = new CanvasSource(canvas, {
@@ -75,7 +75,7 @@ export async function exportPaperVideo({
       }
       const timeMs = (frame / fps) * 1000
       renderer.draw(ctx, canvas, st, timeMs, {
-        imageEl, bgEl, assets, imageSig: st.imageSig, loop: false, transparent,
+        items, bgEl, assets, loop: false, transparent,
       })
       await source.add(frame / fps, frameDur)
 
@@ -97,16 +97,16 @@ export async function exportPaperVideo({
 }
 
 /** Exporta un solo fotograma (PNG/JPG) en el instante actual del transporte. */
-export async function exportPaperFrame({ st, renderer, imageEl, bgEl, assets, width, height, timeMs = 0 }) {
+export async function exportPaperFrame({ st, renderer, items, bgEl, assets, width, height, timeMs = 0 }) {
   const png = st.export.format !== 'jpg'
   const transparent = png && !!st.export.transparentBackground
 
   const canvas = outputCanvas(width, height)
   const ctx = canvas.getContext('2d')
   renderer.resize(canvas, canvas.width, canvas.height)
-  await renderer.generateTornCache(imageEl, st, st.imageSig)
+  await renderer.prepare(items)
   renderer.draw(ctx, canvas, st, timeMs, {
-    imageEl, bgEl, assets, imageSig: st.imageSig, loop: false, transparent,
+    items, bgEl, assets, loop: false, transparent,
   })
 
   const blob = await new Promise((resolve) => {

@@ -19,7 +19,7 @@ en un `<iframe src="/paper-animator/index.html?embed=1">` dentro de un modal.
 |---|---|---|---|
 | `index.html` | 1566 | Todo el DOM de la UI (paneles, acordeones, popups) | **Eliminar** → JSX |
 | `styles.css` | 2232 | Tema propio + Tailwind (único consumidor de Tailwind del repo) | **Eliminar** → `editor.css` |
-| `edit-mode.js` | 702 | Overlay a pantalla completa: pincel / borrado por color / recorte con pan+zoom | **Refactor** → capa sobre el stage |
+| `edit-mode.js` | 702 | Overlay a pantalla completa: pincel / borrado por color / recorte con pan+zoom | **Refactor** → stage partido, como "Recortar" del editor |
 | `export-module.js` | 625 | Mediabunny (mp4/mov/mkv/webm) + PNG/JPG; progreso por DOM | **Refactor** → función pura + `Toast` |
 | `events-global.js` | 500 | Listeners por `getElementById` | **Eliminar** (JSX) |
 | `renderer.js` | 535 | `draw()` canvas 2D + caché de bordes rasgados | **Portar** (des-DOM-ificar) |
@@ -181,7 +181,7 @@ Motion es exactamente el molde a copiar:
 | Tailwind | `editor.css` (variables propias) | **Gana el editor.** Se quita Tailwind del build. |
 | `utils.lerp` / `hexToRgba` | — | Se quedan (el editor no los tiene). |
 | `erase-utils.brushErase/colorErase` | `bgCutout.paintEdits` | **Conviven.** Modelos distintos: PA hornea el alfa en la imagen fuente (lo exige el borde rasgado y las máscaras de papel); el editor guarda una lista de trazos no destructiva por clip. No se fusionan; se documenta la diferencia. |
-| `edit-mode.js` (recorte con pan/zoom) | `EdCrops` (recorte de clip) | **Conviven.** El de PA recorta la imagen **fuente**; el del editor encuadra en la salida. Se reutiliza el *patrón de UI* de `EdBgRemove` (panel abierto ⇒ pincel activo sobre el stage), no el código. |
+| `edit-mode.js` (recorte con pan/zoom) | `EdCrops` (recorte de clip) | **Conviven.** El de PA recorta la imagen **fuente**; el del editor encuadra en la salida. Se reutiliza el *patrón de UI* de "Recortar" del editor (herramienta activa ⇒ stage partido: imagen entera con recuadro naranja · Resultado), no el código. |
 | Bucle rAF de PA | `requestAnimationFrame` del preview del editor | **Conviven.** PA necesita su reloj (jitter + ciclo de pliegue + `needsRedraw`). Se aísla en `usePaperComp`. |
 | Export cliente (mediabunny) | Export backend (FFmpeg) | **Conviven.** PA renderiza canvas 2D en el navegador; portarlo a FFmpeg sería reescribir el producto. Se mantiene mediabunny (ya es dependencia npm). |
 
@@ -202,7 +202,7 @@ frontend/src/features/paper/
 ├── paperExport.js       exportPaperVideo({state, …, onProgress, signal}) → Blob
 ├── usePaperComp.js      hook: estado + rAF + undo/redo + acciones
 ├── PaperCanvas.jsx      stage: <canvas> + <defs> del filtro SVG + marco de transformación
-├── PaperEditLayer.jsx   pincel / borrado por color / recorte sobre el stage
+├── PaperEditLayer.jsx   pincel / borrado por color / recorte (mitad izquierda del stage partido)
 ├── PaperElements.jsx    panel IZQUIERDO (tab "Paper" del material)
 └── PaperProps.jsx       panel DERECHO (Objeto | Fondo | Animación | Salida)
 ```
@@ -214,7 +214,7 @@ Cambios en archivos existentes:
 | `VideoEditor.jsx` | `mainColTab 'paper'`, `usePaperComp`, `goPaperTab`, stage, transporte, inspector, sincronía con la timeline |
 | `EdMaterial.jsx` | `MAT_TABS` += `paper`; monta `PaperElements`; **quita** `PaperAnimatorModal` |
 | `EdInspector.jsx` | sin cambios (se sustituye desde fuera, como motion) |
-| `editor.css` | bloque `PAPER ANIMATOR` (stage, capa de edición, mini-piezas) |
+| `editor.css` | bloque `PAPER ANIMATOR` (stage, stage partido de herramientas, mini-piezas) |
 | `vite.config.js` | fuera la entrada `paper-animator` y el plugin de Tailwind |
 | `package.json` | fuera `tailwindcss`, `postcss`, `autoprefixer` |
 | `hooks/useEditorHistory.js` | generalizado a `useEditorHistory(snapshot, enabled)` |
@@ -327,6 +327,14 @@ Todas las herramientas cuelgan de `st.edit.tool` (`none | crop | brush | color`)
 que **no** entra en el historial: deshacer no debería cambiarle el pincel al
 usuario. Cada una se activa desde el panel; no hay un "Editar imagen" genérico
 que haya que abrir primero.
+
+Con una herramienta activa el stage se parte igual que **Recortar** en el editor:
+a la izquierda `PaperEditLayer` con la imagen entera (recuadro naranja, penumbra y
+tiradores de `drawMainView`, o el cursor del pincel) y a la derecha el lienzo real
+con la etiqueta **Resultado**. No hay barra sobre el lienzo (la antigua
+`paper-edit-bar` duplicaba el panel): herramienta, *Tamaño del pincel* /
+*Tolerancia* y los "Restablecer" están en **Herramientas de imagen**, y se termina
+con Esc o volviendo a pulsar la herramienta.
 
 Mover, escalar y girar se hacen sobre el lienzo con el marco de `PaperCanvas`
 (DOM, no pintado en el canvas: el renderer es el mismo que el del export). El
@@ -537,3 +545,35 @@ Cosas que cambiaron al implementar, y por qué:
 - **Fondo desde el material.** El fondo se carga desde un archivo local; podría elegirse
   entre las imágenes del proyecto igual que el objeto.
 - **Chat IA.** Motion tiene `MotionAIChat` sobre el MCP; Paper no expone tools todavía.
+
+## 17. Texto con letras recortadas (2026-09-12)
+
+Recursos locales en `assets/` (fuera de Git, `/assets/` en `.gitignore`; se puede mover con
+`VIDEO_YT_ASSETS`): `assets/sfx_library` (antes `SFX_LIBRARY`, `config.SFX_DIR`) y
+`assets/alfnum` (letras de Letter Lab, `config.LETTERS_DIR`, servidas por
+`GET /api/letters` y `/api/letters/file/{png}` desde `backend/app/letters.py`).
+
+**No es un sistema aparte.** El texto se descompone en *elementos* (rangos de caracteres) y
+cada uno lleva un `object` con la forma de `DEFAULT_OBJECT`:
+
+```
+texto → glyphs (paperText.resolveGlyphs, congelados en st.text.glyphs)
+      → layout (layoutGlyphs) → elementos {from,to,object} → bitmap (paperTextImage)
+      → renderer.draw({ items }) — el mismo drawStamp que la imagen
+```
+
+- **Letras / grupos / frase** son el mismo modelo con distinto corte. `switchMode` guarda el
+  modo anterior en `stash`, así que volver no pierde nada.
+- **Selección:** `st.selected` = `'image'` o id de elemento. `viewOf(st)` da un estado cuyo
+  `object` es el seleccionado y `withSelectedObject` escribe de vuelta: el inspector, los
+  keyframes, el marco del lienzo y la timeline reutilizan su código sin cambios.
+- **Pose relativa:** con `slot`, `objectFrame` encaja con la frase entera y desplaza al hueco
+  del elemento, así que `x = y = 0` es "en su sitio". Por eso cambiar de modo o agrupar no
+  recalcula posiciones.
+- **Reproducible:** el sorteo (modo aleatorio y variantes) usa un hash con `seed` y el
+  resultado se guarda en `glyphs`: el render nunca vuelve a sortear.
+- **Sin asset:** el carácter queda como hueco del ancho de un espacio. Si falta la minúscula
+  se usa la mayúscula, y si el estilo no tiene la letra se toma de otro estilo.
+- **Solo imagen:** recorte, pincel y quitar fondo (trabajan sobre píxeles de `imgRef`).
+
+Tests: `node src/features/paper/paperText.test.mjs`, `backend/tests/test_letters.py`.

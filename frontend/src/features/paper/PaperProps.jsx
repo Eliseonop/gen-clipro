@@ -13,6 +13,11 @@
 //   Fondo     → Imagen y color · Transformación · Corrección · Desenfoque · Viñeta
 //   Animación → Modo · Simple · Keyframes · Propiedades del keyframe
 //   Salida    → (era el popup de export) Formato · Vídeo · Imagen
+//
+// Objeto y Animación editan el object SELECCIONADO: la imagen o un elemento de
+// texto (letra, grupo o frase). `paper.st` ya es esa vista, así que los mismos
+// controles sirven para los dos; lo único que cambia con texto es que las
+// herramientas de píxeles (recorte, pincel, quitar fondo) son solo de la imagen.
 
 import { useRef, useState } from 'react'
 import Icon from '../../components/Icon'
@@ -21,8 +26,9 @@ import { BG_PROVIDERS, isInteractiveProvider } from '../../lib/clipBg'
 import { InspSection, InspSlider } from '../editor/EdTransform'
 import {
   BLEND_MODES, EASING_OPTIONS, EXPORT_FORMATS, LIMITS, PAPER_ANIMS, PREVIEW_SCALES,
-  TOOL, VIDEO_FORMATS, imageEdited,
+  TOOL, VIDEO_FORMATS, hasContent, imageEdited,
 } from './paperModel'
+import { elementLabel } from './paperText.js'
 
 // Los modelos asistidos (SAM) piden clics sobre el sujeto; aquí no hay dónde
 // ponerlos, así que se ofrecen solo los automáticos.
@@ -116,12 +122,23 @@ function ImageTools({ paper }) {
             type="button"
             className={`ed-fx-chip ${tool === t.value ? 'on' : ''}`}
             disabled={!st.hasImage}
+            title={tool === t.value ? 'Terminar (Esc)' : undefined}
             onClick={() => setTool(tool === t.value ? TOOL.none : t.value)}
           >
             <Icon name={t.icon} size={13} /> {t.label}
           </button>
         ))}
       </div>
+
+      {/* Los ajustes de cada herramienta, solo mientras está activa. */}
+      {tool === TOOL.brush && (
+        <P paper={paper} path="edit.brushSize" label="Tamaño del pincel"
+          min={LIMITS.brushSize.min} max={LIMITS.brushSize.max} suffix="px" />
+      )}
+      {tool === TOOL.color && (
+        <P paper={paper} path="edit.colorTolerance" label="Tolerancia"
+          min={LIMITS.colorTolerance.min} max={LIMITS.colorTolerance.max} />
+      )}
 
       <div className="paper-actions">
         <button type="button" className="ed-btn" onClick={resetCrop} disabled={!cropped}
@@ -177,17 +194,74 @@ function ImageTools({ paper }) {
   )
 }
 
+/** Qué object se está editando (solo cuando hay texto: con la imagen sola es obvio). */
+function SelectedLabel({ paper }) {
+  const { raw } = paper
+  if (!raw.text.elements.length) return null
+  const el = raw.text.elements.find((e) => e.id === raw.selected)
+  let label = raw.imageName || 'Imagen'
+  if (el) {
+    const kind = raw.text.mode === 'phrase' ? 'Frase' : el.from === el.to ? 'Letra' : 'Grupo'
+    label = `${kind} · ${elementLabel(raw.text.glyphs, el)}`
+  }
+  return (
+    <div className="paper-selected">
+      <Icon name={el ? 'text_fields' : 'image'} size={14} />
+      <span>{label}</span>
+    </div>
+  )
+}
+
+/**
+ * Llevar la configuración del elemento seleccionado al resto del texto. Con
+ * retardo, los keyframes de cada letra se desplazan: animación letra a letra.
+ */
+function TextObjectTools({ paper }) {
+  const { raw, applySelectedToAll } = paper
+  const [stagger, setStagger] = useState(0.15)
+  if (raw.text.elements.length < 2) return null
+  const advanced = paper.st.object.animation.mode === 'advanced'
+  return (
+    <InspSection title="Todo el texto">
+      <p className="ed-key-hint">
+        Copia borde, sombra, color, movimiento, pliegue y animación de este elemento a
+        los demás. Cada uno mantiene su sitio en la frase.
+      </p>
+      <div className="paper-actions">
+        <button type="button" className="ed-btn" onClick={() => applySelectedToAll(0)}>
+          <Icon name="select_all" size={14} /> Aplicar a todos
+        </button>
+      </div>
+      {advanced ? (
+        <>
+          <InspSlider label="Retardo por elemento" value={stagger} min={0} max={2} step={0.05}
+            format={(v) => Number(v).toFixed(2)} parse={parseNum} suffix="s" onChange={setStagger} stepper />
+          <div className="paper-actions">
+            <button type="button" className="ed-btn" onClick={() => applySelectedToAll(stagger)}>
+              <Icon name="animation" size={14} /> Aplicar escalonado
+            </button>
+          </div>
+        </>
+      ) : (
+        <p className="ed-key-hint">En modo <b>Avanzado</b> puedes escalonar los keyframes letra a letra.</p>
+      )}
+    </InspSection>
+  )
+}
+
 function ObjectPanel({ paper }) {
-  const { st, patch, reset, setStrokeLive } = paper
+  const { st, raw, patch, reset, setStrokeLive } = paper
   const obj = st.object
   const advanced = obj.animation.mode === 'advanced'
+  const isImage = raw.selected === 'image'
   // Los sliders del borde regeneran una caché de 4 siluetas filtradas; mientras se
   // arrastran se pinta el filtro en vivo y la caché se rehace solo al soltar.
   const live = { onPointerDown: () => setStrokeLive(true), onPointerUp: () => setStrokeLive(false) }
 
   return (
     <>
-      <InspSection title="Imagen" onReset={() => reset('object.image')}>
+      <SelectedLabel paper={paper} />
+      <InspSection title={isImage ? 'Imagen' : 'Transformación'} onReset={() => reset('object.image')}>
         {advanced ? (
           <p className="ed-key-hint">
             En modo avanzado la posición y la escala las mandan los keyframes.
@@ -202,13 +276,19 @@ function ObjectPanel({ paper }) {
           </>
         )}
         <p className="ed-key-hint">
-          También puedes mover, escalar y girar la imagen arrastrándola en el lienzo.
+          {isImage
+            ? 'También puedes mover, escalar y girar la imagen arrastrándola en el lienzo.'
+            : 'La posición es relativa a su sitio en la frase (0, 0 = en su sitio). También se arrastra en el lienzo.'}
         </p>
       </InspSection>
 
-      <InspSection title="Herramientas de imagen">
-        <ImageTools paper={paper} />
-      </InspSection>
+      {isImage ? (
+        <InspSection title="Herramientas de imagen">
+          <ImageTools paper={paper} />
+        </InspSection>
+      ) : (
+        <TextObjectTools paper={paper} />
+      )}
 
       <InspSection title="Borde rasgado" onReset={() => reset('object.stroke')}>
         <Toggle label="Activar" on={obj.stroke.enabled} onChange={(v) => patch('object.stroke.enabled', v)} />
@@ -500,6 +580,7 @@ function AnimationPanel({ paper }) {
 
   return (
     <>
+      <SelectedLabel paper={paper} />
       <InspSection title="Modo">
         <Chips
           value={anim.mode}
@@ -612,7 +693,7 @@ function OutputPanel({ paper, format }) {
             <button type="button" className="ed-btn danger" onClick={cancelExport}>Cancelar</button>
           </>
         ) : (
-          <button type="button" className="ed-btn primary" onClick={exportToMaterial} disabled={!st.hasImage}>
+          <button type="button" className="ed-btn primary" onClick={exportToMaterial} disabled={!hasContent(paper.raw)}>
             <Icon name="save" size={14} /> Guardar en el material
           </button>
         )}

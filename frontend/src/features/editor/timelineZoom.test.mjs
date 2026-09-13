@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { zoomByDrag, anchorScroll, clampPps, maxPps, minPps } from './timelineScale.js'
+import { zoomByDrag, anchorScroll, maxPps, minPps } from './timelineScale.js'
 
 const dur = 120        // 2 min de timeline
 const viewW = 900      // ancho visible

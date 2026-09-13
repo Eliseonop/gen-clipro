@@ -1,6 +1,6 @@
 import unittest
 
-from app.schemas import Timeline, TimelineTrack
+from app.schemas import Timeline
 
 
 class TrackStylePersistTest(unittest.TestCase):

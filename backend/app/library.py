@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from . import config, projects, storage
+from . import projects, storage
 
 _lock = threading.Lock()
 
@@ -272,8 +272,3 @@ def unsave(item_id: str) -> dict:
         except Exception:
             pass
     return {"deleted": item_id}
-
-
-def get_item(item_id: str) -> dict | None:
-    it = _find_item(_load(), item_id)
-    return material_dto(it, "library") if it else None

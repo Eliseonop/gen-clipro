@@ -39,7 +39,7 @@ class ReframeFilterLengthTest(unittest.TestCase):
     def test_long_filter_goes_to_script_file(self):
         with tempfile.TemporaryDirectory() as d:
             args = clipper._vf_args("crop=" + ("x" * 9000), Path(d), complex_graph=False)
-            self.assertEqual(args[0], "-filter_script:v")
+            self.assertEqual(args[0], "-/vf")
             self.assertTrue(Path(args[1]).exists())
             self.assertGreater(Path(args[1]).stat().st_size, 8000)
 

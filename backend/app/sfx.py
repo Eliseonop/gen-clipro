@@ -2,7 +2,7 @@
 
 Lee una carpeta de SFX que contiene un ``sfx_library.json`` con metadatos
 (nombre, categoría, carpeta, uso típico). Si no hay JSON, escanea los audios.
-La carpeta por defecto es ``<repo>/SFX_LIBRARY``; el usuario puede fijar otra
+La carpeta por defecto es ``assets/sfx_library`` (``config.SFX_DIR``); el usuario puede fijar otra
 que se guarda en ``settings.json`` (clave ``sfx_folder``).
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from . import config, settings
 
 FAVORITES_CAT = "favoritos"
 
-_DEFAULT_BASE = config.BASE_DIR.parent / "SFX_LIBRARY"
+_DEFAULT_BASE = config.SFX_DIR
 _AUDIO_EXT = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac"}
 _write_lock = threading.Lock()
 _CAT_NUM = re.compile(r"^(\d+)_")

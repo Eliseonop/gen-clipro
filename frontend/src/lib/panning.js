@@ -7,8 +7,6 @@ import { containDest, splitOrientationFor } from './recipeLayout.js'
 export const OUT_RATIO = 9 / 16
 
 export const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
-export const r2 = (x) => Math.round(x * 100) / 100
-export const r4 = (x) => Math.round(x * 10000) / 10000
 
 function zoomOf(k, fallback = 1) {
   const z = k?.zoom

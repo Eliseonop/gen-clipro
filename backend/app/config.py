@@ -5,6 +5,7 @@ sitio (o, más adelante, sobreescribirlos desde variables de entorno).
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 # Raíz del backend (…/backend)
@@ -20,19 +21,19 @@ DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 PROJECTS_FILE = DATA_DIR / "projects.json"
 
-# --- Valores por defecto del recorte -------------------------------------
-DEFAULTS = {
-    "min_score": 0.40,     # umbral del heatmap (0.0 - 1.0)
-    "max_clips": 10,       # nº máximo de clips por vídeo
-    "max_duration": 60,    # duración máxima de cada clip (segundos)
-    "padding": 10,         # segundos añadidos antes y después de cada tramo
-}
+# Recursos locales del programa (fuera de Git): cada instalación trae los suyos.
+# Copiar esta carpeta a otra máquina basta para llevárselos. ``VIDEO_YT_ASSETS``
+# permite apuntar a otra ubicación sin tocar el código.
+#   assets/sfx_library/  biblioteca de efectos de sonido (sfx_library.json)
+#   assets/alfnum/       letras recortadas para Paper Animator (catalog.json)
+ASSETS_DIR = Path(os.environ.get("VIDEO_YT_ASSETS") or BASE_DIR.parent / "assets")
+SFX_DIR = ASSETS_DIR / "sfx_library"
+LETTERS_DIR = ASSETS_DIR / "alfnum"
 
 # --- Formato de salida (vertical 9:16) -----------------------------------
 OUTPUT_WIDTH = 720
 OUTPUT_HEIGHT = 1280
 TOP_HEIGHT = 960       # alto de la parte superior en modo split
-BOTTOM_HEIGHT = 320    # alto de la parte inferior (facecam) en modo split
 
 # Ajustes de codificación de FFmpeg
 VIDEO_CRF = 26

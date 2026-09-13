@@ -22,4 +22,5 @@ frontend/dist/
 # SO
 Thumbs.db
 .DS_Store
-SFX_LIBRARY
+# Recursos locales del programa (sfx_library, alfnum…): cada máquina trae los suyos
+/assets/

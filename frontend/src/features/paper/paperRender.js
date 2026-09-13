@@ -26,8 +26,12 @@ const SIMPLE_ANIM_DURATION = 1 // s que dura la apertura/cierre en modo simple
 
 // --- Cálculo de la animación ambiental (antes mutaba el estado cada frame) ---
 
-/** Vibración sutil del objeto (rotación + desplazamiento) en `elapsedMs`. */
-export function movementAt(elapsedMs, movement) {
+/**
+ * Vibración sutil del objeto (rotación + desplazamiento) en `elapsedMs`.
+ * `phase` desincroniza varios objetos (cada letra de un texto vibra a su aire);
+ * con 0 —la imagen— el resultado es el de siempre.
+ */
+export function movementAt(elapsedMs, movement, phase = 0) {
   if (!movement?.enabled) return { rotation: 0, offsetX: 0, offsetY: 0 }
 
   const simple = movement.mode === 'simpel'
@@ -43,20 +47,20 @@ export function movementAt(elapsedMs, movement) {
 
   let rotation = 0
   if (rotSpeed > 0 && rotStrength > 0) {
-    const cycle = Math.floor(elapsedMs / (1000 / rotSpeed))
+    const cycle = Math.floor(elapsedMs / (1000 / rotSpeed)) + phase
     rotation = cycle % 2 === 0 ? rotStrength : -rotStrength
   }
 
   let offsetX = 0
   if (posSpeedX > 0 && posStrengthX > 0) {
     const cycle = Math.floor(elapsedMs / (1000 / posSpeedX))
-    offsetX = (seededRandom(cycle * 1000) - 0.5) * posStrengthX
+    offsetX = (seededRandom(cycle * 1000 + phase * 7919) - 0.5) * posStrengthX
   }
 
   let offsetY = 0
   if (posSpeedY > 0 && posStrengthY > 0) {
     const cycle = Math.floor(elapsedMs / (1000 / posSpeedY))
-    offsetY = (seededRandom(cycle * 2000 + 500) - 0.5) * posStrengthY
+    offsetY = (seededRandom(cycle * 2000 + 500 + phase * 7919) - 0.5) * posStrengthY
   }
 
   return { rotation, offsetX, offsetY }
@@ -104,9 +108,11 @@ export function createPaperRenderer(filterIds = {}) {
   const livePreviewCanvas = document.createElement('canvas')
 
   const whitenedCache = new Map()
-  let tornCache = []
-  let tornSig = ''
-  let generating = null // promesa en vuelo, para poder esperarla desde el export
+  // Una caché de siluetas rasgadas POR ITEM (la imagen y cada elemento de texto):
+  // key → { sig, images: [], generating }. El filtro SVG es uno solo y se
+  // reconfigura por semilla, así que las generaciones van en cola.
+  const torn = new Map()
+  let tornQueue = Promise.resolve()
   let livePreview = false
   let needsRedraw = true
 
@@ -145,9 +151,13 @@ export function createPaperRenderer(filterIds = {}) {
     return canvas
   }
 
-  /** Ajusta el `<filter>` SVG a los parámetros del borde (escalados a la imagen). */
-  function applyTornFilter(sourceImg, stroke, seed) {
-    const k = sourceImg.width / BASE_RENDER_WIDTH
+  /**
+   * Ajusta el `<filter>` SVG a los parámetros del borde, escalados al tamaño de
+   * referencia del bitmap (su ancho; los elementos de texto pasan su lado mayor,
+   * para que una "I" estrecha no tenga un borde más fino que una "W").
+   */
+  function applyTornFilter(refSize, stroke, seed) {
+    const k = refSize / BASE_RENDER_WIDTH
     filterNode('dilate')?.setAttribute('radius', String(stroke.width * k))
     filterNode('displacement')?.setAttribute('scale', String(stroke.roughness * k))
     filterNode('turbulence')?.setAttribute('baseFrequency', String(stroke.detail / k))
@@ -155,36 +165,51 @@ export function createPaperRenderer(filterIds = {}) {
     filterNode('flood')?.setAttribute('flood-color', '#FFFFFF')
   }
 
-  function strokeSignature(st, imageSig) {
-    const s = st.object.stroke
+  function strokeSignature(object, imageSig) {
+    const s = object.stroke
     return `${imageSig}|${s.enabled}|${s.width}|${s.roughness}|${s.detail}`
   }
 
+  function strokeRef(item) {
+    return item.strokeRef || item.imageEl.width
+  }
+
   /**
-   * Genera las 4 siluetas rasgadas (una por semilla) aplicando el filtro SVG.
-   * Progresiva: publica cada una en cuanto está y cede el hilo, para que el
-   * preview no se congele con imágenes grandes.
+   * Genera las 4 siluetas rasgadas (una por semilla) de un item aplicando el
+   * filtro SVG. Progresiva: publica cada una en cuanto está y cede el hilo, para
+   * que el preview no se congele con imágenes grandes.
    */
-  function generateTornCache(imageEl, st, imageSig) {
-    const sig = strokeSignature(st, imageSig)
+  function generateTornCache(item) {
+    const { key = 'image', object, imageEl, sig: imageSig = 0 } = item
+    let entry = torn.get(key)
+    if (!entry) {
+      entry = { sig: '', images: [], generating: null }
+      torn.set(key, entry)
+    }
+    const sig = strokeSignature(object, imageSig)
     // Si ya hay una generación en vuelo se devuelve ESA promesa en lugar de
     // ignorar la llamada: el export la espera, y sin esto los primeros
     // fotogramas podrían codificarse con la caché a medias.
-    if (generating) return generating
-    if (!imageEl || !st.object.stroke.enabled || sig === tornSig) return Promise.resolve()
+    if (entry.generating) return entry.generating
+    if (!imageEl || !object.stroke.enabled || sig === entry.sig) return Promise.resolve()
 
-    tornSig = sig
-    tornCache = []
+    entry.sig = sig
+    entry.images = []
+    const ref = strokeRef(item)
+    const stroke = { ...object.stroke }
+    const owner = entry
 
-    generating = (async () => {
+    const run = async () => {
       const next = []
       try {
         for (let i = 0; i < TORN_SEEDS.length; i += 1) {
+          // Invalidada mientras esperaba turno (texto editado, item borrado…).
+          if (torn.get(key) !== owner || owner.sig !== sig) return
           const cache = document.createElement('canvas')
           cache.width = imageEl.width
           cache.height = imageEl.height
           const ctx = cache.getContext('2d')
-          applyTornFilter(imageEl, st.object.stroke, TORN_SEEDS[i])
+          applyTornFilter(ref, stroke, TORN_SEEDS[i])
           ctx.filter = `url(#${ids.filter})`
           ctx.drawImage(imageEl, 0, 0)
 
@@ -192,33 +217,39 @@ export function createPaperRenderer(filterIds = {}) {
           img.src = cache.toDataURL()
           await img.decode()
           next[i] = img
-          tornCache = [...next]
+          owner.images = [...next]
           needsRedraw = true
           await new Promise((r) => setTimeout(r, 16))
         }
       } catch (e) {
         console.error('Paper Animator: falló la caché de bordes rasgados', e)
-        tornSig = ''
+        owner.sig = ''
       } finally {
-        generating = null
+        owner.generating = null
       }
-    })()
-    return generating
+    }
+    tornQueue = tornQueue.then(run)
+    owner.generating = tornQueue
+    return owner.generating
   }
 
   /**
    * Compone el "sello": imagen + arrugas + capa de pliegue, recortado por la
    * silueta rasgada y, si hay animación de papel, por su máscara.
-   * Devuelve el canvas offscreen que toca estampar.
+   * Devuelve `{ canvas, region }`: el offscreen y la región de él que toca estampar.
    */
-  function drawStamp(st, imageEl, imgW, imgH, assets, foldIndex, layerImage, maskImage) {
-    const obj = st.object
+  function drawStamp(item, imgW, imgH, assets, foldIndex, layerImage, maskImage) {
+    const { object: obj, imageEl } = item
     const cx = contentCanvas.width / 2
     const cy = contentCanvas.height / 2
-
-    objectCtx.clearRect(0, 0, objectCanvas.width, objectCanvas.height)
-    contentCtx.clearRect(0, 0, contentCanvas.width, contentCanvas.height)
-    finalCtx.clearRect(0, 0, finalCanvas.width, finalCanvas.height)
+    // Todo lo que se pinta cae dentro del cuadrado de lado max(imgW, imgH)
+    // centrado (la máscara y la capa de pliegue son ese cuadrado). Limpiar y
+    // estampar solo esa región, y no los offscreen enteros, es lo que permite
+    // dibujar un texto de muchas letras sin que el preview se arrastre.
+    const region = stampRegion(imgW, imgH)
+    objectCtx.clearRect(region.x, region.y, region.w, region.h)
+    contentCtx.clearRect(region.x, region.y, region.w, region.h)
+    finalCtx.clearRect(region.x, region.y, region.w, region.h)
 
     let colorFilter = ''
     if (obj.color.enabled) {
@@ -260,29 +291,33 @@ export function createPaperRenderer(filterIds = {}) {
     objectCtx.save()
     objectCtx.translate(cx, cy)
     const tornOn = obj.stroke.enabled && obj.stroke.width > 0
-    if (tornOn && livePreview) {
+    if (tornOn && livePreview && item.live !== false) {
       livePreviewCanvas.width = imageEl.width
       livePreviewCanvas.height = imageEl.height
       const pctx = livePreviewCanvas.getContext('2d')
-      applyTornFilter(imageEl, obj.stroke, 10)
+      applyTornFilter(strokeRef(item), obj.stroke, 10)
       pctx.clearRect(0, 0, livePreviewCanvas.width, livePreviewCanvas.height)
       pctx.filter = `url(#${ids.filter})`
       pctx.drawImage(imageEl, 0, 0)
       objectCtx.drawImage(livePreviewCanvas, -imgW / 2, -imgH / 2, imgW, imgH)
     } else if (tornOn) {
-      const cached = tornCache[foldIndex] || tornCache[0]
+      const images = torn.get(item.key || 'image')?.images || []
+      const cached = images[foldIndex] || images[0]
       objectCtx.drawImage(cached?.complete ? cached : imageEl, -imgW / 2, -imgH / 2, imgW, imgH)
     } else {
       objectCtx.drawImage(imageEl, -imgW / 2, -imgH / 2, imgW, imgH)
     }
     objectCtx.restore()
 
+    // destination-in / source-in componen sobre TODO el lienzo; el clip a la región
+    // da el mismo resultado donde importa y evita recorrer los offscreen enteros.
     contentCtx.save()
+    clipTo(contentCtx, region)
     contentCtx.globalCompositeOperation = 'destination-in'
     contentCtx.drawImage(objectCanvas, 0, 0)
     contentCtx.restore()
 
-    if (!maskImage) return contentCanvas
+    if (!maskImage) return { canvas: contentCanvas, region }
 
     const maskSize = Math.max(imgW, imgH)
     finalCtx.save()
@@ -290,10 +325,32 @@ export function createPaperRenderer(filterIds = {}) {
     finalCtx.drawImage(maskImage, -maskSize / 2, -maskSize / 2, maskSize, maskSize)
     finalCtx.restore()
     finalCtx.save()
+    clipTo(finalCtx, region)
     finalCtx.globalCompositeOperation = 'source-in'
     finalCtx.drawImage(contentCanvas, 0, 0)
     finalCtx.restore()
-    return finalCanvas
+    return { canvas: finalCanvas, region }
+  }
+
+  function clipTo(c, region) {
+    c.beginPath()
+    c.rect(region.x, region.y, region.w, region.h)
+    c.clip()
+  }
+
+  /** Región (en píxeles de los offscreen) que ocupa un sello de imgW×imgH. */
+  function stampRegion(imgW, imgH) {
+    const half = Math.ceil(Math.max(imgW, imgH) / 2) + 2
+    const cx = contentCanvas.width / 2
+    const cy = contentCanvas.height / 2
+    const x = Math.max(0, Math.floor(cx - half))
+    const y = Math.max(0, Math.floor(cy - half))
+    return {
+      x,
+      y,
+      w: Math.max(1, Math.min(contentCanvas.width, Math.ceil(cx + half)) - x),
+      h: Math.max(1, Math.min(contentCanvas.height, Math.ceil(cy + half)) - y),
+    }
   }
 
   function drawBackground(ctx, canvas, st, bgEl, transparent) {
@@ -360,14 +417,20 @@ export function createPaperRenderer(filterIds = {}) {
    * Pinta un fotograma completo.
    *
    * @param ctx/canvas  destino (el del stage, o el del export)
-   * @param st          estado de Paper Animator
+   * @param st          estado de Paper Animator (fondo y duración)
    * @param clockMs     reloj del transporte en ms (manda el jitter y el pliegue)
-   * @param opts.imageEl / bgEl / assets / imageSig
+   * @param opts.items  lo que se anima, de fondo a frente:
+   *                    [{ key, object, imageEl, sig, slot?, phase?, strokeRef?, live? }]
+   *                    Sin `items` se dibuja la imagen (`opts.imageEl` con `st.object`).
+   * @param opts.bgEl / assets
    * @param opts.loop   false en el export (el tiempo no da la vuelta)
    * @param opts.transparent  omite el fondo (export con alfa)
    */
   function draw(ctx, canvas, st, clockMs, opts = {}) {
-    const { imageEl, bgEl, assets = {}, imageSig = 0, loop = true, transparent = false } = opts
+    const { bgEl, assets = {}, loop = true, transparent = false } = opts
+    const items = opts.items || (opts.imageEl
+      ? [{ key: 'image', object: st.object, imageEl: opts.imageEl, sig: opts.imageSig || 0 }]
+      : [])
 
     // Los offscreen se ajustan aquí y no solo en resize(): el preview y el export
     // comparten el renderer, así que quien dibuja manda sobre su tamaño. Sin esto,
@@ -375,25 +438,25 @@ export function createPaperRenderer(filterIds = {}) {
     // del otro y el sello se recortaría.
     ensureOffscreen(canvas)
 
-    if (st.object.stroke.enabled && imageEl && !livePreview) {
-      generateTornCache(imageEl, st, imageSig)
-    }
-
     ctx.save()
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     drawBackground(ctx, canvas, st, bgEl, transparent)
-
-    if (!imageEl) {
-      ctx.restore()
-      return
+    for (const item of items) {
+      if (!item.imageEl) continue
+      if (item.object.stroke.enabled && !(livePreview && item.live !== false)) generateTornCache(item)
+      drawItem(ctx, canvas, st, clockMs, item, assets, loop)
     }
+    ctx.restore()
+  }
 
-    const obj = st.object
+  /** Un objeto animable (la imagen o un elemento de texto) sobre el lienzo. */
+  function drawItem(ctx, canvas, st, clockMs, item, assets, loop) {
+    const obj = item.object
     const anim = obj.animation
     const duration = st.export.duration
     const timeSec = animTime(clockMs, duration, { loop })
     const foldIndex = foldIndexAt(clockMs, obj.paperFoldOverlay)
-    const jitter = movementAt(clockMs, obj.movement)
+    const jitter = movementAt(clockMs, obj.movement, item.phase || 0)
 
     let transform
     let paperActive = false
@@ -440,14 +503,12 @@ export function createPaperRenderer(filterIds = {}) {
     const maskImage = paperActive ? assets.masks?.[paperFrame] : (closed ? assets.masks?.[0] : null)
 
     // Mismo encaje que usa el marco de transformación del lienzo (PaperCanvas).
-    const frame = objectFrame(canvas.width, canvas.height, imageEl.width, imageEl.height, transform)
+    const { imageEl } = item
+    const frame = objectFrame(canvas.width, canvas.height, imageEl.width, imageEl.height, transform, item.slot)
     const imgW = frame.w
     const imgH = frame.h
 
-    const offsetX = (canvas.width * transform.x) / 100 + jitter.offsetX
-    const offsetY = (canvas.height * transform.y) / 100 + jitter.offsetY
-
-    const stamp = drawStamp(st, imageEl, imgW, imgH, assets, foldIndex, layerImage, maskImage)
+    const { canvas: stamp, region } = drawStamp(item, imgW, imgH, assets, foldIndex, layerImage, maskImage)
 
     ctx.save()
     if (obj.shadow.enabled) {
@@ -457,12 +518,15 @@ export function createPaperRenderer(filterIds = {}) {
       ctx.shadowOffsetX = obj.shadow.offsetX * k
       ctx.shadowOffsetY = -obj.shadow.offsetY * k
     }
-    ctx.translate(canvas.width / 2 + offsetX, canvas.height / 2 - offsetY)
+    ctx.translate(frame.cx + jitter.offsetX, frame.cy - jitter.offsetY)
     const rotation = transform.rotation + jitter.rotation
     if (rotation !== 0) ctx.rotate((rotation * Math.PI) / 180)
-    ctx.drawImage(stamp, -stamp.width / 2, -stamp.height / 2)
-    ctx.restore()
-
+    // Solo la región usada del offscreen, en la misma posición relativa al centro
+    // que tendría si se estampara el offscreen entero.
+    ctx.drawImage(
+      stamp, region.x, region.y, region.w, region.h,
+      region.x - stamp.width / 2, region.y - stamp.height / 2, region.w, region.h,
+    )
     ctx.restore()
   }
 
@@ -500,6 +564,12 @@ export function createPaperRenderer(filterIds = {}) {
     draw,
     resize,
     generateTornCache,
+    /** Espera a que todos los items tengan su caché de bordes (lo usa el export). */
+    async prepare(items) {
+      for (const item of items || []) {
+        if (item.imageEl && item.object.stroke.enabled) await generateTornCache(item)
+      }
+    },
     get needsRedraw() { return needsRedraw },
     requestRedraw() { needsRedraw = true },
     clearRedraw() { needsRedraw = false },
@@ -507,12 +577,15 @@ export function createPaperRenderer(filterIds = {}) {
     setLivePreview(on) {
       if (livePreview === on) return
       livePreview = on
-      if (!on) tornSig = '' // al soltar, regenera la caché con los valores finales
+      // Al soltar no hace falta invalidar nada: la firma de la caché incluye los
+      // parámetros del borde, así que solo se regenera el item que cambió (con un
+      // texto de muchas letras, invalidarlo todo las rehacía todas).
       needsRedraw = true
     },
-    invalidateTornCache() {
-      tornSig = ''
-      tornCache = []
+    /** Sin `key` invalida todas las cachés; con `key`, solo la de ese item. */
+    invalidateTornCache(key) {
+      if (key == null) torn.clear()
+      else torn.delete(key)
       needsRedraw = true
     },
     filterIds: ids,

@@ -87,6 +87,22 @@ const FONT_CSS = {
 }
 export const cssFont = (name) => FONT_CSS[name] || 'Arial, sans-serif'
 
+/** Estilo CSS de la miniatura "Aa" de un tema de subtítulos (tarjetas de temas y favoritos). */
+export function themePreviewStyle(theme) {
+  const s = theme.style || {}
+  return {
+    fontFamily: cssFont(s.font),
+    fontWeight: s.bold ? 800 : 600,
+    color: s.color,
+    background: s.bg && s.bg !== 'none' ? s.bg : 'transparent',
+    textShadow: s.glow
+      ? `0 0 8px ${s.shadow_color || s.highlight_color}`
+      : s.border_width
+        ? `0 1px 0 ${s.border_color || '#000'}, 0 -1px 0 ${s.border_color || '#000'}, 1px 0 0 ${s.border_color || '#000'}, -1px 0 0 ${s.border_color || '#000'}`
+        : 'none',
+  }
+}
+
 /** Estilo efectivo de un text clip: la pista aporta la base y el clip la
  *  sobre-escribe campo a campo. Espejo de effective_text_style (backend).
  *  Cubre apariencia, opacidad, word_fx y max_words de forma uniforme. */

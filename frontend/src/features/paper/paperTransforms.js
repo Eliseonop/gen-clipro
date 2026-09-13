@@ -13,17 +13,28 @@ import { EASING, lerp } from './paperModel.js'
  *
  * Devuelve el centro y el tamaño en píxeles del lienzo; el jitter del movimiento
  * ambiental lo suma quien dibuja (no es parte de la pose editable).
+ *
+ * `slot` (solo elementos de texto, ver paperText.elementSlot) cambia dos cosas:
+ *   · el encaje se calcula con la FRASE entera (fitW×fitH), no con el elemento,
+ *     para que todas las letras compartan escala y conserven su tamaño relativo
+ *   · el centro se desplaza a su hueco dentro de la frase (dx, dy), escalado con
+ *     el propio elemento: x = y = 0 es "en su sitio"
+ * Sin `slot` (la imagen) la cuenta es exactamente la de siempre.
  */
-export function objectFrame(canvasW, canvasH, elW, elH, transform) {
+export function objectFrame(canvasW, canvasH, elW, elH, transform, slot = null) {
+  const fitW = slot ? slot.fitW : elW
+  const fitH = slot ? slot.fitH : elH
+  const w = slot ? slot.w : elW
+  const h = slot ? slot.h : elH
   const canvasAspect = canvasW / canvasH
-  const imageAspect = elW / elH
-  const baseScale = canvasAspect > imageAspect ? canvasH / elH : canvasW / elW
+  const imageAspect = fitW / fitH
+  const baseScale = canvasAspect > imageAspect ? canvasH / fitH : canvasW / fitW
   const finalScale = baseScale * (transform.scale / 100)
   return {
-    w: elW * finalScale,
-    h: elH * finalScale,
-    cx: canvasW / 2 + (canvasW * transform.x) / 100,
-    cy: canvasH / 2 - (canvasH * transform.y) / 100,
+    w: w * finalScale,
+    h: h * finalScale,
+    cx: canvasW / 2 + (canvasW * transform.x) / 100 + (slot ? slot.dx * finalScale : 0),
+    cy: canvasH / 2 - (canvasH * transform.y) / 100 + (slot ? slot.dy * finalScale : 0),
     rotation: transform.rotation,
   }
 }

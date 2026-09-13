@@ -3,23 +3,8 @@ import {
   APPEAR_OPTIONS, EXIT_OPTIONS, LOOK_OPTIONS, VIDEO_FX_TOGGLES, fxOn, fxNum,
 } from '../../lib/clipFx'
 import { SUBTITLE_THEMES } from '../../lib/subtitleThemes'
-import { cssFont } from '../../lib/textstyles'
+import { themePreviewStyle } from '../../lib/textstyles'
 import { isVisualClip } from './editorModel'
-
-function themePreviewStyle(theme) {
-  const s = theme.style || {}
-  return {
-    fontFamily: cssFont(s.font),
-    fontWeight: s.bold ? 800 : 600,
-    color: s.color,
-    background: s.bg && s.bg !== 'none' ? s.bg : 'transparent',
-    textShadow: s.glow
-      ? `0 0 8px ${s.shadow_color || s.highlight_color}`
-      : s.border_width
-        ? `0 1px 0 ${s.border_color || '#000'}, 0 -1px 0 ${s.border_color || '#000'}, 1px 0 0 ${s.border_color || '#000'}, -1px 0 0 ${s.border_color || '#000'}`
-        : 'none',
-  }
-}
 
 function NeedClip({ text }) {
   return (

@@ -23,7 +23,6 @@ from .clip_kind import (
     clip_fits_track,
     has_generated_duration,
     is_visual_clip,
-    track_kind_for_clip,
 )
 from .clip_speed import SPEED_MAX, SPEED_MIN
 from .schemas import Keyframe, Reframe, Timeline, TimelineClip, TimelineTrack, Word

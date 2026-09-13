@@ -562,7 +562,7 @@ function drawCropRuler(ctx, bx, by, bw, bh) {
 // y en Encuadre (al seleccionar un fill, o al pulsar Encuadre).
 export function drawMainView(head, env) {
   const {
-    mainCanvasRef, clipsRef, mediaEls, outRef, selRef, selIdsRef, selKfRef, hiddenKfRef,
+    mainCanvasRef, clipsRef, mediaEls, outRef, selRef, selIdsRef, selKfRef,
     playingRef, framingModeRef, mainTextBox, alignGuidesRef, croppingRef,
     viewZoomRef, mainStageRef, cropModeRef,
   } = env
@@ -618,7 +618,6 @@ export function drawMainView(head, env) {
       ? normalizeItems(clip.keyframes.items)
       : [...(rf.keyframes || [])].sort((a, b) => a.t - b.t)
     kfs.forEach((k, i) => {
-      if (hiddenKfRef.current.has(k.id)) return
       const g = keyframesOn(clip)
         ? cropWindow(clip, srcAspect, outA, srcT, k.t)
         : cropWindow({ ...clip, reframe: { ...rf, keyframes: [k] } }, srcAspect, outA, k.t)

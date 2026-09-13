@@ -1,0 +1,1 @@
+{"nodes": [{"id": "docs_paper_animator_migracion", "label": "Paper Animator Migration Document", "file_type": "document", "source_file": "docs/PAPER_ANIMATOR_MIGRACION.md", "rationale": "Architectural blueprint for migrating Paper Animator from a standalone iframe-based tool to a native React-based editor mode."}], "edges": [], "hyperedges": []}

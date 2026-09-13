@@ -124,7 +124,7 @@ function TrackName({ track, onRename }) {
 
 export default function EdTimeline({
   tracks, clips, pps, setPps, duration, playhead, rowH, setRowH, fps = 30,
-  selectedClipId, selectedClipIds, selectedTrackId, selectedClip, selKfId, dragInfo,
+  selectedClipId, selectedClipIds, selectedTrackId, selKfId, dragInfo,
   onSeek, onScrub, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onMoveGroup, onMatchDuration, onSplit, onDuplicate, onDeleteClip,
   previewVol, onPreviewVol,
   onDropAsset, onTrackToggle, onTrackCompact, onAddTrack, onAddTextTrack, onRenameTrack, onMoveKeyframe, onSelectKf, onAddKf, onDeleteKf, onContextClip, onContextTrack,
@@ -148,7 +148,6 @@ export default function EdTimeline({
 
   const rows = displayTracks(tracks)
   const totalW = Math.max(duration + 4, 12) * pps
-  const isVideoSel = isVisualClip(selectedClip)
   const dragKind = dragInfo?.kind || null
   const selectedIds = selectedClipIds?.length ? selectedClipIds : (selectedClipId ? [selectedClipId] : [])
   const viewsByTrack = new Map()
@@ -360,7 +359,7 @@ export default function EdTimeline({
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
   }
 
-  function startKfDrag(e, clip, kf, idx) {
+  function startKfDrag(e, clip, kf) {
     e.stopPropagation()
     onSelectKf(kf.id)
     const startX = e.clientX
@@ -591,7 +590,7 @@ export default function EdTimeline({
                         selected={selectedIds.includes(c.id)} selKfId={selKfId}
                         mcpBusy={mcpBusyIds?.includes(c.id)}
                         onDown={(e, mode) => startClipDrag(e, c, mode)}
-                        onKfDown={(e, kf, idx) => startKfDrag(e, c, kf, idx)}
+                        onKfDown={(e, kf) => startKfDrag(e, c, kf)}
                         onContext={(e) => onContextClip?.(e, c)}
                         onDouble={() => onDoubleClip?.(c)}
                         onCopyDesc={onCopyDesc}
@@ -714,7 +713,7 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
           <span key={k.id || i} className={`ed-kf-dot ${hold ? 'direct' : ''} ${k.id === selKfId ? 'sel' : ''} ${vol != null ? 'vol' : ''}`}
             style={{ left: kl, top, background: kfColor(i) }}
             title={`Keyframe ${i + 1} · ${fmtRuler(animKfs ? k.t : k.t - clip.in_point, { step: 1 / Math.max(fps, 1), fps })}${volHint}`}
-            onPointerDown={(e) => { e.stopPropagation(); onKfDown(e, k, i) }}>{i + 1}</span>
+            onPointerDown={(e) => { e.stopPropagation(); onKfDown(e, k) }}>{i + 1}</span>
         )
       })}
     </div>

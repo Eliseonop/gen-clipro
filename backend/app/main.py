@@ -779,6 +779,22 @@ def sfx_file(relpath: str) -> FileResponse:
     return FileResponse(str(path))
 
 
+@app.get("/api/letters")
+def list_letters() -> dict:
+    """Letras recortadas de ``assets/alfnum`` para el texto de Paper Animator."""
+    from . import letters
+    return letters.library()
+
+
+@app.get("/api/letters/file/{filename}")
+def letter_file(filename: str) -> FileResponse:
+    from . import letters
+    path = letters.resolve(filename)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Letra no encontrada.")
+    return FileResponse(str(path), media_type="image/png")
+
+
 @app.post("/api/media/reveal")
 def reveal_media(req: RevealMediaRequest) -> dict:
     """Abre el explorador de archivos resaltando el material en disco (solo local)."""

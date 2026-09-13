@@ -210,7 +210,6 @@ class OverlayChainOrderTest(unittest.TestCase):
         # PIP animado sale pequeño y mal posicionado (marco negro), aunque la
         # posición sí anime. El alfa ya lo pone el format=gbrap que va ANTES del
         # scale, así que no se debe re-añadir fuera para el overlay animado.
-        import re
         import tempfile
         from app import compose
         from app.schemas import Project, Timeline, TimelineTrack, TimelineClip

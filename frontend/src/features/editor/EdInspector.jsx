@@ -271,7 +271,6 @@ export default function EdInspector({
               selectionCount={p.textEditor?.selectionCount || 1}
               onChangeText={p.textEditor?.onChangeText}
               onChangeStyle={p.onChangeTextStyle}
-              onApplyPreset={p.onApplyTextPreset}
               onChangeDur={p.textEditor?.onChangeDur}
               onApplyAsGlobalTemplate={p.textEditor?.onApplyAsGlobalTemplate}
               framing={p.textEditor?.framing}

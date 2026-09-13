@@ -38,21 +38,17 @@ const del = (path) => req(path, { method: 'DELETE' })
 // --- Vídeo / clips ---
 export const analyze = (params) => post('/api/analyze', params)
 export const createClipJob = (params) => post('/api/clip', params)
-export const composeClipJob = (params) => post('/api/clip/compose', params)
-export const createTranscribeJob = (params) => post('/api/transcribe', params)
 export const prepareReframe = (params) => post('/api/reframe/prepare', params)
 export const getJob = (jobId) => get(`/api/job/${jobId}`)
 
 // --- Proyectos ---
 export const listProjects = () => get('/api/projects')
 export const createProject = (name) => post('/api/projects', { name })
-export const getProject = (id) => get(`/api/projects/${id}`)
 export const deleteProject = (id) => del(`/api/projects/${id}`)
 export const pickFolder = () => post('/api/pick-folder', {})
 // Abre el explorador del sistema resaltando el archivo del material (solo local).
 export const revealMaterial = ({ projectId, kind, filename, scope }) =>
   post('/api/media/reveal', { project_id: projectId, kind, filename, scope })
-export const setProjectFolder = (id, path) => post(`/api/projects/${id}/folder`, { path })
 
 // --- Audio (TTS) + ajustes ---
 export const listVoices = () => get('/api/voices')
@@ -104,7 +100,6 @@ export const uploadAudio = (pid, file) => {
 }
 export const updateMaterial = (pid, kind, id, data) => patch(`/api/projects/${pid}/materials/${kind}/${id}`, data)
 export const deleteMaterial = (pid, kind, id) => del(`/api/projects/${pid}/materials/${kind}/${id}`)
-export const autoDescribeClip = (pid, index) => post(`/api/projects/${pid}/materials/clips/${index}/auto-describe`, {})
 export const getManifest = (pid) => get(`/api/projects/${pid}/manifest`)
 export const putManifest = (pid, data) => put(`/api/projects/${pid}/manifest`, data)
 export const transcribeClip = (pid, index, model) =>
@@ -193,6 +188,10 @@ export const uploadSfx = (file, { name = '', categoryId = '', newCategory = '', 
 export const updateSfx = (id, { name = '', categoryId = '', newCategory = '', uso = '' } = {}) =>
   patch('/api/sfx', { id, name, category_id: categoryId, new_category: newCategory, uso })
 export const createSfxCategory = (label) => post('/api/sfx/category', { label })
+
+// --- Letras recortadas (assets/alfnum) para el texto de Paper Animator ---
+export const listLetters = () => get('/api/letters')
+export const letterUrl = (file) => `/api/letters/file/${encodeURIComponent(file)}`
 
 // --- Subtítulos ---
 export const generateSubtitles = (pid, params) => post(`/api/projects/${pid}/subtitles`, params)

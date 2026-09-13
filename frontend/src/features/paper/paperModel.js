@@ -172,6 +172,25 @@ export const DEFAULT_BACKGROUND = {
   },
 }
 
+// Texto hecho con letras recortadas (ver paperText.js). Sus elementos llevan cada
+// uno un `object` con la MISMA forma que `DEFAULT_OBJECT`.
+export const DEFAULT_TEXT = {
+  content: '',
+  assign: 'style', // 'style' | 'random'
+  style: '',       // estilo elegido en modo 'style' ('' = el primero disponible)
+  seed: 1,         // semilla de la elección de variantes: mismo seed → mismas letras
+  mode: 'letters', // 'letters' | 'phrase'
+  // Resultado CONGELADO de la resolución: el render nunca vuelve a sortear, así que
+  // el preview, el export y el undo ven siempre las mismas letras.
+  //   { ch, file, style, w, h }  letra con asset
+  //   { ch, space: true }        espacio (conserva el hueco)
+  //   { ch, br: true }           salto de línea
+  //   { ch, missing: true }      carácter sin asset: hueco del ancho de un espacio
+  glyphs: [],
+  elements: [], // [{ id, from, to, object }] — rangos disjuntos, ordenados
+  stash: null,  // elementos del OTRO modo, para volver sin perder lo configurado
+}
+
 export const DEFAULT_PAPER_STATE = {
   previewScale: 0.75,
   imageName: '',
@@ -185,10 +204,69 @@ export const DEFAULT_PAPER_STATE = {
   // herramienta: deshacer no debe cambiarle el pincel al usuario).
   edit: { tool: TOOL.none, brushSize: 20, colorTolerance: 32, bgProvider: 'u2net' },
   object: DEFAULT_OBJECT,
+  text: DEFAULT_TEXT,
+  // Qué se está editando: 'image' o el id de un elemento de texto. El inspector,
+  // el marco del lienzo y la timeline trabajan sobre el object seleccionado.
+  selected: 'image',
 }
 
 export function newPaperState() {
   return structuredClone(DEFAULT_PAPER_STATE)
+}
+
+// --- Selección: qué object editan los paneles ----------------------------------
+// La imagen vive en `st.object` y cada elemento de texto en
+// `st.text.elements[i].object`. Todo lo que ya sabía editar `st.object` (paths
+// 'object.stroke.width', addKeyframe, patchKeyframe, resetPath…) se reutiliza tal
+// cual sobre una VISTA del estado cuyo `object` es el seleccionado.
+
+export function hasText(st) {
+  return !!st?.text?.elements?.length
+}
+
+/** Hay algo que animar: imagen, texto o ambos. */
+export function hasContent(st) {
+  return !!st?.hasImage || hasText(st)
+}
+
+/** Índice del elemento de texto seleccionado, o -1 si es la imagen. */
+export function selectedElementIndex(st) {
+  if (!st?.selected || st.selected === 'image') return -1
+  return (st.text?.elements || []).findIndex((e) => e.id === st.selected)
+}
+
+export function selectedObjectPath(st) {
+  const i = selectedElementIndex(st)
+  return i >= 0 ? `text.elements.${i}.object` : 'object'
+}
+
+export function selectedObject(st) {
+  return getPath(st, selectedObjectPath(st))
+}
+
+/** El estado visto desde el object seleccionado (`view.object`). */
+export function viewOf(st) {
+  const path = selectedObjectPath(st)
+  return path === 'object' ? st : { ...st, object: getPath(st, path) }
+}
+
+/**
+ * Aplica `fn` —cualquier operación pensada para `st.object`— al object
+ * seleccionado y lo escribe de vuelta en su sitio. Lo demás que toque `fn`
+ * (p. ej. `export.duration` al estirar por un keyframe) se conserva.
+ */
+export function withSelectedObject(st, fn) {
+  const path = selectedObjectPath(st)
+  if (path === 'object') return fn(st)
+  const view = { ...st, object: getPath(st, path) }
+  const out = fn(view)
+  if (out === view) return st
+  return setPath({ ...out, object: st.object, text: st.text }, path, out.object)
+}
+
+/** ¿`path` es del object (y por tanto del seleccionado)? */
+export function isObjectPath(path) {
+  return path === 'object' || String(path).startsWith('object.')
 }
 
 // --- Utilidades de estado -------------------------------------------------
@@ -228,8 +306,11 @@ export function clamp(n, min, max) {
 
 // --- Recorte --------------------------------------------------------------
 
+/** Lado mínimo de un recorte, en fracción de la región útil. */
+export const CROP_MIN_SIDE = 0.02
+
 /** Rect normalizado válido (dentro de 0-1 y con lados mínimos), o null. */
-export function normalizeCrop(rect, minSide = 0.02) {
+export function normalizeCrop(rect, minSide = CROP_MIN_SIDE) {
   if (!rect) return null
   const x = clamp(Number(rect.x) || 0, 0, 1)
   const y = clamp(Number(rect.y) || 0, 0, 1)

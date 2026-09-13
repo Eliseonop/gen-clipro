@@ -13,7 +13,6 @@ import cv2
 import numpy as np
 
 SHAPE_DEFAULT_DUR = 5.0
-STROKE_ONLY = {"line", "check", "x"}
 ARROW_TYPES = {"arrow", "arrow_curve", "arrow_double"}
 
 
@@ -153,52 +152,6 @@ def _poly_pts(cx, cy, r, sides):
          cy + math.sin(-math.pi / 2 + i * 2 * math.pi / n) * r)
         for i in range(n)
     ]
-
-
-def _qbez(p0, p1, p2, n=28):
-    pts = []
-    for i in range(n + 1):
-        t = i / n
-        u = 1 - t
-        pts.append((
-            u * u * p0[0] + 2 * u * t * p1[0] + t * t * p2[0],
-            u * u * p0[1] + 2 * u * t * p1[1] + t * t * p2[1],
-        ))
-    return pts
-
-
-def _normals(pts):
-    out = []
-    last = len(pts) - 1
-    for i, p in enumerate(pts):
-        a = pts[max(0, i - 1)]
-        b = pts[min(last, i + 1)]
-        dx, dy = b[0] - a[0], b[1] - a[1]
-        length = math.hypot(dx, dy) or 1
-        out.append((-dy / length, dx / length))
-    return out
-
-
-def _thick(pts, half):
-    nrm = _normals(pts)
-    left = [(p[0] + n[0] * half, p[1] + n[1] * half) for p, n in zip(pts, nrm)]
-    right = [(p[0] - n[0] * half, p[1] - n[1] * half) for p, n in zip(pts, nrm)]
-    return left + list(reversed(right))
-
-
-def _neck_and_shaft(pts, head_len):
-    tip = pts[-1]
-    acc = 0.0
-    for i in range(len(pts) - 1, 0, -1):
-        a, b = pts[i - 1], pts[i]
-        d = math.hypot(b[0] - a[0], b[1] - a[1])
-        if acc + d >= head_len:
-            t = (head_len - acc) / (d or 1)
-            neck = (b[0] + (a[0] - b[0]) * t, b[1] + (a[1] - b[1]) * t)
-            return pts[:i] + [neck], neck, tip
-        acc += d
-    neck = pts[-2] if len(pts) > 1 else pts[0]
-    return pts[:-1], neck, tip
 
 
 def _curved_arrow_poly():

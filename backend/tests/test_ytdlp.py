@@ -56,13 +56,6 @@ class FriendlyErrorTest(unittest.TestCase):
         self.assertEqual(friendly_error(RuntimeError("boom")), "boom")
 
 
-def _patch_no_auth():
-    return (
-        patch("app.ytdlp.settings.load", return_value={}),
-        patch.dict(os.environ, {"YTDLP_COOKIES": "", "YTDLP_BROWSER": ""}, clear=False),
-    )
-
-
 class AuthAttemptsTest(unittest.TestCase):
     def test_anonymous_then_browsers_when_nothing_configured(self):
         from app.ytdlp import auth_attempts

@@ -9,9 +9,11 @@
 import { useRef } from 'react'
 import Icon from '../../components/Icon'
 import { bustUrl } from '../editor/MaterialClipGrid'
+import PaperTextPanel from './PaperTextPanel'
+import { hasContent } from './paperModel'
 
 export default function PaperElements({ project, paper, onGoPaper }) {
-  const { st, loadImage, clearImage, busy, error, setError, exportJob, exportToMaterial } = paper
+  const { raw: st, loadImage, clearImage, select, busy, error, setError, exportJob, exportToMaterial } = paper
   const fileRef = useRef(null)
   const images = project.images || []
 
@@ -30,17 +32,25 @@ export default function PaperElements({ project, paper, onGoPaper }) {
       <div className="motion-panel-title">Paper · Imagen</div>
 
       {st.hasImage ? (
-        <div className="paper-current">
+        <div
+          className={`paper-current${st.selected === 'image' ? ' on' : ''}`}
+          role="button"
+          tabIndex={0}
+          title="Editar la imagen"
+          onClick={() => { onGoPaper?.(); select('image') }}
+        >
           <Icon name="draw" size={16} />
           <span className="paper-current-name" title={st.imageName}>{st.imageName || 'Imagen'}</span>
-          <button type="button" className="ed-btn" title="Quitar la imagen y su animación" onClick={clearImage}>
+          <button type="button" className="ed-btn" title="Quitar la imagen y su animación"
+            onClick={(e) => { e.stopPropagation(); clearImage() }}>
             <Icon name="close" size={14} />
           </button>
         </div>
       ) : (
         <p className="motion-start-hint">
-          Elige una imagen del proyecto o sube una. La original no se modifica:
-          el resultado se guarda como un vídeo nuevo en el material.
+          Elige una imagen del proyecto o sube una, o escribe un texto con letras
+          recortadas. La original no se modifica: el resultado se guarda como un
+          vídeo nuevo en el material.
         </p>
       )}
 
@@ -59,7 +69,7 @@ export default function PaperElements({ project, paper, onGoPaper }) {
         <button type="button" className="ed-btn" onClick={() => fileRef.current?.click()}>
           <Icon name="upload" size={14} /> Subir imagen
         </button>
-        {st.hasImage && (
+        {hasContent(st) && (
           exportJob?.status === 'running'
             ? <span className="ed-bg-status run"><Icon name="progress_activity" size={14} /><span>{exportJob.message}</span></span>
             : (
@@ -78,6 +88,8 @@ export default function PaperElements({ project, paper, onGoPaper }) {
           <button type="button" className="ed-btn" onClick={() => setError('')}>Cerrar</button>
         </div>
       )}
+
+      <PaperTextPanel paper={paper} onGoPaper={onGoPaper} />
 
       <div className="motion-panel-title">Imágenes del proyecto</div>
       {images.length === 0 ? (

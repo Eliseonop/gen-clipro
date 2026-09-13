@@ -3,9 +3,8 @@
 
 import { frameAt } from './panning.js'
 import { MASK_KF_KEYS, maskStaticProps } from './clipMask.js'
-import { DEFAULT_FPS, kfSnap, snapToFrame } from './projectFps.js'
+import { kfSnap, snapToFrame } from './projectFps.js'
 
-export const KF_SNAP = kfSnap(DEFAULT_FPS)
 export const KF_INTERPS = [
   { id: 'linear', label: 'Linear' },
   { id: 'ease-in', label: 'Ease In' },
@@ -298,21 +297,6 @@ export function deleteKeyframeItem(clip, id) {
   const items = normalizeItems(clip.keyframes?.items).filter((k) => k.id !== id)
   const enabled = items.length ? !!clip.keyframes?.enabled : false
   return { ...clip, keyframes: { enabled, items } }
-}
-
-export function poseFromProps(props) {
-  const p = props || {}
-  return {
-    x: num(p.x, 0.5),
-    y: num(p.y, 0.5),
-    scale: num(p.scale, 1),
-    rotation: num(p.rotation, 0),
-    opacity: num(p.opacity, 1),
-    cx: num(p.cx, 0.5),
-    cy: num(p.cy, 0.5),
-    zoom: num(p.zoom, 1),
-    volume: clampVolume(p.volume),
-  }
 }
 
 export function clipVolumeAt(clip, localT, srcTime) {

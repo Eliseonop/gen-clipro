@@ -1,8 +1,8 @@
 // Puntero del canvas: compuesto (mover/escalar/rotar/seleccionar) o recorte de fuente.
 import { clamp, clampCenter, frameAt, zoomFromCorner, isNearCropCorner } from '../../lib/panning'
 import {
-  canvasPointer, clampCrop, CLIP_POS_MAX, CLIP_POS_MIN, cropSizeFromCorner, cropWindow, destRectOnCanvas,
-  frameRectOf, hitTransformHandle, isOverlay, mediaSize, sourceCropPx,
+  canvasPointer, clampCrop, CLIP_POS_MAX, CLIP_POS_MIN, cropSizeFromCorner, cropWindow,
+  frameRectOf, hitTransformHandle, isOverlay, mediaSize,
 } from '../../lib/clipLayout'
 import { canvasToSourceNorm, framingRect, hitFrontmost, pointInDest } from './render/canvas'
 import { snapAlign, textAlignTargets } from '../../lib/alignGuides'
@@ -387,35 +387,6 @@ export function createMainDownHandler(ctx) {
   }
 }
 
-export function createResultDownHandler(ctx) {
-  const {
-    resultCanvasRef, mainCanvasRef, selectedClip, playhead, mediaEls, outW, outH,
-    changeTransform, playingRef, stopPlayback,
-  } = ctx
-
-  return function onResultDown(e) {
-    const clip = selectedClip
-    if (!isOverlay(clip) || !isVisualClip(clip)) return
-    const end = clipEnd(clip)
-    if (playhead < clip.start - 0.02 || playhead >= end) return
-    const canvas = resultCanvasRef?.current || mainCanvasRef?.current
-    const el = mediaEls.current.get(clip.id)
-    const sz = mediaSize(el)
-    if (!canvas || !sz.w) return
-    if (playingRef.current) stopPlayback()
-
-    const localT = Math.max(0, playhead - clip.start)
-    const srcT = clamp(timelineToSource(clip, playhead), clip.in_point, clip.out_point)
-    const crop = cropWindow(clip, sz.w / sz.h, outW / outH, srcT, localT)
-    const pxCrop = sourceCropPx(crop, sz.w, sz.h)
-    const dest = destRectOnCanvas(posedTransform(clip, localT), pxCrop, outW, outH, canvas.width, canvas.height)
-    const p0 = canvasPointer(e, canvas)
-    const mode = hitTransformHandle(p0.x, p0.y, dest)
-    if (!mode) return
-    startOverlayTransform(e, canvas, clip, dest, mode, { changeTransform, playhead })
-  }
-}
-
 function startOverlayTransform(e, canvas, clip, dest, mode, { changeTransform, playhead }, frame) {
   const fr = frame || { x: 0, y: 0, w: canvas.width, h: canvas.height }
   const localT = Math.max(0, playhead - clip.start)
@@ -563,7 +534,7 @@ export function createCanvasDownHandler(ctx) {
   const {
     mainCanvasRef, framingModeRef, playingRef, stopPlayback,
     selectedClip, playhead, mediaEls,
-    changeTransform, commitPose, clipsRef,
+    changeTransform, clipsRef,
     cropModeRef, hitListRef, onSelectClip, onClearSelection,
   } = ctx
   const onCropDown = createMainDownHandler(ctx)

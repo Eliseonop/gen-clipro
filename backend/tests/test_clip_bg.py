@@ -7,7 +7,6 @@ tablas, así que la paridad queda cerrada por los dos lados.
 """
 from __future__ import annotations
 
-import math
 import shutil
 import subprocess
 import tempfile

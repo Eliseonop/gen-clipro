@@ -13,7 +13,7 @@ from app.motion.models import (
     MotionLayer,
     MotionTween,
 )
-from app.motion.validator import MotionValidationError, validate
+from app.motion.validator import validate
 
 
 def _comp(**kw):

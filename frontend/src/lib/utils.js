@@ -22,10 +22,3 @@ export function parseTime(str) {
   if (parts.some((p) => Number.isNaN(p))) return null
   return parts.reduce((acc, p) => acc * 60 + p, 0)
 }
-
-// Extrae el id de vídeo de una URL de YouTube.
-export function ytId(url) {
-  if (!url) return null
-  const m = url.match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([\w-]{11})/)
-  return m ? m[1] : null
-}

@@ -18,7 +18,6 @@ Modelo: SAM 2.1 en ONNX de ``vietanhdev/segment-anything-2.1-onnx-models``
 from __future__ import annotations
 
 import logging
-import shutil
 import threading
 import urllib.request
 import zipfile

@@ -6,8 +6,6 @@ import {
 } from './clipKeyframes.js'
 import { clipMasks, maskFromProps } from './clipMask.js'
 
-export const ANIM_PROPS = ['x', 'y', 'scale', 'rotation', 'opacity']
-
 function num(v, d) {
   const n = Number(v)
   return Number.isFinite(n) ? n : d

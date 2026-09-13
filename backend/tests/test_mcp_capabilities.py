@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 from app import config, projects, timeline_store
-from app.mcp_server import capabilities, server, tools_capabilities
+from app.mcp_server import server, tools_capabilities
 
 
 def _call(name, args=None):

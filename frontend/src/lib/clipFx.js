@@ -137,8 +137,8 @@ export function fxWindows(duration) {
 // Aparición "typing": el texto se escribe de izquierda a derecha a lo largo de
 // TODA la duración del clip (la velocidad se adapta a la duración y al nº de
 // caracteres). Devuelve el prefijo visible del texto según el progreso p (0-1).
-// No muta el texto original: solo recorta para pintar. Espejo de _typing_text
-// en backend/app/text_ass.py (mismo modelo char-a-char para preview == export).
+// No muta el texto original: solo recorta para pintar. Espejo del recorte de
+// _typing_dialogues en backend/app/text_ass.py (mismo modelo char-a-char para preview == export).
 export function typingReveal(text, p) {
   const chars = Array.from(text || '')
   if (!chars.length) return ''

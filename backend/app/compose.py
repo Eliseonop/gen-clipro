@@ -26,7 +26,7 @@ from typing import Callable, Optional
 from . import clipper, config, gpu, sfx, storage
 from .clip_fx import _scale_expr, audio_fx_chain, fx_windows, overlay_xy_for_fx, video_fx_chain
 from .clip_keyframes import keyframes_enabled, volume_filter
-from .clip_bg import auto_active, bg_active, bg_capable, chroma_active, chroma_filters, clip_bg
+from .clip_bg import auto_active, bg_capable, chroma_active, chroma_filters, clip_bg
 from .clip_mask import build_timeline_masks, has_mask, maskable
 from .schemas import Keyframe, Project, Reframe, Timeline, TimelineClip
 from .clip_layout import dest_rect_even, is_overlay, source_crop_px
@@ -693,7 +693,6 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
     # Orden de capas de vídeo: primero las pistas de vídeo inferiores (fondo),
     # las superiores encima. Índice de capa = posición de la pista de vídeo.
     video_tracks = [t for t in timeline.tracks if t.kind == "video"]
-    audio_tracks = [t for t in timeline.tracks if t.kind == "audio"]
     vlayer = {t.id: i for i, t in enumerate(video_tracks)}
     track_by_id = {t.id: t for t in timeline.tracks}
 

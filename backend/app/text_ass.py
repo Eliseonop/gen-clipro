@@ -95,11 +95,6 @@ def _alpha_tags(aa: str) -> str:
     return f"\\alpha&H{aa}&\\1a&H{aa}&\\3a&H{aa}&\\4a&H{aa}&"
 
 
-def opacity_tag(st: dict, active: bool = True) -> str:
-    """Aplica la opacidad al relleno, al borde y a la sombra (\\1a solo dejaba el outline opaco)."""
-    return _alpha_tags(alpha_hex(word_opacity(st, active)))
-
-
 def active_word_index(word_count: int, local_t: float, duration: float) -> int:
     if word_count <= 0:
         return -1
@@ -333,16 +328,6 @@ def word_windows(clip: TimelineClip) -> list[tuple[float, float]]:
         return wins
     slot = dur / n
     return [(start + i * slot, start + (i + 1) * slot) for i in range(n)]
-
-
-def _typing_text(text: str, p: float) -> str:
-    """Prefijo visible del texto según el progreso ``p`` (0-1). Espejo de
-    ``typingReveal`` en frontend/src/lib/clipFx.js (mismo recorte char-a-char)."""
-    chars = list(text or "")
-    if not chars:
-        return ""
-    k = math.ceil(_clamp01(p) * len(chars))
-    return "".join(chars[:k])
 
 
 def _typing_dialogues(clip: TimelineClip, W: int, H: int, st: dict) -> list[str]:

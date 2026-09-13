@@ -152,15 +152,6 @@ export function resolveExpandedClusterId(prevId, clusters) {
 
 export const STACK_PAD = 5
 export const STACK_STEP = 14
-export const PEEK_GUTTER = 12
-export const PEEK_BAND_H = 8
-export const PEEK_LIFT = 4
-export const SUB_ROW_GAP = 3
-export const PEEK_SPINE = 2
-
-export function subRowHeight(rowH) {
-  return Math.max(28, rowH - 6)
-}
 
 export function trackLaneHeight(rowH, extraSteps) {
   return (rowH || 0) + (extraSteps > 0 ? STACK_STEP : 0)

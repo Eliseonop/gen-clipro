@@ -114,54 +114,6 @@ function polyPts(cx, cy, r, sides) {
   return pts
 }
 
-function qbez(p0, p1, p2, n = 28) {
-  const pts = []
-  for (let i = 0; i <= n; i++) {
-    const t = i / n
-    const u = 1 - t
-    pts.push([
-      u * u * p0[0] + 2 * u * t * p1[0] + t * t * p2[0],
-      u * u * p0[1] + 2 * u * t * p1[1] + t * t * p2[1],
-    ])
-  }
-  return pts
-}
-
-function normals(pts) {
-  return pts.map((p, i) => {
-    const a = pts[Math.max(0, i - 1)]
-    const b = pts[Math.min(pts.length - 1, i + 1)]
-    const dx = b[0] - a[0]
-    const dy = b[1] - a[1]
-    const len = Math.hypot(dx, dy) || 1
-    return [-dy / len, dx / len]
-  })
-}
-
-function thickPoly(pts, half) {
-  const nrm = normals(pts)
-  const left = pts.map((p, i) => [p[0] + nrm[i][0] * half, p[1] + nrm[i][1] * half])
-  const right = pts.map((p, i) => [p[0] - nrm[i][0] * half, p[1] - nrm[i][1] * half]).reverse()
-  return left.concat(right)
-}
-
-function neckAndShaft(pts, headLen) {
-  const tip = pts[pts.length - 1]
-  let acc = 0
-  for (let i = pts.length - 1; i > 0; i--) {
-    const a = pts[i - 1]
-    const b = pts[i]
-    const d = Math.hypot(b[0] - a[0], b[1] - a[1])
-    if (acc + d >= headLen) {
-      const t = (headLen - acc) / (d || 1)
-      const neck = [b[0] + (a[0] - b[0]) * t, b[1] + (a[1] - b[1]) * t]
-      return { shaft: pts.slice(0, i).concat([neck]), neck, tip }
-    }
-    acc += d
-  }
-  return { shaft: pts.slice(0, -1), neck: pts[Math.max(0, pts.length - 2)], tip }
-}
-
 function curvedArrowPoly() {
   const cx = 66
   const cy = 84

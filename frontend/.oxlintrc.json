@@ -1,8 +1,5 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "ignorePatterns": [
-    "paper-animator/**"
-  ],
   "plugins": [
     "react",
     "oxc"
