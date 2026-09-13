@@ -15,7 +15,10 @@ if not exist "frontend\node_modules" (
 )
 
 echo Abriendo backend  (http://127.0.0.1:8000)...
-start "video-yt backend" cmd /k ".venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --reload"
+rem --timeout-graceful-shutdown: con --reload, uvicorn espera a que se cierren las
+rem conexiones abiertas; las de mcp-remote (streams MCP) no se cierran nunca y el
+rem backend se quedaba colgado tras cada cambio de código.
+start "video-yt backend" cmd /k ".venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --reload --timeout-graceful-shutdown 3"
 
 echo Abriendo frontend (http://localhost:5173)...
 start "video-yt frontend" cmd /k "cd frontend && npm run dev"

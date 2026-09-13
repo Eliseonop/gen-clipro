@@ -299,6 +299,115 @@ export function clipsOnTrackSorted(clips, trackId) {
     .sort((a, b) => (a.start - b.start) || String(a.id).localeCompare(String(b.id)))
 }
 
+/**
+ * Primer instante >= `desired` donde cabe un clip de `dur` en la pista sin solapar.
+ *
+ * Una pista es una SECUENCIA: al insertar (botón +, duplicar) el clip no debe
+ * caer encima de otro, sino en el primer hueco libre que lo admita. Si ningún
+ * hueco intermedio da la talla, aterriza detrás del último clip que estorba.
+ * `excludeIds` deja fuera al propio clip cuando se recoloca uno existente.
+ */
+export function freeStartOnTrack(clips, trackId, desired, dur, { excludeIds } = {}) {
+  const span = Math.max(0, Number(dur) || 0)
+  let t = Math.max(0, Number(desired) || 0)
+  if (span <= 0) return +t.toFixed(3)
+  const skip = new Set(excludeIds || [])
+  const busy = (clips || [])
+    .filter((c) => c.track_id === trackId && !skip.has(c.id))
+    .map((c) => ({ start: Math.max(0, c.start || 0), end: clipEnd(c) }))
+    .filter((r) => r.end > r.start)
+    .sort((a, b) => a.start - b.start)
+  for (const r of busy) {
+    if (r.end <= t) continue        // ya lo hemos dejado atrás
+    if (t + span <= r.start) break  // cabe en el hueco antes de este clip
+    t = r.end                       // choca: se prueba justo detrás
+  }
+  return +t.toFixed(3)
+}
+
+/** Tramos ocupados de una pista, fusionados y ordenados. */
+function busyRanges(clips, trackId, excludeIds) {
+  const skip = excludeIds instanceof Set ? excludeIds : new Set(excludeIds || [])
+  const raw = (clips || [])
+    .filter((c) => c.track_id === trackId && !skip.has(c.id))
+    .map((c) => ({ start: Math.max(0, c.start || 0), end: clipEnd(c) }))
+    .filter((r) => r.end > r.start)
+    .sort((a, b) => a.start - b.start)
+  const out = []
+  for (const r of raw) {
+    const last = out[out.length - 1]
+    if (last && r.start <= last.end) last.end = Math.max(last.end, r.end)
+    else out.push({ ...r })
+  }
+  return out
+}
+
+/**
+ * Inicio más cercano a `desired` que NO solapa: el clip se PEGA al vecino.
+ *
+ * La pista es una secuencia, así que al arrastrar no se monta encima ni genera
+ * escalones: se acota al hueco libre que mejor encaja. Si el hueco al que
+ * apuntas no da la talla, se busca el más próximo que sí. Con la pista vacía o
+ * al final no hay tope: manda `desired`.
+ */
+export function clampStartNoOverlap(clips, trackId, desired, dur, { excludeIds } = {}) {
+  const span = Math.max(0, Number(dur) || 0)
+  const want = Math.max(0, Number(desired) || 0)
+  if (span <= 0) return +want.toFixed(3)
+  const busy = busyRanges(clips, trackId, excludeIds)
+  if (!busy.length) return +want.toFixed(3)
+  // Huecos entre tramos ocupados, incluidos el de antes del primero y el de
+  // después del último (este último, sin fin).
+  const gaps = []
+  let cursor = 0
+  for (const r of busy) {
+    if (r.start > cursor) gaps.push({ start: cursor, end: r.start })
+    cursor = Math.max(cursor, r.end)
+  }
+  gaps.push({ start: cursor, end: Infinity })
+  let best = null
+  for (const g of gaps) {
+    const hi = g.end - span      // último inicio que cabe en el hueco
+    if (hi < g.start) continue   // el hueco no da la talla
+    const cand = Math.min(Math.max(want, g.start), hi)
+    const d = Math.abs(cand - want)
+    if (!best || d < best.d) best = { start: cand, d }
+  }
+  return +(best ? best.start : cursor).toFixed(3)
+}
+
+/** Hasta dónde puede crecer un clip por cada lado sin tocar a sus vecinos. */
+export function trimBounds(clips, clip) {
+  const s = Math.max(0, clip?.start || 0)
+  const e = clipEnd(clip || {})
+  let left = 0
+  let right = Infinity
+  for (const c of clips || []) {
+    if (!c || c.id === clip?.id || c.track_id !== clip?.track_id) continue
+    const ce = clipEnd(c)
+    if (ce <= s) left = Math.max(left, ce)
+    else if (c.start >= e) right = Math.min(right, c.start)
+  }
+  return { left, right }
+}
+
+/**
+ * Acota el arrastre de un borde para que el clip no invada al vecino.
+ *
+ * Se limita el DESPLAZAMIENTO, no el patch: así siguen valiendo los topes que
+ * ya aplica `trimClipPatch` (duración mínima, fin del material) y no hay que
+ * reconstruir patches distintos para clips generados y de vídeo.
+ */
+export function clampTrimDelta(clips, clip, mode, deltaT) {
+  const d = Number(deltaT) || 0
+  if (!clip) return d
+  const { left, right } = trimBounds(clips, clip)
+  // El borde se mueve 1:1 con el tiempo de la timeline en ambos modos.
+  if (mode === 'trim-left') return Math.max(d, left - Math.max(0, clip.start || 0))
+  if (mode === 'trim-right') return Number.isFinite(right) ? Math.min(d, right - clipEnd(clip)) : d
+  return d
+}
+
 /** Ids inclusivos entre dos clips de la misma pista (por orden temporal). */
 export function rangeSelectOnTrack(clips, trackId, fromId, toId) {
   const row = clipsOnTrackSorted(clips, trackId)

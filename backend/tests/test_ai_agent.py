@@ -78,7 +78,8 @@ class AgentTest(unittest.TestCase):
         self.assertIn("reload", types)
         self.assertEqual(types[-1], "done")
         tl = projects.get_project(self.pid).timeline
-        self.assertEqual((tl.width, tl.height), (1080, 1080))
+        # 1:1 conserva el lado corto del formato por defecto (720×1280).
+        self.assertEqual((tl.width, tl.height), (720, 720))
         entries = [e for e in audit.read_all() if e.get("tool") == "set_project_format"]
         self.assertEqual(entries[-1]["source"], "ai_chat")
         # persistencia: la conversación se guardó en disco

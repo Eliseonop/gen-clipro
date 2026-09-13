@@ -161,6 +161,13 @@
 .ed-canvas-col .ed-transport {
   padding: 6px 10px 8px; background: #0e1118; border-top: 1px solid var(--line);
 }
+/* Reproductor a pantalla completa: la columna central ocupa todo, sin
+   cromo innecesario. El transporte queda visible; Esc sale. */
+.ed-canvas-col:fullscreen { border: none; border-radius: 0; }
+.ed-canvas-col:fullscreen .ed-col-tabs { display: none; }
+.ed-canvas-col:fullscreen .ed-canvas-stage .ed-main-canvas {
+  max-width: calc(100% - 12px); max-height: calc(100% - 12px);
+}
 /* Formato + zoom dentro de la fila del reproductor (.ed-transport), solo botones */
 .ed-viewer-tools {
   display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: 4px;
@@ -168,6 +175,12 @@
 .ed-viewer-tools button.select.flip-select.ed-vt-sel {
   height: 22px; min-height: 22px; box-sizing: border-box;
   padding: 0 6px; font-size: 11px; font-weight: 650;
+}
+.ed-vt-custom { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--text-secondary); }
+.ed-vt-custom input {
+  width: 52px; height: 22px; box-sizing: border-box; padding: 0 4px;
+  font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text);
+  background: var(--card-2); border: 1px solid var(--accent); border-radius: 4px;
 }
 .ed-vt-zoom { display: flex; align-items: center; gap: 3px; }
 .ed-vt-zoom .ed-num-stepper { height: 22px; }
@@ -266,9 +279,10 @@
 }
 .ed-kf-dia:hover { border-color: #fff; }
 /* off: sin animar (contorno apagado) · empty: animada, sin KF aquí (contorno
-   de acento) · on: KF en el cabezal (relleno). */
-.ed-kf-dia.empty { border-color: var(--accent); }
-.ed-kf-dia.on { background: var(--accent); border-color: var(--accent); }
+   de acento) · on: KF en el cabezal (relleno). Clases con prefijo `kf-`: la
+   global `.empty` (App.css) le metía padding 32px y borde discontinuo. */
+.ed-kf-dia.kf-empty { border-color: var(--accent); }
+.ed-kf-dia.kf-on { background: var(--accent); border-color: var(--accent); }
 .ed-kf-dia:disabled { opacity: 0.35; cursor: default; }
 .ed-kf-dia.spacer { visibility: hidden; pointer-events: none; }
 .ed-insp-ico {
@@ -874,6 +888,17 @@ body.ed-zooming, body.ed-zooming * { cursor: ew-resize !important; user-select: 
   content: ''; position: absolute; top: 0; left: 50%; transform: translateX(-50%);
   border-left: 5px solid transparent; border-right: 5px solid transparent;
   border-top: 7px solid #f5d76e;
+}
+/* Rango marcado con I / O ("Generar Motion"): franja en la regla + sombra en las pistas. */
+.ed-mark-range {
+  position: absolute; top: 0; bottom: 0; pointer-events: none; z-index: 1;
+  background: rgba(255, 122, 26, 0.28); border-left: 2px solid var(--accent, #ff7a1a); border-right: 2px solid var(--accent, #ff7a1a);
+}
+.ed-mark-range.open { background: none; border-right: none; }
+.ed-mark-shade {
+  position: absolute; top: var(--ed-ruler-h); bottom: 0; z-index: 5; pointer-events: none;
+  background: rgba(255, 122, 26, 0.06);
+  box-shadow: inset 1px 0 0 rgba(255, 122, 26, 0.45), inset -1px 0 0 rgba(255, 122, 26, 0.45);
 }
 /* Rubber band de selección por área (arrastre en un hueco del timeline). */
 .ed-marquee {
@@ -1487,6 +1512,21 @@ body.ed-zooming, body.ed-zooming * { cursor: ew-resize !important; user-select: 
   display: flex; align-items: center; overflow: hidden;
 }
 .ed-drop-ghost span { font-size: 10.5px; color: #fff; padding: 0 8px; white-space: nowrap; text-shadow: 0 1px 2px #000; }
+/* Reemplazar el clip de debajo: ámbar, porque pide confirmación. */
+.ed-drop-ghost.replace { background: rgba(245,158,11,0.30); border-color: #f59e0b; }
+/* Pista nueva: el fantasma se atenúa y manda la línea de inserción. */
+.ed-drop-ghost.newTrack { background: rgba(34,197,94,0.20); border-color: #22c55e; }
+.ed-drop-newtrack {
+  position: absolute; left: 0; right: 0; top: 0; height: 3px; z-index: 8;
+  background: #22c55e; box-shadow: 0 0 8px rgba(34,197,94,0.9); pointer-events: none;
+}
+/* Al arrastrar un clip fuera del bloque de pistas: línea + etiqueta. */
+.ed-drop-newtrack.below { top: auto; bottom: 0; }
+.ed-drop-newtrack span {
+  position: absolute; left: 8px; top: -9px; padding: 1px 7px; border-radius: 999px;
+  background: #22c55e; color: #06240f; font-size: 10px; font-weight: 700; white-space: nowrap;
+}
+.ed-drop-newtrack.below span { top: auto; bottom: -9px; }
 
 /* ===== Menú contextual ===== */
 .ed-ctx-backdrop { position: fixed; inset: 0; z-index: 90; }
@@ -1500,6 +1540,42 @@ body.ed-zooming, body.ed-zooming * { cursor: ew-resize !important; user-select: 
 }
 .ed-ctx-menu button:hover { background: var(--card-3); }
 .ed-ctx-menu button.danger { color: var(--danger); }
+.ed-ctx-menu button.accent { color: var(--accent, #ff7a1a); font-weight: 600; }
+.ed-ctx-menu button:disabled { opacity: 0.45; cursor: default; background: none; }
+.ed-ctx-menu kbd, .gm-modal kbd {
+  margin-left: auto; font: 10.5px ui-monospace, monospace; color: var(--muted);
+  border: 1px solid var(--line-bright); border-radius: 4px; padding: 0 4px;
+}
+.ed-ctx-sep { height: 1px; background: var(--line); margin: 3px 4px; }
+
+/* ===== Generar Motion (modal contextual) ===== */
+.gm-modal { max-width: 580px; max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
+.gm-body { display: flex; flex-direction: column; gap: 14px; overflow-y: auto; min-height: 0; padding-right: 2px; }
+.gm-sec { display: flex; flex-direction: column; gap: 6px; }
+.gm-label { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.gm-label em { font-style: normal; font-weight: 500; text-transform: none; letter-spacing: 0; opacity: 0.8; }
+.gm-refresh { margin-left: auto; }
+.gm-moment { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.gm-tc { font: 600 18px ui-monospace, 'Cascadia Mono', monospace; color: var(--text); font-variant-numeric: tabular-nums; }
+.gm-dur { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.gm-dur input { width: 72px; background: var(--card-2); border: 1px solid var(--line); border-radius: 6px; color: var(--text); padding: 5px 8px; font-size: 13px; }
+.gm-note, .gm-muted { font-size: 12px; color: var(--muted); }
+.gm-note kbd { margin: 0 2px; }
+.gm-error { font-size: 12.5px; color: var(--danger); }
+.gm-script { margin: 0; font-size: 14px; line-height: 1.55; color: var(--text); background: var(--card-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.gm-script mark { background: rgba(255, 122, 26, 0.16); color: var(--text); border-radius: 3px; padding: 1px 3px; box-shadow: inset 0 -2px 0 rgba(255, 122, 26, 0.6); }
+.gm-side { color: var(--muted); }
+.gm-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.gm-chip { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; background: var(--card-3); color: var(--text); border: 1px solid var(--line); }
+.gm-elements { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.gm-elements li { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text); padding: 4px 6px; border-radius: 6px; }
+.gm-elements li.on { background: var(--card-2); }
+.gm-el-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gm-el-tc { font: 11px ui-monospace, monospace; color: var(--muted); }
+.gm-warn { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #f5c451; }
+.gm-check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; }
+.gm-hint { width: 100%; box-sizing: border-box; resize: vertical; background: var(--card-2); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 8px 10px; font: inherit; font-size: 13px; }
+.gm-actions { justify-content: flex-end; }
 
 /* ===== Toast de subtítulos ===== */
 .ed-sub-toast {
@@ -1733,6 +1809,7 @@ body.ed-zooming, body.ed-zooming * { cursor: ew-resize !important; user-select: 
 .motion-hitbox:hover { border-color: rgba(120,190,255,0.55); background: rgba(120,190,255,0.06); }
 .motion-hitbox.sel { border-color: var(--accent, #ff7a1a); background: rgba(255,122,26,0.10);
   box-shadow: 0 0 0 1px rgba(255,122,26,0.35); }
+.motion-hitbox.off { border-style: dashed; background: transparent; box-shadow: none; }
 
 /* ===== Motion integrado en el editor (paneles + stage + timeline) ===== */
 .motion-elements-panel, .motion-props-panel { display: flex; flex-direction: column; min-height: 0;

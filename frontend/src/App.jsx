@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { listProjects, createProject, deleteProject } from './services/api'
+import { listProjects, createProject, deleteProject, renameProject, duplicateProject } from './services/api'
 import Home from './features/projects/Home'
 import ProjectView from './features/projects/ProjectView'
 import ConfirmModal from './components/ConfirmModal'
@@ -41,6 +41,16 @@ export default function App() {
     return p
   }
 
+  async function onRename(p, name) {
+    try { await renameProject(p.id, name) } catch { /* error silencioso */ }
+    await refresh()
+  }
+
+  async function onDuplicate(p) {
+    try { await duplicateProject(p.id) } catch { /* error silencioso */ }
+    await refresh()
+  }
+
   async function confirmDeleteProject() {
     if (!deleteTarget) return
     try {
@@ -65,7 +75,14 @@ export default function App() {
       {openProject ? (
         <ProjectView project={openProject} onBack={() => navigate(null)} onRefresh={refresh} />
       ) : (
-        <Home projects={projects} onOpen={navigate} onCreate={onCreate} onDelete={(p) => setDeleteTarget(p)} />
+        <Home
+          projects={projects}
+          onOpen={navigate}
+          onCreate={onCreate}
+          onDelete={(p) => setDeleteTarget(p)}
+          onRename={onRename}
+          onDuplicate={onDuplicate}
+        />
       )}
 
       <ConfirmModal

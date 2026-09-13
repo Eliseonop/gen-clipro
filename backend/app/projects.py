@@ -126,6 +126,66 @@ def create_project(name: str) -> Project:
     return proj
 
 
+def rename_project(pid: str, name: str) -> Project | None:
+    new_name = (name or "").strip()
+    if not new_name:
+        raise ValueError("El nombre no puede estar vacío.")
+    with _lock:
+        data = _load()
+        for p in data["projects"]:
+            if p["id"] == pid:
+                p["name"] = new_name
+                _save(data)
+                return _project_from_dict(p)
+    return None
+
+
+# Carpetas que NO se copian al duplicar: los renders son derivados y pesan mucho.
+_DUPLICATE_SKIP_DIRS = ("exports",)
+
+
+def duplicate_project(pid: str) -> Project | None:
+    """Copia un proyecto (datos + archivos) con id nuevo y nombre "<nombre> (copia)".
+
+    Los archivos se copian a la carpeta por defecto del nuevo proyecto, así que la
+    copia es independiente aunque el original use una carpeta propia. Las URLs
+    ``/api/media/<pid>/…`` y ``/api/projects/<pid>/…`` guardadas se reescriben al id nuevo.
+    """
+    import shutil
+
+    from . import storage
+
+    src = get_project(pid)
+    if src is None:
+        return None
+    new_id = uuid.uuid4().hex[:8]
+    dest_base = storage.default_base(new_id)
+    ignore = shutil.ignore_patterns(*_DUPLICATE_SKIP_DIRS)
+    src_base = storage.project_base(src)
+    if src_base.exists():
+        shutil.copytree(src_base, dest_base, ignore=ignore, dirs_exist_ok=True)
+    # Motion Studio guarda siempre bajo la carpeta por defecto, aunque haya carpeta propia.
+    motion = storage.default_base(pid) / "motion"
+    if motion.exists() and not (dest_base / "motion").exists():
+        shutil.copytree(motion, dest_base / "motion")
+    storage.ensure_dirs(dest_base)
+
+    with _lock:
+        data = _load()
+        raw = next((p for p in data["projects"] if p["id"] == pid), None)
+        if raw is None:
+            return None
+        text = json.dumps(raw, ensure_ascii=False)
+        for prefix in ("/api/media/", "/api/projects/"):
+            text = text.replace(f"{prefix}{pid}/", f"{prefix}{new_id}/")
+        copy = json.loads(text)
+        copy.update(id=new_id, name=f"{src.name} (copia)", created_at=_now(), folder=None)
+        idx = data["projects"].index(raw)
+        data["projects"].insert(idx, copy)
+        _save(data)
+    return _project_from_dict(copy)
+
+
 def set_folder(pid: str, path: str) -> Project | None:
     with _lock:
         data = _load()

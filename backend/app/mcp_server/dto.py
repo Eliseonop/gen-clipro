@@ -48,6 +48,10 @@ def aspect_ratio(width: int, height: int) -> str:
     """Reduce w:h a una razón legible ('720x1280' -> '9:16')."""
     if width <= 0 or height <= 0:
         return "?"
+    from ..timeline_ops import aspect_of
+    known = aspect_of(width, height)   # 854x480 → '16:9', no '427:240'
+    if known:
+        return known
     d = gcd(width, height)
     return f"{width // d}:{height // d}"
 

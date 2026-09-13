@@ -15,6 +15,7 @@ funciones puras y componibles.
 """
 from __future__ import annotations
 
+import math
 import uuid
 from dataclasses import dataclass, field
 
@@ -30,9 +31,43 @@ from .schemas import Keyframe, Reframe, Timeline, TimelineClip, TimelineTrack, W
 TRACK_KINDS = ("video", "audio", "text")
 FRAME_POSITIONS = ("full", "top", "bottom", "free")
 
-# Formatos de salida (espejo de FORMATS en editorModel.js).
-FORMATS = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (1080, 1080),
-           "4:5": (864, 1080), "4:3": (960, 720)}
+# Formato de salida = proporción × resolución (lado corto).
+# Espejo de frontend/src/lib/projectFormat.js.
+ASPECTS = {"16:9": (16, 9), "9:16": (9, 16), "1:1": (1, 1),
+           "4:3": (4, 3), "3:4": (3, 4), "4:5": (4, 5)}
+RESOLUTIONS = (480, 720, 1080, 2160)
+DIM_MIN, DIM_MAX = 144, 4096
+_RATIO_TOL = 0.01
+
+
+def even_dim(n: float) -> int:
+    """Dimensión válida para H.264/yuv420p: par y dentro de [DIM_MIN, DIM_MAX]."""
+    # floor(x + .5) = Math.round de JS; round() de Python redondea .5 al par.
+    c = min(DIM_MAX, max(DIM_MIN, math.floor(float(n) + 0.5)))
+    return int(math.floor(c / 2 + 0.5) * 2)
+
+
+def size_for_ratio(rw: float, rh: float, short_side: float) -> tuple[int, int]:
+    """(w, h) para la proporción rw:rh con ``short_side`` px en el lado corto;
+    el lado largo se limita a DIM_MAX reduciendo el corto."""
+    r = rw / rh
+    s = max(DIM_MIN, float(short_side))
+    k = r if r >= 1 else 1 / r
+    if s * k > DIM_MAX:
+        s = DIM_MAX / k
+    long = s * k
+    return (even_dim(long), even_dim(s)) if r >= 1 else (even_dim(s), even_dim(long))
+
+
+def aspect_of(width: int, height: int) -> str | None:
+    """Id de ASPECTS que coincide con w:h (tolerancia 1 %), o ``None``."""
+    if width <= 0 or height <= 0:
+        return None
+    r = width / height
+    for aid, (rw, rh) in ASPECTS.items():
+        if abs(r - rw / rh) / (rw / rh) < _RATIO_TOL:
+            return aid
+    return None
 
 
 @dataclass
@@ -320,19 +355,31 @@ def add_subtitles(tl: Timeline, source_clip_id: str, segments, style: dict | Non
 
 
 def set_project_format(tl: Timeline, aspect: str | None = None, width: int | None = None,
-                       height: int | None = None, fps: int | None = None) -> EditResult:
-    """Cambia el formato de salida. ``aspect`` (9:16, 16:9, 1:1, 4:5, 4:3) resuelve
-    ancho/alto; o se pasan ``width``/``height`` explícitos. El material master se
-    re-adapta al formato en el render (recipe_layout), sin re-cortar clips."""
+                       height: int | None = None, fps: int | None = None,
+                       resolution: int | None = None) -> EditResult:
+    """Cambia el formato de salida.
+
+    * ``aspect`` (16:9, 9:16, 1:1, 4:3, 3:4, 4:5) cambia la proporción conservando
+      el lado corto actual.
+    * ``resolution`` (480/720/1080/2160 = lado corto) cambia el tamaño conservando
+      la proporción (la de ``aspect`` si se pasa a la vez).
+    * ``width``/``height`` explícitos mandan sobre lo anterior (se redondean a par).
+
+    El material master se re-adapta al formato en el render (recipe_layout), sin
+    re-cortar clips."""
     out = _copy(tl)
-    if aspect is not None:
-        if aspect not in FORMATS:
-            raise ValueError(f"aspect inválido: {aspect} (usa {list(FORMATS)})")
-        out.width, out.height = FORMATS[aspect]
+    if aspect is not None and aspect not in ASPECTS:
+        raise ValueError(f"aspect inválido: {aspect} (usa {list(ASPECTS)})")
+    if resolution is not None and int(resolution) not in RESOLUTIONS:
+        raise ValueError(f"resolution inválida: {resolution} (usa {list(RESOLUTIONS)})")
+    if aspect is not None or resolution is not None:
+        rw, rh = ASPECTS[aspect] if aspect is not None else (out.width, out.height)
+        short = int(resolution) if resolution is not None else min(out.width, out.height)
+        out.width, out.height = size_for_ratio(rw, rh, short)
     if width is not None:
-        out.width = int(width)
+        out.width = even_dim(width)
     if height is not None:
-        out.height = int(height)
+        out.height = even_dim(height)
     if fps is not None:
         if fps <= 0:
             raise ValueError("fps debe ser > 0")

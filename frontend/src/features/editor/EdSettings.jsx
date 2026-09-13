@@ -73,7 +73,7 @@ function txMeta(models, id) {
   return models.find((m) => m.id === id) || { id, label: id, hint: '' }
 }
 
-export default function EdSettings({ onExportFps, audioDb, onAudioDb }) {
+export default function EdSettings({ audioDb, onAudioDb }) {
   const [cfgTab, setCfgTab] = useState('config')
   const [setKeys, setSetKeys] = useState({})
   const [keyCounts, setKeyCounts] = useState({})
@@ -287,7 +287,6 @@ export default function EdSettings({ onExportFps, audioDb, onAudioDb }) {
     setErr('')
     try {
       await putSettings({ export: next })
-      onExportFps?.(normalizeFps(next.fps))
       setToast({ type: 'success', message: 'Ajustes de export guardados.' })
     } catch (e) {
       setErr(e.message || 'No se pudo guardar.')
@@ -622,7 +621,7 @@ export default function EdSettings({ onExportFps, audioDb, onAudioDb }) {
       {cfgTab === 'export' && (
         <div className="ed-cfg-export">
           <label className="field">
-            <span>FPS</span>
+            <span>FPS de proyectos nuevos</span>
             <select
               className="select"
               value={exportCfg.fps}
@@ -649,7 +648,7 @@ export default function EdSettings({ onExportFps, audioDb, onAudioDb }) {
           </label>
           <p className="ed-key-hint">
             {QUALITY_OPTS.find((q) => q.id === exportCfg.quality)?.hint}.
-            El preview usa el canvas; el MP4 usa estos valores.
+            El preview usa el canvas; el MP4 usa esta calidad. El FPS de cada proyecto se cambia en la barra del reproductor.
           </p>
           {onAudioDb && (
             <label className="field">

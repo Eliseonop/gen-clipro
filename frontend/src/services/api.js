@@ -45,6 +45,8 @@ export const getJob = (jobId) => get(`/api/job/${jobId}`)
 export const listProjects = () => get('/api/projects')
 export const createProject = (name) => post('/api/projects', { name })
 export const deleteProject = (id) => del(`/api/projects/${id}`)
+export const renameProject = (id, name) => patch(`/api/projects/${id}`, { name })
+export const duplicateProject = (id) => post(`/api/projects/${id}/duplicate`, {})
 export const pickFolder = () => post('/api/pick-folder', {})
 // Abre el explorador del sistema resaltando el archivo del material (solo local).
 export const revealMaterial = ({ projectId, kind, filename, scope }) =>
@@ -171,6 +173,17 @@ export const motionPreviewUrl = (pid, cid, version) =>
 export const renderMotion = (pid, cid) => post(`/api/projects/${pid}/motion/${cid}/render`, {})
 export const addMotionToTimeline = (pid, cid, body) =>
   post(`/api/projects/${pid}/motion/${cid}/add-to-timeline`, body || {})
+// "Generar Motion": contexto compacto de UN tramo + foco del editor (para MCP).
+export const getMotionSegmentContext = (pid, { start, end, playhead, clipId } = {}) => {
+  const q = new URLSearchParams()
+  if (start != null) q.set('start', String(start))
+  if (end != null) q.set('end', String(end))
+  if (playhead != null) q.set('playhead', String(playhead))
+  if (clipId) q.set('clip_id', clipId)
+  return get(`/api/projects/${pid}/motion/segment-context?${q}`)
+}
+export const setMotionFocus = (pid, { start, end, playhead, clipId } = {}) =>
+  post(`/api/projects/${pid}/motion/focus`, { start, end, playhead, clip_id: clipId || null })
 
 // --- Sound Effects ---
 export const listSfx = (q = '', category = '') =>

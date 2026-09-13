@@ -226,6 +226,31 @@ class SetProjectFormatTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ops.set_project_format(base_tl(), aspect="21:9")
 
+    def test_aspecto_conserva_lado_corto(self):
+        r = ops.set_project_format(base_tl(), aspect="3:4")
+        self.assertEqual((r.timeline.width, r.timeline.height), (720, 960))
+
+    def test_resolucion_conserva_proporcion(self):
+        r = ops.set_project_format(base_tl(), resolution=2160)
+        self.assertEqual((r.timeline.width, r.timeline.height), (2160, 3840))
+        r = ops.set_project_format(base_tl(), aspect="16:9", resolution=480)
+        self.assertEqual((r.timeline.width, r.timeline.height), (854, 480))
+
+    def test_resolucion_invalida(self):
+        with self.assertRaises(ValueError):
+            ops.set_project_format(base_tl(), resolution=900)
+
+    def test_explicito_se_redondea_a_par(self):
+        r = ops.set_project_format(base_tl(), width=1081, height=99999)
+        self.assertEqual((r.timeline.width, r.timeline.height), (1082, 4096))
+
+    def test_espejo_del_frontend(self):
+        # Mismos valores que frontend/src/lib/projectFormat.test.mjs.
+        self.assertEqual(ops.size_for_ratio(4, 5, 1080), (1080, 1350))
+        self.assertEqual(ops.size_for_ratio(16, 9, 2160), (3840, 2160))
+        self.assertEqual(ops.aspect_of(864, 1080), "4:5")
+        self.assertIsNone(ops.aspect_of(1000, 700))
+
 
 class AddSubtitlesTest(unittest.TestCase):
     def _tl_with_source(self):

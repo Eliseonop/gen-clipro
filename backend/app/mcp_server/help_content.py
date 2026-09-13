@@ -78,6 +78,14 @@ TOOL_DOMAINS: dict[str, str] = {
     "redo": "history",
     "checkpoint": "history",
     "restore_checkpoint": "history",
+    # motion graphics (Motion Studio / Generar Motion)
+    "motion_segment_context": "motion",
+    "motion_list_templates": "motion",
+    "motion_get_composition": "motion",
+    "motion_get_frame": "motion",
+    "motion_create_composition": "motion",
+    "motion_update_composition": "motion",
+    "motion_add_to_timeline": "motion",
 }
 
 
@@ -103,7 +111,9 @@ HELP: dict[str, str] = {
         "- inspect_clip(clip_id): un clip COMPLETO (reframe/keyframes, words, "
         "transform, origin). Úsalo solo para el clip que vas a tocar.\n"
         "- list_media: inventario detallado del material.\n"
-        "- set_project_format(aspect|width/height/fps): 9:16/16:9/1:1/4:5/4:3. "
+        "- set_project_format(aspect|resolution|width/height, fps): aspect "
+        "16:9/9:16/1:1/4:3/3:4/4:5 (conserva el lado corto); resolution "
+        "480/720/1080/2160 = lado corto (conserva la proporción). "
         "Reescala/reencuadra todo (deshacible con undo)."
     ),
     "text": (
@@ -255,6 +265,42 @@ HELP: dict[str, str] = {
         "- checkpoint(name): marca un punto seguro con nombre.\n"
         "- restore_checkpoint(name): vuelve a un checkpoint (también deshacible).\n"
         "Recomendado: un checkpoint antes de un cambio grande."
+    ),
+    "motion": (
+        "Motion graphics EDITABLES (composición JSON → HTML/GSAP → render con alfa). "
+        "Flujo contextual 'Generar Motion':\n"
+        "1. motion_segment_context(project_id, start?, end?): guion de ESE tramo "
+        "(previous/current/next + keyTerms), clip activo, elementos que ya ocupan el "
+        "tramo (motionInRange = posibles duplicados), assets relevantes y estilo "
+        "(formato, fuente/acento de subtítulos, avoidY = franja de subtítulos que no "
+        "hay que tapar). Sin tiempos usa el rango marcado en el editor (teclas I/O). "
+        "No pidas get_timeline para esto.\n"
+        "2. motion_create_composition(project_id, composition | template+params): "
+        "duration = fin − inicio EXACTO del tramo; width/height/fps = style.format.\n"
+        "3. motion_get_frame(project_id, composition_id, n?): mírala antes de insertar.\n"
+        "4. motion_add_to_timeline(project_id, composition_id, start): la coloca como clip "
+        "'motion' (overlay con alfa) en el segundo indicado.\n"
+        "Ajustes posteriores: motion_get_composition + motion_update_composition (solo esa "
+        "composición).\n"
+        "ESQUEMA: composition = {name, width, height, fps, duration, background: "
+        "'transparent' | '#rrggbb', layers: [...]}. Cada layer: {id único, type: 'text' | "
+        "'shape', x, y (CENTRO en px del lienzo), start, end (s, end ≤ duration), opacity, "
+        "scale, rotation, z_index, animation: {entrance, exit}, effect}.\n"
+        "- text: content + style {font (familia CSS, p.ej. \"'Segoe UI', Arial, sans-serif\"), "
+        "fontSize, fontWeight, color, letterSpacing, lineHeight, background, padding, "
+        "borderRadius, shadow}.\n"
+        "- shape: shape {kind: 'circle' (radius, fill, stroke, thickness, glow) | 'rect' "
+        "(width, height, fill, stroke) | 'line' (x2, y2, thickness, stroke, glow; va de x,y "
+        "a x2,y2)}. fill 'none' = solo contorno.\n"
+        "- entrance/exit: {type: fade | slide | scale | zoom | rotate | draw (líneas), "
+        "direction (slide: left/right/up/down), distance (px), from_scale, degrees, "
+        "duration ≤ vida de la capa, delay, ease (power1-4.in/out/inOut, back.*, "
+        "elastic.*, bounce.*, sine.*, expo.out, circ.out, none)}.\n"
+        "- effect (continuo): {type: pulse (amount) | glow | flow (punto que recorre una "
+        "línea; duration = periodo), delay}.\n"
+        "DISEÑO: minimalista (1 color de acento, fuentes limpias, líneas finas), texto "
+        "breve, jerarquía clara, respeta style.avoidY. Para diagramas con muchos elementos "
+        "repetidos usa un template (motion_list_templates) en vez de un JSON enorme."
     ),
 }
 

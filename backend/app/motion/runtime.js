@@ -211,6 +211,10 @@
   // (Re)construye DOM + timeline desde una composición. Llamable en vivo desde el
   // editor (__rebuild) sin recargar GSAP/fuente. El render solo usa la 1ª build.
   function buildAll(comp) {
+    // Un __rebuild en vivo conserva el instante: antes cada edición (arrastrar una
+    // capa, tocar una propiedad) devolvía el preview a t=0 y se perdía la posición.
+    // El render construye una sola vez (prevT=0) → paridad intacta.
+    var prevT = tl ? tl.time() : 0;
     COMP = comp || COMP;
     if (tl) { try { tl.kill(); } catch (e) { /* noop */ } }
     stage.innerHTML = '';
@@ -289,7 +293,7 @@
     tl.pause(0);
     window.__duration = COMP.duration;
     window.__fps = COMP.fps;
-    window.__seek(0);
+    window.__seek(prevT);
     notify();
   }
 

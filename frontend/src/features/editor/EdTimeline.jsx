@@ -3,11 +3,13 @@ import Icon from '../../components/Icon'
 import FlipPopover from '../../components/FlipPopover'
 import { fmt } from '../../lib/utils'
 import { pseudoWaveform, clamp, kfColor } from '../../lib/panning'
-import { clipCopyText, clipDur, clipSourceDur, clipSpeed, displayTracks, isVisualClip, laneKindForAsset, linkedPartnerName, trackKindForClip, trimClipPatch, trimPreviewHead } from './editorModel'
+import { clampStartNoOverlap, clampTrimDelta, clipCopyText, clipDur, clipSourceDur, clipSpeed, displayTracks, isVisualClip, laneKindForAsset, linkedPartnerName, trackKindForClip, trimClipPatch, trimPreviewHead } from './editorModel'
 import { alignOthers, alignThresholdSec, asAlignClip, snapClipGroup, snapClipMove, snapClipTrim, timelineAlignHits } from './timelineAlign'
 import { keyframesEnabled, normalizeItems, clipVolumeAt, clampVolume, sampleVolumeCurve, VOL_MAX, hasVolumeControls } from '../../lib/clipKeyframes'
 import { snapToFrame } from '../../lib/projectFps'
 import { stackViewForTrack } from './clipStack.js'
+import { stepRowHeight, trackRowHeight } from './trackRows'
+import { dropIntent } from './dropIntent'
 import { headerScrollPad, timelineWheelAction } from './timelineWheel'
 import { anchorScroll, buildTicks, clampPps, fmtRuler, tickStep, zoomByDrag } from './timelineScale'
 
@@ -123,7 +125,7 @@ function TrackName({ track, onRename }) {
 }
 
 export default function EdTimeline({
-  tracks, clips, pps, setPps, duration, playhead, rowH, setRowH, fps = 30,
+  tracks, clips, pps, setPps, duration, playhead, rowH, setRowH, fps = 30, onMoveToNewTrack,
   selectedClipId, selectedClipIds, selectedTrackId, selKfId, dragInfo,
   onSeek, onScrub, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onMoveGroup, onMatchDuration, onSplit, onDuplicate, onDeleteClip,
   previewVol, onPreviewVol,
@@ -131,12 +133,14 @@ export default function EdTimeline({
   onFaceTrack, faceTrackBusy, faceTrackDisabled,
   linkPick, onPickLinkTrack, onCancelLinkPick, onCopyDesc, audioMaterials,
   mcpBusyIds, onMarqueeSelect,
+  markRange, onContextLane,
 }) {
   const lanesRef = useRef(null)
   const bodyRef = useRef(null)
   const headersRef = useRef(null)
   const drag = useRef(null)
-  const [dropHint, setDropHint] = useState(null)   // { trackId, time }
+  const [dropHint, setDropHint] = useState(null)   // { trackId, action, start }
+  const [newTrackHint, setNewTrackHint] = useState(null)   // { side, kind } al arrastrar un clip fuera
   const [expandedClusterId, setExpandedClusterId] = useState(null)
   const [trimGuide, setTrimGuide] = useState(null) // { t, dur }
   const [alignTimes, setAlignTimes] = useState(null) // number[] mientras se mueve/recorta
@@ -146,13 +150,17 @@ export default function EdTimeline({
   const rulerStep = tickStep(pps, fps, !!trimGuide)
   const rulerLong = duration >= 3600
 
+  const markIn = Number.isFinite(markRange?.in) ? markRange.in : null
+  const markOut = Number.isFinite(markRange?.out) ? markRange.out : null
+
   const rows = displayTracks(tracks)
   const totalW = Math.max(duration + 4, 12) * pps
   const dragKind = dragInfo?.kind || null
   const selectedIds = selectedClipIds?.length ? selectedClipIds : (selectedClipId ? [selectedClipId] : [])
   const viewsByTrack = new Map()
   for (const t of rows) {
-    viewsByTrack.set(t.id, stackViewForTrack(clips, t.id, selectedIds, expandedClusterId, rowH))
+    // Cada tipo de pista tiene su alto: la de texto es ~la mitad que vídeo/audio.
+    viewsByTrack.set(t.id, stackViewForTrack(clips, t.id, selectedIds, expandedClusterId, trackRowHeight(t.kind, rowH)))
   }
   const liveExpandedId = [...viewsByTrack.values()].find((view) => view.liveExpandedId)?.liveExpandedId || null
 
@@ -172,6 +180,23 @@ export default function EdTimeline({
       const lane = node.closest?.('.ed-lane')
       if (lane) return lane.getAttribute('data-track')
     }
+    return null
+  }
+
+  /**
+   * ¿El puntero se ha salido por arriba o por abajo del bloque de pistas de
+   * `kind`? Es la señal de "quiero una pista nueva aquí". Se mide con la
+   * geometría real de las calles, así que las alturas distintas dan igual.
+   */
+  function laneEdgeUnderPointer(clientY, kind) {
+    const scroll = lanesRef.current
+    if (!scroll) return null
+    const lanes = [...scroll.querySelectorAll(`.ed-lane.${kind}`)]
+    if (!lanes.length) return null
+    const top = lanes[0].getBoundingClientRect()
+    const bottom = lanes[lanes.length - 1].getBoundingClientRect()
+    if (clientY < top.top) return 'above'
+    if (clientY > bottom.bottom) return 'below'
     return null
   }
 
@@ -239,7 +264,7 @@ export default function EdTimeline({
       }
       e.preventDefault()
       if (action === 'rowHeight') {
-        setRowH((h) => clamp(Math.round(h * (e.deltaY < 0 ? 1.1 : 0.9)), 34, 120))
+        setRowH((h) => stepRowHeight(h, e.deltaY))
         return
       }
       // scrollX: la rueda vertical y horizontal desplazan la línea de tiempo.
@@ -306,11 +331,15 @@ export default function EdTimeline({
     const waitDrag = !!(e.ctrlKey || e.metaKey || e.shiftKey)
     const movingIds = mode === 'move' && origs.length > 1 ? new Set(origs.map((c) => c.id)) : new Set([clip.id])
     const others = alignOthers(clips, movingIds)
-    drag.current = { mode, startX, orig: { ...clip }, origs, waitDrag, others }
+    drag.current = { mode, startX, orig: { ...clip }, origs, waitDrag, others, trackId: clip.track_id }
     const thresh = () => alignThresholdSec(pps)
-    const previewTrim = (deltaT, doSnap) => {
+    const previewTrim = (rawDelta, doSnap) => {
       const which = mode === 'trim-left' ? 'start' : 'end'
-      const snapped = doSnap ? snapClipTrim(clip, mode, deltaT, others, thresh()) : null
+      // El borde se para en el vecino: estirar un clip tampoco puede montarlo.
+      const deltaT = clampTrimDelta(clips, clip, mode, rawDelta)
+      const snap = doSnap ? snapClipTrim(clip, mode, deltaT, others, thresh()) : null
+      // …y el imán de alineación tampoco puede saltárselo.
+      const snapped = snap && clampTrimDelta(clips, clip, mode, snap.deltaT) === snap.deltaT ? snap : null
       const patch = snapped?.patch || trimClipPatch(clip, mode, deltaT)
       if (!patch) return
       const usedDelta = snapped ? snapped.deltaT : deltaT
@@ -335,25 +364,42 @@ export default function EdTimeline({
           setAlignTimes(snapped.times)
           return
         }
+        // La pista viva del arrastre, no la de origen: así el clip puede VOLVER
+        // a su pista inicial sin soltarlo. (Comparar contra `o.track_id` dejaba
+        // el patch sin track_id justo al regresar, y el clip se quedaba fuera.)
+        const kind = trackKindForClip(o.kind)
         const tid = trackUnderPointer(ev.clientX, ev.clientY)
-        let trackId = o.track_id
-        if (tid && tid !== o.track_id) {
+        let trackId = d.trackId || o.track_id
+        if (tid && tid !== trackId) {
           const tt = tracks.find((t) => t.id === tid)
-          if (tt && trackKindForClip(o.kind) === tt.kind && !tt.locked) trackId = tid
+          if (tt && kind === tt.kind && !tt.locked) trackId = tid
         }
+        d.trackId = trackId   // fuera de las pistas se mantiene la última válida
         const snapped = snapClipMove(o, deltaT, d.others, thresh(), trackId)
-        const patch = { start: snapped.start }
-        if (trackId !== o.track_id) patch.track_id = trackId
-        onMutateClip(o.id, patch)
+        // Los clips no se montan ni hacen escalones: se PEGAN al vecino. El
+        // snap de alineación propone; esto acota al hueco libre más cercano.
+        snapped.start = clampStartNoOverlap(clips, trackId, snapped.start, clipDur(o), { excludeIds: [o.id] })
+        // Sacar el clip por encima/debajo del bloque de pistas = "quiero una
+        // pista nueva aquí". Solo se anuncia; la pista se crea al soltar.
+        // Exige estar FUERA de toda calle (`!tid`): si no, pasar un clip de
+        // vídeo por encima de las pistas de audio pediría pista nueva sin querer.
+        const edge = onMoveToNewTrack && !tid ? laneEdgeUnderPointer(ev.clientY, kind) : null
+        d.newTrack = edge ? { side: edge, start: snapped.start } : null
+        setNewTrackHint(edge ? { side: edge, kind } : null)
+        onMutateClip(o.id, { start: snapped.start, track_id: trackId })
         setAlignTimes(snapped.times)
       } else if (d.mode === 'trim-left' || d.mode === 'trim-right') {
         previewTrim(deltaT, true)
       }
     }
     const up = () => {
+      const pending = drag.current?.newTrack
       drag.current = null
       setTrimGuide(null)
       setAlignTimes(null)
+      setNewTrackHint(null)
+      // La pista se crea aquí, al soltar, no en cada pointermove.
+      if (pending) onMoveToNewTrack?.(clip.id, pending.side, pending.start)
       window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up)
     }
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
@@ -385,11 +431,25 @@ export default function EdTimeline({
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
   }
 
+  // Posición del puntero dentro de la pista (0 = borde superior, 1 = inferior).
+  // Es lo que distingue "ponlo aquí" de "ponlo en una pista nueva encima".
+  function laneYRatio(e) {
+    const box = e.currentTarget?.getBoundingClientRect?.()
+    if (!box || !box.height) return 0.5
+    return clamp((e.clientY - box.top) / box.height, 0, 1)
+  }
+
+  function laneIntent(e, track, dur) {
+    const time = xToTime(e.clientX)
+    return dropIntent(clips, track.id, time, Math.max(0.1, dur || 1), laneYRatio(e))
+  }
+
   function onLaneDragOver(e, track) {
     if (!dragKind || laneKindFor(dragKind) !== track.kind) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
-    setDropHint({ trackId: track.id, time: xToTime(e.clientX) })
+    const intent = laneIntent(e, track, dragInfo?.duration)
+    setDropHint({ trackId: track.id, ...intent })
   }
   function onLaneDrop(e, track) {
     e.preventDefault()
@@ -399,7 +459,9 @@ export default function EdTimeline({
     let payload
     try { payload = JSON.parse(raw) } catch { return }
     if (laneKindFor(payload.asset_kind) !== track.kind) return
-    onDropAsset(payload, track.id, xToTime(e.clientX))
+    // La duración sale del payload: al soltar, dragInfo ya puede estar vacío.
+    const intent = laneIntent(e, track, payload.duration)
+    onDropAsset(payload, track.id, intent.start, intent)
   }
 
   // Selección por área (rubber band estilo Windows). Arranca en un hueco de una
@@ -547,7 +609,16 @@ export default function EdTimeline({
 
         <div className="ed-tl-scroll" ref={lanesRef}>
           <div className="ed-tl-inner" style={{ width: totalW }}>
-            <div className={`ed-ruler${trimGuide ? ' live' : ''}`} title="Clic: mover el cursor · Arrastra ↔ para hacer zoom en ese punto" onPointerDown={onRulerDown}>
+            <div className={`ed-ruler${trimGuide ? ' live' : ''}`} title="Clic: mover el cursor · Arrastra ↔ para hacer zoom en ese punto · I / O: marcar rango"
+              onPointerDown={onRulerDown}
+              onContextMenu={onContextLane ? (e) => { e.preventDefault(); onContextLane(e, null, xToTime(e.clientX)) } : undefined}>
+              {markIn != null && (
+                <span className={`ed-mark-range${markOut == null ? ' open' : ''}`} aria-hidden="true"
+                  style={{ left: markIn * pps, width: markOut != null ? Math.max(2, (markOut - markIn) * pps) : 2 }} />
+              )}
+              {markIn == null && markOut != null && (
+                <span className="ed-mark-range open" aria-hidden="true" style={{ left: markOut * pps, width: 2 }} />
+              )}
               {buildTicks(duration + 4, pps, { fps, dense: !!trimGuide, scrollX, viewW }).map((tk) => (
                 <span key={`${tk.minor ? 'm' : 'M'}-${tk.t}`} className={`ed-tick${tk.minor ? ' minor' : ''}`} style={{ left: tk.t * pps }}><i />{tk.major ? <em>{fmtRuler(tk.t, { step: tk.step, fps, long: rulerLong })}</em> : null}</span>
               ))}
@@ -562,6 +633,13 @@ export default function EdTimeline({
             {rows.map((t) => {
               const view = viewsByTrack.get(t.id)
               const vh = view.height
+              // Bordes del bloque de su tipo: ahí se dibuja la línea de "pista nueva".
+              const sameKind = rows.filter((r) => r.kind === t.kind)
+              const edgeHint = newTrackHint?.kind === t.kind
+                && ((newTrackHint.side === 'above' && sameKind[0]?.id === t.id)
+                  || (newTrackHint.side === 'below' && sameKind[sameKind.length - 1]?.id === t.id))
+                ? newTrackHint.side
+                : null
               return (
                 <div key={t.id}
                   className={`ed-lane ${t.kind} ${t.locked ? 'locked' : ''} ${selectedTrackId === t.id ? 'sel' : ''} ${dragKind && laneKindFor(dragKind) === t.kind ? 'drop-ok' : ''} ${vh > rowH ? 'stack-open' : ''}${linkPick && t.kind === 'text' ? ' link-target' : ''}${linkPick && t.id === linkPick ? ' link-source' : ''}`}
@@ -579,6 +657,12 @@ export default function EdTimeline({
                       startMarquee(e)
                     }
                   }}
+                  onContextMenu={onContextLane ? (e) => {
+                    // Solo el hueco de la pista: el menú de un clip lo abre el propio clip.
+                    if (e.target !== e.currentTarget) return
+                    e.preventDefault()
+                    onContextLane(e, t, xToTime(e.clientX))
+                  } : undefined}
                   onDragOver={(e) => onLaneDragOver(e, t)}
                   onDragLeave={() => setDropHint((h) => (h?.trackId === t.id ? null : h))}
                   onDrop={(e) => onLaneDrop(e, t)}>
@@ -591,7 +675,7 @@ export default function EdTimeline({
                         mcpBusy={mcpBusyIds?.includes(c.id)}
                         onDown={(e, mode) => startClipDrag(e, c, mode)}
                         onKfDown={(e, kf) => startKfDrag(e, c, kf)}
-                        onContext={(e) => onContextClip?.(e, c)}
+                        onContext={(e) => onContextClip?.(e, c, xToTime(e.clientX))}
                         onDouble={() => onDoubleClip?.(c)}
                         onCopyDesc={onCopyDesc}
                         audioMaterials={audioMaterials} />
@@ -608,8 +692,23 @@ export default function EdTimeline({
                     </button>
                   )}
                   {dropHint?.trackId === t.id && dragInfo && (
-                    <div className="ed-drop-ghost" style={{ left: dropHint.time * pps, width: Math.max(20, (dragInfo.duration || 1) * pps) }}>
-                      <span>{dragInfo.name}</span>
+                    <>
+                      {/* El fantasma se pinta donde el clip va a CAER de verdad
+                          (detrás del que estorba, o alineado si se reemplaza). */}
+                      <div
+                        className={`ed-drop-ghost ${dropHint.action}`}
+                        style={{ left: dropHint.start * pps, width: Math.max(20, (dragInfo.duration || 1) * pps) }}
+                      >
+                        <span>{dropHint.action === 'replace' ? `Reemplazar · ${dragInfo.name}` : dragInfo.name}</span>
+                      </div>
+                      {dropHint.action === 'newTrack' && (
+                        <div className="ed-drop-newtrack" aria-hidden="true" />
+                      )}
+                    </>
+                  )}
+                  {edgeHint && (
+                    <div className={`ed-drop-newtrack ${edgeHint}`} aria-hidden="true">
+                      <span>Nueva pista</span>
                     </div>
                   )}
                 </div>
@@ -621,6 +720,9 @@ export default function EdTimeline({
             ))}
             {marquee && (
               <div className="ed-marquee" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} aria-hidden="true" />
+            )}
+            {markIn != null && markOut != null && (
+              <div className="ed-mark-shade" style={{ left: markIn * pps, width: (markOut - markIn) * pps }} aria-hidden="true" />
             )}
             <div className="ed-playhead" style={{ left: playhead * pps }}><span className="ed-playhead-knob" /></div>
           </div>

@@ -160,10 +160,12 @@ export default function MotionCanvas({
             style={{ width: comp?.width, height: comp?.height }}
             onPointerDown={() => onSelectLayer?.(null)}
           >
-            {boxes.filter((b) => b.on !== false).map((b) => (
+            {/* La capa seleccionada se enmarca aunque no esté visible en este instante
+                (borde discontinuo): así se sabe dónde está sin tener que buscar su tramo. */}
+            {boxes.filter((b) => b.on !== false || b.id === selLayerId).map((b) => (
               <div
                 key={b.id}
-                className={`motion-hitbox ${b.id === selLayerId ? 'sel' : ''}`}
+                className={`motion-hitbox${b.id === selLayerId ? ' sel' : ''}${b.on === false ? ' off' : ''}`}
                 style={{ left: b.left, top: b.top, width: b.width, height: b.height }}
                 onPointerDown={(e) => beginDrag(e, b.id)}
               />

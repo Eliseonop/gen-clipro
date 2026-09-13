@@ -11,6 +11,7 @@ import base64
 import io
 
 from .. import jobs, projects
+from ..motion import segment_context
 from ..motion import service as motion_service
 from ..motion import templates as motion_templates
 from ..motion.models import MotionComposition
@@ -199,7 +200,23 @@ def motion_get_frame(project_id: str, composition_id: str,
     }
 
 
+def motion_segment_context(project_id: str, start: float | None = None, end: float | None = None,
+                           playhead: float | None = None, clip_id: str | None = None) -> dict:
+    """Contexto compacto de UN tramo (guion, clips, assets, estilo) para diseñar un motion; sin tiempos usa el rango marcado en el editor."""
+    proj = _project_or_raise(project_id)
+    if start is None and end is None and playhead is None:
+        focus = segment_context.get_focus(project_id)
+        if not focus:
+            raise MCPError("invalid_parameter",
+                           "Indica start/end (s) o marca un rango en el editor (teclas I/O).",
+                           retryable=True)
+        start, end, playhead = focus["start"], focus["end"], focus["playhead"]
+        clip_id = clip_id or focus["clip_id"]
+    return segment_context.build_segment_context(proj, start, end, playhead, clip_id)
+
+
 def register(mcp) -> None:
+    tool(mcp, access="read")(motion_segment_context)
     tool(mcp, access="read")(motion_list_templates)
     tool(mcp, access="read")(motion_get_composition)
     tool(mcp, access="read")(motion_get_frame)

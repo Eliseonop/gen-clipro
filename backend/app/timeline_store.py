@@ -71,7 +71,11 @@ def _current(pid: str) -> dict:
     proj = projects.get_project(pid)
     if proj is None:
         raise ValueError("Proyecto no encontrado.")
-    return proj.timeline.model_dump() if proj.timeline else Timeline().model_dump()
+    if proj.timeline:
+        return proj.timeline.model_dump()
+    # Proyecto sin timeline: fps predeterminado de Configuración→Exportar (igual que el editor).
+    from . import export_settings
+    return Timeline(fps=export_settings.load()["fps"]).model_dump()
 
 
 def _result(pid: str, timeline_dict: dict, changed, warnings, hist: dict) -> dict:

@@ -20,6 +20,7 @@ import {
   clipLayerInfo, moveClipLayer, canLayerClip,
   trackTextContent, trackSrt, trackSrtWithReference, trackSource, srtTimestamp,
   mcpBusyClipIds, MCP_BUSY_MS,
+  freeStartOnTrack, clampStartNoOverlap, trimBounds, clampTrimDelta,
 } from './editorModel.js'
 
 const vFast = { kind: 'video', start: 10, in_point: 2, out_point: 6, speed: 2 }
@@ -643,3 +644,90 @@ assert.deepEqual(
 )
 console.log('mcp busy clip ids ok')
 
+
+// --- freeStartOnTrack: una pista es una secuencia, no un montón ---------------
+const seq = [
+  { id: 'a', track_id: 'V1', kind: 'video', start: 0, in_point: 0, out_point: 5, speed: 1 },
+  { id: 'b', track_id: 'V1', kind: 'video', start: 10, in_point: 0, out_point: 4, speed: 1 },
+  { id: 'z', track_id: 'V2', kind: 'video', start: 0, in_point: 0, out_point: 30, speed: 1 },
+]
+// Hueco libre: se respeta el instante pedido.
+assert.equal(freeStartOnTrack(seq, 'V1', 6, 2), 6)
+// Encima de 'a' (0-5): cae justo detrás.
+assert.equal(freeStartOnTrack(seq, 'V1', 0, 3), 5)
+// El hueco 5-10 no admite 8s: salta detrás de 'b' (termina en 14).
+assert.equal(freeStartOnTrack(seq, 'V1', 0, 8), 14)
+// El hueco 5-10 sí admite 5s exactos.
+assert.equal(freeStartOnTrack(seq, 'V1', 5, 5), 5)
+// Otra pista no estorba.
+assert.equal(freeStartOnTrack(seq, 'A1', 0, 5), 0)
+// Pista vacía o duración nula: el instante pedido, sin tocar.
+assert.equal(freeStartOnTrack([], 'V1', 3.5, 2), 3.5)
+assert.equal(freeStartOnTrack(seq, 'V1', 2, 0), 2)
+// Negativos se acotan a 0.
+assert.equal(freeStartOnTrack([], 'V1', -4, 2), 0)
+// Duplicar detrás del original encadena sin solapar.
+assert.equal(freeStartOnTrack(seq, 'V1', 5, 5), 5)
+console.log('freeStartOnTrack ok')
+
+// --- clampStartNoOverlap: los clips se PEGAN, no se montan --------------------
+const row = [
+  { id: 'a', track_id: 'V1', kind: 'video', start: 0, in_point: 0, out_point: 5, speed: 1 },
+  { id: 'b', track_id: 'V1', kind: 'video', start: 10, in_point: 0, out_point: 4, speed: 1 },
+]
+const mv = (id, want, dur) => clampStartNoOverlap(row, 'V1', want, dur, { excludeIds: [id] })
+
+// Pista vacía: manda lo que pidas.
+assert.equal(clampStartNoOverlap([], 'V1', 7, 3), 7)
+// Hueco libre de sobra (5-10): se respeta.
+assert.equal(clampStartNoOverlap(row, 'V1', 6, 2), 6)
+// Empujando contra 'a' por la derecha: se pega a su final (5), no se monta.
+assert.equal(clampStartNoOverlap(row, 'V1', 4, 3), 5)
+// Empujando contra 'b' por la izquierda: se pega a su inicio (10-3=7).
+assert.equal(clampStartNoOverlap(row, 'V1', 9, 3), 7)
+// Justo en medio del hueco 5-10 con un clip de 5: encaja clavado.
+assert.equal(clampStartNoOverlap(row, 'V1', 5, 5), 5)
+// El hueco 5-10 no admite 6s → se va al hueco infinito tras 'b'.
+assert.equal(clampStartNoOverlap(row, 'V1', 6, 6), 14)
+// Antes del primer clip no hay sitio (0 está ocupado) → detrás de 'a'.
+assert.equal(clampStartNoOverlap(row, 'V1', 0, 2), 5)
+// Nunca sale negativo.
+assert.equal(clampStartNoOverlap(row, 'V1', -5, 2), 5)
+
+// Moviendo un clip, él mismo no cuenta como obstáculo.
+assert.equal(mv('a', 0, 5), 0)      // 'a' se queda donde está
+assert.equal(mv('a', 6, 5), 5)      // pegado a su sitio original, sin chocar consigo
+assert.equal(mv('b', 5, 4), 5)      // 'b' sube a pegarse al final de 'a'
+assert.equal(mv('b', 3, 4), 5)      // no puede pisar 'a': se pega
+// Con 'a' fuera del cálculo, el inicio de la pista queda libre.
+assert.equal(mv('a', -2, 3), 0)
+console.log('clampStartNoOverlap ok')
+
+// --- trim: el borde se para en el vecino -------------------------------------
+const trow = [
+  { id: 'p', track_id: 'V1', kind: 'video', start: 0, in_point: 0, out_point: 4, speed: 1 },
+  { id: 'm', track_id: 'V1', kind: 'video', start: 6, in_point: 2, out_point: 8, speed: 1, source_duration: 30 },
+  { id: 'n', track_id: 'V1', kind: 'video', start: 14, in_point: 0, out_point: 3, speed: 1 },
+]
+const mid = trow[1]   // ocupa 6-12
+assert.deepEqual(trimBounds(trow, mid), { left: 4, right: 14 })
+// Sin vecinos: sin topes.
+assert.deepEqual(trimBounds([mid], mid), { left: 0, right: Infinity })
+
+// Estirar a la derecha: como mucho hasta 14 (delta +2).
+assert.equal(clampTrimDelta(trow, mid, 'trim-right', 5), 2)
+assert.equal(clampTrimDelta(trow, mid, 'trim-right', 1), 1)     // cabe, no se toca
+assert.equal(clampTrimDelta(trow, mid, 'trim-right', -3), -3)   // encoger, libre
+// Estirar a la izquierda: como mucho hasta 4 (delta -2).
+assert.equal(clampTrimDelta(trow, mid, 'trim-left', -5), -2)
+assert.equal(clampTrimDelta(trow, mid, 'trim-left', -1), -1)
+assert.equal(clampTrimDelta(trow, mid, 'trim-left', 3), 3)      // encoger, libre
+// Sin vecino a la derecha no hay tope.
+assert.equal(clampTrimDelta([mid], mid, 'trim-right', 99), 99)
+
+// El delta acotado, pasado por trimClipPatch, deja el clip pegado sin solapar.
+const rp = trimClipPatch(mid, 'trim-right', clampTrimDelta(trow, mid, 'trim-right', 50))
+assert.equal(clipEnd({ ...mid, ...rp }), 14)
+const lp = trimClipPatch(mid, 'trim-left', clampTrimDelta(trow, mid, 'trim-left', -50))
+assert.equal(({ ...mid, ...lp }).start, 4)
+console.log('trim bounds ok')

@@ -177,11 +177,13 @@ def add_subtitles(project_id: str, source_clip_id: str, segments: list,
                    "track_id": track_id, "transcript_id": transcript_id, "style": style})
 
 
-def set_project_format(project_id: str, aspect: str | None = None, width: int | None = None,
-                       height: int | None = None, fps: int | None = None) -> dict:
-    """Cambia el formato de salida: ``aspect`` (9:16/16:9/1:1/4:5/4:3) o w/h/fps."""
+def set_project_format(project_id: str, aspect: str | None = None, resolution: int | None = None,
+                       width: int | None = None, height: int | None = None,
+                       fps: int | None = None) -> dict:
+    """Formato de salida: ``aspect`` (16:9/9:16/1:1/4:3/3:4/4:5), ``resolution`` (480/720/1080/2160), o w/h; y fps."""
     return _apply(project_id, "set_project_format",
-                  {"aspect": aspect, "width": width, "height": height, "fps": fps})
+                  {"aspect": aspect, "resolution": resolution, "width": width,
+                   "height": height, "fps": fps})
 
 
 # --- Propiedades por-clip (Etapa 4.5) ------------------------------------

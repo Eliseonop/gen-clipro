@@ -110,6 +110,22 @@ export function VideoCard({
     toggle(e)
   }
 
+  // Scrub al pasar el ratón: mover en X sobre la miniatura busca el frame,
+  // como CapCut. Solo cuando no se está reproduciendo con el botón play.
+  function onScrub(e) {
+    if (playing) return
+    const v = ref.current
+    if (!v || !Number.isFinite(v.duration) || v.duration <= 0) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const rel = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
+    try { v.currentTime = rel * v.duration } catch { /* noop */ }
+  }
+  function onScrubLeave() {
+    if (playing) return
+    const v = ref.current
+    if (v) { try { v.currentTime = 0 } catch { /* noop */ } }
+  }
+
   return (
     <div
       className={`ed-card grid video${draggable ? '' : ' no-drag'}`}
@@ -121,7 +137,12 @@ export function VideoCard({
       } : undefined}
       onDragEnd={draggable ? () => di?.(null) : undefined}
     >
-      <div className="ed-card-media" style={ar ? { aspectRatio: ar } : undefined}>
+      <div
+        className="ed-card-media"
+        style={ar ? { aspectRatio: ar } : undefined}
+        onPointerMove={onScrub}
+        onPointerLeave={onScrubLeave}
+      >
         <video ref={ref} src={bustUrl(clip.url, clip)} preload="metadata" playsInline muted
           onLoadedMetadata={onMeta}
           onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} />

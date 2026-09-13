@@ -318,6 +318,30 @@ def _clip_duration(clip: TimelineClip) -> float:
     return clip_timeline_duration(clip)
 
 
+# Espacio de color de salida: BT.709 (HD). Sin esto, la conversión final RGB→YUV
+# usaba la matriz BT.601 y sin etiquetar: las imágenes y los clips que pasan por
+# RGB (overlay, máscara, fondo) salían con el color desplazado respecto al preview.
+BT709_OUTPUT_ARGS = ["-colorspace", "bt709", "-color_primaries", "bt709",
+                     "-color_trc", "bt709", "-color_range", "tv"]
+BT709_FINAL_FILTER = "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p"
+# Vídeo sin etiqueta de color → se interpreta como BT.709, igual que el navegador
+# en el preview (si no, FFmpeg asume BT.601 al pasar a RGB).
+ASSUME_BT709_FILTER = "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv"
+
+
+def _color_untagged(path: Path) -> bool:
+    """True si el primer stream de vídeo no declara matriz de color (vía ffprobe)."""
+    try:
+        res = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=color_space", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True,
+        )
+        return (res.stdout or "").strip() in ("", "unknown")
+    except Exception:
+        return True
+
+
 def _has_audio(path: Path) -> bool:
     """True si el archivo tiene al menos un stream de audio (vía ffprobe)."""
     try:
@@ -683,12 +707,7 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
     H = int(timeline.height or config.OUTPUT_HEIGHT)
     W -= W % 2
     H -= H % 2
-    fps = int(timeline.fps or 30)
-    try:
-        from .export_settings import load as load_export
-        fps = int(load_export()["fps"] or fps)
-    except Exception:  # noqa: BLE001
-        pass
+    fps = int(timeline.fps or 30)   # por proyecto; el global solo es el predeterminado
 
     # Orden de capas de vídeo: primero las pistas de vídeo inferiores (fondo),
     # las superiores encima. Índice de capa = posición de la pista de vídeo.
@@ -826,12 +845,13 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         overlay_xy = overlay_xy_for_fx(overlay_xy, c, start, dur, W, H)
         vlabel = f"v{n}"
         tin, tout = ffmpeg_trim_window(c, fps)
+        color_pre = f"{ASSUME_BT709_FILTER}," if (not is_still_clip(c) and _color_untagged(path)) else ""
         if has_bg:
             # El alfa se aplica en el espacio del MATERIAL (antes del recorte),
             # igual que el preview, que sustituye el elemento fuente por un
             # recorte con alfa. Velocidad/reverse van después: el alfa las
             # hereda sin duplicar filtros.
-            filt.append(f"[{k}:v]trim={tin:.3f}:{tout:.3f},setpts=PTS-STARTPTS[bgin{n}]")
+            filt.append(f"[{k}:v]{color_pre}trim={tin:.3f}:{tout:.3f},setpts=PTS-STARTPTS[bgin{n}]")
             filt.extend(bg_steps)
             filt.append(
                 f"[{bg_label}]{cropscale},fps={fps}{spd_part}{fx_part},"
@@ -839,7 +859,7 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
             )
         else:
             filt.append(
-                f"[{k}:v]trim={tin:.3f}:{tout:.3f},setpts=PTS-STARTPTS,"
+                f"[{k}:v]{color_pre}trim={tin:.3f}:{tout:.3f},setpts=PTS-STARTPTS,"
                 f"{cropscale},fps={fps}{spd_part}{fx_part},setpts=PTS-STARTPTS+{start:.3f}/TB[{vlabel}]"
             )
         out_label = f"ov{n}"
@@ -875,7 +895,7 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         text_steps, last_label = _text_chain(timeline, W, H, last_label)
         filt.extend(text_steps)
 
-    filt.append(f"[{last_label}]format=yuv420p[vout]")
+    filt.append(f"[{last_label}]{BT709_FINAL_FILTER}[vout]")
 
     # --- Audio: cada clip retrasado + volumen, mezclado con amix ---
     alabels: list[str] = []
@@ -926,7 +946,7 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         cmd += ["-an"]
     cmd += [
         *gpu.video_encoder_args(),
-        "-pix_fmt", "yuv420p", "-r", str(fps), "-movflags", "+faststart",
+        "-pix_fmt", "yuv420p", *BT709_OUTPUT_ARGS, "-r", str(fps), "-movflags", "+faststart",
         "-t", f"{total:.3f}",
         str(out_path),
     ]

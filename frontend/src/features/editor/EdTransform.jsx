@@ -30,7 +30,7 @@ export function KfDia({ state = 'off', onClick, title }) {
   return (
     <button
       type="button"
-      className={`ed-kf-dia ${st}`}
+      className={`ed-kf-dia kf-${st}`}
       title={title || KF_TITLES[st]}
       onClick={onClick}
       disabled={!onClick}

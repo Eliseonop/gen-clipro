@@ -289,7 +289,6 @@ export default function EdMaterial({
   selectedClip, onChangeFx,
   onAddText, onApplyTextPreset,
   matTab, onMatTab,
-  onExportFps,
   audioDb, onAudioDb,
   aiContext, onReloadTimeline, timelineClips, onMcpAudit,
   motion, motionFormat, onGoMotion, onMotionBack,
@@ -1153,7 +1152,7 @@ export default function EdMaterial({
       {tab === 'paper' && paper && (
         <PaperElements project={project} paper={paper} onGoPaper={onGoPaper} />
       )}
-      {tab === 'settings' && <EdSettings onExportFps={onExportFps} audioDb={audioDb} onAudioDb={onAudioDb} />}
+      {tab === 'settings' && <EdSettings audioDb={audioDb} onAudioDb={onAudioDb} />}
       <div
         className={tab === 'chat' ? 'ed-mat-list pinned' : 'ed-hidden-panel'}
         aria-hidden={tab !== 'chat'}

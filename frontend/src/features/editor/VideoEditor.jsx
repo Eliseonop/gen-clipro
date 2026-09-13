@@ -9,13 +9,13 @@ import { clamp } from '../../lib/panning'
 import { defaultTextStyle, subtitleStyle, wrappedText, ensureEditorFonts, selectedSubtitleThemeId, clearTextTheme, effectiveTextStyle } from '../../lib/textstyles'
 import { applyThemeToStyle, wordsPerBoxOptions, activeWordsPerBox, splitCaptionWords } from '../../lib/textKaraoke'
 import {
-  uid, FORMATS, mediaUrl, defaultTracks, newReframe, withKfIds,
+  uid, mediaUrl, defaultTracks, newReframe, withKfIds,
   makeClip, makeTextClip, makeShapeClip, clipDur, clipEnd, clipPlaybackMuted, clipSpeed, clipKeepPitch, timelineToSource, sourceToTimeline, splitClipAt,
   canCaptionClip, removeTrack, shouldConfirmTrackDelete,
   extraClipsAfterSplit, extraClipsAfterOneSplit, splitTrackTextByMaxWords, splitOneTextClip,
-  nextClipSelection, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
+  nextClipSelection, groupMoveFromOrig, patchClipsStyle, removeClipsByIds, freeStartOnTrack,
   previewElementVolume, parsePreviewVolume, PREVIEW_VOL_KEY, syncPreviewMedia,
-  isVisualClip, trackKindForClip, IMAGE_DEFAULT_DUR,
+  isVisualClip, trackKindForClip, laneKindForAsset, IMAGE_DEFAULT_DUR,
   duplicateClipOntoTrack, syncMaterialInstances, applyFaceTrack,
   isEditingExistingClip, clipSaveIndex,
   trackContextItems, linkTrackPair, unlinkTrackPair,
@@ -28,6 +28,8 @@ import {
 } from './editorModel'
 import { textRole } from '../../lib/textRole'
 import { SHAPE_DEFAULT_DUR } from '../../lib/shapes'
+import { readRowHeight, writeRowHeight } from './trackRows'
+import { newTrackIndex, resolveNewTrack } from './dropIntent'
 import { MASK_KF_KEYS, clipMasks, defaultMask, maskId, normalizeMask } from '../../lib/clipMask'
 import { bgCapable, clipBg, defaultBg, normalizeBg } from '../../lib/clipBg'
 import { resetBgMeta, resetCutout } from './bgCutout'
@@ -41,6 +43,8 @@ import {
 import { drawMainView, drawResultView } from './render/canvas'
 import MotionCanvas from '../motion/MotionCanvas'
 import MotionProps from '../motion/MotionProps'
+import GenerateMotionModal from '../motion/GenerateMotionModal'
+import { EMPTY_MARK, hasMarkRange, resolveGenerateTarget, setMark } from './motionTarget'
 import { useMotionComp } from '../motion/useMotionComp'
 import PaperCanvas from '../paper/PaperCanvas'
 import PaperProps from '../paper/PaperProps'
@@ -190,6 +194,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [fps, setFps] = useState(30)
   const [playhead, setPlayhead] = useState(0)
   const [playing, setPlaying] = useState(false)
+  const [isFullscreen, setIsFullscreen] = useState(false)
   const [selClipId, setSelClipId] = useState(null)
   const [selClipIds, setSelClipIds] = useState([])
   const [selTrackId, setSelTrackId] = useState('V1')
@@ -207,15 +212,29 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     try { return parsePreviewVolume(localStorage.getItem(PREVIEW_VOL_KEY)) }
     catch { return 1 }
   })
-  const [rowH, setRowH] = useState(52)
+  // Alto de fila del timeline: Ctrl+rueda lo ajusta y se conserva entre sesiones.
+  const [rowH, setRowH] = useState(() => readRowHeight(typeof localStorage === 'undefined' ? null : localStorage))
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return
+    writeRowHeight(localStorage, rowH)
+  }, [rowH])
   const panels = usePanelLayout()
 
   const [ctxMenu, setCtxMenu] = useState(null)      // { x, y, clip }
+  // "Generar Motion": rango marcado con I / O, menú del hueco de pista/regla y el
+  // tramo abierto en el modal. Solo en modo Main (la timeline del proyecto).
+  const [markRange, setMarkRange] = useState(EMPTY_MARK)
+  const markRangeRef = useRef(EMPTY_MARK); markRangeRef.current = markRange
+  const [laneMenu, setLaneMenu] = useState(null)    // { x, y, time, track }
+  const [genMotion, setGenMotion] = useState(null)  // { start, end, playhead, explicit, clipId }
+  const genMotionRef = useRef(null); genMotionRef.current = genMotion
   const [propClipboard, setPropClipboard] = useState(null)  // props visuales copiadas
   const [trackMenu, setTrackMenu] = useState(null)  // { x, y, track }
   const [linkPick, setLinkPick] = useState(null)    // id de pista de audio al relacionar
   const [trackToDelete, setTrackToDelete] = useState(null)
   const [fragmentAsk, setFragmentAsk] = useState(null)
+  // Soltar un clip justo encima de otro = intención de reemplazarlo: se confirma.
+  const [replaceAsk, setReplaceAsk] = useState(null)
   const [dragInfo, setDragInfo] = useState(null)    // { kind, duration, name }
   const [framingMode, setFramingMode] = useState(null) // { trackId, x, y, w } o null
   const [mainColTab, setMainColTab] = useState('main')
@@ -227,6 +246,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const motionModeRef = useRef(false)
   const motionControlsRef = useRef(null)
   const [motionTime, setMotionTime] = useState(0)
+  const motionTimeRef = useRef(0)
   const [motionPlaying, setMotionPlaying] = useState(false)
   // Paper Animator, mismo esquema que Motion: estado en un hook, el canvas central
   // es su lienzo, el inspector sus propiedades y la timeline real proyecta su
@@ -373,11 +393,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         if (tl?.width) setOutW(tl.width)
         if (tl?.height) setOutH(tl.height)
         if (tl?.audio_target_db != null) setAudioDb(tl.audio_target_db)
+        // FPS por proyecto: el de la timeline guardada. El de Configuración→Exportar
+        // solo es el predeterminado de un proyecto sin timeline todavía.
         if (tl?.fps) setFps(normalizeFps(tl.fps))
-        try {
-          const s = await getSettings()
-          if (alive) setFps(normalizeFps(s?.export?.fps ?? tl?.fps))
-        } catch { /* deja el fps del timeline */ }
+        else {
+          try {
+            const s = await getSettings()
+            if (alive) setFps(normalizeFps(s?.export?.fps))
+          } catch { /* deja 30 */ }
+        }
       } catch { /* vacía */ } finally {
         if (alive) setLoaded(true)
       }
@@ -629,6 +653,20 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     seek(playheadRef.current + dt)
   }
 
+  // Pantalla completa del reproductor: fullscreen sobre la columna central
+  // (canvas + transporte) para conservar los controles. Esc sale.
+  function toggleFullscreen() {
+    const col = mainStageRef.current?.closest('.ed-canvas-col')
+    if (!col) return
+    if (document.fullscreenElement) document.exitFullscreen?.()
+    else col.requestFullscreen?.().catch(() => {})
+  }
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', onFsChange)
+    return () => document.removeEventListener('fullscreenchange', onFsChange)
+  }, [])
+
   function snapshotTl() {
     return {
       tracks, clips, playhead, selClipId, selClipIds, selTrackId, selKfId, pps,
@@ -724,6 +762,41 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     applyMotionTimeline(null)
   }
 
+  // Motion tiene UN solo reloj: el del preview (iframe). La timeline pinta
+  // `motionTime` y sus clics/scrub/teclas mueven el preview. Antes la timeline
+  // usaba `playhead`/`seek` del vídeo: la línea roja y el preview iban cada uno
+  // por su lado. Solo usan refs y setters estables → válidas desde el keydown.
+  function motionSeek(t) {
+    const c = motionControlsRef.current
+    if (!c) return
+    if (c.isPlaying()) { c.pause(); setMotionPlaying(false) }
+    c.seek(clamp(Number(t) || 0, 0, motionRef.current.comp?.duration || 0))
+  }
+  function motionTogglePlay() {
+    const c = motionControlsRef.current
+    if (!c) return
+    if (c.isPlaying()) { c.pause(); setMotionPlaying(false) }
+    else { c.setLoop(true); c.play(); setMotionPlaying(true) }
+  }
+
+  // "Generar Motion": tramo = rango I/O si está marcado; si no, el instante del
+  // clic + 5 s. Se guarda la timeline antes de abrir porque el backend construye
+  // el contexto (guion, elementos del tramo) desde la versión guardada.
+  async function openGenerateMotion({ time, clip } = {}) {
+    setCtxMenu(null)
+    setLaneMenu(null)
+    if (clipModeRef.current || motionModeRef.current || paperModeRef.current) return
+    const target = resolveGenerateTarget({
+      mark: markRangeRef.current,
+      time: Number.isFinite(time) ? time : playheadRef.current,
+      clip,
+    })
+    stopPlayback()
+    seek(target.start)
+    try { await saveTimeline(project.id, timelinePayload()) } catch { /* se usa lo último guardado */ }
+    setGenMotion(target)
+  }
+
   // Proyecta el estado de Paper Animator como timeline (objeto + keyframes →
   // pista/clip), reusando EdTimeline igual que hace Motion.
   function applyPaperTimeline(st) {
@@ -799,6 +872,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   // acciones de Paper Animator, y lo que no aplica (cortar, duplicar, arrastrar
   // material, pistas nuevas) llega como `undefined` y la barra lo deshabilita.
   const paperMode = mainColTab === 'paper'
+  const motionMode = mainColTab === 'motion'
 
   // Estirar el clip del objeto = cambiar la duración de la animación.
   // Las bandas de papel (apertura/cierre) tienen tiempos fijos: se ignoran.
@@ -1017,9 +1091,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       ? clipArg
       : (clips.find((c) => c.id === selClipId) || clips.find((c) => selClipIds.includes(c.id)))
     if (!clip) return
-    const kind = trackKindForClip(clip.kind)
-    const trackId = addTrack(kind)
+    // El duplicado se queda en LA MISMA pista, justo detrás del original (y si
+    // ahí no cabe, en el siguiente hueco libre). Antes se creaba una pista nueva
+    // por cada duplicado, que es lo que llenaba el timeline de V2/V3/V4…
+    const trackId = clip.track_id
     const copy = duplicateClipOntoTrack(clip, trackId, uid('c'))
+    copy.start = freeStartOnTrack(clipsRef.current, trackId, clipEnd(clip), clipDur(clip))
     setClips((prev) => [...prev, copy])
     setSelClipId(copy.id)
     setSelClipIds([copy.id])
@@ -1194,6 +1271,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (assetKind === 'shape') {
       const track = targetTrackFor('video')
       if (!track) return
+      // Las figuras son objetos libres (rótulos, flechas): se quedan en el
+      // cabezal aunque haya un clip debajo, porque suelen ir SOBRE el vídeo.
       const clip = makeShapeClip(track.id, at, SHAPE_DEFAULT_DUR, item)
       setClips((prev) => [...prev, clip])
       setSelClipId(clip.id)
@@ -1208,13 +1287,50 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       : assetKind === 'clips'
         ? ((item.end ?? item.duration ?? 0) - (item.start ?? 0))
         : (item.duration || 0)
-    const clip = makeClip(assetKind, item, track.id, at, dur)
+    // Desde el cabezal, pero sin pisar lo que ya hay: la pista es una secuencia.
+    // Pulsar + varias veces encadena los clips en vez de amontonarlos.
+    const at0 = freeStartOnTrack(clipsRef.current, track.id, at, dur)
+    const clip = makeClip(assetKind, item, track.id, at0, dur)
     setClips((prev) => [...prev, clip])
     setSelClipId(clip.id)
     setSelClipIds([clip.id])
   }
 
-  function dropAsset(payload, trackId, startTime) {
+  // Aplica la intención deducida al soltar (ver dropIntent.js). Devuelve la
+  // pista definitiva y el instante, o null si hay que esperar confirmación.
+  function resolveDropTarget(payload, trackId, startTime, intent) {
+    if (!intent || intent.action === 'place' || intent.action === 'after') {
+      return { trackId, start: startTime }
+    }
+    const dur = Math.max(0.1, payload.duration || SHAPE_DEFAULT_DUR)
+    if (intent.action === 'newTrack') {
+      const spot = resolveNewTrack(clipsRef.current, tracksRef.current, trackId, startTime, dur)
+      // Si la de encima está ocupada se crea una: es lo que anuncia la línea verde.
+      return { trackId: spot.create ? addTrack(laneKindForAsset(payload.asset_kind)) : spot.trackId, start: startTime }
+    }
+    if (intent.action === 'replace') {
+      setReplaceAsk({ payload, trackId, start: startTime, targetId: intent.targetId })
+      return null
+    }
+    return { trackId, start: startTime }
+  }
+
+  function dropAsset(payload, trackId, startTime, intent) {
+    const spot = resolveDropTarget(payload, trackId, startTime, intent)
+    if (!spot) return                       // el modal de reemplazo decide
+    placeAsset(payload, spot.trackId, spot.start)
+  }
+
+  // Confirmado el reemplazo: fuera el clip de debajo y el nuevo ocupa su sitio.
+  function applyReplaceDrop() {
+    const ask = replaceAsk
+    setReplaceAsk(null)
+    if (!ask) return
+    setClips((prev) => removeClipsByIds(prev, [ask.targetId]))
+    placeAsset(ask.payload, ask.trackId, ask.start)
+  }
+
+  function placeAsset(payload, trackId, startTime) {
     if (payload.asset_kind === 'shape' || payload.kind === 'shape') {
       const clip = makeShapeClip(trackId, startTime, payload.duration || SHAPE_DEFAULT_DUR, payload)
       setClips((prev) => [...prev, clip])
@@ -1299,7 +1415,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     })
   }
 
-  function addTrack(kind, style) {
+  function addTrack(kind, style, side) {
     const prefix = kind === 'video' ? 'V' : kind === 'audio' ? 'A' : 'T'
     const nums = tracksRef.current.filter((t) => t.kind === kind).map((t) => parseInt(String(t.name).replace(/\D/g, ''), 10) || 0)
     const n = (nums.length ? Math.max(...nums) : 0) + 1
@@ -1307,6 +1423,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     const nt = { id, kind, name: `${prefix}${n}`, hidden: false, muted: false, locked: false, linked_track_id: null }
     if (kind === 'text') nt.style = style || subtitleStyle()
     setTracks((prev) => {
+      // `side` ('above' | 'below') llega al arrastrar un clip fuera del bloque
+      // de pistas; sin él se mantiene el sitio de siempre.
+      if (side) {
+        const copy = [...prev]; copy.splice(newTrackIndex(prev, kind, side), 0, nt); return copy
+      }
       if (kind === 'video') {
         const lastVid = prev.map((t, i) => (t.kind === 'video' ? i : -1)).reduce((a, b) => Math.max(a, b), -1)
         const copy = [...prev]; copy.splice(lastVid + 1, 0, nt); return copy
@@ -1474,6 +1595,19 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (!clipId) return
     setClips((prev) => moveClipLayer(prev, clipId, action))
   }
+  // Arrastrar un clip ya colocado fuera del bloque de pistas (o a la franja
+  // superior de una ocupada) crea la pista y lo lleva allí. Se aplica al SOLTAR,
+  // no en cada movimiento: crear pistas en el pointermove sería un desastre.
+  function moveClipToNewTrack(clipId, side, start) {
+    const clip = clipsRef.current.find((c) => c.id === clipId)
+    if (!clip) return
+    const kind = trackKindForClip(clip.kind)
+    const trackId = addTrack(kind, undefined, side || 'above')
+    const at = Number.isFinite(Number(start)) ? Math.max(0, Number(start)) : clip.start
+    setClips((prev) => prev.map((c) => (c.id === clipId ? { ...c, track_id: trackId, start: +at.toFixed(3) } : c)))
+    setSelTrackId(trackId)
+  }
+
   function moveGroup(origs, deltaT) {
     setClips((prev) => groupMoveFromOrig(prev, origs, deltaT))
   }
@@ -2439,6 +2573,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     }
     function onKey(e) {
       if (typingTarget(document.activeElement) || typingTarget(e.target)) return
+      if (genMotionRef.current) return   // el modal de Generar Motion tiene el teclado
       // Paper Animator tiene su propio estado y su propio historial: solo comparte
       // los atajos que significan lo mismo (deshacer, play, mover el cabezal).
       // Cortar/duplicar/pegar clips no aplican a un objeto único.
@@ -2470,6 +2605,37 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         }
         return
       }
+      // Motion: transporte y borrado van al preview/composición, no al motor de
+      // vídeo (Espacio reproducía la timeline de capas y el preview no se movía).
+      // Deshacer (Ctrl+Z) sigue cayendo al historial de la timeline de abajo.
+      if (motionModeRef.current && !(e.ctrlKey || e.metaKey || e.altKey)) {
+        if (e.code === 'Space') {
+          e.preventDefault()
+          if (!e.repeat) motionTogglePlay()
+          return
+        }
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+          e.preventDefault()
+          const step = (e.shiftKey ? 1 : 0.1) * (e.key === 'ArrowLeft' ? -1 : 1)
+          motionSeek(motionTimeRef.current + step)
+          return
+        }
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          const id = motionRef.current.selLayerId
+          if (id) { e.preventDefault(); motionRef.current.deleteLayer(id) }
+          return
+        }
+        if (e.key.toLowerCase() === 's') return   // cortar una capa no aplica
+      }
+      // I / O: entrada y salida del rango para "Generar Motion" (timeline del proyecto).
+      if (!(e.ctrlKey || e.metaKey || e.altKey) && !clipModeRef.current && !motionModeRef.current) {
+        const k = e.key.toLowerCase()
+        if (k === 'i' || k === 'o') {
+          e.preventDefault()
+          setMarkRange((m) => setMark(m, k === 'i' ? 'in' : 'out', playheadRef.current))
+          return
+        }
+      }
       if (e.ctrlKey || e.metaKey) {
         const k = e.key.toLowerCase()
         if (k === 'z') {
@@ -2494,6 +2660,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         if (k === 'c') { if (ops.copyKeyframe()) e.preventDefault() }
         else if (k === 'v') { if (ops.pasteKeyframe()) e.preventDefault() }
         else if (k === 'd') { if (ops.duplicateKeyframe()) e.preventDefault() }
+        else if (k === 'x') { e.preventDefault(); setMarkRange(EMPTY_MARK) }   // quitar marca I/O
         return
       }
       if (e.code === 'Space') {
@@ -2517,11 +2684,19 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  function setFormat(fmtId) {
-    const f = FORMATS.find((x) => x.id === fmtId)
-    if (f) { setOutW(f.w); setOutH(f.h) }
+  function setOutSize(w, h) { setOutW(w); setOutH(h) }
+
+  // "Original": proporción del clip visual seleccionado o, si no hay, del primero
+  // de la timeline. Solo si su medio ya tiene dimensiones.
+  function originalMediaSize() {
+    const visual = clipsRef.current.filter((c) => isVisualClip(c))
+    const sel = visual.find((c) => c.id === selIdsRef.current[0])
+    const first = sel || [...visual].sort((a, b) => a.start - b.start)[0]
+    if (!first) return null
+    const m = mediaSize(mediaEls.current.get(first.id))
+    return m.w > 0 && m.h > 0 ? m : null
   }
-  const curFormat = FORMATS.find((f) => f.w === outW && f.h === outH)?.id || 'custom'
+  const hasVisualClip = clips.some((c) => isVisualClip(c))
 
   // Elementos multimedia ocultos (el texto no tiene medio)
   const mediaPool = clips.filter((c) => c.kind !== 'text' && c.kind !== 'shape').map((c) => (
@@ -2620,7 +2795,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           matTab={matTab}
           onMatTab={setMatTab}
           timelineClips={clips}
-          onExportFps={setFps}
           audioDb={audioDb}
           onAudioDb={setAudioDb}
           aiContext={{ project_id: project.id, selected_clip_id: selClipId || null, selected_track_id: selTrackId || null, current_time: Math.round((playhead || 0) * 100) / 100 }}
@@ -2691,9 +2865,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                 <EdViewerTools
                   zoom={viewZoom}
                   onZoom={setViewZoom}
-                  formatId={curFormat}
-                  onFormat={setFormat}
-                  formatCustomLabel={`${outW}×${outH}`}
+                  width={outW}
+                  height={outH}
+                  onSize={setOutSize}
+                  fps={fps}
+                  onFps={setFps}
                 />
               </div>
             </div>
@@ -2705,7 +2881,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                   projectId={project.id}
                   comp={motion.comp}
                   onControls={(c) => { motionControlsRef.current = c }}
-                  onTime={(t) => { setMotionTime(t); setMotionPlaying(!!motionControlsRef.current?.isPlaying?.()) }}
+                  onTime={(t) => { motionTimeRef.current = t; setMotionTime(t); setMotionPlaying(!!motionControlsRef.current?.isPlaying?.()) }}
                   selLayerId={motion.selLayerId}
                   onSelectLayer={motion.setSelLayerId}
                   onMoveLayer={motion.moveLayerBy}
@@ -2714,21 +2890,16 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                 <div className="ed-stage-empty">Crea un motion graphic desde Materiales (icono Motion).</div>
               )}
               <div className="ed-transport">
-                <button className="icon-btn big" type="button" title="Reproducir / Pausa"
-                  onClick={() => {
-                    const c = motionControlsRef.current
-                    if (!c) return
-                    if (c.isPlaying()) { c.pause(); setMotionPlaying(false) }
-                    else { c.setLoop(true); c.play(); setMotionPlaying(true) }
-                  }}>
+                <button className="icon-btn big" type="button" title="Reproducir / Pausa (Espacio)"
+                  onClick={motionTogglePlay}>
                   <Icon name={motionPlaying ? 'pause_circle' : 'play_circle'} size={24} />
                 </button>
                 <button className="icon-btn" type="button" title="Al inicio"
-                  onClick={() => motionControlsRef.current?.seek(0)}><Icon name="first_page" size={18} /></button>
+                  onClick={() => motionSeek(0)}><Icon name="first_page" size={18} /></button>
                 <div className="ed-scrub" onPointerDown={(e) => {
                   const rect = e.currentTarget.getBoundingClientRect()
                   const dur = motion.comp?.duration || 1
-                  const doSeek = (cx) => motionControlsRef.current?.seek(((cx - rect.left) / rect.width) * dur)
+                  const doSeek = (cx) => motionSeek(((cx - rect.left) / rect.width) * dur)
                   doSeek(e.clientX)
                   const mv = (ev) => doSeek(ev.clientX)
                   const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up) }
@@ -2777,7 +2948,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               e.preventDefault()
               const raw = e.dataTransfer.getData('application/x-material')
               if (!raw) return
-              try { dropAsset(JSON.parse(raw), selTrackId, playhead) } catch { /* noop */ }
+              // Soltar en el lienzo no apunta a un punto de la timeline: entra
+              // en el cabezal, pero sin pisar lo que ya hubiera en la pista.
+              try {
+                const p = JSON.parse(raw)
+                const at = freeStartOnTrack(clipsRef.current, selTrackId, playhead, p.duration || SHAPE_DEFAULT_DUR)
+                dropAsset(p, selTrackId, at)
+              } catch { /* noop */ }
             }}
             style={{
               cursor: (bgBrush.on || chromaPick) ? 'crosshair'
@@ -2850,12 +3027,23 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               <div className="ed-scrub-knob" style={{ left: `${duration ? (playhead / duration) * 100 : 0}%` }} />
             </div>
             <span className="ed-time">{fmtRuler(playhead, { step: tickStep(pps, fps), fps, long: duration >= 3600 })} / {fmt(duration)}</span>
+            <button
+              className="icon-btn"
+              type="button"
+              onClick={toggleFullscreen}
+              title={isFullscreen ? 'Salir de pantalla completa (Esc)' : 'Pantalla completa'}
+            >
+              <Icon name={isFullscreen ? 'fullscreen_exit' : 'fullscreen'} size={18} />
+            </button>
             <EdViewerTools
               zoom={viewZoom}
               onZoom={setViewZoom}
-              formatId={curFormat}
-              onFormat={setFormat}
-              formatCustomLabel={`${outW}×${outH}`}
+              width={outW}
+              height={outH}
+              onSize={setOutSize}
+              fps={fps}
+              onFps={setFps}
+              originalSize={hasVisualClip ? originalMediaSize : null}
             />
           </div>
           {exportJob?.status === 'error' && <div className="error small">⚠️ {exportJob.error}</div>}
@@ -2990,18 +3178,24 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       <div className={`veditor-bottom${mainColTab === 'clip' ? ' clip-mode' : ''}`} ref={panels.bottomRef}>
         <EdTimeline
           tracks={tracks} clips={clips} pps={pps} setPps={setPps} fps={fps}
-          duration={duration} playhead={paperMode ? paper.time : playhead} rowH={rowH} setRowH={setRowH}
+          duration={motionMode ? Math.max(duration, motion.comp?.duration || 0) : duration}
+          playhead={paperMode ? paper.time : motionMode ? motionTime : playhead} rowH={rowH} setRowH={setRowH}
           selectedClipId={mainColTab === 'motion' ? motion.selLayerId : selClipId} selectedClipIds={mainColTab === 'motion' ? (motion.selLayerId ? [motion.selLayerId] : []) : selClipIds} selectedTrackId={selTrackId}
           selKfId={paperMode ? paper.st.object.animation.activeKeyframeId : selKfId} dragInfo={dragInfo}
           mcpBusyIds={mcpBusyIds}
-          onSeek={paperMode ? paper.seek : seek}
-          onScrub={paperMode ? paper.seek : scrub}
+          onSeek={paperMode ? paper.seek : motionMode ? motionSeek : seek}
+          onScrub={paperMode ? paper.seek : motionMode ? motionSeek : scrub}
           onSelectClip={mainColTab === 'motion' ? ((clip) => motion.setSelLayerId(clip.id)) : paperMode ? paperSelectClip : handleSelectClip}
           onMarqueeSelect={mainColTab === 'motion' || paperMode ? undefined : selectClipIds}
           onSelectTrack={selectTrack}
           onDoubleClip={(clip) => {
             if (clip.kind === 'motion' && (clip.composition_id || clip.asset_id)) {
               goMotionTab(clip.composition_id || clip.asset_id)   // reeditar el motion graphic
+              return
+            }
+            if (motionMode) {   // capa de la composición: el preview salta a su inicio
+              motion.setSelLayerId(clip.id)
+              motionSeek(clip.start)
               return
             }
             seek(clip.start)   // exactamente el inicio del clip (00:00 relativo), sin offset
@@ -3011,13 +3205,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           }}
           onMutateClip={paperMode ? paperMutateClip : mutateClip}
           onMoveGroup={paperMode ? undefined : moveGroup}
+          onMoveToNewTrack={paperMode ? undefined : moveClipToNewTrack}
           onMatchDuration={paperMode ? undefined : matchSelectedDurations}
           onSplit={paperMode ? undefined : splitClip}
           onDuplicate={paperMode ? undefined : duplicateSelected}
           onFaceTrack={mainColTab === 'clip' ? startFaceTrack : undefined}
           faceTrackBusy={!!faceBusy}
           faceTrackDisabled={!clipMeta.url || clipMeta.preparing}
-          onDeleteClip={paperMode ? paperDeleteClip : deleteClip}
+          onDeleteClip={paperMode ? paperDeleteClip : motionMode ? ((id) => { const lid = id || motion.selLayerId; if (lid) motion.deleteLayer(lid) }) : deleteClip}
           previewVol={previewVol}
           onPreviewVol={setListenVolume}
           onDropAsset={paperMode ? undefined : dropAsset}
@@ -3030,7 +3225,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onSelectKf={paperMode ? paper.selectKeyframe : selectTimelineKf}
           onAddKf={paperMode ? paperAddKf : toggleKeyframeAtPlayhead}
           onDeleteKf={paperMode ? paperDeleteKf : deleteSelectedKeyframe}
-          onContextClip={paperMode ? undefined : (e, clip) => {
+          onContextClip={paperMode ? undefined : (e, clip, time) => {
             e.preventDefault()
             if (!selIdsRef.current.includes(clip.id)) {
               setSelClipId(clip.id)
@@ -3038,8 +3233,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               selIdsRef.current = [clip.id]
               selRef.current = clip.id
             }
-            setCtxMenu({ x: e.clientX, y: e.clientY, clip })
+            setLaneMenu(null)
+            setCtxMenu({ x: e.clientX, y: e.clientY, clip, time })
           }}
+          markRange={mainColTab === 'main' ? markRange : null}
+          onContextLane={mainColTab === 'main' ? (e, track, time) => {
+            setCtxMenu(null)
+            setTrackMenu(null)
+            setLaneMenu({ x: e.clientX, y: e.clientY, time, track })
+          } : undefined}
           onContextTrack={paperMode ? undefined : (e, track) => {
             e.preventDefault()
             setLinkPick(null)
@@ -3086,6 +3288,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         <>
           <div className="ed-ctx-backdrop" onPointerDown={() => setCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null) }} />
           <AnchoredMenu className="ed-ctx-menu" x={ctxMenu.x} y={ctxMenu.y}>
+            {mainColTab === 'main' && (
+              <>
+                <button className="accent" onClick={() => openGenerateMotion({ time: ctxMenu.time, clip: ctxMenu.clip })}>
+                  <Icon name="auto_awesome" size={15} /> Generar Motion{hasMarkRange(markRange) ? ' en el rango' : ''}
+                </button>
+                <div className="ed-ctx-sep" />
+              </>
+            )}
             {(ctxMenu.clip.asset_kind === 'sfx') && (
               <button onClick={() => { fav.toggleClipFav(ctxMenu.clip); setCtxMenu(null) }}>
                 <Icon name={fav.isClipFav(ctxMenu.clip) ? 'star' : 'star_border'} size={15} />
@@ -3145,6 +3355,38 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             <button className="danger" onClick={() => { deleteClip(ctxMenu.clip.id); setCtxMenu(null) }}><Icon name="delete" size={15} /> Eliminar</button>
           </AnchoredMenu>
         </>
+      )}
+
+      {/* Menú del hueco de una pista o de la regla: Generar Motion + marcas I/O */}
+      {laneMenu && (
+        <>
+          <div className="ed-ctx-backdrop" onPointerDown={() => setLaneMenu(null)} onContextMenu={(e) => { e.preventDefault(); setLaneMenu(null) }} />
+          <AnchoredMenu className="ed-ctx-menu" x={laneMenu.x} y={laneMenu.y}>
+            <button className="accent" onClick={() => openGenerateMotion({ time: laneMenu.time })}>
+              <Icon name="auto_awesome" size={15} /> Generar Motion {hasMarkRange(markRange) ? 'en el rango' : 'aquí'}
+            </button>
+            <div className="ed-ctx-sep" />
+            <button onClick={() => { setMarkRange((m) => setMark(m, 'in', laneMenu.time)); setLaneMenu(null) }}>
+              <Icon name="first_page" size={15} /> Marcar entrada aquí <kbd>I</kbd>
+            </button>
+            <button onClick={() => { setMarkRange((m) => setMark(m, 'out', laneMenu.time)); setLaneMenu(null) }}>
+              <Icon name="last_page" size={15} /> Marcar salida aquí <kbd>O</kbd>
+            </button>
+            <button disabled={markRange.in == null && markRange.out == null}
+              onClick={() => { setMarkRange(EMPTY_MARK); setLaneMenu(null) }}>
+              <Icon name="backspace" size={15} /> Quitar marca <kbd>Alt+X</kbd>
+            </button>
+          </AnchoredMenu>
+        </>
+      )}
+
+      {genMotion && (
+        <GenerateMotionModal
+          projectId={project.id}
+          target={genMotion}
+          onChangeTarget={setGenMotion}
+          onClose={() => setGenMotion(null)}
+        />
       )}
 
       {trackMenu && (
@@ -3217,6 +3459,16 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         danger={false}
         onConfirm={applyFragment}
         onCancel={() => setFragmentAsk(null)}
+      />
+      <ConfirmModal
+        open={!!replaceAsk}
+        title="¿Reemplazar el clip?"
+        message={replaceAsk
+          ? `“${clips.find((c) => c.id === replaceAsk.targetId)?.name || 'El clip de debajo'}” se quitará de la pista y “${replaceAsk.payload?.name || 'el nuevo clip'}” ocupará su lugar. Para dejar los dos, suelta en la franja superior de la pista (crea una pista nueva).`
+          : ''}
+        confirmText="Reemplazar"
+        onConfirm={applyReplaceDrop}
+        onCancel={() => setReplaceAsk(null)}
       />
       <Toast toast={clipToast} onClose={() => setClipToast(null)} />
     </div>

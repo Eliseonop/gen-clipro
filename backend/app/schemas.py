@@ -173,6 +173,10 @@ class CreateProjectRequest(BaseModel):
     folder: Optional[str] = None
 
 
+class RenameProjectRequest(BaseModel):
+    name: str
+
+
 class SetFolderRequest(BaseModel):
     path: str
 

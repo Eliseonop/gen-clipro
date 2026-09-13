@@ -20,6 +20,7 @@ from .schemas import (
     ClipRequest,
     ComposeClipRequest,
     CreateProjectRequest,
+    RenameProjectRequest,
     Job,
     Project,
     ClipTranscribeRequest,
@@ -110,6 +111,28 @@ def create_project(req: CreateProjectRequest) -> Project:
 @app.get("/api/projects/{project_id}", response_model=Project)
 def get_project(project_id: str) -> Project:
     proj = projects.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    return proj
+
+
+@app.patch("/api/projects/{project_id}", response_model=Project)
+def rename_project(project_id: str, req: RenameProjectRequest) -> Project:
+    try:
+        proj = projects.rename_project(project_id, req.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    return proj
+
+
+@app.post("/api/projects/{project_id}/duplicate", response_model=Project)
+def duplicate_project(project_id: str) -> Project:
+    try:
+        proj = projects.duplicate_project(project_id)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"No se pudieron copiar los archivos: {exc}")
     if proj is None:
         raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
     return proj
@@ -593,6 +616,29 @@ def motion_list(project_id: str) -> dict:
 def motion_templates(project_id: str) -> dict:
     from .motion import templates as motion_templates
     return {"templates": motion_templates.list_templates()}
+
+
+# "Generar Motion": contexto COMPACTO de un tramo. Van antes de /motion/{comp_id}
+# para que "segment-context" y "focus" no se interpreten como id de composición.
+@app.get("/api/projects/{project_id}/motion/segment-context")
+def motion_segment_context(project_id: str, start: float | None = None, end: float | None = None,
+                           playhead: float | None = None, clip_id: str | None = None) -> dict:
+    from .motion import segment_context
+    proj = _project_or_404(project_id)
+    return segment_context.build_segment_context(proj, start, end, playhead, clip_id)
+
+
+@app.post("/api/projects/{project_id}/motion/focus")
+def motion_focus(project_id: str, body: dict = Body(...)) -> dict:
+    """Guarda el tramo marcado en el editor para que un cliente MCP lo use sin tiempos."""
+    from .motion import segment_context
+    _project_or_404(project_id)
+    try:
+        return segment_context.set_focus(project_id, start=float(body["start"]),
+                                         end=body.get("end"), playhead=body.get("playhead"),
+                                         clip_id=body.get("clip_id"))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Foco inválido: {exc}")
 
 
 @app.post("/api/projects/{project_id}/motion")
