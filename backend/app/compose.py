@@ -701,8 +701,11 @@ def _bg_source_chain(clip: TimelineClip, path: Path, spec: Optional[dict],
 def build_command(project: Project, timeline: Timeline, out_path: Path,
                   ass_path: Optional[Path] = None, shape_files: Optional[dict] = None,
                   mask_files: Optional[dict] = None,
-                  bg_files: Optional[dict] = None) -> list[str]:
-    """Construye la lista de argumentos de ffmpeg para renderizar la timeline."""
+                  bg_files: Optional[dict] = None, frame_at: Optional[float] = None) -> list[str]:
+    """Construye la lista de argumentos de ffmpeg para renderizar la timeline.
+
+    Con ``frame_at`` (segundos) NO codifica el vídeo: busca ese instante y escribe UN
+    fotograma (PNG) del COMPUESTO en ``out_path`` (para previsualizar un frame real)."""
     W = int(timeline.width or config.OUTPUT_WIDTH)
     H = int(timeline.height or config.OUTPUT_HEIGHT)
     W -= W % 2
@@ -940,6 +943,12 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
 
     cmd = ["ffmpeg", "-y", *inputs, "-filter_complex", ";".join(filt),
            "-map", "[vout]"]
+    if frame_at is not None:
+        # Un solo fotograma del compuesto: sin audio, seek de salida (procesa el
+        # grafo desde 0 y emite el frame en `frame_at`) y PNG único.
+        cmd += ["-an", "-ss", f"{max(0.0, float(frame_at)):.3f}", "-frames:v", "1",
+                "-update", "1", str(out_path)]
+        return cmd
     if has_audio:
         cmd += ["-map", "[aout]", "-c:a", "aac", "-ar", "48000", "-b:a", config.AUDIO_BITRATE]
     else:
@@ -1080,4 +1089,37 @@ def render(project: Project, timeline: Timeline, out_path: Path,
     if not out_path.exists():
         raise RuntimeError("La exportación no generó ningún archivo.")
     on_progress(1.0, "Vídeo final listo.")
+    return out_path
+
+
+def render_frame(project: Project, timeline: Timeline, out_path: Path, at_time: float) -> Path:
+    """Escribe UN fotograma PNG del COMPUESTO real de la timeline en ``at_time`` (segundos).
+
+    Reutiliza la misma tubería que el export (subtítulos, formas, máscaras, overlays), pero
+    sin codificar el vídeo: FFmpeg busca el instante y emite un único frame. Sirve para
+    verificar la composición real de un tramo (los 'ojos' de la IA)."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    W = int(timeline.width or config.OUTPUT_WIDTH)
+    H = int(timeline.height or config.OUTPUT_HEIGHT)
+    W -= W % 2
+    H -= H % 2
+    texts = [c for c in timeline.clips if c.kind == "text" and (c.text or "").strip()]
+    ass_path = None
+    if texts:
+        ass_path = out_path.with_suffix(".ass")
+        ass_path.write_text(build_ass(timeline.clips, W, H, timeline.tracks), encoding="utf-8")
+    with tempfile.TemporaryDirectory(prefix="vy-frame-") as td:
+        shape_files = rasterize_timeline_shapes(timeline, Path(td), W, H)
+        mask_files = build_timeline_masks(timeline, Path(td) / "masks", W, H, int(timeline.fps or 30))
+        from .bg import service as bg_service
+        bg_files = bg_service.build_timeline_bg_masks(timeline, int(timeline.fps or 30))
+        cmd = build_command(project, timeline, out_path, ass_path=ass_path, shape_files=shape_files,
+                            mask_files=mask_files, bg_files=bg_files, frame_at=at_time)
+        cmd = _filter_script_cmd(cmd, Path(td))
+        cmd[1:1] = ["-nostdin"]
+        with timed("render FFmpeg (frame)", log, clips=len(timeline.clips)):
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=180)
+    if proc.returncode != 0 or not out_path.exists():
+        raise RuntimeError(_ffmpeg_export_error(proc.stderr, proc.returncode))
     return out_path

@@ -28,6 +28,7 @@ from . import (
     tools_motion,
     tools_read,
     tools_render,
+    tools_scene,
     tools_vision,
     tools_workflow,
 )
@@ -54,6 +55,7 @@ tools_render.register(mcp)    # Etapa 7: export_project, list_jobs, cancel_job
 tools_workflow.register(mcp)  # Etapa 8: create_short_from_youtube, make_short_from_library
 tools_vision.register(mcp)    # Visión: get_frame (ojos) + set_clip_ai_description
 tools_motion.register(mcp)    # Motion Studio: composiciones editables (motion graphics)
+tools_scene.register(mcp)     # Dirección de escena: escaleta + pack de contexto (Fase 1)
 
 # Registro de resources (Fase 2): descubrimiento + estado de solo lectura.
 resources.register(mcp)

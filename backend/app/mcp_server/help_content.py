@@ -89,6 +89,23 @@ TOOL_DOMAINS: dict[str, str] = {
     "motion_add_to_timeline": "motion",
     "motion_stick_library": "motion",
     "motion_create_stick_scene": "motion",
+    # dirección de escena (escaleta de tramos + pack de contexto)
+    "scene_direction_get": "scene",
+    "scene_direction_status": "scene",
+    "scene_direction_pack": "scene",
+    "scene_rank_materials": "scene",
+    "scene_direction_auto_split": "scene",
+    "scene_direction_update_segment": "scene",
+    "scene_direction_set": "scene",
+    "scene_set_material_meta": "scene",
+    "scene_place_material": "scene",
+    "scene_reuse_reference": "scene",
+    "motion_scene_directions": "scene",
+    "motion_scene_questions": "scene",
+    "motion_plan_scene": "scene",
+    "motion_build_scene": "scene",
+    "scene_validate_segment": "scene",
+    "render_timeline_frame": "scene",
 }
 
 
@@ -336,6 +353,65 @@ HELP: dict[str, str] = {
         "fx:[{type, target, at}], actors:[{id, pose, expression, x 0..1, to_x?, facing ±1}]}]}. "
         "Reutiliza id y aspecto del reparto existente (continuidad). Violencia SIEMPRE no gráfica "
         "(poses + fx impact/shake), sin estereotipos."
+    ),
+    "scene": (
+        "DIRECCIÓN DE ESCENA: dirige el vídeo entero tramo a tramo. La app hace lo "
+        "mecánico (cortar el guion, preparar contexto); tú solo decides QUÉ se ve en "
+        "cada tramo. Pensado para funcionar con cualquier modelo: el contexto llega "
+        "compacto y ya decidido, no tienes que entender el proyecto entero.\n"
+        "Flujo:\n"
+        "1. scene_direction_status(project_id): el MAPA. Tramos, su estado "
+        "(empty→ready→generated→placed), modo, si ya tienen material/escena, y "
+        "'pending' = los que aún necesitan visual. Empieza aquí para saber qué falta.\n"
+        "2. scene_direction_get(project_id): la escaleta completa + el guion en frases "
+        "con tiempos + los modos + el catálogo de materiales (título+descripción; la "
+        "DESCRIPCIÓN es lo que usas para elegir). Si no hay escaleta, "
+        "scene_direction_auto_split la propone (no guarda; persiste con "
+        "scene_direction_set).\n"
+        "3. scene_direction_pack(project_id, segment={start,end,mode?,instruction?,"
+        "strict?,materials?}): el PACK de UN tramo, lo ÚNICO que necesitas para decidir. "
+        "'text' es el prompt exacto e incluye la ZONA DE SUBTÍTULOS a respetar (no "
+        "tapes ahí texto/caras/sujeto principal). 'skeleton' son los beats ya cortados: "
+        "solo rellenas qué se ve en cada uno. 'brief_defaults' arranca Generar Escena.\n"
+        "   - scene_rank_materials(project_id, text): candidatos por relevancia a "
+        "demanda (sin pedir el pack), con 'match' = términos coincidentes.\n"
+        "   - scene_set_material_meta(project_id, kind, material_id, meta, scope?): enriquece "
+        "un material con metadata semántica (subjects/actions/environment/mood/composition/"
+        "visual_content/suggested_usage/visual_priority) para que elijas por concepto y no "
+        "solo por palabras. Puebla lo que ves (get_frame) y mejora el ranking y el pack.\n"
+        "4. scene_direction_update_segment(project_id, segment_id, patch): dirige un "
+        "tramo (mode/instruction/strict/materials/reference_id) o marca su estado tras "
+        "montarlo. Plan editorial (§SCENE PLAN): composition_intent (en lenguaje natural: "
+        "qué es principal, qué acompaña, qué zonas dejar libres), complexity 1–5 (1 simple "
+        "… 5 clímax; no lo revientes en cada tramo) y no_visual=true (este tramo no necesita "
+        "nada nuevo: basta mantener el plano + subtítulos). MODOS: propose (propón el enfoque) · explain (haz entender lo "
+        "narrado) · represent (metáfora visual, sin texto) · reinforce (repite la "
+        "escena de reference_id) · material (el protagonista es el material indicado). "
+        "strict=true → seguir el guion frase a frase.\n"
+        "5. Composición HÍBRIDA (§3.4-3.5): un tramo NO tiene por qué ser un solo recurso; "
+        "combina b-roll + motion + stickman cuando aporte. Planifícalo en el campo "
+        "`components` del tramo (update_segment): lista de {source: material|motion|stickman|"
+        "text|graphic|keep, role, material?, source_range?, note}. role: full|broll|overlay|"
+        "pip|side_panel|circular|background|reference. Es el SCENE PLAN.\n"
+        "6. Ejecuta con scene_place_material(project_id, segment_id, material?, role, source?, "
+        "size?, pos?, opacity?, transform?): coloca un material (recortado al fragmento) con "
+        "su rol (pip a la derecha, panel lateral, fondo…). Para motion/stickman usa las tools "
+        "de motion (motion_add_to_timeline). Coloca varios para una composición híbrida.\n"
+        "7. GENERAR ESCENA (cuando ningún material sirve; la IA crea motion graphics/"
+        "stickman): motion_scene_directions (elige una direction_id/estilo) → "
+        "motion_scene_questions(direction_id) → responde con motion_plan_scene(answers) → "
+        "revisa/edita los beats → motion_build_scene(plan): crea el borrador (composition_id) "
+        "y, con direction_id, lo enlaza al tramo (status 'generated'). Insértalo con "
+        "motion_add_to_timeline (dominio motion). Para 'reinforce' (repetir una escena previa) "
+        "usa scene_reuse_reference (sin IA).\n"
+        "8. VERIFICA el montaje antes de darlo por bueno: scene_validate_segment(segment_id) "
+        "detecta por geometría colisiones con la zona de subtítulos, elementos fuera de "
+        "pantalla y solapes; devuelve issues con sugerencias. Corrige con scene_place_material "
+        "y vuelve a validar (bucle montar→validar→corregir). Para ver el frame REAL compuesto "
+        "usa render_timeline_frame(at_time) (más lento).\n"
+        "Regla editorial: EDIT > COMBINE > GENERATE. Antes de generar algo nuevo, mira "
+        "si un material existente (o combinado/recortado) ya lo cuenta. Estados del tramo: "
+        "empty→ready (dirigido)→generated (escena creada)→placed (en la timeline)."
     ),
 }
 

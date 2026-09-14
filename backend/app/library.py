@@ -270,6 +270,19 @@ def update_item(item_id: str, fields: dict) -> dict:
     return material_dto(item, "library")
 
 
+def set_semantic(item_id: str, semantic: dict | None) -> dict:
+    """Guarda la metadata semántica (dict) de un material guardado. La IA la usa para
+    elegir y componer (ver scene_direction.normalize_semantic)."""
+    with _lock:
+        data = _load()
+        item = _find_item(data, item_id)
+        if item is None:
+            raise LookupError("Recurso no encontrado.")
+        item["semantic"] = semantic or {}
+        _save(data)
+    return material_dto(item, "library")
+
+
 def projects_using(item_id: str) -> list[dict]:
     used = []
     for p in projects.list_projects():

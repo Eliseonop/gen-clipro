@@ -956,7 +956,8 @@ def scene_direction_patch(project_id: str, segment_id: str, body: dict = Body(de
     from . import scene_direction
     _project_or_404(project_id)
     allowed = {"status", "composition_id", "placed_clip_id", "mode", "instruction", "strict", "materials",
-               "reference_id", "start", "end", "text"}
+               "reference_id", "start", "end", "text", "composition_intent", "complexity", "no_visual",
+               "components"}
     try:
         return scene_direction.update_segment(project_id, segment_id,
                                               {k: v for k, v in (body or {}).items() if k in allowed})
