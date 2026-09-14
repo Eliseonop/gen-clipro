@@ -46,7 +46,9 @@ import {
 import { drawMainView, drawResultView } from './render/canvas'
 import MotionCanvas from '../motion/MotionCanvas'
 import MotionProps from '../motion/MotionProps'
-import GenerateMotionModal from '../motion/GenerateMotionModal'
+import GenerateSceneModal from '../motion/GenerateSceneModal'
+import SceneDirectionWorkspace from '../direction/SceneDirectionWorkspace'
+import { patchDirectionSegment } from '../../services/api'
 import { EMPTY_MARK, hasMarkRange, resolveGenerateTarget, setMark } from './motionTarget'
 import { useMotionComp } from '../motion/useMotionComp'
 import PaperCanvas from '../paper/PaperCanvas'
@@ -243,6 +245,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const segAskRef = useRef(null); segAskRef.current = segAsk
   const [genMotion, setGenMotion] = useState(null)  // { start, end, playhead, explicit, clipId }
   const genMotionRef = useRef(null); genMotionRef.current = genMotion
+  // "Dirección de escena": workspace de tramos del guion ({ focus }) y el tramo con el que
+  // se abrió Generar Escena ({ segment, pack }). directionReload refresca la escaleta.
+  const [directionWs, setDirectionWs] = useState(null)
+  const directionWsRef = useRef(null); directionWsRef.current = directionWs
+  const [genDirection, setGenDirection] = useState(null)
+  const [directionReload, setDirectionReload] = useState(0)
   const [propClipboard, setPropClipboard] = useState(null)  // props visuales copiadas
   const [trackMenu, setTrackMenu] = useState(null)  // { x, y, track }
   const [linkPick, setLinkPick] = useState(null)    // id de pista de audio al relacionar
@@ -831,6 +839,27 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setGenMotion(target)
   }
 
+  // "Dirección de escena": abre la escaleta enfocada en el rango marcado (o en el tramo
+  // bajo el cursor). Se guarda la timeline antes: el backend lee subtítulos y clips de ahí.
+  async function openSceneDirection({ time } = {}) {
+    setCtxMenu(null)
+    setLaneMenu(null)
+    if (clipModeRef.current || motionModeRef.current || paperModeRef.current) return
+    stopPlayback()
+    const mark = markRangeRef.current
+    const t = Number.isFinite(time) ? time : playheadRef.current
+    const focus = hasMarkRange(mark)
+      ? { start: mark.in, end: mark.out, explicit: true }
+      : { start: t, end: t, explicit: false }
+    try { await saveTimeline(project.id, timelinePayload()) } catch { /* se usa lo último guardado */ }
+    setDirectionWs({ focus })
+  }
+
+  function generateFromDirection(segment, pack) {
+    setGenDirection({ segment, pack })
+    setGenMotion({ start: segment.start, end: segment.end, playhead: segment.start, explicit: true, clipId: null })
+  }
+
   // "Agregar al timeline" desde el modal de Generar Motion: guarda la timeline,
   // lanza el job de inserción (renderiza + coloca el clip motion), recarga y
   // selecciona el clip nuevo con el cursor a su inicio.
@@ -859,6 +888,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         setSelClipId(info.clip_id)
         setSelClipIds([info.clip_id])
         if (Number.isFinite(info.start)) seek(info.start)
+      }
+      if (target?.directionId && info?.clip_id) {
+        patchDirectionSegment(project.id, target.directionId, { status: 'placed', placed_clip_id: info.clip_id })
+          .then(() => setDirectionReload((n) => n + 1)).catch(() => {})
       }
       setClipToast({ type: 'success', message: 'Motion añadido como vídeo (editable) a la timeline' })
     } catch (e) {
@@ -2878,7 +2911,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     }
     function onKey(e) {
       if (typingTarget(document.activeElement) || typingTarget(e.target)) return
-      if (genMotionRef.current) return   // el modal de Generar Motion tiene el teclado
+      if (genMotionRef.current || directionWsRef.current) return   // Generar Escena / Dirección de escena tienen el teclado
       if (segAskRef.current) return      // el modal de Crear clip tiene el teclado
       // Paper Animator tiene su propio estado y su propio historial: solo comparte
       // los atajos que significan lo mismo (deshacer, play, mover el cabezal).
@@ -3576,6 +3609,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           segmentBusy={segBusy || !!clipSaving}
           markKeys={mainColTab === 'clip' ? ['Z', 'X'] : ['I', 'O']}
           segmentLabelText={mainColTab === 'clip' && clipMark.in == null && clipMark.out == null ? 'Z inicio · X fin' : ''}
+          onSceneDirection={mainColTab === 'main' ? () => openSceneDirection() : undefined}
           onContextLane={mainColTab === 'main' ? (e, track, time) => {
             setCtxMenu(null)
             setTrackMenu(null)
@@ -3630,7 +3664,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             {mainColTab === 'main' && (
               <>
                 <button className="accent" onClick={() => openGenerateMotion({ time: ctxMenu.time, clip: ctxMenu.clip })}>
-                  <Icon name="auto_awesome" size={15} /> Generar Motion{hasMarkRange(markRange) ? ' en el rango' : ''}
+                  <Icon name="auto_awesome" size={15} /> Generar Escena{hasMarkRange(markRange) ? ' en el rango' : ''}
+                </button>
+                <button onClick={() => openSceneDirection({ time: ctxMenu.time })}>
+                  <Icon name="theaters" size={15} /> Dirección de escena{hasMarkRange(markRange) ? ' del rango' : ''}
                 </button>
                 <div className="ed-ctx-sep" />
               </>
@@ -3696,13 +3733,16 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         </>
       )}
 
-      {/* Menú del hueco de una pista o de la regla: Generar Motion + marcas I/O */}
+      {/* Menú del hueco de una pista o de la regla: Generar Escena + marcas I/O */}
       {laneMenu && (
         <>
           <div className="ed-ctx-backdrop" onPointerDown={() => setLaneMenu(null)} onContextMenu={(e) => { e.preventDefault(); setLaneMenu(null) }} />
           <AnchoredMenu className="ed-ctx-menu" x={laneMenu.x} y={laneMenu.y}>
             <button className="accent" onClick={() => openGenerateMotion({ time: laneMenu.time })}>
-              <Icon name="auto_awesome" size={15} /> Generar Motion {hasMarkRange(markRange) ? 'en el rango' : 'aquí'}
+              <Icon name="auto_awesome" size={15} /> Generar Escena {hasMarkRange(markRange) ? 'en el rango' : 'aquí'}
+            </button>
+            <button onClick={() => openSceneDirection({ time: laneMenu.time })}>
+              <Icon name="theaters" size={15} /> Dirección de escena{hasMarkRange(markRange) ? ' del rango' : ''}
             </button>
             <div className="ed-ctx-sep" />
             <button onClick={() => { setMarkRange((m) => setMark(m, 'in', laneMenu.time)); setLaneMenu(null) }}>
@@ -3719,13 +3759,33 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         </>
       )}
 
+      {directionWs && (
+        <SceneDirectionWorkspace
+          projectId={project.id}
+          focus={directionWs.focus}
+          markRange={markRange}
+          reloadKey={directionReload}
+          onClose={() => setDirectionWs(null)}
+          onGenerate={generateFromDirection}
+          onGoToSegment={(seg) => {
+            setDirectionWs(null)
+            setMarkRange({ in: seg.start, out: seg.end })
+            seek(seg.start)
+          }}
+          onOpenComposition={(cid) => { setDirectionWs(null); goMotionTab(cid) }}
+          onToast={(t) => { setClipToast(t); if (t?.type === 'success') reloadTimeline() }}
+        />
+      )}
+
       {genMotion && (
-        <GenerateMotionModal
+        <GenerateSceneModal
+          key={genDirection?.segment?.id || 'free'}
           projectId={project.id}
           target={genMotion}
+          direction={genDirection}
           onChangeTarget={setGenMotion}
-          onClose={() => setGenMotion(null)}
-          onEditInStudio={(cid) => { setGenMotion(null); goMotionTab(cid) }}
+          onClose={() => { setGenMotion(null); setGenDirection(null); setDirectionReload((n) => n + 1) }}
+          onEditInStudio={(cid) => { setGenMotion(null); setGenDirection(null); setDirectionWs(null); goMotionTab(cid) }}
           onAddToTimeline={addMotionDraftToTimeline}
         />
       )}

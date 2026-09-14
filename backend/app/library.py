@@ -252,6 +252,24 @@ def save_from_project(project_id: str, resource_type: str, ident: str) -> dict:
     return material_dto(entry, "library")
 
 
+EDITABLE_FIELDS = ("label", "description")
+
+
+def update_item(item_id: str, fields: dict) -> dict:
+    """Edita título/descripción de un material guardado (lo que la IA usa como contexto)."""
+    with _lock:
+        data = _load()
+        item = _find_item(data, item_id)
+        if item is None:
+            raise LookupError("Recurso no encontrado.")
+        for k in EDITABLE_FIELDS:
+            v = fields.get(k)
+            if v is not None:
+                item[k] = str(v).strip()
+        _save(data)
+    return material_dto(item, "library")
+
+
 def projects_using(item_id: str) -> list[dict]:
     used = []
     for p in projects.list_projects():

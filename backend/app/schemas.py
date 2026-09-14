@@ -477,6 +477,7 @@ class Project(BaseModel):
     images: list[ImageInfo] = []
     timeline: Optional[Timeline] = None   # composición del editor de vídeo
     motion_compositions: list[dict] = []  # composiciones de Motion Studio (ver app/motion)
+    scene_directions: dict = {}           # Dirección de escena: escaleta de tramos (ver app/scene_direction.py)
 
 
 class JobStatus(str, Enum):

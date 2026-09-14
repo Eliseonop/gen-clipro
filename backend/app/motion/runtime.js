@@ -175,6 +175,22 @@
   // bloque se posiciona dentro. El ``js`` es el CUERPO de una función
   // (tl, root, gsap, ctx) que añade tweens a una timeline HIJA (seekable), que se
   // anida en la master en ``start`` → sigue siendo determinista con __seek(t).
+  // Imágenes del proyecto referenciadas como `asset:image/<id>`: el generador las
+  // incrusta en window.__ASSETS (data URI) → preview, __rebuild y render iguales.
+  function resolveAssets(s) {
+    var map = window.__ASSETS || {};
+    return String(s).replace(/asset:image\/([A-Za-z0-9_.-]+)/g, function (m, id) {
+      return map[id] || m;
+    });
+  }
+
+  // Beat de una escena (Generar Escena) al que pertenece la capa, si lo hay.
+  function beatOf(layer) {
+    var beats = (((COMP.metadata || {}).scene || {}).beats) || [];
+    for (var i = 0; i < beats.length; i++) { if (beats[i] && beats[i].id === layer.beat) return beats[i]; }
+    return null;
+  }
+
   function buildHtmlLayer(layer) {
     var start = layer.start || 0;
     var end = layer.end != null ? layer.end : COMP.duration;
@@ -189,7 +205,7 @@
     outer.style.zIndex = String(layer.z_index || 0);
     if (layer.css) {
       var st = document.createElement('style');
-      st.textContent = layer.css;
+      st.textContent = resolveAssets(layer.css);
       outer.appendChild(st);
     }
     var root = document.createElement('div');
@@ -197,7 +213,7 @@
     root.style.position = 'relative';
     root.style.width = '100%';
     root.style.height = '100%';
-    root.innerHTML = layer.html || '';
+    root.innerHTML = resolveAssets(layer.html || '');
     outer.appendChild(root);
     stage.appendChild(outer);
 
@@ -212,6 +228,8 @@
         start: start, end: end, life: Math.max(0.1, end - start),
         theme: (COMP.metadata || {}).theme || {},
         meta: COMP.metadata || {},
+        layer: layer,
+        beat: beatOf(layer),
       };
       try {
         (new Function('tl', 'root', 'gsap', 'ctx', layer.js))(child, root, gsap, ctx);

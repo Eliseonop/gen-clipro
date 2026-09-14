@@ -372,6 +372,18 @@ def delete_motion_composition(pid: str, cid: str) -> bool:
     return False
 
 
+def save_scene_directions(pid: str, doc: dict) -> bool:
+    """Guarda la escaleta de Dirección de escena (documento completo ya normalizado)."""
+    with _lock:
+        data = _load()
+        for p in data["projects"]:
+            if p["id"] == pid:
+                p["scene_directions"] = doc
+                _save(data)
+                return True
+    return False
+
+
 def retarget_timeline_asset(
     pid: str, asset_kind: str, old_id: str, old_filename: str,
     new_id: str, new_filename: str, match_filename: bool = True,

@@ -124,7 +124,9 @@ class MotionLayer(BaseModel):
     html: Optional[str] = None
     css: Optional[str] = None
     js: Optional[str] = None
-    animation: MotionAnimation = Field(default_factory=MotionAnimation)
+    # Escena (Generar Escena): id del beat de ``metadata.scene.beats`` del que deriva la capa.
+    beat: Optional[str] = None
+    animation:MotionAnimation = Field(default_factory=MotionAnimation)
     effect: MotionEffect = Field(default_factory=MotionEffect)   # efecto continuo (loop)
 
 

@@ -707,6 +707,9 @@
     var st = {}, base = STYLES[styleKey] || STYLES.clean, key;
     for (key in base) st[key] = base[key];
     if (scene.style.accent) st.accent = scene.style.accent;
+    // Paleta de una dirección creativa (Generar Escena): el stickman vive en su mundo.
+    var pal = scene.style.palette;
+    if (pal && typeof pal === 'object') { for (key in pal) { if (pal[key] != null) st[key] = pal[key]; } }
     var vertical = H > W;
     var U = Math.min(W * (vertical ? 0.56 : 0.46), H * 0.4);
     var S = {

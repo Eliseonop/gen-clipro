@@ -59,6 +59,8 @@ export const createYoutubeAudioJob = (params) => post('/api/youtube-audio', para
 export const listLibrary = () => get('/api/library')
 export const saveLibraryItem = (params) => post('/api/library/save', params)
 export const unsaveLibraryItem = (id) => del(`/api/library/${id}`)
+// Título/descripción de un material guardado (biblioteca).
+export const updateLibraryItem = (id, data) => patch(`/api/library/${encodeURIComponent(id)}`, data)
 export const getSettings = () => get('/api/settings')
 export const putSettings = (data) => put('/api/settings', data)
 // API keys: prueba todas, y gestión de varias claves por proveedor (por índice).
@@ -215,16 +217,43 @@ export const getMotionSegmentContext = (pid, { start, end, playhead, clipId } = 
 }
 export const setMotionFocus = (pid, { start, end, playhead, clipId } = {}) =>
   post(`/api/projects/${pid}/motion/focus`, { start, end, playhead, clip_id: clipId || null })
-// "Generar Motion" (fase propuesta): SSE con eventos text/proposal/error.
-export const proposeMotion = (pid, { start, end, playhead, clipId, hint, frames } = {}, onEvent, signal) =>
-  streamSSE(`/api/projects/${pid}/motion/generate/propose`,
-    { start, end, playhead, clip_id: clipId || null, hint: hint || '', frames: !!frames },
-    onEvent, signal)
-// "Generar Motion" (fase generación): SSE con eventos tool_*/created/error. Crea un borrador.
-export const createMotionDraft = (pid, { start, end, playhead, clipId, proposal, variantOf } = {}, onEvent, signal) =>
-  streamSSE(`/api/projects/${pid}/motion/generate/create`,
-    { start, end, playhead, clip_id: clipId || null, proposal, variant_of: variantOf || null },
-    onEvent, signal)
+
+// "Generar Escena" (docs/GENERAR_ESCENA.md). `range` = { start, end, playhead, clipId }.
+// Con `directionId` el backend usa el tramo de la escaleta y su paquete de contexto.
+const sceneBody = ({ start, end, playhead, clipId, directionId } = {}, extra = {}) =>
+  ({ start, end, playhead, clip_id: clipId || null, direction_id: directionId || null, ...extra })
+
+// "Dirección de escena": escaleta de tramos del guion (app/scene_direction.py).
+export const getSceneDirection = (pid) => get(`/api/projects/${pid}/scene-direction`)
+export const saveSceneDirection = (pid, doc) => put(`/api/projects/${pid}/scene-direction`, doc)
+export const autoSplitSceneDirection = (pid, segments) =>
+  post(`/api/projects/${pid}/scene-direction/auto-split`, { segments })
+export const getDirectionPack = (pid, { segment, segments, pace }) =>
+  post(`/api/projects/${pid}/scene-direction/pack`, { segment, segments, pace })
+export const patchDirectionSegment = (pid, sid, patch) =>
+  req(`/api/projects/${pid}/scene-direction/${encodeURIComponent(sid)}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
+  })
+export const placeDirectionMaterial = (pid, sid, material) =>
+  post(`/api/projects/${pid}/scene-direction/${encodeURIComponent(sid)}/place-material`, { material: material || null })
+export const reuseDirectionScene = (pid, sid) =>
+  post(`/api/projects/${pid}/scene-direction/${encodeURIComponent(sid)}/reuse-scene`, {})
+export const getSceneDirections = (pid) => get(`/api/projects/${pid}/motion/scene/directions`)
+export const listScenePresets = (pid) => get(`/api/projects/${pid}/motion/scene/presets`)
+export const saveScenePreset = (pid, { id, name, brief }) =>
+  post(`/api/projects/${pid}/motion/scene/presets`, { id: id || null, name, brief })
+export const deleteScenePreset = (pid, id) => del(`/api/projects/${pid}/motion/scene/presets/${encodeURIComponent(id)}`)
+// SSE: questions / error / done.
+export const askSceneQuestions = (pid, range, brief, onEvent, signal) =>
+  streamSSE(`/api/projects/${pid}/motion/scene/questions`, sceneBody(range, { brief }), onEvent, signal)
+// SSE: plan / error / done.
+export const planScene = (pid, range, { brief, answers }, onEvent, signal) =>
+  streamSSE(`/api/projects/${pid}/motion/scene/plan`, sceneBody(range, { brief, answers }), onEvent, signal)
+// SSE: beat_start / beat_done / status / created / error / done. Guarda un borrador.
+export const buildScene = (pid, range, { brief, answers, plan, variantOf, onlyBeats }, onEvent, signal) =>
+  streamSSE(`/api/projects/${pid}/motion/scene/build`, sceneBody(range, {
+    brief, answers, plan, variant_of: variantOf || null, only_beats: onlyBeats || null,
+  }), onEvent, signal)
 
 // --- Sound Effects ---
 export const listSfx = (q = '', category = '') =>

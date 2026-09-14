@@ -759,6 +759,235 @@ def motion_focus(project_id: str, body: dict = Body(...)) -> dict:
         raise HTTPException(status_code=400, detail=f"Foco inválido: {exc}")
 
 
+# "Generar Escena" (docs/GENERAR_ESCENA.md): brief → preguntas → plan por beats → escena.
+@app.get("/api/projects/{project_id}/motion/scene/directions")
+def motion_scene_directions(project_id: str) -> dict:
+    from .motion import directions, scene
+    return {"directions": directions.list_directions(), "default": directions.DEFAULT_DIRECTION,
+            "options": scene.options()}
+
+
+@app.get("/api/projects/{project_id}/motion/scene/presets")
+def motion_scene_presets(project_id: str) -> dict:
+    from .motion import scene
+    return {"presets": scene.list_presets()}
+
+
+@app.post("/api/projects/{project_id}/motion/scene/presets")
+def motion_scene_preset_save(project_id: str, body: dict = Body(default={})) -> dict:
+    from .motion import scene
+    body = body or {}
+    try:
+        return scene.save_preset(str(body.get("name") or ""), body.get("brief"), body.get("id"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/projects/{project_id}/motion/scene/presets/{preset_id}")
+def motion_scene_preset_delete(project_id: str, preset_id: str) -> dict:
+    from .motion import scene
+    try:
+        ok = scene.delete_preset(preset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Preset no encontrado.")
+    return {"ok": True}
+
+
+def _scene_request(project_id: str, body: dict):
+    """(proyecto, contexto del tramo, brief normalizado con la duración del tramo, rango).
+
+    Con ``direction_id`` (Dirección de escena) el rango es el del tramo y la IA recibe el
+    PAQUETE compacto del tramo (guion exacto, subtítulos, dirección, materiales) y, si la
+    estructura es "script", los beats fijados por las frases."""
+    from . import scene_direction
+    from .motion import scene, segment_context
+    proj = _project_or_404(project_id)
+    seg = doc = None
+    if body.get("direction_id"):
+        try:
+            seg, doc = scene_direction.get_segment(proj, str(body["direction_id"]))
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        body = {**body, "start": seg["start"], "end": seg["end"]}
+    ctx = segment_context.build_segment_context(
+        proj, body.get("start"), body.get("end"), body.get("playhead"), body.get("clip_id"))
+    sel = ctx.get("selection") or {}
+    if sel.get("start") is None or sel.get("end") is None:
+        raise HTTPException(status_code=400, detail="Falta el rango del tramo.")
+    rng = {"start": float(sel["start"]), "end": float(sel["end"])}
+    brief = scene.normalize_brief(body.get("brief"), duration=rng["end"] - rng["start"])
+    if seg is not None:
+        pack = scene_direction.build_pack(proj, seg, doc)
+        ctx["directionPack"] = scene_direction.pack_text(pack)
+        ctx["skeleton"] = scene_direction.skeleton_beats(pack, pace=scene.PACES[brief["pace"]])
+        known = {str(a.get("id")) for a in ctx.get("availableAssets") or []}
+        for m in pack["materials"] + pack["candidates"]:
+            if m["kind"] == "images" and m["id"] not in known:
+                ctx.setdefault("availableAssets", []).append({"kind": "image", "id": m["id"], "label": m["title"]})
+    return proj, ctx, brief, rng
+
+
+def _sse(stream) -> StreamingResponse:
+    return StreamingResponse(stream, media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/projects/{project_id}/motion/scene/questions")
+async def motion_scene_questions(project_id: str, body: dict = Body(default={})) -> StreamingResponse:
+    """La IA pregunta lo que falta para diseñar la escena (SSE: questions/error/done)."""
+    from .motion import scene_ai
+    _, ctx, brief, _ = _scene_request(project_id, body or {})
+    return _sse(scene_ai.to_sse(scene_ai.questions_stream(ctx=ctx, brief=brief)))
+
+
+@app.post("/api/projects/{project_id}/motion/scene/plan")
+async def motion_scene_plan(project_id: str, body: dict = Body(default={})) -> StreamingResponse:
+    """Plan por beats (SSE: plan/error/done). No guarda nada."""
+    from .motion import scene, scene_ai
+    body = body or {}
+    _, ctx, brief, _ = _scene_request(project_id, body)
+    answers = scene.normalize_answers(body.get("answers"))
+    return _sse(scene_ai.to_sse(scene_ai.plan_stream(ctx=ctx, brief=brief, answers=answers)))
+
+
+@app.post("/api/projects/{project_id}/motion/scene/build")
+async def motion_scene_build(project_id: str, body: dict = Body(default={})) -> StreamingResponse:
+    """Construye la escena beat a beat y guarda el BORRADOR (SSE: beat_start/beat_done/
+    created/error/done). ``variant_of`` = regenerar sobre el mismo borrador;
+    ``only_beats`` = regenerar solo esos beats conservando el resto."""
+    from .mcp_server.tools_motion import _project_format
+    from .motion import scene, scene_ai
+    from .motion import service as motion_service
+    body = body or {}
+    proj, ctx, brief, rng = _scene_request(project_id, body)
+    raw_plan = body.get("plan") if isinstance(body.get("plan"), dict) else {}
+    plan = scene.normalize_beats_edit(raw_plan.get("beats"), brief, image_ids=scene_ai.image_ids(ctx))
+    plan.update({k: str(raw_plan.get(k) or "")[:800] for k in ("title", "logline", "rationale")})
+    motion_service.cleanup_generate_drafts(project_id)
+    variant_of = body.get("variant_of")
+    only = body.get("only_beats") if isinstance(body.get("only_beats"), list) else None
+    previous = None
+    if variant_of and only is not None:
+        prev = motion_service.get_composition(project_id, variant_of)
+        previous = (prev.metadata or {}).get("scene") if prev else None
+    stream = scene_ai.build_stream(project_id, ctx=ctx, brief=brief, answers=scene.normalize_answers(body.get("answers")),
+                                   plan=plan, fmt=_project_format(proj), for_range=rng,
+                                   variant_of=variant_of, only_beats=only, previous=previous)
+    if body.get("direction_id"):
+        stream = _link_direction(project_id, str(body["direction_id"]), stream)
+    return _sse(scene_ai.to_sse(stream))
+
+
+async def _link_direction(project_id: str, direction_id: str, stream):
+    """Al crearse el borrador, lo enlaza al tramo de la escaleta (estado 'generated')."""
+    from . import scene_direction
+    async for ev in stream:
+        if ev.get("type") == "created" and ev.get("composition_id"):
+            try:
+                scene_direction.update_segment(project_id, direction_id,
+                                               {"composition_id": ev["composition_id"], "status": "generated"})
+            except LookupError:
+                pass
+        yield ev
+
+
+# Dirección de escena: escaleta de tramos del guion (ver app/scene_direction.py).
+@app.get("/api/projects/{project_id}/scene-direction")
+def scene_direction_get(project_id: str) -> dict:
+    from . import scene_direction
+    proj = _project_or_404(project_id)
+    from .clip_speed import clip_timeline_duration
+    units, source = scene_direction.script_units(proj)
+    tl = proj.timeline
+    duration = max((float(c.start or 0) + clip_timeline_duration(c) for c in tl.clips), default=0.0) if tl else 0.0
+    return {**scene_direction.load(proj), "script_source": source, "units": units,
+            "modes": [{"key": k, **v} for k, v in scene_direction.MODES.items()],
+            "materials": scene_direction.material_catalog(proj),
+            "duration": round(duration, 3)}
+
+
+@app.put("/api/projects/{project_id}/scene-direction")
+def scene_direction_put(project_id: str, body: dict = Body(default={})) -> dict:
+    from . import scene_direction
+    _project_or_404(project_id)
+    return scene_direction.save(project_id, body)
+
+
+@app.post("/api/projects/{project_id}/scene-direction/auto-split")
+def scene_direction_auto_split(project_id: str, body: dict = Body(default={})) -> dict:
+    """Propone tramos por frases conservando los ya dirigidos. NO guarda: el editor decide."""
+    from . import scene_direction
+    proj = _project_or_404(project_id)
+    keep = (body or {}).get("segments")
+    if isinstance(keep, list):
+        keep = scene_direction.normalize_doc({"segments": keep})["segments"]
+    else:
+        keep = scene_direction.load(proj)["segments"]
+    return {"segments": scene_direction.auto_segments(proj, keep=keep)}
+
+
+@app.post("/api/projects/{project_id}/scene-direction/pack")
+def scene_direction_pack(project_id: str, body: dict = Body(default={})) -> dict:
+    """Paquete de contexto de UN tramo (sin guardar): lo que recibirá la IA, tal cual."""
+    from . import scene_direction
+    from .motion import scene
+    proj = _project_or_404(project_id)
+    body = body or {}
+    seg = scene_direction.normalize_segment(body.get("segment"))
+    if seg is None:
+        raise HTTPException(status_code=400, detail="Tramo inválido.")
+    if isinstance(body.get("segments"), list):
+        doc = scene_direction.normalize_doc({"segments": body["segments"]})
+    else:
+        doc = scene_direction.load(proj)
+    pack = scene_direction.build_pack(proj, seg, doc)
+    text = scene_direction.pack_text(pack)
+    pace = scene.PACES.get(str(body.get("pace") or "medio"), scene.PACES["medio"])
+    return {"pack": pack, "text": text, "tokens": scene_direction.estimate_tokens(text),
+            "skeleton": scene_direction.skeleton_beats(pack, pace=pace),
+            "brief_defaults": scene_direction.brief_defaults(pack)}
+
+
+@app.patch("/api/projects/{project_id}/scene-direction/{segment_id}")
+def scene_direction_patch(project_id: str, segment_id: str, body: dict = Body(default={})) -> dict:
+    """Actualiza campos de UN tramo (p.ej. estado tras insertar su escena en la timeline)."""
+    from . import scene_direction
+    _project_or_404(project_id)
+    allowed = {"status", "composition_id", "placed_clip_id", "mode", "instruction", "strict", "materials",
+               "reference_id", "start", "end", "text"}
+    try:
+        return scene_direction.update_segment(project_id, segment_id,
+                                              {k: v for k, v in (body or {}).items() if k in allowed})
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/api/projects/{project_id}/scene-direction/{segment_id}/place-material")
+def scene_direction_place(project_id: str, segment_id: str, body: dict = Body(default={})) -> dict:
+    from . import scene_direction
+    _project_or_404(project_id)
+    try:
+        return scene_direction.place_material(project_id, segment_id, (body or {}).get("material"))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/projects/{project_id}/scene-direction/{segment_id}/reuse-scene")
+def scene_direction_reuse(project_id: str, segment_id: str) -> dict:
+    from . import scene_direction
+    _project_or_404(project_id)
+    try:
+        return scene_direction.reuse_scene(project_id, segment_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @app.post("/api/projects/{project_id}/motion/generate/propose")
 async def motion_generate_propose(project_id: str, body: dict = Body(default={})) -> StreamingResponse:
     """Fase de PROPUESTA de 'Generar Motion': la IA propone una idea (JSON) para un
@@ -1195,6 +1424,16 @@ def save_library_item(req: SaveLibraryRequest) -> dict:
         return library.save_from_project(req.project_id, req.resource_type, req.ident)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc) or "Material no encontrado.") from exc
+
+
+@app.patch("/api/library/{item_id}")
+def update_library_item(item_id: str, req: UpdateMaterialRequest) -> dict:
+    """Título/descripción de un material guardado (mismo contrato que los del proyecto)."""
+    from . import library
+    try:
+        return library.update_item(item_id, req.model_dump())
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc) or "Recurso no encontrado.") from exc
 
 
 @app.delete("/api/library/{item_id}")

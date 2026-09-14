@@ -11,21 +11,22 @@ assert.equal(materialIdent('audios', { id: 'a2' }), 'a2')
 
 {
   const items = materialMenuItems({ saved: false, canDelete: true })
-  assert.deepEqual(items.map((x) => x.id), ['save', 'delete'])
-  assert.equal(items[0].label, 'Guardar')
-  assert.equal(items[1].danger, true)
+  assert.deepEqual(items.map((x) => x.id), ['info', 'save', 'delete'])
+  assert.equal(items[0].label, 'Editar información')
+  assert.equal(items[1].label, 'Guardar')
+  assert.equal(items[2].danger, true)
 }
 
 {
   const items = materialMenuItems({ saved: true, canDelete: false })
-  assert.deepEqual(items.map((x) => x.id), ['save'])
-  assert.equal(items[0].label, 'Quitar de guardados')
+  assert.deepEqual(items.map((x) => x.id), ['info', 'save'])
+  assert.equal(items[1].label, 'Quitar de guardados')
 }
 
 {
   const items = materialMenuItems({ saved: false, canDelete: true, canDownload: true })
-  assert.deepEqual(items.map((x) => x.id), ['save', 'download', 'delete'])
-  assert.equal(items[1].label, 'Descargar')
+  assert.deepEqual(items.map((x) => x.id), ['info', 'save', 'download', 'delete'])
+  assert.equal(items[2].label, 'Descargar')
 }
 
 assert.equal(canDownloadMaterial({ url: '/api/media/x/video/a.mp4' }), true)

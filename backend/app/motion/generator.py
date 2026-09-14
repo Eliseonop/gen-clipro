@@ -91,9 +91,27 @@ _FONTS_LINK = (
 )
 
 
+def _scene_parts(comp: MotionComposition) -> tuple[str, str, str]:
+    """(link de fuentes, CSS del kit, defs SVG) si la composición es una escena con
+    dirección creativa (``metadata.scene.brief.direction``). Se calcula en cada
+    generación: mejorar el kit mejora también las escenas ya creadas."""
+    scene = (comp.metadata or {}).get("scene")
+    if not isinstance(scene, dict):
+        return "", "", ""
+    from . import directions
+    brief = scene.get("brief") if isinstance(scene.get("brief"), dict) else {}
+    d = directions.resolve(brief.get("direction"), brief.get("direction_overrides"))
+    return (directions.scene_font_link(directions.font_families(d)),
+            directions.kit_css(d, comp.width, comp.height), directions.ROUGH_SVG_DEFS)
+
+
 def generate_html(comp: MotionComposition) -> str:
     """Devuelve el documento HTML completo y autocontenido de la composición."""
-    comp_json = json.dumps(comp.model_dump(), ensure_ascii=False)
+    from . import assets
+    # "</" escapado: un bloque html/js con "</script>" no debe cerrar la etiqueta.
+    comp_json = json.dumps(comp.model_dump(), ensure_ascii=False).replace("</", "<\\/")
+    assets_json = json.dumps(assets.embedded_assets(comp), ensure_ascii=False).replace("</", "<\\/")
+    fonts_extra, kit, svg_defs = _scene_parts(comp)
     return f"""<!doctype html>
 <html lang="es">
 <head>
@@ -101,12 +119,14 @@ def generate_html(comp: MotionComposition) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{comp.name}</title>
 {_FONTS_LINK}
-<style>{_css(comp)}</style>
+{fonts_extra}
+<style>{_css(comp)}{kit}</style>
 </head>
 <body>
+{svg_defs}
 <div id="stage"></div>
 <script>{_gsap_src()}</script>
-<script>window.__COMP = {comp_json};</script>
+<script>window.__COMP = {comp_json};window.__ASSETS = {assets_json};</script>
 <script>{_stick_src()}</script>
 <script>{_runtime_src()}</script>
 </body>

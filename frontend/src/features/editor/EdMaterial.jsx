@@ -17,6 +17,7 @@ import AudioTab from '../audio/AudioTab'
 import MotionElements from '../motion/MotionElements'
 import ConfirmModal from '../../components/ConfirmModal'
 import AnchoredMenu from '../../components/AnchoredMenu'
+import MaterialInfoModal from './MaterialInfoModal'
 import { canDeleteMaterial, canDownloadMaterial, downloadMaterialFile, materialIdent, materialMenuItems, materialDeleteTitle, materialLabel } from './materialMenu'
 import { hasFaceTrack, materialDuration, segmentRange } from './clipExtract'
 import { clipCopyText } from './editorModel'
@@ -325,6 +326,7 @@ export default function EdMaterial({
   const [matMenu, setMatMenu] = useState(null)
   const [matMenuPaper, setMatMenuPaper] = useState(false) // submenú "Generar Paper Animation"
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [infoTarget, setInfoTarget] = useState(null)   // { kind, item } → modal título/descripción
   const [imgAddOpen, setImgAddOpen] = useState(false)
   const [imgTick, setImgTick] = useState(0)
   const [imgPaneMenu, setImgPaneMenu] = useState(null)
@@ -1306,6 +1308,10 @@ export default function EdMaterial({
                     onClick={async () => {
                       const { kind, item } = matMenu
                       closeMatMenu()
+                      if (it.id === 'info') {
+                        setInfoTarget({ kind, item })
+                        return
+                      }
                       if (it.id === 'save') {
                         const resource = kind === 'clips' ? 'clip' : kind === 'images' ? 'image' : 'audio'
                         toggleSave(resource, item)
@@ -1323,7 +1329,7 @@ export default function EdMaterial({
                     }}
                   >
                     <Icon
-                      name={it.id === 'save' ? (matMenu.saved ? 'bookmark' : 'bookmark_border') : (it.id === 'download' ? 'download' : 'delete')}
+                      name={it.id === 'info' ? 'edit_note' : it.id === 'save' ? (matMenu.saved ? 'bookmark' : 'bookmark_border') : (it.id === 'download' ? 'download' : 'delete')}
                       size={15}
                     />
                     {it.label}
@@ -1335,6 +1341,17 @@ export default function EdMaterial({
         </>
       )}
 
+      {infoTarget && (
+        <MaterialInfoModal
+          projectId={project.id} kind={infoTarget.kind} item={infoTarget.item}
+          onClose={() => setInfoTarget(null)}
+          onSaved={() => {
+            if (infoTarget.item?.scope === 'library') reloadLibrary()
+            else onRefresh?.()
+            setMatToast({ type: 'success', message: 'Información del material guardada.' })
+          }}
+        />
+      )}
       <Toast toast={matToast} onClose={() => setMatToast(null)} />
       <ConfirmModal
         open={!!deleteTarget}

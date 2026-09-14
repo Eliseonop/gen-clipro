@@ -9,6 +9,7 @@ export function materialIdent(kind, item) {
 
 export function materialMenuItems({ saved, canDelete, canDownload }) {
   const items = [
+    { id: 'info', label: 'Editar información' },
     { id: 'save', label: saved ? 'Quitar de guardados' : 'Guardar' },
   ]
   if (canDownload) items.push({ id: 'download', label: 'Descargar' })

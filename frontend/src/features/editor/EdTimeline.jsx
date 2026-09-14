@@ -133,7 +133,7 @@ export default function EdTimeline({
   onFaceTrack, faceTrackBusy, faceTrackDisabled,
   linkPick, onPickLinkTrack, onCancelLinkPick, onCopyDesc, audioMaterials,
   mcpBusyIds, onMarqueeSelect,
-  markRange, onContextLane,
+  markRange, onContextLane, onSceneDirection,
   onMarkChange, onCreateSegment, segmentBusy, segmentLabelText, markKeys = ['I', 'O'],
 }) {
   const lanesRef = useRef(null)
@@ -580,6 +580,15 @@ export default function EdTimeline({
           )}
         </div>
         <div className="ed-tl-tools-right">
+          {onSceneDirection && (
+            <>
+              <button className="ghost small accent" onClick={onSceneDirection}
+                title="Dirección de escena: recorre el guion tramo a tramo y decide qué se ve en cada uno">
+                <Icon name="theaters" size={15} /> Dirección de escena
+              </button>
+              <span className="ed-tl-sep" />
+            </>
+          )}
           <button className="ghost small" onClick={() => onMatchDuration?.()} disabled={selectedIds.length < 2} title="Copiar el rango de tiempo del primer clip (mismo inicio y mismo fin). Cada uno se queda en su pista. Un vídeo o audio no se alarga más que su fuente.">
             <Icon name="straighten" size={15} /> Igualar
           </button>
