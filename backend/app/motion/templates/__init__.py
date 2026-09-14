@@ -469,8 +469,19 @@ def _neural_network(comp_id: str, params: dict[str, Any]) -> MotionComposition:
                              metadata={"template": "neural_network", "theme": th}, layers=layers)
 
 
+def _stick_scene(comp_id: str, params: dict[str, Any]) -> MotionComposition:
+    from .. import stick
+    return stick.demo_template(comp_id, params)
+
+
 _TEMPLATES: dict[str, Template] = {
     t.key: t for t in [
+        Template("stick_scene", "Historia con stickman", "story",
+                 "Escena animada de stickman (reparto, escenario, planos con poses, cámara y "
+                 "efectos) a partir de un storyboard. Para contar una anécdota o ilustrar el guion. "
+                 "Pasa params.storyboard (ver motion_create_stick_scene) o usa el ejemplo.",
+                 {"storyboard": None, "theme": "light"},
+                 _stick_scene),
         Template("pro_title", "Título pro", "titles",
                  "Título grande con antetítulo en acento y un subrayado que se dibuja. "
                  "Limpio y con jerarquía; para abrir un tema o marcar un capítulo.",

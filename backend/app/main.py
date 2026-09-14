@@ -20,6 +20,8 @@ from .schemas import (
     ClipRequest,
     ComposeClipRequest,
     CreateProjectRequest,
+    CreateSegmentsRequest,
+    FaceTrackRequest,
     RenameProjectRequest,
     Job,
     Project,
@@ -187,6 +189,13 @@ def delete_material(project_id: str, kind: str, ident: str) -> dict:
     removed = projects.remove_material(project_id, kind, ident)
     if removed is None:
         raise HTTPException(status_code=404, detail="Material no encontrado.")
+    # Un segmento por referencia comparte el archivo con su vídeo de origen (y
+    # con los demás segmentos): el archivo solo se borra si ya nadie lo usa.
+    if kind == "clips":
+        from . import segments
+        after = projects.get_project(project_id)
+        if segments.is_shared_file(after, removed.get("filename", "")):
+            return {"deleted": ident, "file_kept": True}
     # Borrar el archivo del disco.
     path = storage.resolve_media(proj, _MEDIA_KIND[kind], removed.get("filename", ""))
     if path and path.exists():
@@ -260,6 +269,33 @@ async def upload_video(project_id: str, file: UploadFile = File(...)) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"No se pudo importar el vídeo: {exc}")
     return {"clip": info.model_dump()}
+
+
+@app.post("/api/projects/{project_id}/clips/{ident}/segments")
+def create_segments(project_id: str, ident: str, req: CreateSegmentsRequest) -> dict:
+    """Crea clips POR REFERENCIA (sin render) desde rangos de un vídeo del material."""
+    from . import segments
+    try:
+        created = segments.create_segments(project_id, ident, req.segments)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return {"clips": [c.model_dump() for c in created]}
+
+
+@app.post("/api/projects/{project_id}/clips/{ident}/face-track", response_model=Job)
+def face_track_clip(project_id: str, ident: str, req: FaceTrackRequest) -> Job:
+    """Seguimiento de caras de un material (o de un rango de su archivo), cacheado en él."""
+    from . import segments
+    proj = projects.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    if segments.find_clip(proj, ident) is None:
+        raise HTTPException(status_code=404, detail="Material de vídeo no encontrado.")
+    job = jobs.create_job()
+    jobs.start_face_track_job(job, project_id, ident, req.start, req.end, req.samples, req.force)
+    return job
 
 
 @app.post("/api/projects/{project_id}/audios")
@@ -636,6 +672,68 @@ def motion_template_preview(project_id: str, key: str, theme: str | None = None,
     except KeyError:
         raise HTTPException(status_code=404, detail="Plantilla desconocida.")
     return Response(content=generate_html(comp), media_type="text/html; charset=utf-8")
+
+
+# Historias con stickman: storyboard (IA) → composición editable. Antes de /motion/{comp_id}.
+@app.get("/api/projects/{project_id}/motion/stick/library")
+def motion_stick_library(project_id: str) -> dict:
+    from .motion import stick
+    return stick.library()
+
+
+@app.get("/api/projects/{project_id}/motion/stick/cast")
+def motion_stick_cast(project_id: str) -> dict:
+    from .motion import stick
+    _project_or_404(project_id)
+    return {"characters": stick.project_cast(project_id)}
+
+
+@app.post("/api/projects/{project_id}/motion/stick/storyboard")
+async def motion_stick_storyboard(project_id: str, body: dict = Body(default={})) -> StreamingResponse:
+    """Guion → storyboard (SSE: start/status/storyboard/error/done). No guarda nada."""
+    from .motion import stick, stick_ai
+    _project_or_404(project_id)
+    body = body or {}
+    try:
+        duration = float(body["duration"]) if body.get("duration") else None
+    except (TypeError, ValueError):
+        duration = None
+    cast = stick.project_cast(project_id) if body.get("use_cast", True) else []
+    stream = stick_ai.storyboard_sse(script=str(body.get("script") or ""), duration=duration,
+                                     style=body.get("style"), environment=body.get("environment"),
+                                     cast=cast)
+    return StreamingResponse(stream, media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/projects/{project_id}/motion/stick/compile")
+def motion_stick_compile(project_id: str, body: dict = Body(default={})) -> dict:
+    """Crea (o actualiza si viene ``composition_id``) la composición de una historia."""
+    from .motion import service as motion_service
+    from .motion import stick
+    from .motion.validator import MotionValidationError
+    proj = _project_or_404(project_id)
+    body = body or {}
+    tl = proj.timeline
+    fmt = {"width": int(body.get("width") or getattr(tl, "width", 1080) or 1080),
+           "height": int(body.get("height") or getattr(tl, "height", 1920) or 1920),
+           "fps": int(getattr(tl, "fps", 30) or 30)}
+    cid = body.get("composition_id")
+    prev = motion_service.get_composition(project_id, cid) if cid else None
+    try:
+        comp = stick.build_composition(prev.id if prev else motion_service.new_id(),
+                                       body.get("storyboard"), name=body.get("name"),
+                                       metadata=(prev.metadata if prev else None), **fmt)
+        saved = motion_service.save_composition(project_id, comp, bump=prev is not None)
+    except MotionValidationError as exc:
+        raise HTTPException(status_code=400, detail={"errors": exc.errors})
+    return saved.model_dump()
+
+
+@app.post("/api/projects/{project_id}/motion/stick/prompts")
+def motion_stick_prompts(project_id: str, body: dict = Body(default={})) -> dict:
+    from .motion import stick
+    return stick.prompts((body or {}).get("storyboard"))
 
 
 # "Generar Motion": contexto COMPACTO de un tramo. Van antes de /motion/{comp_id}
@@ -1034,6 +1132,7 @@ def voices() -> dict:
     engines = [
         {"id": "gemini", "label": "Gemini (cinematográfico)",
          "available": gemini_tts.available(), "voices": gemini_tts.VOICES,
+         "styles": gemini_tts.STYLES,
          "reason": gemini_tts.unavailable_reason()},
         {"id": "kokoro", "label": "Kokoro (neutro)",
          "available": tts.available(), "voices": tts.VOICES},
@@ -1090,7 +1189,7 @@ def get_library() -> dict:
 @app.post("/api/library/save")
 def save_library_item(req: SaveLibraryRequest) -> dict:
     from . import library
-    if req.resource_type not in ("audio", "clip"):
+    if req.resource_type not in ("audio", "clip", "image"):
         raise HTTPException(status_code=400, detail="Tipo no válido.")
     try:
         return library.save_from_project(req.project_id, req.resource_type, req.ident)

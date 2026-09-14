@@ -101,7 +101,13 @@ export const uploadAudio = (pid, file) => {
   return req(`/api/projects/${pid}/audios`, { method: 'POST', body })
 }
 export const updateMaterial = (pid, kind, id, data) => patch(`/api/projects/${pid}/materials/${kind}/${id}`, data)
-export const deleteMaterial = (pid, kind, id) => del(`/api/projects/${pid}/materials/${kind}/${id}`)
+// Clip Editor → "Crear clip": segmentos POR REFERENCIA (sin render) de un vídeo del material.
+export const createSegments = (pid, ident, segments) =>
+  post(`/api/projects/${pid}/clips/${encodeURIComponent(ident)}/segments`, { segments })
+// Seguimiento de caras de un material (o de un rango de su archivo); se cachea en el material.
+export const faceTrackMaterial = (pid, ident, params = {}) =>
+  post(`/api/projects/${pid}/clips/${encodeURIComponent(ident)}/face-track`, params)
+export const deleteMaterial =(pid, kind, id) => del(`/api/projects/${pid}/materials/${kind}/${id}`)
 export const getManifest = (pid) => get(`/api/projects/${pid}/manifest`)
 export const putManifest = (pid, data) => put(`/api/projects/${pid}/manifest`, data)
 export const transcribeClip = (pid, index, model) =>
@@ -187,6 +193,14 @@ export const motionTemplatePreviewUrl = (pid, key, { theme, accent, w, h } = {})
   const s = q.toString()
   return `/api/projects/${pid}/motion/templates/${key}/preview.html${s ? `?${s}` : ''}`
 }
+// Historias con stickman: vocabulario, reparto del proyecto, storyboard IA (SSE),
+// compilación a composición y prompts para IAs de imagen/vídeo externas.
+export const getStickLibrary = (pid) => get(`/api/projects/${pid}/motion/stick/library`)
+export const getStickCast = (pid) => get(`/api/projects/${pid}/motion/stick/cast`)
+export const streamStickStoryboard = (pid, body, onEvent, signal) =>
+  streamSSE(`/api/projects/${pid}/motion/stick/storyboard`, body, onEvent, signal)
+export const compileStick = (pid, body) => post(`/api/projects/${pid}/motion/stick/compile`, body || {})
+export const getStickPrompts = (pid, storyboard) => post(`/api/projects/${pid}/motion/stick/prompts`, { storyboard })
 export const renderMotion = (pid, cid) => post(`/api/projects/${pid}/motion/${cid}/render`, {})
 export const addMotionToTimeline = (pid, cid, body) =>
   post(`/api/projects/${pid}/motion/${cid}/add-to-timeline`, body || {})

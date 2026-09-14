@@ -6,10 +6,17 @@ function voiceOptionLabel(v) {
   return `${v.label} — ${g}`
 }
 
+// Fallback por si el backend no envía el catálogo de estilos.
+const STYLE_FALLBACK = [
+  { id: 'documentary', label: 'Documental' },
+  { id: 'close', label: 'Cercano' },
+]
+
 export default function TtsControls({
   engines, engine, setEngine, voices, voice, setVoice, voice2, setVoice2, isKokoro, isGemini,
-  style, setStyle, blend, setBlend, speed, setSpeed, pause, setPause, name, setName,
+  style, setStyle, styles, blend, setBlend, speed, setSpeed, pause, setPause, name, setName,
 }) {
+  const styleOptions = (styles && styles.length) ? styles : STYLE_FALLBACK
   return (
     <div className="tts-controls">
       <label className="field"><span>Motor</span>
@@ -29,8 +36,7 @@ export default function TtsControls({
       {isGemini && (
         <label className="field"><span>Estilo</span>
           <select className="select" value={style} onChange={(e) => setStyle(e.target.value)}>
-            <option value="documentary">Documental</option>
-            <option value="close">Cercano</option>
+            {styleOptions.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>
         </label>
       )}

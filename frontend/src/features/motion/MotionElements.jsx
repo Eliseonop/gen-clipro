@@ -4,6 +4,7 @@ import { deleteMotion, listMotion } from '../../services/api'
 import { newTextLayer, newCircleLayer, newLineLayer } from './motionModel'
 import MotionAIChat from './MotionAIChat'
 import MotionTemplates from './MotionTemplates'
+import StickStory from './StickStory'
 
 // Composiciones "en este proyecto" (no borrador): listado con duración e insignia
 // "en timeline", clic para abrirlas en Motion Studio y eliminar.
@@ -39,8 +40,9 @@ function ProjectCompositions({ pid, timelineCompIds, onOpen }) {
 
 const TABS = [
   { id: 'plantillas', label: 'Plantillas' },
+  { id: 'historia', label: 'Historia' },
   { id: 'editar', label: 'Editar' },
-  { id: 'elementos', label: 'Elementos' },
+  { id: 'elementos', label: 'Capas' },
   { id: 'ia', label: 'IA' },
   { id: 'proyecto', label: 'Proyecto' },
 ]
@@ -50,22 +52,24 @@ const TABS = [
 //  · Editar: ajustes de la composición (nombre, duración, fondo) + chat IA.
 //  · Elementos: añadir capas (texto/forma/línea) y lista de capas.
 //  · Proyecto: agregar al proyecto y motions ya guardados.
-export default function MotionElements({ pid, m, format, onReloadTimeline, onBack, timelineCompIds }) {
+export default function MotionElements({ pid, m, format, onReloadTimeline, onBack, timelineCompIds, onSeek, timeRef }) {
   const { comp, selLayerId, setSelLayerId, addLayer, deleteLayer, edit,
           templates, error, addJob, addToProject, setName, setDuration,
           loadComp, createBlank, createFromTemplate } = m
 
-  const [tab, setTab] = useState(comp ? 'editar' : 'plantillas')
+  const isStory = !!comp?.metadata?.stick
+  const [tab, setTab] = useState(comp ? (isStory ? 'historia' : 'editar') : 'plantillas')
   const [galleryTheme, setGalleryTheme] = useState('light')
 
-  // Al crear/abrir una composición, salta a "Editar" si estabas en Plantillas.
+  // Al crear/abrir una composición, salta a su pestaña natural (una historia se
+  // edita en "Historia"; el resto en "Editar") si estabas en Plantillas.
   useEffect(() => {
-    if (comp?.id) setTab((t) => (t === 'plantillas' ? 'editar' : t))
-  }, [comp?.id])
+    if (comp?.id) setTab((t) => (t === 'plantillas' || (isStory && t === 'editar') ? (isStory ? 'historia' : 'editar') : t))
+  }, [comp?.id, isStory])
 
   const pickTemplate = useCallback(async (key, theme) => {
     await createFromTemplate(key, { theme, width: format?.width, height: format?.height })
-    setTab('editar')
+    setTab(key === 'stick_scene' ? 'historia' : 'editar')
   }, [createFromTemplate, format])
 
   const makeBlank = useCallback(async () => {
@@ -98,6 +102,12 @@ export default function MotionElements({ pid, m, format, onReloadTimeline, onBac
           <MotionTemplates pid={pid} templates={templates} format={format}
             theme={galleryTheme} onThemeChange={setGalleryTheme}
             onPick={pickTemplate} onBlank={makeBlank} />
+        </div>
+      )}
+
+      {tab === 'historia' && (
+        <div className="motion-tabpane">
+          <StickStory pid={pid} m={m} format={format} onSeek={onSeek} timeRef={timeRef} />
         </div>
       )}
 

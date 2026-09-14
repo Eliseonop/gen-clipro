@@ -211,13 +211,18 @@
         width: COMP.width, height: COMP.height, duration: COMP.duration,
         start: start, end: end, life: Math.max(0.1, end - start),
         theme: (COMP.metadata || {}).theme || {},
+        meta: COMP.metadata || {},
       };
       try {
         (new Function('tl', 'root', 'gsap', 'ctx', layer.js))(child, root, gsap, ctx);
       } catch (e) { /* bloque con JS inválido: se muestra estático */ }
     }
     tl.add(child, start);
-    tl.set(outer, { autoAlpha: 0 }, end);
+    // Ocultar la capa tras su vida SOLO si termina antes del final de la composición.
+    // Un `.set(autoAlpha:0)` en el ÚLTIMO instante no se revierte al rebobinar (gotcha
+    // de GSAP con tweens de duración 0) → dejaba el bloque en blanco en la 2ª
+    // reproducción/loop y al arrastrar el cursor al final y volver.
+    if (end < COMP.duration - 1e-3) tl.set(outer, { autoAlpha: 0 }, end);
 
     NODES.push({ id: layer.id, layer: layer, info: { anim: outer, bar: null, isLine: false } });
   }
@@ -430,7 +435,9 @@
   // idéntica a la 1ª sea cual sea el bloque. El render no usa esta ruta (solo seek
   // hacia delante con una única build → paridad intacta).
   function restart() {
-    if (hasHtmlLayer()) { buildAll(COMP); }
+    // Salta a 0 ANTES de reconstruir: así buildAll conserva t=0 (no el instante final)
+    // y no dispara los `.set(autoAlpha:0)` de fin de vida de las capas html.
+    if (hasHtmlLayer()) { if (tl) { try { tl.pause(0); } catch (e) { /* noop */ } } buildAll(COMP); }
     window.__seek(0);
   }
 

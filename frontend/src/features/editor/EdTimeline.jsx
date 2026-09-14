@@ -134,6 +134,7 @@ export default function EdTimeline({
   linkPick, onPickLinkTrack, onCancelLinkPick, onCopyDesc, audioMaterials,
   mcpBusyIds, onMarqueeSelect,
   markRange, onContextLane,
+  onMarkChange, onCreateSegment, segmentBusy, segmentLabelText, markKeys = ['I', 'O'],
 }) {
   const lanesRef = useRef(null)
   const bodyRef = useRef(null)
@@ -405,6 +406,27 @@ export default function EdTimeline({
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
   }
 
+  // Arrastrar la marca de inicio/fin del rango (Z / X). El cabezal la sigue para
+  // ver en el preview el fotograma exacto donde empieza o acaba el clip.
+  function startMarkDrag(e, which) {
+    if (!onMarkChange || (e.button != null && e.button !== 0)) return
+    e.preventDefault()
+    e.stopPropagation()
+    document.body.classList.add('ed-mark-dragging')
+    const move = (ev) => {
+      const t = snapToFrame(xToTime(ev.clientX), fps)
+      onMarkChange(which, t)
+      ;(onScrub || onSeek)?.(t)
+    }
+    const up = () => {
+      document.body.classList.remove('ed-mark-dragging')
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
   function startKfDrag(e, clip, kf) {
     e.stopPropagation()
     onSelectKf(kf.id)
@@ -527,6 +549,24 @@ export default function EdTimeline({
           </button>
           {onFaceTrack && (
             <FaceTrackButton onPick={onFaceTrack} disabled={faceTrackDisabled} busy={faceTrackBusy} />
+          )}
+          {onCreateSegment && (
+            <>
+              <span className="ed-tl-sep" />
+              <button
+                className="ghost small accent ed-create-seg"
+                onClick={() => onCreateSegment()}
+                disabled={markIn == null || markOut == null || markOut <= markIn || segmentBusy}
+                title="Revisa título y descripción del rango marcado (Z inicio · X fin) y confírmalo para añadirlo a Mis materiales (Enter)"
+              >
+                <Icon name={segmentBusy ? 'hourglass_top' : 'add_to_photos'} size={15} />
+                {segmentBusy ? 'Creando…' : 'Crear clip'}
+                {markIn != null && markOut != null && markOut > markIn && (
+                  <em className="ed-create-seg-dur">{fmt(markOut - markIn)}</em>
+                )}
+              </button>
+              {segmentLabelText && <span className="ed-tl-hint">{segmentLabelText}</span>}
+            </>
           )}
           <span className="ed-tl-sep" />
           <PreviewVolButton value={previewVol} onChange={onPreviewVol} />
@@ -724,6 +764,18 @@ export default function EdTimeline({
             {markIn != null && markOut != null && (
               <div className="ed-mark-shade" style={{ left: markIn * pps, width: (markOut - markIn) * pps }} aria-hidden="true" />
             )}
+            {onMarkChange && [['in', markIn], ['out', markOut]].map(([which, t]) => (t == null ? null : (
+              <div
+                key={which}
+                className={`ed-mark-handle ${which}`}
+                style={{ left: t * pps }}
+                onPointerDown={(e) => startMarkDrag(e, which)}
+                title={`${which === 'in' ? 'Inicio' : 'Fin'} (${which === 'in' ? markKeys[0] : markKeys[1]}) · ${fmtRuler(t, { step: rulerStep, fps, long: rulerLong })} · arrastra para ajustar`}
+              >
+                <span className="ed-mark-flag">{which === 'in' ? markKeys[0] : markKeys[1]}</span>
+                <span className="ed-mark-line" />
+              </div>
+            )))}
             <div className="ed-playhead" style={{ left: playhead * pps }}><span className="ed-playhead-knob" /></div>
           </div>
         </div>

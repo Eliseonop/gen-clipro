@@ -191,13 +191,17 @@ def face_track(
     source: Path,
     samples: int = 0,
     on_progress: Optional[Callable[[float, str], None]] = None,
+    start: float = 0.0,
+    end: Optional[float] = None,
+    progress_base: float = 0.5,
 ) -> dict:
-    """Recorre TODO el vídeo ``source`` detectando la cara más grande por muestra.
+    """Detecta la cara más grande por muestra en ``source`` (todo o [start, end]).
 
-    Pensado para un proxy que YA es el tramo a editar (empieza en t=0). Devuelve
-    un diccionario con la duración, dimensiones, fps y una lista ``track`` de
-    puntos ``{t, cx, cy, w, h}`` en coordenadas normalizadas (0-1). Esto alimenta
-    el editor de reencuadre: el usuario ve dónde está la cara y corrige a mano.
+    Sin rango recorre TODO el vídeo (un proxy que YA es el tramo, empieza en t=0).
+    Con ``start``/``end`` busca directamente en el archivo original — así un
+    segmento por referencia se analiza sin recortar ni transcodificar nada — y los
+    ``t`` quedan en segundos del ARCHIVO. Devuelve la duración (del archivo o del
+    rango), dimensiones, fps y ``track`` = ``{t, cx, cy, w, h}`` normalizados (0-1).
     """
     cap = cv2.VideoCapture(str(source))
     if not cap.isOpened():
@@ -207,18 +211,23 @@ def face_track(
     count = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    dur = (count / fps) if fps else 0.0
+    file_dur = (count / fps) if fps else 0.0
+    t0 = max(0.0, float(start or 0.0))
+    t1 = file_dur if end is None else float(end)
+    if file_dur > 0:
+        t1 = min(t1, file_dur)
+    dur = max(0.0, t1 - t0)
 
     if samples <= 0:
         samples = max(8, min(240, int(dur * 2)))   # ~2 muestras por segundo
 
     track: list[dict] = []
 
-    log.info("Tracking de caras: %s · %dx%d · %.1fs · %d muestras",
-             source.name, w, h, dur, samples)
+    log.info("Tracking de caras: %s · %dx%d · [%.1f–%.1f]s · %d muestras",
+             source.name, w, h, t0, t0 + dur, samples)
     with timed("detección de caras", log, samples=samples, res=f"{w}x{h}"):
         for i in range(samples):
-            t = dur * (i + 0.5) / samples
+            t = t0 + dur * (i + 0.5) / samples
             cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
             ok, frame = cap.read()
             if ok:
@@ -237,8 +246,10 @@ def face_track(
                             "h": round(bh / fh, 4),
                         })
             if on_progress and samples:
-                on_progress(0.5 + 0.5 * (i + 1) / samples, f"Detectando caras… {i + 1}/{samples}")
+                span = 1.0 - progress_base
+                on_progress(progress_base + span * (i + 1) / samples, f"Detectando caras… {i + 1}/{samples}")
 
     log.info("Tracking: %d/%d muestras con cara detectada.", len(track), samples)
     cap.release()
-    return {"track": track, "duration": round(dur, 3), "width": w, "height": h, "fps": round(fps, 3)}
+    return {"track": track, "duration": round(dur, 3), "width": w, "height": h,
+            "fps": round(fps, 3), "samples": samples}

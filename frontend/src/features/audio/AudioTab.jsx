@@ -33,6 +33,7 @@ export default function AudioTab({ project, onChange, initialYtUrl = '', sourceT
 
   const curEngine = engines.find((e) => e.id === engine) || null
   const voices = curEngine?.voices || []
+  const styles = curEngine?.styles || []
   const available = curEngine?.available ?? true
   const isKokoro = engine === 'kokoro'
   const isGemini = engine === 'gemini'
@@ -183,7 +184,7 @@ export default function AudioTab({ project, onChange, initialYtUrl = '', sourceT
             engines={engines} engine={engine} setEngine={setEngine}
             voices={voices} voice={voice} setVoice={setVoice}
             voice2={voice2} setVoice2={setVoice2} isKokoro={isKokoro} isGemini={isGemini}
-            style={style} setStyle={setStyle}
+            style={style} setStyle={setStyle} styles={styles}
             blend={blend} setBlend={setBlend} speed={speed} setSpeed={setSpeed}
             pause={pause} setPause={setPause} name={name} setName={setName}
           />

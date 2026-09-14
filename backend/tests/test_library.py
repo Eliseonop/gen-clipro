@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from app import config, projects, storage
-from app.schemas import AudioInfo, ImageInfo, Timeline, TimelineClip, TimelineTrack
+from app.schemas import AudioInfo, ClipInfo, ImageInfo, Timeline, TimelineClip, TimelineTrack
 
 
 class InferOriginTest(unittest.TestCase):
@@ -227,6 +227,58 @@ class LibrarySaveTest(unittest.TestCase):
         lib = list_library()
         self.assertEqual(len(lib["audios"]), 1)
         self.assertNotIn("au2", [a["id"] for a in lib["audios"]])
+
+    def _add_video(self, index, name="v.mp4", **extra):
+        src = self.proj_dir / "video" / name
+        if not src.exists():
+            src.write_bytes(b"\x00" * 16)
+        projects.add_clips(self.pid, [ClipInfo(
+            index=index, filename=name, url=f"/api/media/{self.pid}/video/{name}",
+            start=0.0, end=2.0, **extra,
+        )])
+
+    def test_save_video_mueve_a_biblioteca(self):
+        from app.library import list_library, save_from_project
+
+        self._add_video(100000)
+        saved = save_from_project(self.pid, "clip", "100000")
+        self.assertEqual(saved["resource_type"], "clip")
+        self.assertEqual(projects.get_project(self.pid).clips, [])
+        self.assertFalse((self.proj_dir / "video" / "v.mp4").exists())
+        self.assertEqual(len(list_library()["clips"]), 1)
+
+    def test_save_segmento_no_borra_archivo_compartido(self):
+        from app.library import save_from_project
+
+        self._add_video(100000)
+        self._add_video(100001, in_point=0.5, out_point=1.5, parent_id="p")
+        projects.save_timeline(self.pid, Timeline(
+            tracks=[TimelineTrack(id="V1", kind="video", name="V1")],
+            clips=[TimelineClip(
+                id="c1", track_id="V1", kind="video", asset_kind="clips",
+                asset_id="100000", filename="v.mp4", out_point=2, source_duration=2,
+            )],
+        ).model_dump())
+        saved = save_from_project(self.pid, "clip", "100001")
+        self.assertEqual((saved["in_point"], saved["out_point"]), (0.5, 1.5))
+        # El vídeo de origen sigue en el proyecto, con su archivo y su clip de timeline.
+        self.assertTrue((self.proj_dir / "video" / "v.mp4").exists())
+        proj = projects.get_project(self.pid)
+        self.assertEqual([c.index for c in proj.clips], [100000])
+        self.assertEqual(proj.timeline.clips[0].asset_scope, "project")
+
+    def test_endpoint_acepta_imagen(self):
+        from fastapi.testclient import TestClient
+        from app.main import app
+
+        (self.proj_dir / "image").mkdir(parents=True, exist_ok=True)
+        (self.proj_dir / "image" / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        projects.add_image(self.pid, ImageInfo(id="im1", filename="logo.png", url="/x"))
+        r = TestClient(app).post("/api/library/save", json={
+            "project_id": self.pid, "resource_type": "image", "ident": "im1",
+        })
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["resource_type"], "image")
 
 
 class TimelineAssetScopeDefaultTest(unittest.TestCase):

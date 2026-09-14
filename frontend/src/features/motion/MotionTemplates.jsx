@@ -5,6 +5,7 @@ import { motionTemplatePreviewUrl } from '../../services/api'
 // tienen plantillas se muestran como "Próximamente" para dejar ver la estructura
 // y dónde entrarán las siguientes tandas de componentes.
 const CATEGORIES = [
+  { key: 'story', label: 'Historias', note: 'Stickman animados a partir de tu guion (pestaña Historia)' },
   { key: 'captions', label: 'Subtítulos', note: 'Texto sincronizado con la voz' },
   { key: 'titles', label: 'Títulos', note: 'Titulares, antetítulos e introducciones' },
   { key: 'text', label: 'Texto', note: 'Listas, citas y bloques de texto' },

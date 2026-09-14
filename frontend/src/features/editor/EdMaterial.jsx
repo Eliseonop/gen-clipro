@@ -18,6 +18,7 @@ import MotionElements from '../motion/MotionElements'
 import ConfirmModal from '../../components/ConfirmModal'
 import AnchoredMenu from '../../components/AnchoredMenu'
 import { canDeleteMaterial, canDownloadMaterial, downloadMaterialFile, materialIdent, materialMenuItems, materialDeleteTitle, materialLabel } from './materialMenu'
+import { hasFaceTrack, materialDuration, segmentRange } from './clipExtract'
 import { clipCopyText } from './editorModel'
 import { isTypingTarget, scopeShortcutIndex, scopeTabsFor, stepNavId, wheelStepDir } from './materialNav'
 import JobStatusBar from '../../components/JobStatusBar'
@@ -291,8 +292,9 @@ export default function EdMaterial({
   matTab, onMatTab,
   audioDb, onAudioDb,
   aiContext, onReloadTimeline, timelineClips, onMcpAudit,
-  motion, motionFormat, onGoMotion, onMotionBack,
+  motion, motionFormat, onGoMotion, onMotionBack, onMotionSeek, motionTimeRef,
   paper, onGoPaper, onExitStudio, onGeneratePaper,
+  onFaceTrackMaterial, faceTrackBusyIdent,
 }) {
   const [tabState, setTabState] = useState('video')
   const tab = matTab ?? tabState
@@ -538,17 +540,14 @@ export default function EdMaterial({
       }
       reloadLibrary()
       onRefresh?.()
-      if (resourceType === 'audio') {
-        setMatToast({
-          type: 'success',
-          message: wasSaved ? 'Audio quitado de guardados.' : 'Audio guardado en la biblioteca.',
-        })
-      }
+      const [noun, o] = { audio: ['Audio', 'o'], clip: ['Vídeo', 'o'], image: ['Imagen', 'a'] }[resourceType] || ['Material', 'o']
+      setMatToast({
+        type: 'success',
+        message: wasSaved ? `${noun} quitad${o} de guardados.` : `${noun} guardad${o} en la biblioteca.`,
+      })
     } catch (e) {
       setErr(e.message)
-      if (resourceType === 'audio') {
-        setMatToast({ type: 'error', message: e.message || 'No se pudo guardar el audio.' })
-      }
+      setMatToast({ type: 'error', message: e.message || 'No se pudo guardar.' })
     }
   }
 
@@ -685,6 +684,27 @@ export default function EdMaterial({
     const media = (c.url || '').trim()
     const title = c.label || c.filename || `Clip #${c.index}`
     const description = c.description || ''
+    const seg = segmentRange(c)
+    // Vídeo local del proyecto → extractor sobre el archivo original (sin proxy).
+    // Un segmento por referencia abre su vídeo entero con el rango ya marcado.
+    // (Los segmentos van siempre por aquí: sus tiempos son del archivo, no de YouTube.)
+    const localMedia = c.scope !== 'library' && media.startsWith(`/api/media/${project.id}/video/`)
+    if (localMedia && (seg || !isYtUrl(src))) {
+      onEditYtClip?.({
+        url: media,
+        start: 0,
+        end: seg ? seg.out + 1 : Math.max(materialDuration(c), 0.5),
+        index: c.index,
+        title,
+        description,
+        existing: true,
+        segment: !!seg,
+        materialIdent: c.index,
+        markIn: seg?.in,
+        markOut: seg?.out,
+      })
+      return
+    }
     if (isYtUrl(src)) {
       setYtUrl(src)
       const start = Number(c.start) || 0
@@ -1175,6 +1195,7 @@ export default function EdMaterial({
       {tab === 'motion' && motion && (
         <MotionElements pid={project.id} m={motion} format={motionFormat}
           onReloadTimeline={onReloadTimeline} onBack={onMotionBack}
+          onSeek={onMotionSeek} timeRef={motionTimeRef}
           timelineCompIds={new Set((timelineClips || []).filter((c) => c.kind === 'motion').map((c) => c.composition_id))} />
       )}
       {tab === 'paper' && paper && (
@@ -1247,6 +1268,29 @@ export default function EdMaterial({
                       <span>Generar Paper Animation</span>
                       <span className="ed-ctx-chev"><Icon name="chevron_right" size={16} /></span>
                     </button>
+                    <div className="ed-ctx-sep" />
+                  </>
+                )}
+                {matMenu.kind === 'clips' && matMenu.item?.scope !== 'library' && onFaceTrackMaterial && (
+                  <>
+                    <button
+                      type="button"
+                      className="accent"
+                      disabled={faceTrackBusyIdent != null}
+                      onClick={() => { const it = matMenu.item; closeMatMenu(); onFaceTrackMaterial(it) }}
+                    >
+                      <Icon name="face" size={15} />
+                      {hasFaceTrack(matMenu.item) ? 'Aplicar seguimiento de caras' : 'Seguimiento de caras'}
+                    </button>
+                    {hasFaceTrack(matMenu.item) && (
+                      <button
+                        type="button"
+                        disabled={faceTrackBusyIdent != null}
+                        onClick={() => { const it = matMenu.item; closeMatMenu(); onFaceTrackMaterial(it, { force: true }) }}
+                      >
+                        <Icon name="refresh" size={15} /> Volver a analizar caras
+                      </button>
+                    )}
                     <div className="ed-ctx-sep" />
                   </>
                 )}

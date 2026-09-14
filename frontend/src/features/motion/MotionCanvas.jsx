@@ -186,7 +186,9 @@ export default function MotionCanvas({
           >
             {/* La capa seleccionada se enmarca aunque no esté visible en este instante
                 (borde discontinuo): así se sabe dónde está sin tener que buscar su tramo. */}
-            {boxes.filter((b) => b.on !== false || b.id === selLayerId).map((b) => (
+            {/* La escena de una historia ocupa todo el lienzo y se edita desde su panel:
+                no se selecciona ni arrastra aquí (teñía el preview y la movía sin querer). */}
+            {boxes.filter((b) => (b.on !== false || b.id === selLayerId) && !(comp?.metadata?.stick && b.id === 'stick_scene')).map((b) => (
               <div
                 key={b.id}
                 className={`motion-hitbox${b.id === selLayerId ? ' sel' : ''}${b.on === false ? ' off' : ''}`}

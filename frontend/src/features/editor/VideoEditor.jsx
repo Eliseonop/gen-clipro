@@ -4,7 +4,10 @@ import ConfirmModal from '../../components/ConfirmModal'
 import Toast from '../../components/Toast'
 import { fmt } from '../../lib/utils'
 import { getTimeline, saveTimeline, prepareReframe, getJob, createClipJob, getSettings,
-  createBgRemovalJob, listBgProviders, cancelJob, addMotionToTimeline } from '../../services/api'
+  createBgRemovalJob, listBgProviders, cancelJob, addMotionToTimeline,
+  createSegments, faceTrackMaterial } from '../../services/api'
+import { dragMark, markToSourceRange, materialDuration, segmentDescription, segmentLabel } from './clipExtract'
+import SegmentConfirmModal from './SegmentConfirmModal'
 import { clamp } from '../../lib/panning'
 import { defaultTextStyle, subtitleStyle, wrappedText, ensureEditorFonts, selectedSubtitleThemeId, clearTextTheme, effectiveTextStyle } from '../../lib/textstyles'
 import { applyThemeToStyle, wordsPerBoxOptions, activeWordsPerBox, splitCaptionWords } from '../../lib/textKaraoke'
@@ -228,6 +231,16 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [markRange, setMarkRange] = useState(EMPTY_MARK)
   const markRangeRef = useRef(EMPTY_MARK); markRangeRef.current = markRange
   const [laneMenu, setLaneMenu] = useState(null)    // { x, y, time, track }
+  // Extractor del Clip Editor: Z / X marcan inicio y fin (arrastrables en la
+  // regla) y "Crear clip" guarda el tramo en Materiales por referencia. Estado
+  // aparte del I/O de Main para que un rango no se cuele en el otro editor.
+  const [clipMark, setClipMark] = useState(EMPTY_MARK)
+  const clipMarkRef = useRef(EMPTY_MARK); clipMarkRef.current = clipMark
+  const [segBusy, setSegBusy] = useState(false)
+  const segBusyRef = useRef(false)
+  // Modal "Crear clip": revisar título/descripción y confirmar; luego su progreso.
+  const [segAsk, setSegAsk] = useState(null)
+  const segAskRef = useRef(null); segAskRef.current = segAsk
   const [genMotion, setGenMotion] = useState(null)  // { start, end, playhead, explicit, clipId }
   const genMotionRef = useRef(null); genMotionRef.current = genMotion
   const [propClipboard, setPropClipboard] = useState(null)  // props visuales copiadas
@@ -283,8 +296,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [clipMeta, setClipMeta] = useState({
     title: '', description: '', url: '', segStart: 0, segEnd: 0, segIndex: null,
     existingIndex: null,
+    // sourceIdent: material LOCAL del proyecto abierto tal cual (sin proxy): la
+    // timeline del clip está en segundos de su archivo y "Crear clip" crea
+    // segmentos por referencia. null = tramo de YouTube (proxy) → se renderiza.
+    sourceIdent: null,
     preparing: false, prepProgress: 0, prepMsg: '', err: '',
   })
+  const clipMetaRef = useRef(clipMeta); clipMetaRef.current = clipMeta
   const [clipSaveJob, setClipSaveJob] = useState(null)
   const [faceJob, setFaceJob] = useState(null)
   const [clipToast, setClipToast] = useState(null)
@@ -1026,6 +1044,30 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     }
   }, [motion.comp])
 
+  // Vídeo local del proyecto: se abre el archivo ORIGINAL directamente (sin
+  // transcodificar un proxy de todo el vídeo). Así la timeline del clip está en
+  // segundos del archivo, que es justo lo que guardan los segmentos por referencia.
+  function openDirectSource(url, dur, title) {
+    ++prepGen.current
+    const span = Math.max(0.3, Number(dur) || 1)
+    const clip = {
+      ...makeClip('clips', {
+        index: `local-${Date.now()}`,
+        filename: '',
+        label: title || 'Vídeo',
+        start: 0,
+        end: span,
+      }, 'V1', 0, span),
+      media_url: url,
+      source_url: url,
+    }
+    setClips([clip])
+    setSelClipId(clip.id)
+    setSelClipIds([clip.id])
+    setSelTrackId('V1')
+    setClipMeta((m) => ({ ...m, preparing: false, prepMsg: '', err: '' }))
+  }
+
   async function startClipPrepare(url, start, end, title) {
     const gen = ++prepGen.current
     setClipMeta((m) => ({ ...m, preparing: true, prepProgress: 0.04, prepMsg: 'Preparando el tramo…', err: '' }))
@@ -1091,20 +1133,133 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setMainColTab('clip')
     applyEmptyClipTl()
     const title = info.title || `Tramo #${info.index}`
+    const direct = info.materialIdent != null
+    // Reabrir un segmento: se ve el vídeo entero con su rango ya marcado.
+    const mark = Number.isFinite(info.markIn) && Number.isFinite(info.markOut) && info.markOut > info.markIn
+      ? { in: info.markIn, out: info.markOut }
+      : EMPTY_MARK
+    setClipMark(mark)
     setClipMeta({
       title,
       description: info.description || '',
       url,
-      segStart: info.start || 0,
-      segEnd: info.end || 0,
+      segStart: direct ? 0 : (info.start || 0),
+      segEnd: direct ? (info.end || 0) : (info.end || 0),
       segIndex: info.index,
-      existingIndex: info.existing ? info.index : null,
-      preparing: true,
+      // Un segmento abierto sobre su vídeo entero NO se sobrescribe con "Guardar
+      // clip" (renderizaría todo el vídeo en su lugar): guarda uno nuevo.
+      existingIndex: info.existing && !info.segment ? info.index : null,
+      sourceIdent: direct ? String(info.materialIdent) : null,
+      preparing: !direct,
       prepProgress: 0.04,
       prepMsg: 'Preparando el tramo…',
       err: '',
     })
-    startClipPrepare(url, info.start, info.end, title)
+    if (direct) {
+      openDirectSource(url, info.end, title)
+      if (mark.in != null) scrub(mark.in)
+    } else {
+      startClipPrepare(url, info.start, info.end, title)
+    }
+  }
+
+  // El keydown se registra una vez: llama siempre a la versión más reciente.
+  const createSegmentFromMarkRef = useRef(null)
+  createSegmentFromMarkRef.current = createSegmentFromMark
+
+  // "Crear clip" (botón o Enter): el rango Z/X pasa a Materiales.
+  //   · Vídeo local → segmento POR REFERENCIA: instantáneo, sin render.
+  //   · Tramo de YouTube (proxy sin archivo local) → hay que descargarlo: se
+  //     recorta en su aspecto original (receta master, sin hornear 9:16).
+  // Paso 1 (botón o Enter): valida el rango y abre el modal de confirmación
+  // con el título del clip completo y su descripción. Aún no se crea nada.
+  function createSegmentFromMark() {
+    if (segBusyRef.current || !clipModeRef.current || segAskRef.current) return
+    const meta = clipMetaRef.current
+    const range = markToSourceRange(clipsRef.current, clipMarkRef.current)
+    if (range.error) {
+      setClipToast({ type: 'error', message: range.error })
+      return
+    }
+    stopPlayback()
+    const sourceDescription = String(meta.description || '').trim()
+    setSegAsk({
+      start: +((meta.segStart || 0) + range.start).toFixed(3),
+      end: +((meta.segStart || 0) + range.end).toFixed(3),
+      clipId: range.clip.id,
+      remote: meta.sourceIdent == null,
+      title: String(meta.title || '').trim() || 'Clip',
+      descMode: sourceDescription ? 'source' : 'manual',
+      description: '',
+      sourceDescription,
+      phase: 'edit',
+      progress: 0,
+      message: '',
+      error: '',
+    })
+  }
+
+  function patchSegAsk(patch) {
+    setSegAsk((a) => (a ? { ...a, ...patch } : a))
+  }
+
+  // Paso 2 (Confirmar): recién aquí se crea el clip, con progreso en el modal
+  // hasta que aparece en Mis materiales.
+  //   · Vídeo local → segmento POR REFERENCIA: sin render.
+  //   · Tramo de YouTube (sin archivo local) → se descarga en su aspecto original
+  //     (receta master, sin hornear 9:16).
+  async function confirmSegment() {
+    const ask = segAskRef.current
+    if (!ask || segBusyRef.current) return
+    const meta = clipMetaRef.current
+    const label = String(ask.title || '').trim() || segmentLabel(meta.title, ask.start, ask.end)
+    const description = segmentDescription(ask) || null
+    const { start, end } = ask
+    segBusyRef.current = true
+    setSegBusy(true)
+    patchSegAsk({ phase: 'running', progress: 0.08, message: 'Iniciando…', error: '' })
+    try {
+      if (meta.sourceIdent != null) {
+        patchSegAsk({ progress: 0.35, message: 'Creando el clip desde el vídeo original…' })
+        await createSegments(project.id, meta.sourceIdent, [{ start, end, label, description }])
+        patchSegAsk({ progress: 0.8, message: 'Añadiendo a Mis materiales…' })
+        await onChange?.()
+      } else {
+        const url = (meta.url || '').trim()
+        if (!url) throw new Error('Falta la URL del vídeo original.')
+        const video = clipsRef.current.find((c) => c.id === ask.clipId) || {}
+        const index = 100000 + (Date.now() % 900000)
+        let job = await createClipJob({
+          url,
+          project_id: project.id,
+          segments: [{ index, start, end, score: 1, duration: +(end - start).toFixed(3), label, description }],
+          crop_mode: 'smart_face',
+          reframe: { ...newReframe(), master: true, keyframes: [] },
+          volume: video.volume ?? 1,
+          muted: !!video.muted,
+          width: outW,
+          height: outH,
+        })
+        while (job.status !== 'done' && job.status !== 'error') {
+          patchSegAsk({ progress: Math.min(0.9, job.progress || 0.1), message: job.message || 'Descargando el tramo…' })
+          await new Promise((r) => setTimeout(r, 400))
+          job = await getJob(job.id)
+        }
+        if (job.status === 'error') throw new Error(job.error || 'No se pudo crear el clip.')
+        patchSegAsk({ progress: 0.95, message: 'Añadiendo a Mis materiales…' })
+        await onChange?.()
+      }
+      patchSegAsk({ progress: 1, message: 'Listo' })
+      setSegAsk(null)
+      setClipToast({ type: 'success', message: `«${label}» añadido a Mis materiales · ${fmt(end - start)}` })
+      // Listo para marcar el siguiente: la salida de este es la entrada del próximo.
+      setClipMark((m) => ({ in: m.out, out: null }))
+    } catch (e) {
+      patchSegAsk({ phase: 'error', error: e.message || 'No se pudo crear el clip.' })
+    } finally {
+      segBusyRef.current = false
+      setSegBusy(false)
+    }
   }
 
   async function saveClip() {
@@ -1230,6 +1385,26 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (!url || clipMeta.preparing) return
     const gen = ++faceGen.current
     setClipMeta((m) => ({ ...m, err: '' }))
+    const pan = mode === 'direct' ? 'direct' : 'smooth'
+    // Vídeo local: se analiza SOLO el rango marcado (Z/X) o, sin marca, el tramo
+    // visible del clip, buscando directamente en el archivo original.
+    if (clipMeta.sourceIdent != null) {
+      const marked = markToSourceRange(clips, clipMark)
+      const video = clips.find((c) => c.kind === 'video')
+      const range = marked.error
+        ? (video ? { start: video.in_point || 0, end: video.out_point } : null)
+        : marked
+      if (!range) return
+      try {
+        const job = await faceTrackMaterial(project.id, clipMeta.sourceIdent, { start: range.start, end: range.end })
+        if (faceGen.current !== gen) return
+        setFaceJob({ ...job, mode: pan, gen })
+      } catch (e) {
+        if (faceGen.current !== gen) return
+        setClipMeta((m) => ({ ...m, err: e.message || 'No se pudo generar el seguimiento.' }))
+      }
+      return
+    }
     try {
       const job = await prepareReframe({
         url,
@@ -1269,6 +1444,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (!real || !isFinite(real)) return
     setClips((prev) => prev.map((c) => {
       if (c.id !== clip.id) return c
+      // Un segmento por referencia apunta al vídeo ENTERO: su out_point es el fin
+      // del tramo, no el del archivo. Nunca se "des-recorta" hasta el final.
+      if (c.ref_segment) return { ...c, source_duration: real, out_point: Math.min(c.out_point, real) }
       const wasUntrimmed = Math.abs(c.out_point - c.source_duration) < 0.05 || c.source_duration <= 0
       const out = wasUntrimmed ? real : Math.min(c.out_point, real)
       return { ...c, source_duration: real, out_point: out }
@@ -1329,6 +1507,59 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     }))
   }
 
+  // Aplica un seguimiento de caras (keyframes cx/cy en tiempo de FUENTE) a clips
+  // de la timeline. Un objeto libre ya "encajado" (crop 1×1) no tiene margen para
+  // panear, así que se vuelve al encuadre de relleno y se reconvierte a objeto
+  // libre: applyFreeLayout captura la ventana 9:16 (o la del formato) alrededor de
+  // la cara y el paneo animado queda como movimiento de cámara.
+  function applyFaceTrackToClips(ids, keyframes, mode) {
+    const set = new Set(ids)
+    setClips((prev) => prev.map((c) => {
+      if (!set.has(c.id) || !isVisualClip(c)) return c
+      const rf = applyFaceTrack({ ...(c.reframe || newReframe()), dual_crop: false, zoom: 1 }, keyframes, mode)
+      delete rf.crop_w
+      delete rf.crop_h
+      return { ...c, layout: 'fill', frame: 'full', transform: undefined, reframe: rf }
+    }))
+    for (const id of set) {
+      const el = mediaEls.current.get(id)
+      if (el) applyFreeLayout({ id }, el)
+    }
+  }
+
+  // Material → "Seguimiento de caras": analiza el tramo del material (o reutiliza
+  // el análisis guardado en él) y lo aplica a sus instancias en la timeline.
+  const [matFaceBusy, setMatFaceBusy] = useState(null)   // index del material en análisis
+  async function faceTrackFromMaterial(item, { force = false } = {}) {
+    if (!item || matFaceBusy != null) return
+    const ident = String(item.index ?? item.id)
+    setMatFaceBusy(ident)
+    setClipToast({ type: 'info', message: 'Seguimiento de caras…' })
+    try {
+      let job = await faceTrackMaterial(project.id, ident, { force })
+      while (job.status !== 'done' && job.status !== 'error') {
+        await new Promise((r) => setTimeout(r, 400))
+        job = await getJob(job.id)
+        setClipToast({ type: 'info', message: `${job.message || 'Seguimiento de caras…'} ${Math.round((job.progress || 0) * 100)}%` })
+      }
+      if (job.status === 'error') throw new Error(job.error || 'No se pudo analizar.')
+      await onChange?.()
+      const kfs = job.reframe_prep?.keyframes || []
+      const targets = clipsRef.current.filter((c) => c.asset_kind === 'clips' && String(c.asset_id) === ident)
+      if (targets.length && !clipModeRef.current && !motionModeRef.current && !paperModeRef.current) {
+        applyFaceTrackToClips(targets.map((c) => c.id), kfs, 'smooth')
+      }
+      setClipToast({
+        type: 'success',
+        message: `${job.message || 'Seguimiento listo'}${targets.length ? ` · aplicado a ${targets.length} clip${targets.length > 1 ? 's' : ''}` : ' · se aplicará al agregarlo'}`,
+      })
+    } catch (e) {
+      setClipToast({ type: 'error', message: e.message || 'No se pudo generar el seguimiento.' })
+    } finally {
+      setMatFaceBusy(null)
+    }
+  }
+
   function targetTrackFor(kind) {
     const sel = tracks.find((t) => t.id === selTrackId)
     if (sel && sel.kind === kind && !sel.locked) return sel
@@ -1356,7 +1587,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     const dur = assetKind === 'images'
       ? (item.animated && Number(item.duration) > 0 ? Number(item.duration) : IMAGE_DEFAULT_DUR)
       : assetKind === 'clips'
-        ? ((item.end ?? item.duration ?? 0) - (item.start ?? 0))
+        ? materialDuration(item)
         : (item.duration || 0)
     // Desde el cabezal, pero sin pisar lo que ya hay: la pista es una secuencia.
     // Pulsar + varias veces encadena los clips en vez de amontonarlos.
@@ -1418,6 +1649,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       media_version: payload.media_version,
       animated: payload.animated,
       loop: payload.loop,
+      in_point: payload.in_point,
+      out_point: payload.out_point,
+      face_track: payload.face_track,
     }, trackId, startTime, payload.duration)
     setClips((prev) => [...prev, clip])
     setSelClipId(clip.id)
@@ -2573,8 +2807,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     const kfs = faceJob.reframe_prep?.keyframes
     const video = clipsRef.current.find((c) => c.kind === 'video') || clipsRef.current[0]
     if (!video) return
-    const nextRf = applyFaceTrack(video.reframe, kfs || [], faceJob.mode)
-    setClips((prev) => prev.map((c) => (c.id === video.id ? { ...c, reframe: nextRf } : c)))
+    applyFaceTrackToClips([video.id], kfs || [], faceJob.mode)
+    setClipToast({ type: 'success', message: faceJob.message || 'Seguimiento de caras aplicado' })
   }, [faceJob?.id, faceJob?.status])
 
   useEffect(() => {
@@ -2645,6 +2879,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     function onKey(e) {
       if (typingTarget(document.activeElement) || typingTarget(e.target)) return
       if (genMotionRef.current) return   // el modal de Generar Motion tiene el teclado
+      if (segAskRef.current) return      // el modal de Crear clip tiene el teclado
       // Paper Animator tiene su propio estado y su propio historial: solo comparte
       // los atajos que significan lo mismo (deshacer, play, mover el cabezal).
       // Cortar/duplicar/pegar clips no aplican a un objeto único.
@@ -2697,6 +2932,24 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           return
         }
         if (e.key.toLowerCase() === 's') return   // cortar una capa no aplica
+      }
+      // Clip Editor como extractor: Z = inicio, X = fin, Enter = Crear clip.
+      if (!(e.ctrlKey || e.metaKey || e.altKey) && clipModeRef.current) {
+        const k = e.key.toLowerCase()
+        if (k === 'z' || k === 'x') {
+          e.preventDefault()
+          setClipMark((m) => setMark(m, k === 'z' ? 'in' : 'out', playheadRef.current))
+          return
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          createSegmentFromMarkRef.current?.()
+          return
+        }
+        if (e.key === 'Escape' && (clipMarkRef.current.in != null || clipMarkRef.current.out != null)) {
+          setClipMark(EMPTY_MARK)
+          return
+        }
       }
       // I / O: entrada y salida del rango para "Generar Motion" (timeline del proyecto).
       if (!(e.ctrlKey || e.metaKey || e.altKey) && !clipModeRef.current && !motionModeRef.current) {
@@ -2856,6 +3109,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onRefresh={onChange}
           fav={fav}
           onEditYtClip={openClipEditor}
+          onFaceTrackMaterial={faceTrackFromMaterial}
+          faceTrackBusyIdent={matFaceBusy}
           selectedClip={selectedClip}
           onChangeFx={patchClipFx}
           onAddText={addText}
@@ -2875,6 +3130,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           motionFormat={{ width: outW, height: outH, fps }}
           onGoMotion={() => goMotionTab(null)}
           onMotionBack={goMotionBlank}
+          onMotionSeek={motionSeek}
+          motionTimeRef={motionTimeRef}
           paper={paper}
           onGoPaper={goPaperTab}
           onExitStudio={leaveStudioForMaterial}
@@ -3309,7 +3566,16 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             setLaneMenu(null)
             setCtxMenu({ x: e.clientX, y: e.clientY, clip, time })
           }}
-          markRange={mainColTab === 'main' ? markRange : null}
+          markRange={mainColTab === 'main' ? markRange : mainColTab === 'clip' ? clipMark : null}
+          onMarkChange={mainColTab === 'clip'
+            ? (which, t) => setClipMark((m) => dragMark(m, which, t, duration))
+            : mainColTab === 'main'
+              ? (which, t) => setMarkRange((m) => dragMark(m, which, t, duration))
+              : undefined}
+          onCreateSegment={mainColTab === 'clip' && clips.some((c) => c.kind === 'video') ? createSegmentFromMark : undefined}
+          segmentBusy={segBusy || !!clipSaving}
+          markKeys={mainColTab === 'clip' ? ['Z', 'X'] : ['I', 'O']}
+          segmentLabelText={mainColTab === 'clip' && clipMark.in == null && clipMark.out == null ? 'Z inicio · X fin' : ''}
           onContextLane={mainColTab === 'main' ? (e, track, time) => {
             setCtxMenu(null)
             setTrackMenu(null)
@@ -3544,6 +3810,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         confirmText="Reemplazar"
         onConfirm={applyReplaceDrop}
         onCancel={() => setReplaceAsk(null)}
+      />
+      <SegmentConfirmModal
+        ask={segAsk}
+        onChange={patchSegAsk}
+        onConfirm={confirmSegment}
+        onCancel={() => { if (!segBusyRef.current) setSegAsk(null) }}
       />
       <Toast toast={clipToast} onClose={() => setClipToast(null)} />
     </div>

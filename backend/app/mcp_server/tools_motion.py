@@ -141,6 +141,44 @@ def motion_update_composition(project_id: str, composition_id: str, composition:
     return _summary(saved)
 
 
+def motion_stick_library(project_id: str | None = None) -> dict:
+    """Vocabulario de historias con stickman (poses, expresiones, fx, escenarios…) y, si pasas
+    project_id, el reparto ya creado en el proyecto (para reutilizarlo y mantener continuidad)."""
+    from ..motion import stick
+    out = stick.library()
+    if project_id:
+        _project_or_raise(project_id)
+        out["project_cast"] = stick.project_cast(project_id)
+    return out
+
+
+def motion_create_stick_scene(project_id: str, storyboard: dict, composition_id: str | None = None,
+                              for_range: dict | None = None) -> dict:
+    """Crea (o actualiza con composition_id) una HISTORIA ANIMADA DE STICKMAN desde un
+    storyboard {title, style, environment, characters[], shots[]}; ver help('motion')."""
+    from ..motion import stick
+    proj = _project_or_raise(project_id)
+    prev = motion_service.get_composition(project_id, composition_id) if composition_id else None
+    if composition_id and prev is None:
+        raise MCPError("resource_not_found", f"Composición no encontrada: {composition_id}")
+    fmt = _project_format(proj)
+    comp = stick.build_composition(prev.id if prev else motion_service.new_id(), storyboard,
+                                   metadata=(prev.metadata if prev else None), **fmt)
+    if for_range:
+        comp = _apply_for_range(proj, comp, for_range)
+        # El tramo manda: reescala los planos a su duración.
+        sb = stick.normalize(comp.metadata["stick"], duration=comp.duration)
+        comp = comp.model_copy(update={"metadata": {**comp.metadata, "stick": sb}})
+    _raise_if_invalid(comp)
+    saved = motion_service.save_composition(project_id, comp, bump=prev is not None)
+    out = _summary(saved)
+    sb = saved.metadata["stick"]
+    out["storyboard"] = {"characters": [c["name"] for c in sb["characters"]],
+                         "shots": [{"start": s["start"], "end": s["end"], "description": s["description"]}
+                                   for s in sb["shots"]]}
+    return out
+
+
 def motion_get_composition(project_id: str, composition_id: str) -> dict:
     """Devuelve el JSON completo de una composición (para editarla)."""
     comp = motion_service.get_composition(project_id, composition_id)
@@ -328,4 +366,6 @@ def register(mcp) -> None:
     tool(mcp, access="read")(motion_get_frame)
     tool(mcp, access="write")(motion_create_composition)
     tool(mcp, access="write")(motion_update_composition)
+    tool(mcp, access="read")(motion_stick_library)
+    tool(mcp, access="write")(motion_create_stick_scene)
     tool(mcp, access="write")(motion_add_to_timeline)

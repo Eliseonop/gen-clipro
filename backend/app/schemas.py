@@ -101,6 +101,25 @@ class ReframePrep(BaseModel):
     keyframes: list[Keyframe] = []
 
 
+class FaceTrack(BaseModel):
+    """Seguimiento de caras cacheado en un material de vídeo.
+
+    Los tiempos (``track[].t``, ``keyframes[].t``) van en tiempo del ARCHIVO del
+    material — el mismo espacio que ``reframe.keyframes`` de un clip de la
+    timeline —, así se reutiliza tal cual sin volver a analizar. ``start``/``end``
+    es el rango analizado: si coincide con el pedido, el caché vale.
+    """
+    start: float
+    end: float
+    width: int = 0
+    height: int = 0
+    fps: float = 25.0
+    samples: int = 0
+    track: list[TrackPoint] = []
+    keyframes: list[Keyframe] = []
+    created_at: Optional[str] = None
+
+
 class ReframePrepareRequest(BaseModel):
     url: str
     start: float
@@ -166,6 +185,25 @@ class ClipInfo(BaseModel):
     external_id: Optional[str] = None
     author: Optional[str] = None
     license_info: Optional[str] = None
+    # Segmento POR REFERENCIA (extraído en el Clip Editor, sin render): ``filename``
+    # es el archivo del vídeo original y [in_point, out_point] el tramo usado, en
+    # segundos del archivo (start/end repiten esos valores). ``parent_id`` = id
+    # del material del que salió. Ausentes → el archivo ES el clip (0..duración).
+    in_point: Optional[float] = None
+    out_point: Optional[float] = None
+    parent_id: Optional[str] = None
+    face_track: Optional[FaceTrack] = None
+
+
+class CreateSegmentsRequest(BaseModel):
+    segments: list[dict]        # [{start, end, label?, description?}] en segundos del archivo
+
+
+class FaceTrackRequest(BaseModel):
+    start: Optional[float] = None   # ausente → rango del propio material
+    end: Optional[float] = None
+    samples: int = 0                # 0 = automático (~2/seg)
+    force: bool = False             # re-analizar aunque haya caché
 
 
 class CreateProjectRequest(BaseModel):
@@ -376,6 +414,9 @@ class TimelineClip(BaseModel):
     in_point: float = 0.0
     out_point: float = 0.0
     source_duration: float = 0.0
+    # Clip de un segmento por referencia: el archivo es el vídeo entero, así que
+    # out_point NO es "fin del archivo" y el editor no debe des-recortarlo.
+    ref_segment: Optional[bool] = None
     volume: float = 1.0
     media_version: Optional[str] = None   # created_at del material: cache-busting del <video> tras regenerar
     reframe: Optional[Reframe] = None

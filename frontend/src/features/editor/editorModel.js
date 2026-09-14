@@ -705,7 +705,9 @@ export function motionLayersToTimeline(comp) {
     const start = Math.max(0, l.start || 0)
     const end = l.end != null ? l.end : dur
     const span = +Math.max(0.1, end - start).toFixed(3)
-    const label = isText ? (l.content || 'Texto').slice(0, 22) : (l.shape?.kind || 'forma')
+    const label = isText ? (l.content || 'Texto').slice(0, 22)
+      : l.type === 'html' ? (comp?.metadata?.stick ? `Historia · ${comp.metadata.stick.title || ''}`.slice(0, 28) : 'Bloque')
+        : (l.shape?.kind || 'forma')
     tracks.push({ id: trackId, kind, name: label, muted: false, hidden: false, locked: false })
     clips.push({
       id: l.id, track_id: trackId, kind: isText ? 'text' : 'shape',
@@ -799,6 +801,12 @@ export function makeClip(assetKind, item, trackId, start, dur) {
   const gifDur = animatedGif && Number(item.duration) > 0 ? Number(item.duration) : 0
   const defaultDur = kind === 'image' ? (gifDur || IMAGE_DEFAULT_DUR) : 1
   const span = +Math.max(0.3, dur || defaultDur).toFixed(3)
+  // Segmento por referencia (Crear clip del Clip Editor): el archivo es el vídeo
+  // original y el tramo empieza en item.in_point. Si trae seguimiento de caras,
+  // su reframe (keyframes en tiempo de archivo) viaja con el clip.
+  const segIn = kind === 'video' && item?.in_point != null && item?.out_point != null
+    && Number(item.out_point) > Number(item.in_point) ? +Number(item.in_point).toFixed(3) : null
+  const tracked = kind === 'video' && !!item?.face_track && item?.reframe?.keyframes?.length > 0
   return {
     id: uid('c'),
     track_id: trackId,
@@ -811,9 +819,10 @@ export function makeClip(assetKind, item, trackId, start, dur) {
     filename: assetKind === 'sfx' ? item.id : item.filename,
     name: item.label || item.name || item.filename,
     start: +Math.max(0, start).toFixed(3),
-    in_point: 0,
-    out_point: span,
-    source_duration: span,
+    in_point: segIn ?? 0,
+    out_point: +((segIn ?? 0) + span).toFixed(3),
+    source_duration: +((segIn ?? 0) + span).toFixed(3),
+    ...(segIn != null ? { ref_segment: true } : {}),
     volume: 1,
     muted: false,
     speed: 1,
@@ -822,7 +831,7 @@ export function makeClip(assetKind, item, trackId, start, dur) {
     speed_curve: null,
     media_version: item.created_at || item.media_version || null,
     reframe: visual
-      ? (fromLib ? withKfIds({ ...newReframe(), ...item.reframe }) : newReframe())
+      ? ((fromLib || tracked) ? withKfIds({ ...newReframe(), ...item.reframe }) : newReframe())
       : null,
     layout: visual ? 'fill' : undefined,
     frame: visual ? 'full' : undefined,

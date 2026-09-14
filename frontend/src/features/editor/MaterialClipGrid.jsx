@@ -3,6 +3,7 @@ import Icon from '../../components/Icon'
 import { fmt } from '../../lib/utils'
 import './editor.css'
 import { IMAGE_DEFAULT_DUR } from './editorModel.js'
+import { hasFaceTrack, materialDuration, segmentRange } from './clipExtract.js'
 
 // Al regenerar un clip el archivo se reescribe con la MISMA URL, así que el
 // navegador serviría el vídeo cacheado (viejo encuadre). Añadimos un token de
@@ -30,7 +31,7 @@ export function dragPayload(assetKind, item) {
     url: item.url,
     duration: isImage
       ? (animatedGif && Number(item.duration) > 0 ? Number(item.duration) : IMAGE_DEFAULT_DUR)
-      : (assetKind === 'clips' ? ((item.end ?? item.duration ?? 0) - (item.start ?? 0)) : (item.duration || 0)),
+      : (assetKind === 'clips' ? materialDuration(item) : (item.duration || 0)),
     kind: isImage ? 'image' : (assetKind === 'clips' ? 'video' : 'audio'),
     animated: animatedGif || undefined,
     loop: animatedGif ? item.loop !== false : undefined,
@@ -38,6 +39,9 @@ export function dragPayload(assetKind, item) {
     scope: fromLibrary ? 'library' : 'project',
     description: item.description || item.text || null,
     media_version: item.created_at || item.media_version || null,
+    // Segmento por referencia: el clip de la timeline recorta el vídeo original.
+    ...(segmentRange(item) ? { in_point: item.in_point, out_point: item.out_point } : {}),
+    ...(hasFaceTrack(item) ? { face_track: true } : {}),
   })
 }
 
@@ -95,7 +99,11 @@ export function VideoCard({
   const { ref, playing, setPlaying, toggle } = useToggle(onPlay)
   const title = clip.label || (clip.scope === 'library' ? (clip.filename || 'Guardado') : `Clip #${clip.index}`)
   const desc = (clip.description || '').trim()
-  const dur = (clip.end != null && clip.start != null) ? (clip.end - clip.start) : (clip.duration || 0)
+  const dur = materialDuration(clip)
+  // Segmento por referencia: la card reproduce y hace scrub SOLO dentro de su tramo
+  // del vídeo original.
+  const seg = segmentRange(clip)
+  const tracked = hasFaceTrack(clip)
   // El card adopta el aspecto real del clip compuesto (9:16, 16:9, 1:1…) para
   // identificar de un vistazo cómo está montado. Se lee de los metadatos del vídeo.
   const [ar, setAr] = useState(null)
@@ -103,11 +111,22 @@ export function VideoCard({
   function onMeta(e) {
     const v = e.currentTarget
     if (v.videoWidth && v.videoHeight) setAr(`${v.videoWidth} / ${v.videoHeight}`)
+    if (seg) { try { v.currentTime = seg.in } catch { /* noop */ } }
   }
 
   function onPlayClick(e) {
     e?.stopPropagation()
+    const v = ref.current
+    if (seg && v && v.paused && (v.currentTime < seg.in || v.currentTime >= seg.out - 0.05)) {
+      try { v.currentTime = seg.in } catch { /* noop */ }
+    }
     toggle(e)
+  }
+
+  function onTime(e) {
+    if (!seg) return
+    const v = e.currentTarget
+    if (v.currentTime >= seg.out) { v.pause(); try { v.currentTime = seg.in } catch { /* noop */ } }
   }
 
   // Scrub al pasar el ratón: mover en X sobre la miniatura busca el frame,
@@ -118,12 +137,13 @@ export function VideoCard({
     if (!v || !Number.isFinite(v.duration) || v.duration <= 0) return
     const rect = e.currentTarget.getBoundingClientRect()
     const rel = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
-    try { v.currentTime = rel * v.duration } catch { /* noop */ }
+    const t = seg ? seg.in + rel * (seg.out - seg.in) : rel * v.duration
+    try { v.currentTime = t } catch { /* noop */ }
   }
   function onScrubLeave() {
     if (playing) return
     const v = ref.current
-    if (v) { try { v.currentTime = 0 } catch { /* noop */ } }
+    if (v) { try { v.currentTime = seg ? seg.in : 0 } catch { /* noop */ } }
   }
 
   return (
@@ -144,8 +164,22 @@ export function VideoCard({
         onPointerLeave={onScrubLeave}
       >
         <video ref={ref} src={bustUrl(clip.url, clip)} preload="metadata" playsInline muted
-          onLoadedMetadata={onMeta}
+          onLoadedMetadata={onMeta} onTimeUpdate={seg ? onTime : undefined}
           onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} />
+        {(seg || tracked) && (
+          <span className="ed-card-badges">
+            {seg && (
+              <span className="ed-card-badge" title="Clip por referencia: usa un tramo del vídeo original, sin render">
+                <Icon name="content_cut" size={11} />
+              </span>
+            )}
+            {tracked && (
+              <span className="ed-card-badge face" title="Seguimiento de caras guardado (se aplica al agregarlo)">
+                <Icon name="face" size={11} />
+              </span>
+            )}
+          </span>
+        )}
         <button className="ed-play-ov" onClick={onPlayClick} title={playing ? 'Pausa' : 'Reproducir'}>
           <Icon name={playing ? 'pause' : 'play_arrow'} size={20} />
         </button>

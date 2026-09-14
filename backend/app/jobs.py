@@ -442,6 +442,55 @@ def start_reframe_prepare_job(job: Job, url: str, start: float, end: float, samp
     thread.start()
 
 
+def _run_face_track(job_id: str, pid: str, ident: str, start, end, samples: int, force: bool) -> None:
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+    job.progress = 0.01
+    job.message = "Preparando el seguimiento de caras…"
+
+    def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from . import segments
+        from .schemas import ReframePrep
+
+        ft, cached = segments.face_track_material(
+            pid, ident, on_progress, start=start, end=end, samples=samples, force=force,
+        )
+        # Mismo contrato que /api/reframe/prepare: el editor ya sabe aplicar
+        # reframe_prep.keyframes (tiempo de archivo = tiempo de fuente del clip).
+        job.reframe_prep = ReframePrep(
+            proxy_url="", duration=round(ft.end - ft.start, 3),
+            width=ft.width, height=ft.height, fps=ft.fps,
+            track=ft.track, keyframes=ft.keyframes,
+        )
+        n = len(ft.track)
+        job.progress = 1.0
+        job.message = ("Seguimiento reutilizado · " if cached else "Listo · ") + (
+            f"{n} detecciones de cara." if n else "no se detectaron caras."
+        )
+        job.status = JobStatus.done
+    except JobCancelled:
+        job.status = JobStatus.error
+        job.error = "Cancelado."
+    except Exception as exc:  # noqa: BLE001
+        job.status = JobStatus.error
+        job.error = str(exc)
+        job.message = "Error en el seguimiento de caras."
+
+
+def start_face_track_job(job: Job, pid: str, ident: str, start=None, end=None,
+                         samples: int = 0, force: bool = False) -> None:
+    thread = threading.Thread(
+        target=_run_face_track, args=(job.id, pid, ident, start, end, samples, force), daemon=True,
+    )
+    thread.start()
+
+
 def _run_export(job_id: str, pid: str, timeline_dict: dict) -> None:
     job = _jobs[job_id]
     job.status = JobStatus.running

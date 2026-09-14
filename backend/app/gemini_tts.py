@@ -17,6 +17,8 @@ ProgressCb = Callable[[float, str], None]
 
 MODEL = "gemini-3.1-flash-tts-preview"
 SAMPLE_RATE = 24000
+# Baja para que la entrega no derive de tono a mitad de la narración.
+TEMPERATURE = 0.55
 
 VOICES = [
     {"id": "Kore", "label": "Kore — mujer, firme", "gender": "female"},
@@ -55,33 +57,122 @@ def available() -> bool:
     return unavailable_reason() is None
 
 
+# Catálogo de estilos de narración. El ``id`` viaja tal cual desde el frontend
+# (y por el MCP), la ``label`` se muestra en el selector, y ``instr`` es la
+# instrucción de carácter que se inyecta en el prompt.
+STYLES = [
+    {
+        "id": "documentary",
+        "label": "Documental",
+        "instr": (
+            "Léelo como un narrador profesional de documentales: voz adulta, "
+            "misteriosa y seria, ritmo pausado, énfasis ligero en las palabras "
+            "clave y un sonido cinematográfico. Natural, nunca exagerado."
+        ),
+    },
+    {
+        "id": "close",
+        "label": "Cercano",
+        "instr": (
+            "Cuéntalo como una persona real y cercana, como si se lo contaras a "
+            "un amigo. Natural y con curiosidad, nada de tono de enciclopedia ni "
+            "de documental. Ritmo vivo y pausas naturales, sin exagerar."
+        ),
+    },
+    {
+        "id": "fun",
+        "label": "Divertido",
+        "instr": (
+            "Cuéntalo con energía y buen humor, con chispa y una sonrisa en la "
+            "voz, como quien disfruta lo que dice. Dinámico y juguetón, pero sin "
+            "gritar ni sonar de payaso."
+        ),
+    },
+    {
+        "id": "friendly",
+        "label": "Amigable",
+        "instr": (
+            "Cuéntalo con calidez y cercanía, con un tono amable y acogedor, "
+            "como alguien de confianza que te explica algo con cariño. Relajado, "
+            "positivo y tranquilo."
+        ),
+    },
+    {
+        "id": "mysterious",
+        "label": "Misterioso",
+        "instr": (
+            "Cuéntalo con aire de misterio e intriga: voz baja y envolvente, "
+            "ritmo lento y pausas que crean suspense, como si revelaras un "
+            "secreto. Sugerente, sin caer en el susurro teatral."
+        ),
+    },
+    {
+        "id": "curiosity",
+        "label": "Curiosidad",
+        "instr": (
+            "Cuéntalo como quien comparte un dato curioso y fascinante que acaba "
+            "de descubrir, con asombro contenido y ganas de sorprender. Cercano "
+            "y enganchador, invitando a seguir escuchando."
+        ),
+    },
+    {
+        "id": "energetic",
+        "label": "Enérgico",
+        "instr": (
+            "Cuéntalo con mucha energía y entusiasmo, ritmo ágil y voz que "
+            "engancha desde la primera palabra, como una intro que no deja "
+            "cambiar de vídeo. Vibrante pero claro, sin atropellarte."
+        ),
+    },
+    {
+        "id": "calm",
+        "label": "Tranquilo",
+        "instr": (
+            "Cuéntalo con calma y serenidad, voz suave y relajante, ritmo "
+            "pausado y respiración tranquila, como una narración para relajar. "
+            "Íntimo y sereno."
+        ),
+    },
+]
+
+_STYLE_BY_ID = {s["id"]: s for s in STYLES}
+# Alias por compatibilidad con valores antiguos o en español.
+_STYLE_ALIASES = {
+    "documental": "documentary",
+    "cercano": "close",
+    "divertido": "fun",
+    "amigable": "friendly",
+    "misterioso": "mysterious",
+    "curiosidad": "curiosity",
+    "enérgico": "energetic",
+    "energico": "energetic",
+    "tranquilo": "calm",
+}
+
+
+def resolve_style(style: str | None) -> dict:
+    """Devuelve la definición de estilo (por id o alias); documental por defecto."""
+    key = (style or "").strip().lower()
+    key = _STYLE_ALIASES.get(key, key)
+    return _STYLE_BY_ID.get(key) or _STYLE_BY_ID["documentary"]
+
+
 def narration_prompt(text: str, style: str | None = None, speed: float = 1.0) -> str:
     body = (text or "").strip()
-    close = (style or "").strip().lower() in ("close", "cercano")
-    if close:
-        prompt = (
-            "Narra el siguiente texto en español como una persona real, cercana y curiosa, "
-            "como si se lo contaras a un amigo. Natural, no de documental ni de enciclopedia. "
-            "Ritmo vivo, pausas naturales, sin exagerar.\n\n"
-            f"Texto:\n{body}"
-        )
-    else:
-        prompt = (
-            "Lee el siguiente texto como narrador profesional de documentales.\n\n"
-            "Estilo:\n"
-            "- Voz adulta\n"
-            "- Misteriosa y seria\n"
-            "- Natural, no exagerada\n"
-            "- Ritmo pausado\n"
-            "- Énfasis ligero en las palabras importantes\n"
-            "- Pausas naturales entre frases\n"
-            "- Sonido cinematográfico\n\n"
-            f"Texto:\n{body}"
-        )
+    spec = resolve_style(style)
+    prompt = (
+        "Narra el siguiente texto en español.\n\n"
+        f"Estilo: {spec['instr']}\n\n"
+        "Muy importante: mantén exactamente el mismo tono, la misma energía y el "
+        "mismo carácter desde la primera hasta la última palabra. No cambies de "
+        "estilo ni subas o bajes la intensidad a mitad de la narración; la voz "
+        "debe sonar coherente y uniforme de principio a fin.\n"
+    )
     if speed >= 1.15:
-        prompt += "\n\nHabla un poco más rápido, sin atropellar."
+        prompt += "\nHabla un poco más rápido, sin atropellar."
     elif speed <= 0.85:
-        prompt += "\n\nHabla más despacio, con pausas claras."
+        prompt += "\nHabla más despacio, con pausas claras."
+    prompt += f"\n\nTexto:\n{body}"
     return prompt
 
 
@@ -123,6 +214,7 @@ def _generate_pcm(prompt: str, voice: str, key: str) -> tuple[bytes, str]:
         contents=prompt,
         config=types.GenerateContentConfig(
             response_modalities=["AUDIO"],
+            temperature=TEMPERATURE,
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice or "Kore"),

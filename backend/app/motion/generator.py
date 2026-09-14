@@ -17,6 +17,7 @@ from .models import MotionComposition
 _DIR = Path(__file__).parent
 _GSAP = _DIR / "vendor" / "gsap.min.js"
 _RUNTIME = _DIR / "runtime.js"
+_STICK = _DIR / "stick.js"
 _FONT = _DIR.parent / "fonts" / "Anton-Regular.ttf"
 
 
@@ -28,6 +29,11 @@ def _gsap_src() -> str:
 @lru_cache(maxsize=1)
 def _runtime_src() -> str:
     return _RUNTIME.read_text(encoding="utf-8")
+
+
+@lru_cache(maxsize=1)
+def _stick_src() -> str:
+    return _STICK.read_text(encoding="utf-8")
 
 
 @lru_cache(maxsize=1)
@@ -101,6 +107,7 @@ def generate_html(comp: MotionComposition) -> str:
 <div id="stage"></div>
 <script>{_gsap_src()}</script>
 <script>window.__COMP = {comp_json};</script>
+<script>{_stick_src()}</script>
 <script>{_runtime_src()}</script>
 </body>
 </html>"""

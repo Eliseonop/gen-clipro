@@ -36,7 +36,7 @@ export function useMotionComp(pid, { onReloadTimeline } = {}) {
       const c = await getMotion(pid, cid)
       dirtyRef.current = false
       setComp(c)
-      setSelLayerId(c.layers?.[0]?.id || null)
+      setSelLayerId(c.metadata?.stick ? null : (c.layers?.[0]?.id || null))
       setError('')
       return c
     } catch (e) { setError(e.message); return null }
@@ -85,10 +85,30 @@ export function useMotionComp(pid, { onReloadTimeline } = {}) {
       const c = await createMotion(pid, { template: key, params })
       dirtyRef.current = false
       setComp(c)
-      setSelLayerId(c.layers?.[0]?.id || null)
+      setSelLayerId(c.metadata?.stick ? null : (c.layers?.[0]?.id || null))
       return c
     } catch (e) { setError(e.message); return null }
   }, [pid])
+
+  // Historia con stickman: el storyboard vive en metadata.stick; la duración de la
+  // composición es la del storyboard (el motor lo redibuja en vivo con __rebuild).
+  const setStoryboard = useCallback((sb) => {
+    setComp((c) => {
+      if (!c) return c
+      dirtyRef.current = true
+      // La capa del motor cubre siempre la historia entera (si la timeline la hubiera
+      // recortado, alargar un plano dejaría el final de la escena invisible).
+      const layers = (c.layers || []).map((l) => (l.id === 'stick_scene' ? { ...l, start: 0, end: null } : l))
+      return { ...c, duration: sb.duration, layers, metadata: { ...(c.metadata || {}), stick: sb } }
+    })
+  }, [])
+  // Abre una composición recién creada en el servidor (p.ej. compilada desde un storyboard).
+  const openComp = useCallback((c) => {
+    dirtyRef.current = false
+    setComp(c)
+    setSelLayerId(c?.metadata?.stick ? null : (c?.layers?.[0]?.id || null))
+    setError('')
+  }, [])
 
   // Sincroniza SOLO start/end de las capas (desde el timeline) sin re-derivar clips.
   const applyTiming = useCallback((layers) => {
@@ -128,5 +148,6 @@ export function useMotionComp(pid, { onReloadTimeline } = {}) {
     templates, addJob, error, setError,
     edit, editLayer, moveLayerBy, addLayer, deleteLayer, setName, setDuration,
     loadComp, createBlank, createFromTemplate, addToProject, close, applyTiming,
+    setStoryboard, openComp,
   }
 }

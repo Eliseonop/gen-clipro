@@ -374,9 +374,13 @@ def delete_motion_composition(pid: str, cid: str) -> bool:
 
 def retarget_timeline_asset(
     pid: str, asset_kind: str, old_id: str, old_filename: str,
-    new_id: str, new_filename: str,
+    new_id: str, new_filename: str, match_filename: bool = True,
 ) -> None:
-    """Reescribe punteros de la timeline de un proyecto hacia un ítem de biblioteca."""
+    """Reescribe punteros de la timeline de un proyecto hacia un ítem de biblioteca.
+
+    ``match_filename=False`` empareja solo por id: el archivo lo comparten otros
+    materiales (segmentos por referencia) cuyos clips no deben moverse.
+    """
     with _lock:
         data = _load()
         for p in data["projects"]:
@@ -387,7 +391,7 @@ def retarget_timeline_asset(
                 for c in tl.get("clips") or []:
                     if c.get("asset_kind") != asset_kind:
                         continue
-                    if str(c.get("asset_id")) == str(old_id) or c.get("filename") == old_filename:
+                    if str(c.get("asset_id")) == str(old_id) or (match_filename and c.get("filename") == old_filename):
                         c["asset_scope"] = "library"
                         c["asset_id"] = new_id
                         c["filename"] = new_filename

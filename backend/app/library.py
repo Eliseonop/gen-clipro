@@ -211,7 +211,18 @@ def save_from_project(project_id: str, resource_type: str, ident: str) -> dict:
         "external_id": raw.get("external_id"),
         "author": raw.get("author"),
         "license_info": raw.get("license_info"),
+        # Segmento por referencia: la copia es el vídeo entero, el tramo viaja aquí.
+        "in_point": raw.get("in_point"),
+        "out_point": raw.get("out_point"),
+        "face_track": raw.get("face_track"),
     }
+
+    # Un segmento por referencia comparte archivo con su vídeo de origen y con
+    # otros segmentos: esos siguen en el proyecto, así que no se tocan.
+    shared = False
+    if resource_type == "clip":
+        from . import segments
+        shared = segments.is_shared_file(proj, raw["filename"], exclude_ident=str(ident))
 
     try:
         with _lock:
@@ -220,6 +231,7 @@ def save_from_project(project_id: str, resource_type: str, ident: str) -> dict:
             _save(data)
         projects.retarget_timeline_asset(
             project_id, asset_kind, ident, raw["filename"], lib_id, dest_name,
+            match_filename=not shared,
         )
         removed = projects.remove_material(project_id, asset_kind, str(ident))
         if removed is None:
@@ -232,10 +244,11 @@ def save_from_project(project_id: str, resource_type: str, ident: str) -> dict:
         dest.unlink(missing_ok=True)
         raise
 
-    try:
-        src.unlink()
-    except Exception:
-        pass
+    if not shared:
+        try:
+            src.unlink()
+        except Exception:
+            pass
     return material_dto(entry, "library")
 
 

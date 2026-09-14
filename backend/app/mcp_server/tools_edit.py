@@ -67,8 +67,16 @@ def _resolve_asset(proj, asset_kind: str, asset_id: str) -> dict:
         for c in proj.clips:
             if str(c.index) == str(asset_id):
                 dur = round((c.end or 0.0) - (c.start or 0.0), 3)
+                # Segmento por referencia: el archivo es el vídeo original y el
+                # tramo empieza en in_point (in/out del clip se desplazan).
+                is_ref = c.in_point is not None and c.out_point is not None
+                offset = float(c.in_point) if is_ref else 0.0
+                if is_ref:
+                    dur = round(float(c.out_point) - float(c.in_point), 3)
                 return {"kind": "video", "filename": c.filename,
-                        "source_duration": dur, "name": c.label or c.filename}
+                        "source_duration": dur, "name": c.label or c.filename,
+                        "offset": offset, "segment": is_ref,
+                        "reframe": c.reframe.model_dump() if (c.face_track and c.reframe) else None}
         raise ValueError(f"Clip no encontrado en el proyecto: {asset_id}")
     if asset_kind == "audios":
         for a in proj.audios:
@@ -121,15 +129,20 @@ def add_to_timeline(project_id: str, asset_kind: str, asset_id: str,
         else:
             track_id = existing.id
 
+    off = float(info.get("offset") or 0.0)
     clip = {
         "track_id": track_id, "kind": info["kind"], "asset_kind": asset_kind,
         "asset_id": str(asset_id), "filename": info["filename"], "name": info["name"],
-        "start": float(start), "in_point": round(ip, 3), "out_point": round(op_end, 3),
-        "source_duration": round(src_dur, 3),
+        "start": float(start), "in_point": round(ip + off, 3), "out_point": round(op_end + off, 3),
+        "source_duration": round(src_dur + off, 3),
     }
     if info["kind"] in ("video", "image"):
         clip["layout"] = "fill"
         clip["frame"] = "full"
+    if info.get("segment"):
+        clip["ref_segment"] = True
+    if info.get("reframe"):
+        clip["reframe"] = info["reframe"]
     out = _apply(project_id, "add_clip", {"clip": clip})
     if created_track:
         out["changed"] = [created_track, *out["changed"]]

@@ -87,6 +87,8 @@ TOOL_DOMAINS: dict[str, str] = {
     "motion_create_composition": "motion",
     "motion_update_composition": "motion",
     "motion_add_to_timeline": "motion",
+    "motion_stick_library": "motion",
+    "motion_create_stick_scene": "motion",
 }
 
 
@@ -324,7 +326,16 @@ HELP: dict[str, str] = {
         "borderRadius+shadow), UN acento sobrio, mucho espacio, tipografía Inter con "
         "jerarquía. NADA de neón/glow ni colores saturados. Movimiento SUTIL: fade + "
         "desplazamiento corto con power2.out/power3.out; NUNCA back/elastic/bounce; stagger "
-        "0.08–0.15s. Respeta style.avoidY. Para diagramas complejos usa un template."
+        "0.08–0.15s. Respeta style.avoidY. Para diagramas complejos usa un template.\n"
+        "HISTORIAS CON STICKMAN (para contar una anécdota/ilustrar el guion con personajes): "
+        "motion_stick_library(project_id) → vocabulario + reparto existente; "
+        "motion_create_stick_scene(project_id, storyboard, composition_id?, for_range?). storyboard = "
+        "{title, style:{preset: clean|paper|chalk|transparent, captions}, environment:{preset}, "
+        "characters:[{id, name, body, hair, outfit, shirt, pants, accessory, description}], "
+        "shots:[{duration, description, caption, camera: wide|medium|close, focus, moving, "
+        "fx:[{type, target, at}], actors:[{id, pose, expression, x 0..1, to_x?, facing ±1}]}]}. "
+        "Reutiliza id y aspecto del reparto existente (continuidad). Violencia SIEMPRE no gráfica "
+        "(poses + fx impact/shake), sin estereotipos."
     ),
 }
 

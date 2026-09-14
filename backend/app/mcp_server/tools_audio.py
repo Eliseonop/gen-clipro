@@ -64,7 +64,7 @@ def generate_subtitles(project_id: str, filename: str, asset_kind: str = "audios
 def generate_voice(project_id: str, text: str, engine: str = "kokoro", voice: str = "ef_dora",
                    voice2: str | None = None, blend: float = 0.5, speed: float = 1.0,
                    pause: float = 0.4, name: str | None = None, style: str | None = None) -> dict:
-    """Genera un audio de narrador (TTS) y lo añade al proyecto. engine kokoro|piper|gemini. Devuelve job."""
+    """Genera un audio de narrador (TTS) y lo añade al proyecto. engine kokoro|piper|gemini. En gemini, style define el carácter: documentary|close|fun|friendly|mysterious|curiosity|energetic|calm. Devuelve job."""
     _project_or_raise(project_id)
     if not (text or "").strip():
         raise ValueError("El texto está vacío.")
