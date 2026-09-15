@@ -110,6 +110,138 @@ def _brief_block(brief: dict, d: dict) -> str:
     return "\n".join(lines)
 
 
+# --- 0) Dirección visual GLOBAL (Fase 5) --------------------------------------------
+# Una sola llamada barata que mira el VÍDEO ENTERO (guion + material) y decide el lenguaje
+# visual del proyecto: dirección creativa dominante, identidad, vocabulario y reglas. Da
+# coherencia al montaje antes de bajar tramo a tramo. Ver docs/DIRECCION_ESCENA §5.
+
+def blueprint_system() -> str:
+    return "\n\n".join([
+        "Eres director de arte de un canal de vídeo divulgativo vertical. Tu tarea: definir la DIRECCIÓN "
+        "VISUAL GLOBAL de UN vídeo entero (no de un tramo): el estilo único, el vocabulario visual permitido "
+        "y las reglas de montaje que darán COHERENCIA a todo el vídeo. Decides el LENGUAJE, no escenas.",
+        "Cómo decidir:\n"
+        "1. Lee el guion completo y el material disponible; capta el tema, el tono y qué se puede contar.\n"
+        "2. Elige UNA dirección creativa dominante de la lista (su 'key' EXACTA), la que mejor encaje.\n"
+        "3. Escribe la identidad visual en 1-2 frases (el mundo visual del vídeo).\n"
+        "4. Elige el vocabulario visual: SOLO los recursos que de verdad usarás (menos es más).\n"
+        "5. Escribe 3-6 reglas duras de montaje, coherentes con: 'recurso corto y fuerte > escena larga "
+        "mediocre', 'preferir material existente', 'una idea dominante por plano', 'subtítulos protegidos'.\n"
+        "6. Describe la curva de intensidad del vídeo (hook → desarrollo → clímax → cierre) en 1 frase.",
+        "RESPONDE EXCLUSIVAMENTE con JSON (sin ```), en el idioma del guion:\n"
+        "{\n"
+        '  "direction": "una key EXACTA de la lista",\n'
+        '  "identity": "1-2 frases del mundo visual",\n'
+        '  "vocabulary": ["recurso", "recurso"],\n'
+        '  "rules": ["regla", "regla"],\n'
+        '  "intensity_curve": "cómo sube y baja la intensidad, 1 frase"\n'
+        "}",
+    ])
+
+
+def blueprint_user(project_name: str, script: str, materials: list[dict],
+                   directions_list: list[dict], vocabulary: list[str]) -> str:
+    dirs = "\n".join(f"  · {d['key']}: {d['label']} — {d['summary']}" for d in directions_list)
+    mats = "\n".join(f"  · {m.get('title') or m.get('id')}: {(m.get('description') or '')[:100]}"
+                     for m in materials[:15]) or "  (sin material todavía)"
+    return "\n\n".join([
+        f"PROYECTO: {project_name}",
+        "GUION COMPLETO DEL VÍDEO:\n" + (script or "(sin guion transcrito; guíate por el proyecto y el material)"),
+        "MATERIAL DISPONIBLE (para decidir qué vocabulario es realista):\n" + mats,
+        "DIRECCIONES CREATIVAS (elige UNA key EXACTA):\n" + dirs,
+        "VOCABULARIO VISUAL sugerido (elige de aquí; añade otro solo si de verdad hace falta): "
+        + ", ".join(vocabulary),
+        "Define la dirección visual GLOBAL del vídeo. Devuelve SOLO el JSON.",
+    ])
+
+
+async def blueprint_stream(*, project_name: str, script: str, materials: list[dict],
+                           directions_list: list[dict], vocabulary: list[str]) -> AsyncIterator[dict]:
+    reason = _unavailable()
+    if reason:
+        yield {"type": "error", "message": reason}
+        return
+    yield {"type": "start"}
+    yield {"type": "status", "message": "Leyendo el vídeo entero…"}
+    user = blueprint_user(project_name, script, materials, directions_list, vocabulary)
+    for _ in range(JSON_ATTEMPTS):
+        try:
+            text = await _complete(blueprint_system(), user)
+        except Exception as exc:  # noqa: BLE001
+            yield {"type": "error", "message": f"Error del modelo: {exc}"}
+            return
+        obj = _extract_json(text)
+        if isinstance(obj, dict) and (obj.get("direction") or obj.get("identity")
+                                      or obj.get("vocabulary") or obj.get("rules")):
+            yield {"type": "blueprint", "blueprint": obj}
+            yield {"type": "done"}
+            return
+        user += "\n\nTu respuesta no era un JSON válido. Devuelve SOLO el objeto JSON pedido."
+    yield {"type": "error", "message": "La IA no devolvió un blueprint válido. Reintenta."}
+
+
+# Plan editorial de TODA la escaleta en una pasada (§5.2): guiada por el blueprint, decide el
+# plan de cada tramo (mode/composition_intent/complexity/no_visual) sin componer ni elegir
+# material. Barato: la IA solo ve voz+tiempos por tramo, no el pack completo de cada uno.
+
+def plan_all_system() -> str:
+    return "\n\n".join([
+        "Eres director de escena. Tienes el vídeo entero dividido en TRAMOS (con su voz y tiempos) y una "
+        "DIRECCIÓN VISUAL GLOBAL ya decidida. Tu tarea: para CADA tramo decide el PLAN editorial —qué se "
+        "cuenta y con cuánta intensidad—, coherente con la dirección global. NO generes escenas ni elijas "
+        "material todavía: SOLO el plan.",
+        "Para cada tramo decide:\n"
+        "- mode: propose | explain | represent | reinforce | material (el enfoque del tramo).\n"
+        "- composition_intent: 1 frase en lenguaje natural (qué es lo principal, qué acompaña, qué zonas "
+        "dejar libres). Recuerda: recurso corto y fuerte > escena larga mediocre; una idea dominante por plano.\n"
+        "- complexity: 1-5 (1 simple … 5 clímax). Reparte la intensidad según la curva; NO todo a 4-5.\n"
+        "- no_visual: true si el tramo NO necesita nada nuevo (basta mantener el plano + subtítulos).",
+        "RESPONDE EXCLUSIVAMENTE con JSON (sin ```), en el idioma del guion, con TODOS los tramos por su id:\n"
+        '{"segments": [{"id": "…", "mode": "explain", "composition_intent": "…", "complexity": 3, '
+        '"no_visual": false}]}',
+    ])
+
+
+def plan_all_user(blueprint_text: str, escaleta: list[dict], materials: list[dict]) -> str:
+    segs = "\n".join(f"  · {s['id']} [{float(s['start']):.1f}–{float(s['end']):.1f}s] "
+                     f"«{(s.get('text') or '(sin voz)')[:160]}»" for s in escaleta)
+    mats = "\n".join(f"  · {m.get('title') or m.get('id')}: {(m.get('description') or '')[:100]}"
+                     for m in materials[:15]) or "  (sin material todavía)"
+    parts = []
+    if blueprint_text.strip():
+        parts.append(blueprint_text)
+    parts += [
+        "TRAMOS DEL VÍDEO (decide el plan de CADA uno, por su id):\n" + segs,
+        "MATERIAL DISPONIBLE (para saber qué es realista contar con lo que hay):\n" + mats,
+        "Devuelve SOLO el JSON con TODOS los tramos por su id.",
+    ]
+    return "\n\n".join(parts)
+
+
+async def plan_all_stream(*, blueprint_text: str, escaleta: list[dict],
+                          materials: list[dict]) -> AsyncIterator[dict]:
+    reason = _unavailable()
+    if reason:
+        yield {"type": "error", "message": reason}
+        return
+    yield {"type": "start"}
+    yield {"type": "status", "message": f"Planificando {len(escaleta)} tramos…"}
+    user = plan_all_user(blueprint_text, escaleta, materials)
+    for _ in range(JSON_ATTEMPTS):
+        try:
+            text = await _complete(plan_all_system(), user)
+        except Exception as exc:  # noqa: BLE001
+            yield {"type": "error", "message": f"Error del modelo: {exc}"}
+            return
+        obj = _extract_json(text)
+        if isinstance(obj, dict) and isinstance(obj.get("segments"), list) and obj["segments"]:
+            yield {"type": "plan_all", "segments": obj["segments"]}
+            yield {"type": "done"}
+            return
+        user += "\n\nTu respuesta no era un JSON válido con 'segments'. Devuelve SOLO el objeto JSON."
+    yield {"type": "error", "message": "La IA no devolvió un plan válido. Reintenta."}
+
+
 # --- 1) Preguntas --------------------------------------------------------------------
 
 def questions_system() -> str:

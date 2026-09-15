@@ -49,6 +49,110 @@ def scene_direction_get(project_id: str) -> dict:
     }
 
 
+def scene_get_blueprint(project_id: str) -> dict:
+    """Dirección visual GLOBAL del proyecto (Fase 5): la identidad/estilo, el vocabulario visual
+    permitido y las reglas que valen para TODO el vídeo. Léela ANTES de dirigir tramo a tramo para
+    que el montaje sea coherente. ``blueprint`` vacío = aún no hay dirección global (fíjala con
+    scene_set_blueprint). Devuelve también las direcciones creativas disponibles y el vocabulario
+    sugerido."""
+    proj = _project_or_raise(project_id)
+    from ..motion import directions
+    opts = [{"key": d["key"], "label": d["label"], "summary": d["summary"]}
+            for d in directions.list_directions()]
+    return {"blueprint": scene_direction.load_blueprint(proj),
+            "direction_options": opts, "default_direction": directions.DEFAULT_DIRECTION,
+            "vocabulary_suggestions": list(scene_direction.VOCABULARY)}
+
+
+def scene_generate_blueprint(project_id: str, apply: bool = True) -> dict:
+    """(Bloqueante) La IA PROPONE la dirección visual GLOBAL del vídeo (Fase 5) en una sola pasada
+    barata: lee el guion COMPLETO + el material disponible + el catálogo de direcciones y devuelve
+    {direction, identity, vocabulary[], rules[], intensity_curve}. Con ``apply=True`` (por defecto)
+    la guarda (source='ai'); con ``apply=False`` solo la devuelve para revisarla y guardarla luego
+    con scene_set_blueprint. Necesita guion (transcribe/subtitula) o material."""
+    proj = _project_or_raise(project_id)
+    from ..motion import directions, scene_ai
+    units, _ = scene_direction.script_units(proj)
+    script = " ".join(u["text"] for u in units)[:6000]
+    materials = scene_direction.material_catalog(proj)
+    if not script.strip() and not materials:
+        raise MCPError("invalid_parameter",
+                       "No hay guion ni material: transcribe/subtitula el audio o añade material primero.",
+                       retryable=True)
+    dopts = [{"key": d["key"], "label": d["label"], "summary": d["summary"]}
+             for d in directions.list_directions()]
+    events = _run_async(_drain(scene_ai.blueprint_stream(
+        project_name=proj.name, script=script, materials=materials,
+        directions_list=dopts, vocabulary=list(scene_direction.VOCABULARY))))
+    _raise_scene_error(events)
+    bp_ev = _last(events, "blueprint")
+    if not bp_ev or not isinstance(bp_ev.get("blueprint"), dict):
+        raise MCPError("processing_error", "La IA no devolvió un blueprint válido. Reintenta.", retryable=True)
+    raw = {**bp_ev["blueprint"], "source": "ai"}
+    if apply:
+        return {"blueprint": scene_direction.save_blueprint(project_id, raw), "applied": True}
+    return {"blueprint": scene_direction.normalize_blueprint(raw), "applied": False}
+
+
+def scene_plan_all(project_id: str, apply: bool = True) -> dict:
+    """(Bloqueante) Rellena el PLAN editorial de TODA la escaleta en una sola pasada barata (Fase 5,
+    §5.2), guiada por la dirección global: por cada tramo decide mode + composition_intent +
+    complexity (1-5) + no_visual, sin componer ni elegir material. Es el 'plan de fabricación' del
+    vídeo antes de bajar tramo a tramo. Con ``apply=True`` (por defecto) lo guarda en la escaleta;
+    con ``apply=False`` solo lo devuelve. Requiere una escaleta (scene_direction_auto_split +
+    scene_direction_set) y conviene fijar antes la dirección global (scene_get/generate_blueprint)."""
+    proj = _project_or_raise(project_id)
+    from ..motion import scene_ai
+    doc = scene_direction.load(proj)
+    escaleta = doc["segments"]
+    if not escaleta:
+        raise MCPError("invalid_parameter",
+                       "No hay escaleta: crea los tramos con scene_direction_auto_split + "
+                       "scene_direction_set primero.", retryable=True)
+    bp_text = "\n".join(scene_direction._blueprint_lines(scene_direction.load_blueprint(proj)))
+    materials = scene_direction.material_catalog(proj)
+    events = _run_async(_drain(scene_ai.plan_all_stream(
+        blueprint_text=bp_text, escaleta=escaleta, materials=materials)))
+    _raise_scene_error(events)
+    ev = _last(events, "plan_all")
+    if not ev or not isinstance(ev.get("segments"), list):
+        raise MCPError("processing_error", "La IA no devolvió un plan válido. Reintenta.", retryable=True)
+    if not apply:
+        return {"segments": ev["segments"], "applied": False}
+    try:
+        res = scene_direction.apply_plan_all(project_id, ev["segments"])
+    except LookupError as exc:
+        raise MCPError("resource_not_found", str(exc))
+    return {"segments": res["segments"], "changed": res["changed"], "applied": True}
+
+
+def scene_set_blueprint(project_id: str, blueprint: dict) -> dict:
+    """Guarda/edita la dirección visual GLOBAL del proyecto (Fase 5). Entra en TODOS los packs, así
+    que fíjala una vez y da coherencia a todo el montaje. ``blueprint`` (todo opcional):
+    ``direction`` (una clave del catálogo, ver scene_get_blueprint), ``direction_overrides``
+    ({accent, notes, forbidden[]…}), ``identity`` (1-2 frases del estilo/mundo visual),
+    ``vocabulary`` [] (lenguaje visual permitido: movie_footage, paper_animation, stickman,
+    motion_graphic, diagram, handwritten_word, generated_image, chart…), ``rules`` [] (reglas duras
+    del montaje, p.ej. 'una idea dominante por plano', 'preferir material existente') e
+    ``intensity_curve`` (texto: cómo sube/baja la intensidad del vídeo). ``blueprint={}`` la borra.
+    Devuelve lo guardado (normalizado)."""
+    _project_or_raise(project_id)
+    if not isinstance(blueprint, dict):
+        raise MCPError("invalid_parameter", "Pasa 'blueprint' como objeto.",
+                       retryable=True, param="blueprint")
+    direction = str(blueprint.get("direction") or "").strip()
+    if direction:
+        from ..motion import directions
+        if direction not in directions.DIRECTIONS:
+            raise MCPError("invalid_parameter",
+                           f"direction desconocida: {direction}. Elige una de scene_get_blueprint.",
+                           retryable=True, param="direction")
+    try:
+        return {"blueprint": scene_direction.save_blueprint(project_id, blueprint)}
+    except LookupError as exc:
+        raise MCPError("resource_not_found", str(exc))
+
+
 def scene_direction_status(project_id: str) -> dict:
     """Mapa del montaje: por cada tramo su estado (empty→ready→generated→placed), modo y si
     ya tiene material/escena, más un recuento y la lista de tramos que aún necesitan visual
@@ -423,6 +527,10 @@ def render_timeline_frame(project_id: str, at_time: float) -> dict:
 
 
 def register(mcp) -> None:
+    tool(mcp, access="read")(scene_get_blueprint)
+    tool(mcp, access="write")(scene_generate_blueprint)
+    tool(mcp, access="write")(scene_set_blueprint)
+    tool(mcp, access="write")(scene_plan_all)
     tool(mcp, access="read")(scene_direction_get)
     tool(mcp, access="read")(scene_direction_status)
     tool(mcp, access="read")(scene_direction_pack)

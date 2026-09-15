@@ -560,6 +560,111 @@ AUDIO → TRANSCRIPCIÓN/SUBS → SCENE DIRECTION → SEGMENT/BEAT
 - Con esto el MCP pasa de "herramientas para que una IA edite" a **"un editor que dirige y revisa su propio
   montaje"**. Flujos de punta a punta: [`FLUJOS_ESCENA_MCP.md`](FLUJOS_ESCENA_MCP.md) (W1, §5).
 
+### Fase 5 — Dirección global: que la IA DIRIJA el vídeo entero, no cada tramo · ⚙️ EN CURSO (paso 1 hecho 2026-09-14)
+
+> **Estado 2026-09-14: paso 1 IMPLEMENTADO.** `Project.visual_blueprint` (schema + persistencia
+> `projects.save_visual_blueprint`), `scene_direction.normalize_blueprint`/`load_blueprint`/
+> `save_blueprint`, bloque **DIRECCIÓN GLOBAL** en `pack_text` (helper `_blueprint_lines`, entra vía
+> `build_pack`), tools MCP `scene_get_blueprint`/`scene_set_blueprint` (+ dominio `scene` en
+> `help_content`, paso 0) y HTTP `GET/PUT /scene-direction/blueprint`.
+> **Paso 2 IMPLEMENTADO (2026-09-14):** generación por IA en una pasada barata —
+> `scene_ai.blueprint_stream` (guion completo + material + catálogo de direcciones → JSON), tool MCP
+> `scene_generate_blueprint(project_id, apply=True)` y HTTP `POST /scene-direction/blueprint/generate`.
+> **Paso 3 IMPLEMENTADO (2026-09-14):** `scene_ai.plan_all_stream` (blueprint + escaleta con voz/tiempos
+> + material → un patch editorial por tramo), `scene_direction.apply_plan_all` (merge por id, descarta
+> valores inválidos, guarda de una vez), tool MCP `scene_plan_all(project_id, apply=True)` y HTTP
+> `POST /scene-direction/plan-all`. Tests: `BlueprintTest` + `PlanAllTest` en
+> `backend/tests/test_tools_scene.py`. **Falta** el paso 4 (UX).
+
+> **Motivación.** Las Fases 1-4 dieron a la IA todo lo mecánico y editorial **por tramo** (pack local
+> ~300-500 tokens, ideal para modelos pequeños). Falta la capa de arriba: una **dirección audiovisual
+> global** que decida la identidad visual del vídeo entero *antes* de bajar tramo a tramo, para que el
+> montaje sea coherente y para que la pregunta deje de ser "¿qué relleno este tramo?" y pase a ser
+> "¿qué necesita ver el espectador y cuál es la mejor forma de contarlo en todo el vídeo?".
+>
+> **Principio de diseño (la tensión a respetar):** la capa global tiene que ser **barata y de una sola
+> pasada** — una decisión de identidad + un mapa de intenciones — NO un planificador pesado que catalogue
+> y priorice recursos de todo el vídeo (eso rompería el pipeline apto para modelos pequeños). *Blueprint
+> ligero arriba, ejecución local abajo.* Por eso NO se introduce una entidad `VisualAsset` nueva: su
+> contenido ya vive en `components` + `composition_intent` + `complexity` + `no_visual` por tramo (§3.4-3.12).
+> La Fase 5 solo añade **la cabeza** que da criterio a esos campos y cierra el pendiente de Fase 1.
+
+#### 5.1 `Project.visual_blueprint` (persistido a nivel de proyecto) · [net-new]
+Cierra el único hueco abierto de la Fase 1 (§5, "dirección visual global"): hoy el *Creative Direction Lock*
+se elige **por tramo** y se inyecta solo en `build`; no hay identidad para el vídeo entero.
+
+```jsonc
+Project.visual_blueprint = {
+  "version": 1,
+  "direction": "sketchbook",          // dirección creativa DOMINANTE (una de las 16 de directions.py)
+  "direction_overrides": { "accent": "#e11d48", "notes": "" },
+  "identity": "cinematográfico + educativo; paper animation como acento; motion contenido",
+  "vocabulary": ["movie_footage", "paper_animation", "stickman", "diagram", "handwritten_word"],
+  "rules": [                            // reglas duras que entran en TODOS los packs
+    "una idea visual dominante por plano",
+    "preferir material existente; generar solo si aporta",
+    "recurso corto y fuerte > escena larga mediocre",
+    "subtítulos siempre protegidos"
+  ],
+  "intensity_curve": "hook alto → explicación media → clímax alto → cierre medio",
+  "source": "ai|manual",              // cómo se creó (traza)
+  "updated_at": "..."
+}
+```
+- **Derivación (1 llamada IA barata):** `blueprint_from_context(project)` a partir de audio+guion,
+  `get_project_context`, el catálogo de material (`material_catalog`) y las 16 direcciones
+  (`app/motion/directions.py`). Devuelve el dict de arriba. Editable a mano después.
+- **Relación con el `direction_id` por tramo:** el blueprint fija la dirección **por defecto** de todo el
+  proyecto; un tramo puede seguir sobre-escribiéndola (el lock por tramo gana si existe). Así la coherencia
+  es el default y la excepción sigue siendo posible.
+- **Entra al pack:** `build_pack`/`pack_text` (`app/scene_direction.py`) imprimen un bloque nuevo
+  **DIRECCIÓN GLOBAL** (identidad + vocabulario permitido + reglas + posición del tramo en la curva de
+  intensidad). Esto es lo que hoy falta en `pack_text` (§3.1 punto (a)).
+
+  ```
+  DIRECCIÓN GLOBAL
+    identidad: cinematográfico + educativo · paper animation como acento
+    vocabulario permitido: movie_footage · paper_animation · stickman · diagram · handwritten_word
+    reglas: una idea dominante por plano · preferir material existente · corto y fuerte > largo mediocre
+    este tramo en la curva: EXPLICACIÓN (intensidad media, objetivo complexity ≈3)
+  ```
+
+#### 5.2 Pasada "intención por tramo" de una sola vez (el "plan de fabricación") · [net-new]
+En lugar de un catálogo global de VisualAssets (caro, global), una única pasada rellena **toda la escaleta
+a la vez** guiada por el blueprint: por cada tramo escribe `composition_intent` + `complexity` +
+`no_visual` (+ opcionalmente `mode`). Es la escaleta ya poblada con criterio **antes de generar nada** —
+el equivalente barato del "plan de fabricación", reutilizando campos que ya existen.
+- La IA ve: blueprint + toda la escaleta (solo voz+tiempos de cada tramo, no el pack completo de cada uno) +
+  resumen del material disponible. Devuelve un patch por tramo. Barato porque no compone, solo **decide qué
+  y con qué densidad**.
+- Aplica la regla de valor (§3.10-3.11): un tramo puede quedar `no_visual`, y la duración del recurso la
+  manda la idea (un `composition_intent` puede pedir "gráfico 3s + mantener plano el resto"), no la longitud
+  del tramo.
+
+#### 5.3 Tools MCP y HTTP · [net-new]
+- `scene_get_blueprint(project_id)` — lee `visual_blueprint` (read).
+- `scene_set_blueprint(project_id, blueprint)` — guarda/edita (write). Valida `direction` contra el catálogo.
+- `scene_generate_blueprint(project_id)` — 1 llamada IA que propone el blueprint desde el contexto (write).
+- `scene_plan_all(project_id)` — la pasada §5.2; devuelve el patch por tramo y lo aplica a la escaleta (write).
+- Dominio `scene` en `help_content.py` + `capabilities://scene`: documentar el flujo global
+  (blueprint → plan_all → por tramo pack/build/place) y los enums (vocabulario, curva de intensidad).
+- HTTP espejo: `GET/PUT /api/projects/{pid}/scene-direction/blueprint`,
+  `POST /api/projects/{pid}/scene-direction/blueprint/generate`,
+  `POST /api/projects/{pid}/scene-direction/plan-all`.
+
+#### 5.4 UX (SceneDirectionWorkspace) · [net-new]
+- Panel **Dirección global** arriba del workspace: dirección dominante, vocabulario (chips), reglas, curva de
+  intensidad; botón "Proponer con IA" (`scene_generate_blueprint`) y edición a mano.
+- Botón **"Planificar todo"** (`scene_plan_all`) que rellena `composition_intent`/`complexity`/`no_visual` de
+  toda la escaleta de una vez; se ve reflejado en los chips de complejidad (§4.4) y en el mapa global (§4.8).
+- El bloque **DIRECCIÓN GLOBAL** aparece también en "lo que recibe la IA" (§4.2): nada oculto.
+
+#### 5.5 Orden de implementación
+1. [x] Modelo `visual_blueprint` + `get/set` (MCP+HTTP) + bloque en `pack_text`. *(cierra el pendiente de Fase 1; 2026-09-14)*
+2. [x] `scene_generate_blueprint` (la llamada IA barata). *(2026-09-14)*
+3. [x] `scene_plan_all` (la pasada de intención por tramo). *(2026-09-14)*
+4. [ ] UX del panel global + "Planificar todo".
+
 ---
 
 ## 6. Checklist maestro (trazabilidad)
@@ -581,3 +686,8 @@ AUDIO → TRANSCRIPCIÓN/SUBS → SCENE DIRECTION → SEGMENT/BEAT
 | 13 | Render de frame compuesto | ✅ `render_timeline_frame` | §3.13 | 4 |
 | 14 | Validación + auto-corrección | ✅ base (`scene_validate_segment` + bucle) | §3.14 | 4 |
 | 15 | UX/UI (overlay, badges, mapa) | net-new | §4 | 1–4 |
+| 16 | Dirección visual GLOBAL (`visual_blueprint`) | ✅ base (schema+persistencia+normalize) | §5.1 | 5 |
+| 17 | Blueprint dentro del pack (bloque DIRECCIÓN GLOBAL) | ✅ (`_blueprint_lines` en `pack_text`) | §5.1, §3.1(a) | 5 |
+| 18 | Pasada "intención por tramo" (`scene_plan_all`) | ✅ (IA + `apply_plan_all`) | §5.2 | 5 |
+| 19 | Tools blueprint (`scene_get/set/generate_blueprint` + `scene_plan_all`) | ✅ (MCP+HTTP) | §5.3 | 5 |
+| 20 | UX panel dirección global + "Planificar todo" | ⬜ pendiente | §5.4 | 5 |

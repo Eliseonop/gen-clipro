@@ -105,6 +105,15 @@ class CacheBase(unittest.TestCase):
         cv2.imwrite(str(out), np.full((64, 96, 3), 200, np.uint8))
         return out
 
+    def _gif(self, seconds: float = 1.0, name: str = "a.gif") -> Path:
+        """GIF ANIMADO sintético (necesita ffmpeg)."""
+        out = self.td / name
+        subprocess.run(
+            ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", f"testsrc=duration={seconds}:size=96x64:rate=10",
+             str(out)], check=True, capture_output=True)
+        return out
+
 
 class MissingRangesTest(CacheBase):
     def test_sin_caché_falta_todo(self):
@@ -235,6 +244,23 @@ class BuildMatteTest(CacheBase):
         self.assertEqual(meta["range"], [0, 0])
         self.assertEqual(self.prov.calls, 1)
 
+    def test_gif_animado_cubre_toda_la_animacion(self):
+        """Un GIF (still con duración) NO debe colapsar a un solo fotograma.
+
+        Reproduce el bug real: ``_run_bg_removal`` llama con still=True y el tramo
+        (0, 0) que da ``clip_range`` sin meta; el matte tiene que cubrir toda la
+        animación del GIF, no el primer frame.
+        """
+        src = self._gif(1.0)                                  # 10 frames a 10 fps
+        meta = bg_service.build_matte(src, self._auto(), 0.0, 0.0, still=True)
+        lo, hi = meta["range"]
+        self.assertEqual(lo, 0)
+        self.assertGreater(hi, 1, "el GIF animado colapsó a un solo fotograma")
+        self.assertGreater(meta["source_duration"], 0.0)
+        for i in range(lo, hi + 1):
+            self.assertTrue(bg_service.frame_path(
+                bg_service.matte_dir(meta["base_key"]), i).exists(), i)
+
     def test_cancelar_aborta_y_no_deja_ffmpeg_colgado(self):
         src = self._video(3.0)
         estado = {"n": 0}
@@ -347,6 +373,30 @@ class ClipSpecTest(CacheBase):
         self.assertIsNotNone(spec)
         self.assertEqual(spec["start_number"], 11)     # índice 10 → fichero 000011
         self.assertEqual(spec["mask_fps"], 10)
+        self.assertFalse(spec["loop"])                 # vídeo: sin loop del matte
+
+    def test_gif_animado_marca_loop_en_el_spec(self):
+        """El matte de un GIF animado se marca ``loop`` → el export lo repite."""
+        src = self._gif(1.0)
+        auto = self._auto()
+        bg_service.build_matte(src, auto, 0.0, 0.0, still=True)
+        clip = self._ready_clip(src, auto, kind="image", asset_kind="images",
+                                filename="a.gif", source_duration=1.0)
+        spec = bg_service.build_clip_bg_mask(clip, 30)
+        self.assertIsNotNone(spec)
+        self.assertTrue(spec["loop"], "el GIF animado no marcó loop")
+        self.assertGreater(spec["frames"], 1)
+
+    def test_imagen_fija_no_marca_loop(self):
+        """Una imagen fija (1 frame) no se repite: el overlay clona el último."""
+        src = self._image()
+        auto = self._auto()
+        bg_service.build_matte(src, auto, 0.0, 0.0, still=True)
+        clip = self._ready_clip(src, auto, kind="image", asset_kind="images",
+                                filename="i.png", source_duration=5.0)
+        spec = bg_service.build_clip_bg_mask(clip, 30)
+        self.assertIsNotNone(spec)
+        self.assertFalse(spec["loop"])
 
     def test_cortar_el_clip_no_recalcula_nada(self):
         src = self._video(3.0)
@@ -454,6 +504,29 @@ class SamAssistedTest(CacheBase):
         meta = bg_service.build_matte(src, self._sam_auto(edits=[]), 0.0, 0.5)
         m = bg_service.read_matte_frame(meta["base_key"], meta["range"][0])
         self.assertEqual(int(m.max()), 0)
+
+    def test_lapiz_magico_segmenta_un_frame(self):
+        """El endpoint del Lápiz mágico: clic → máscara al vuelo (encode+decode)."""
+        src = self._video(1.0)
+        mask = bg_service.segment_frame(src, self._sam_auto(), 0.3, [(0.5, 0.5, 1)])
+        self.assertEqual(mask.shape[0], 64)          # mask_height pedido
+        self.assertEqual(int(mask.max()), 255)       # keep → sujeto
+        vacio = bg_service.segment_frame(src, self._sam_auto(), 0.3, [])
+        self.assertEqual(int(vacio.max()), 0)        # sin puntos → vacío
+
+    def test_lapiz_magico_reusa_embeddings_entre_clics(self):
+        """Añadir puntos re-decodifica (barato) pero NO re-encodea el frame."""
+        src = self._video(1.0)
+        bg_service.segment_frame(src, self._sam_auto(), 0.0, [(0.4, 0.5, 1)])
+        enc = self.sam.enc
+        bg_service.segment_frame(src, self._sam_auto(), 0.0, [(0.4, 0.5, 1), (0.6, 0.5, 0)])
+        self.assertEqual(self.sam.enc, enc, "re-encodeó el mismo frame")
+        self.assertGreater(self.sam.dec, enc)
+
+    def test_lapiz_magico_falla_con_modelo_no_interactivo(self):
+        src = self._video(0.5)
+        with self.assertRaises(ValueError):
+            bg_service.segment_frame(src, self._auto(), 0.0, [(0.5, 0.5, 1)])
 
     def test_cambiar_puntos_reusa_embeddings(self):
         """Cambiar el prompt re-decodifica, pero NO re-encodea (caché nivel 1)."""

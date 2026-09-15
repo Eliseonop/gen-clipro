@@ -155,7 +155,8 @@ export function canCaptionClip(clip) {
   if (!clip || clip.kind === 'text') return false
   if (clip.asset_kind === 'audios' || clip.asset_kind === 'sfx') return true
   if (clip.kind !== 'video') return false
-  if ((clip.asset_scope || 'project') === 'library') return false
+  const scope = clip.asset_scope || 'project'
+  if (scope === 'library' || scope === 'collection') return false
   return !!(clip.asset_id || clip.index != null)
 }
 
@@ -760,6 +761,11 @@ export function mediaUrl(pid, clip) {
   const kind = clip.asset_kind === 'audios' ? 'audio'
     : (clip.asset_kind === 'images' || clip.kind === 'image') ? 'image'
       : 'video'
+  // Biblioteca de colecciones: el archivo vive en su carpeta externa; filename es
+  // "<coleccion>/<relpath>" y se sirve tal cual (con cada segmento codificado).
+  if ((clip.asset_scope || 'project') === 'collection') {
+    return withMediaVersion(`/api/collections/file/${clip.filename.split('/').map(encodeURIComponent).join('/')}`, clip)
+  }
   if ((clip.asset_scope || 'project') === 'library') {
     return withMediaVersion(`/api/library/media/${kind}/${encodeURIComponent(clip.filename)}`, clip)
   }
@@ -793,7 +799,8 @@ export function withKfIds(reframe) {
 // Crea un clip de vídeo/audio a partir de un asset de la biblioteca.
 export function makeClip(assetKind, item, trackId, start, dur) {
   const kind = assetKind === 'clips' ? 'video' : assetKind === 'images' ? 'image' : 'audio'
-  const fromLibrary = item?.scope === 'library' || String(item?.id || '').startsWith('lib_')
+  const isCollection = item?.scope === 'collection' || String(item?.id || '').startsWith('col_')
+  const fromLibrary = isCollection || item?.scope === 'library' || String(item?.id || '').startsWith('lib_')
   const visual = kind === 'video' || kind === 'image'
   const fromLib = kind === 'video' && isMasterReframe(item.reframe)
   // GIF animado: la duración inicial es la del propio gif; PNG/JPG usan el default.
@@ -815,7 +822,7 @@ export function makeClip(assetKind, item, trackId, start, dur) {
     asset_id: fromLibrary
       ? String(item.id)
       : (assetKind === 'clips' ? String(item.index) : String(item.id)),
-    asset_scope: fromLibrary ? 'library' : 'project',
+    asset_scope: isCollection ? 'collection' : (fromLibrary ? 'library' : 'project'),
     filename: assetKind === 'sfx' ? item.id : item.filename,
     name: item.label || item.name || item.filename,
     start: +Math.max(0, start).toFixed(3),

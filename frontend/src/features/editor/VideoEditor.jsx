@@ -4,7 +4,7 @@ import ConfirmModal from '../../components/ConfirmModal'
 import Toast from '../../components/Toast'
 import { fmt } from '../../lib/utils'
 import { getTimeline, saveTimeline, prepareReframe, getJob, createClipJob, getSettings,
-  createBgRemovalJob, listBgProviders, cancelJob, addMotionToTimeline,
+  createBgRemovalJob, createBgCutoutJob, segmentBg, listBgProviders, cancelJob, addMotionToTimeline,
   createSegments, faceTrackMaterial } from '../../services/api'
 import { dragMark, markToSourceRange, materialDuration, segmentDescription, segmentLabel } from './clipExtract'
 import SegmentConfirmModal from './SegmentConfirmModal'
@@ -34,7 +34,8 @@ import { SHAPE_DEFAULT_DUR } from '../../lib/shapes'
 import { readRowHeight, writeRowHeight } from './trackRows'
 import { newTrackIndex, resolveNewTrack } from './dropIntent'
 import { MASK_KF_KEYS, clipMasks, defaultMask, maskId, normalizeMask } from '../../lib/clipMask'
-import { bgCapable, clipBg, defaultBg, normalizeBg } from '../../lib/clipBg'
+import { autoActive, bgCapable, clipBg, defaultBg, isInteractiveProvider, normalizeBg } from '../../lib/clipBg'
+import { clearMagic, setMagicMask } from './bgMagic'
 import { resetBgMeta, resetCutout } from './bgCutout'
 import { cropWindow, freeFrameAt, isOverlay, mediaSize, newTransform, sourceCropPx, videosAt } from '../../lib/clipLayout'
 import {
@@ -293,6 +294,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   // es una propiedad del clip que el preview lee cada fotograma.
   const [bgBrush, setBgBrush] = useState({ on: false, op: 'erase', size: 0.08, px: null, py: null })
   const [bgJob, setBgJob] = useState(null)
+  // "Exportar recorte": job que hornea el clip con el fondo eliminado a un WebM
+  // transparente y lo añade al material (conserva la animación de vídeo/GIF).
+  const [cutoutJob, setCutoutJob] = useState(null)
+  // Lápiz mágico (selección inteligente SAM): overlay de la máscara del frame
+  // actual mientras el usuario coloca/refina puntos, antes de "Aplicar".
+  const magicRef = useRef({ on: false, clipId: null })
+  const [magicMode, setMagicMode] = useState(false)
+  const [magicBusy, setMagicBusy] = useState(false)
   const [bgInfo, setBgInfo] = useState({ providers: [], device: '' })
   const [chromaPick, setChromaPick] = useState(false)
   // Fondo de vista previa (solo preview): normal|checker|solid|media.
@@ -564,7 +573,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       clipsRef, tracksRef, mediaEls, outRef, selRef, selIdsRef, selKfRef,
       playingRef, framingModeRef, mainCanvasRef, mainStageRef, resultCanvasRef, mainTextBox, topVideoAt, alignGuidesRef,
       clipModeRef, cropModeRef, croppingRef, fpsRef, hitListRef, viewZoomRef,
-      maskModeRef, maskDrawRef, bgBrushRef, bgPreviewRef, bgPreviewElRef,
+      maskModeRef, maskDrawRef, bgBrushRef, bgPreviewRef, bgPreviewElRef, magicRef,
     }
     const tick = () => {
       const total = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
@@ -2458,6 +2467,68 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setBgJob((j) => (j ? { ...j, message: 'Cancelando…' } : j))
   }
 
+  // "Exportar recorte": hornea el clip con el fondo eliminado a un WebM
+  // transparente y lo añade al material como vídeo. A diferencia de la propiedad
+  // no destructiva, esto CONSERVA la animación en un archivo reutilizable —
+  // vídeo o GIF salen como vídeo, no como imagen estática.
+  function exportBgCutout() {
+    const clip = selectedClip
+    if (!clip || !bgCapable(clip)) return
+    const bg = clipBg(clip)
+    if (!bg || !(autoActive(bg) || bg.chroma?.enabled)) return
+    setCutoutJob({ status: 'running', progress: 0, message: 'Preparando el recorte…' })
+    createBgCutoutJob(project.id, {
+      clip_id: clip.id,
+      kind: clip.kind,
+      asset_kind: clip.asset_kind,
+      asset_id: String(clip.asset_id ?? ''),
+      filename: clip.filename,
+      asset_scope: clip.asset_scope || 'project',
+      in_point: clip.in_point,
+      out_point: clip.out_point,
+      source_duration: clip.source_duration,
+      label: clip.name || undefined,
+      bg_removal: clip.bg_removal,
+    })
+      .then((job) => setCutoutJob({ ...job }))
+      .catch((e) => setCutoutJob({ status: 'error', error: e.message }))
+  }
+
+  function cancelBgCutout() {
+    if (!cutoutJob?.id) return
+    cancelJob(cutoutJob.id).catch(() => {})
+    setCutoutJob((j) => (j ? { ...j, message: 'Cancelando…' } : j))
+  }
+
+  // Lápiz mágico: activa la selección inteligente por clic. Reutiliza el ruteo
+  // del pincel SAM (clic = punto keep) y añade el overlay de máscara en vivo.
+  function toggleMagicWand(on) {
+    const clip = selectedClip
+    if (!clip) return
+    setMagicMode(!!on)
+    if (on) {
+      const bg = clipBg(clip)
+      // Necesita un modelo SAM (segmentación por puntos); si no, se pone base_plus.
+      if (!isInteractiveProvider(bg?.auto?.provider)) changeBgAuto({ provider: 'sam21_base_plus' })
+      magicRef.current = { on: true, clipId: clip.id }
+      setBgBrush((b) => ({ ...b, on: true, op: 'keep', size: 0.02 }))
+    } else {
+      magicRef.current = { on: false, clipId: null }
+      clearMagic(clip.id)
+      setBgBrush((b) => ({ ...b, on: false }))
+    }
+  }
+
+  // Confirmar la selección = el flujo "Aplicar" de siempre (matte de todos los
+  // frames). Los puntos ya están en auto.edits (son el prompt de SAM).
+  function confirmMagicWand() {
+    applyBgAuto()
+    setMagicMode(false)
+    magicRef.current = { on: false, clipId: null }
+    setBgBrush((b) => ({ ...b, on: false }))
+    clearMagic(selectedClip?.id)
+  }
+
   const changeBgAuto = (patch) => {
     const clip = selectedClip
     if (!clip) return
@@ -2632,6 +2703,62 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     return () => clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bgJob?.id, bgJob?.status])
+
+  // Sondeo del job "Exportar recorte".
+  useEffect(() => {
+    if (!cutoutJob?.id || cutoutJob.status === 'done' || cutoutJob.status === 'error') return undefined
+    const id = setInterval(async () => {
+      try { setCutoutJob({ ...(await getJob(cutoutJob.id)) }) } catch { /* reintenta */ }
+    }, 800)
+    return () => clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cutoutJob?.id, cutoutJob?.status])
+
+  // Al terminar el recorte, refrescar el material (aparece el nuevo vídeo
+  // transparente en Vídeos) y limpiar el aviso tras unos segundos.
+  useEffect(() => {
+    if (cutoutJob?.status === 'done') {
+      onChange?.()
+      const t = setTimeout(() => setCutoutJob(null), 3200)
+      return () => clearTimeout(t)
+    }
+    return undefined
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cutoutJob?.status])
+
+  // Lápiz mágico: cada vez que cambian los puntos (auto.edits) con el modo activo,
+  // se pide al backend la máscara del frame actual (endpoint ligero SAM) y se
+  // guarda para el overlay. El encode del frame se cachea (nivel 1): solo el
+  // primer clic sobre un frame es lento; refinar es barato.
+  const magicEditsSig = (magicMode && selectedClip)
+    ? JSON.stringify(clipBg(selectedClip)?.auto?.edits || [])
+    : ''
+  useEffect(() => {
+    if (!magicMode || !selectedClip) return undefined
+    const clip = selectedClip
+    const bg = clipBg(clip)
+    const edits = bg?.auto?.edits || []
+    if (!edits.length) { clearMagic(clip.id); setMagicBusy(false); return undefined }
+    const points = edits.flatMap((e) => (e.points || []).map((p) => ({ x: p.x, y: p.y, op: e.op })))
+    let cancelled = false
+    setMagicBusy(true)
+    segmentBg(project.id, {
+      clip_id: clip.id,
+      kind: clip.kind,
+      asset_kind: clip.asset_kind,
+      asset_id: String(clip.asset_id ?? ''),
+      filename: clip.filename,
+      asset_scope: clip.asset_scope || 'project',
+      src_time: srcTOf(clip),
+      auto: bg.auto,
+      points,
+    })
+      .then((img) => { if (!cancelled) setMagicMask(clip.id, img) })
+      .catch(() => { /* el overlay simplemente no se actualiza */ })
+      .finally(() => { if (!cancelled) setMagicBusy(false) })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [magicEditsSig, magicMode])
 
   // Al terminar, la clave de caché se escribe en EL CLIP (la copia del editor),
   // no en el timeline del servidor: así el autosave no la pisa y el cambio queda
@@ -3485,6 +3612,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           }}
           bgProps={{
             job: bgJob,
+            cutoutJob,
             providers: bgInfo.providers,
             device: bgInfo.device,
             brush: bgBrush,
@@ -3493,6 +3621,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             onToggleAuto: toggleBgAuto,
             onApplyAuto: applyBgAuto,
             onCancelAuto: cancelBgAuto,
+            onExportCutout: exportBgCutout,
+            onCancelCutout: cancelBgCutout,
+            magicMode,
+            magicBusy,
+            onToggleMagic: toggleMagicWand,
+            onConfirmMagic: confirmMagicWand,
             onChangeAuto: changeBgAuto,
             onBrush: onBgBrush,
             onUndoEdit: undoBgEdit,

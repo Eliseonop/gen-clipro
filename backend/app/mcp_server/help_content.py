@@ -90,6 +90,10 @@ TOOL_DOMAINS: dict[str, str] = {
     "motion_stick_library": "motion",
     "motion_create_stick_scene": "motion",
     # dirección de escena (escaleta de tramos + pack de contexto)
+    "scene_get_blueprint": "scene",
+    "scene_generate_blueprint": "scene",
+    "scene_set_blueprint": "scene",
+    "scene_plan_all": "scene",
     "scene_direction_get": "scene",
     "scene_direction_status": "scene",
     "scene_direction_pack": "scene",
@@ -360,6 +364,18 @@ HELP: dict[str, str] = {
         "cada tramo. Pensado para funcionar con cualquier modelo: el contexto llega "
         "compacto y ya decidido, no tienes que entender el proyecto entero.\n"
         "Flujo:\n"
+        "0. DIRECCIÓN GLOBAL primero (Fase 5): scene_get_blueprint(project_id) para ver la "
+        "identidad visual del vídeo entero (estilo, vocabulario permitido, reglas) y las "
+        "direcciones creativas disponibles. Si no hay ninguna, scene_generate_blueprint(project_id) "
+        "la PROPONE con IA a partir del guion completo y el material (apply=true la guarda); "
+        "scene_set_blueprint(project_id, blueprint) la fija/edita a mano (direction, identity, "
+        "vocabulary[], rules[], intensity_curve). Entra en TODOS los packs y da coherencia: decide "
+        "el LENGUAJE del vídeo antes de bajar a cada tramo.\n"
+        "0b. PLAN de todo el vídeo de una vez (opcional, tras tener escaleta y blueprint): "
+        "scene_plan_all(project_id) rellena en UNA pasada barata el plan editorial de CADA tramo "
+        "(mode + composition_intent + complexity 1-5 + no_visual), guiado por la dirección global. "
+        "Es el 'plan de fabricación' antes de montar tramo a tramo; luego afinas con "
+        "scene_direction_update_segment.\n"
         "1. scene_direction_status(project_id): el MAPA. Tramos, su estado "
         "(empty→ready→generated→placed), modo, si ya tienen material/escena, y "
         "'pending' = los que aún necesitan visual. Empieza aquí para saber qué falta.\n"

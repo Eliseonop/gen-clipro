@@ -936,3 +936,132 @@ def _run_bg_removal(job_id: str, pid: str, req: dict) -> None:
 def start_bg_removal_job(job: Job, pid: str, req: dict) -> None:
     thread = threading.Thread(target=_run_bg_removal, args=(job.id, pid, req), daemon=True)
     thread.start()
+
+
+def _run_bg_cutout(job_id: str, pid: str, req: dict) -> None:
+    """Hornea el clip con el fondo eliminado a un WebM transparente y lo mete en
+    el material como vídeo, CONSERVANDO todos los fotogramas (la animación).
+
+    Reutiliza el matte de la caché (``build_matte``/``build_clip_bg_mask``) y la
+    cadena de alfa de fuente del export (``bg/cutout_export``). Lo usan Paper
+    Animator (assets animados) y el botón "Exportar recorte" del editor.
+    """
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+
+    def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        import tempfile
+        from pathlib import Path
+
+        from . import clip_bg, compose, detect, videos as video_mod
+        from .bg import cutout_export
+        from .bg import providers as bg_providers
+        from .bg import service as bg_service
+        from .clip_kind import is_still_clip
+        from .schemas import TimelineClip
+
+        project = projects.get_project(pid)
+        if project is None:
+            raise RuntimeError("Proyecto no encontrado.")
+
+        kind = str(req.get("kind") or "video")
+        asset_kind = str(req.get("asset_kind") or "clips")
+        filename = str(req.get("filename") or "")
+        probe_clip = TimelineClip(**{
+            "id": str(req.get("clip_id") or "tmp"), "track_id": "V1",
+            "kind": kind, "asset_kind": asset_kind,
+            "asset_id": str(req.get("asset_id") or "0"), "filename": filename,
+            "asset_scope": str(req.get("asset_scope") or "project"),
+            "in_point": float(req.get("in_point") or 0.0),
+            "out_point": float(req.get("out_point") or 0.0),
+            "source_duration": float(req.get("source_duration") or 0.0),
+        })
+        if not clip_bg.bg_capable(probe_clip):
+            raise RuntimeError("Exportar recorte solo funciona en clips de vídeo o imagen.")
+        path = compose._clip_path(project, probe_clip)
+        if path is None or not path.exists():
+            raise RuntimeError(f"No se encuentra el material: {filename}")
+
+        bg_in = clip_bg.normalize_bg(req.get("bg_removal")) or {}
+        auto = clip_bg.normalize_auto((req.get("bg_removal") or {}).get("auto"))
+        chroma = clip_bg.normalize_chroma((req.get("bg_removal") or {}).get("chroma"))
+        auto_on = bool(auto.get("enabled"))
+        chroma_on = bool(chroma.get("enabled"))
+        if not auto_on and not chroma_on:
+            raise RuntimeError(
+                "Activa la eliminación automática o el chroma antes de exportar el recorte.")
+
+        # Asegurar el matte (incremental: barato si ya está en caché). Devuelve la
+        # base_key canónica, que puede no venir del cliente (p. ej. desde Paper).
+        base_key = ""
+        src_dur = float(probe_clip.source_duration or 0.0)
+        if auto_on:
+            provider = bg_providers.get(auto["provider"])
+            on_progress(0.02, f"Preparando el modelo {provider.id}…")
+            t0, t1 = bg_service.clip_range(probe_clip)
+            meta = bg_service.build_matte(
+                path, auto, t0, t1, still=is_still_clip(probe_clip),
+                on_progress=lambda f, m: on_progress(0.02 + 0.8 * f, m),
+                cancel=lambda: job.cancel_requested)
+            base_key = meta["base_key"]
+            src_dur = float(meta.get("source_duration") or src_dur)
+
+        # Duración a hornear: para una imagen animada (GIF) toda su vuelta; para un
+        # vídeo, el tramo del clip (o el archivo entero si no viene recortado).
+        in_pt, out_pt = float(probe_clip.in_point or 0.0), float(probe_clip.out_point or 0.0)
+        if is_still_clip(probe_clip):
+            in_pt, out_pt = 0.0, max(0.1, src_dur)
+        elif out_pt <= in_pt:
+            out_pt = float(detect.video_info(path).get("duration") or 0.0) or (in_pt + 1.0)
+
+        clip = TimelineClip(**{
+            "id": probe_clip.id, "track_id": "V1", "kind": kind, "asset_kind": asset_kind,
+            "asset_id": probe_clip.asset_id, "filename": filename,
+            "asset_scope": probe_clip.asset_scope,
+            "in_point": in_pt, "out_point": out_pt,
+            "source_duration": max(src_dur, out_pt),
+            "bg_removal": {
+                "enabled": True,
+                "mode": bg_in.get("mode") or "auto",
+                "auto": {**auto, "enabled": auto_on, "base_key": base_key,
+                         "status": "ready" if (auto_on and base_key) else "idle"},
+                "chroma": chroma,
+            },
+        })
+
+        with tempfile.TemporaryDirectory(prefix="vy-cutout-") as tmp:
+            out_path = Path(tmp) / "cutout.webm"
+            cutout_export.render_clip_cutout(project, clip, out_path, on_progress)
+            data = out_path.read_bytes()
+
+        label = str(req.get("label") or Path(filename).stem or "recorte")
+        info = video_mod.import_video(project, f"{label}.webm", data,
+                                      label=label, origin="bg-cutout", source="generated")
+        job.asset = {"asset_id": str(info.index), "filename": info.filename,
+                     "label": info.label, "media_version": info.id}
+        job.progress = 1.0
+        job.message = "Recorte transparente añadido a Vídeos."
+        job.status = JobStatus.done
+    except Exception as exc:  # noqa: BLE001 - reportar cualquier fallo
+        try:
+            from .bg.service import BgCancelled
+        except Exception:  # noqa: BLE001
+            BgCancelled = tuple()  # type: ignore
+        job.status = JobStatus.error
+        if isinstance(exc, (JobCancelled, BgCancelled)):
+            job.error = "Cancelado."
+            job.message = "Exportar recorte cancelado."
+        else:
+            job.error = str(exc)
+            job.message = "Error al exportar el recorte."
+
+
+def start_bg_cutout_job(job: Job, pid: str, req: dict) -> None:
+    thread = threading.Thread(target=_run_bg_cutout, args=(job.id, pid, req), daemon=True)
+    thread.start()

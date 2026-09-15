@@ -11,6 +11,7 @@ import { drawAlignGuides } from '../../../lib/alignGuides'
 import { clipDur, clipEnd, isVisualClip, newReframe, timelineToSource, safeMediaTime } from '../editorModel'
 import { gifFrameAt, gifInfo } from '../gifPlayer'
 import { cutoutDrawable } from '../bgCutout'
+import { hasMagic, magicOverlayCanvas } from '../bgMagic'
 import { applyCanvasFx, clipFxAt } from '../../../lib/clipFx'
 import { posedTransform, clipPose, clipMasksAt } from '../../../lib/clipAnim'
 import { beginMaskLayer, endMaskLayer, maskHandles, strokeMaskShape } from '../../../lib/clipMask'
@@ -432,6 +433,10 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
   const fr = frame || { x: 0, y: 0, w: ctx.canvas.width, h: ctx.canvas.height }
   const cw = fr.w, ch = fr.h, ox = fr.x, oy = fr.y
   const outW = outRef.current.w, outH = outRef.current.h
+  // Lápiz mágico: overlay de la selección (SAM) del clip seleccionado, con borde
+  // de hormigas animado. Se dibuja por la MISMA geometría que la fuente del clip.
+  const magic = env.magicRef?.current
+  const magicPhase = (typeof performance !== 'undefined' ? performance.now() : Date.now())
   // Fondo del área exportada. Normalmente negro; el usuario puede cambiarlo por
   // cuadros (para VER la transparencia), un color o una imagen/vídeo de prueba.
   // Es SOLO vista previa: no afecta al export. El fondo del workspace lo pinta
@@ -470,9 +475,13 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
     // canvas del MISMO aspecto; la geometría se sigue calculando con `el` (las
     // dimensiones reales del material), nunca con la del recorte.
     const drawEl = drawSourceFor(clip, el, srcTime)
+    const magicEl = (magic?.on && selected.has(clip.id) && hasMagic(clip.id))
+      ? magicOverlayCanvas(clip.id, magicPhase) : null
     const fx = fxForClip(clip, head)
     if (isOverlay(clip)) {
       const dest = drawOverlayLayer(g, el, drawEl, clip, srcTime, outW, outH, fx, localT, fr)
+      // Misma geometría de overlay, con el overlay de selección encima.
+      if (magicEl) drawOverlayLayer(g, el, magicEl, clip, srcTime, outW, outH, fx, localT, fr)
       flush()
       hits.push({ id: clip.id, kind: clip.kind, dest, overlay: true })
       if (selected.has(clip.id)) overlayDestSel = dest
@@ -491,7 +500,10 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
         g.scale(sc, sc)
         g.translate(-cw / 2, -ch / 2)
       }
-      drawReframe(g, drawEl, reframeForDraw(clip, localT, srcTime), srcTime, outW / outH, { clear: false, dest: { dx: 0, dy: 0, dw: cw, dh: ch } })
+      const rfDraw = reframeForDraw(clip, localT, srcTime)
+      drawReframe(g, drawEl, rfDraw, srcTime, outW / outH, { clear: false, dest: { dx: 0, dy: 0, dw: cw, dh: ch } })
+      // Overlay de selección del Lápiz mágico, por la MISMA geometría del clip.
+      if (magicEl) drawReframe(g, magicEl, rfDraw, srcTime, outW / outH, { clear: false, dest: { dx: 0, dy: 0, dw: cw, dh: ch } })
       g.restore()
       flush()
       const dest = offsetDest(fillDestRect(cw, ch, clip, localT), ox, oy)

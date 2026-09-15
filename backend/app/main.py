@@ -578,6 +578,83 @@ def bg_removal(project_id: str, body: dict = Body(...)) -> Job:
     return job
 
 
+@app.post("/api/projects/{project_id}/bg-cutout", response_model=Job)
+def bg_cutout(project_id: str, body: dict = Body(...)) -> Job:
+    """Hornea el clip con el fondo eliminado a un WebM transparente (conserva la
+    animación) y lo añade al material como vídeo. Devuelve un Job con progreso."""
+    proj = projects.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    if not (body or {}).get("filename"):
+        raise HTTPException(status_code=400, detail="Falta el material del clip.")
+    job = jobs.create_job()
+    jobs.start_bg_cutout_job(job, project_id, body or {})
+    return job
+
+
+@app.post("/api/projects/{project_id}/bg-segment")
+def bg_segment(project_id: str, body: dict = Body(...)) -> Response:
+    """Máscara INTERACTIVA de UN fotograma (Lápiz mágico): clic(s) → máscara.
+
+    Endpoint LIGERO (no lanza el job de todos los frames): encode cacheado +
+    decode de los puntos, vía el proveedor SAM. Devuelve un PNG RGBA con
+    ``alfa = máscara`` para pintar el overlay de selección (hormigas en marcha)
+    sobre el reproductor. Confirmar la selección usa el flujo "Aplicar" de siempre.
+    """
+    import cv2
+    import numpy as np
+
+    from . import clip_bg, compose
+    from .bg import service as bg_service
+    from .schemas import TimelineClip
+
+    proj = projects.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    if not (body or {}).get("filename"):
+        raise HTTPException(status_code=400, detail="Falta el material del clip.")
+    clip = TimelineClip(**{
+        "id": str(body.get("clip_id") or "tmp"), "track_id": "V1",
+        "kind": str(body.get("kind") or "video"),
+        "asset_kind": str(body.get("asset_kind") or "clips"),
+        "asset_id": str(body.get("asset_id") or "0"),
+        "filename": str(body.get("filename") or ""),
+        "asset_scope": str(body.get("asset_scope") or "project"),
+    })
+    if not clip_bg.bg_capable(clip):
+        raise HTTPException(status_code=400, detail="El clip no admite eliminar fondo.")
+    path = compose._clip_path(proj, clip)
+    if path is None or not path.exists():
+        raise HTTPException(status_code=404, detail="No se encuentra el material del clip.")
+
+    auto = clip_bg.normalize_auto(body.get("auto"))
+    points: list[tuple[float, float, int]] = []
+    for p in (body.get("points") or []):
+        try:
+            x, y = float(p["x"]), float(p["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        points.append((x, y, 0 if p.get("op") == "erase" else 1))
+    try:
+        mask = bg_service.segment_frame(path, auto, float(body.get("src_time") or 0.0), points)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001 - modelo/entorno
+        raise HTTPException(status_code=500, detail=f"No se pudo segmentar: {exc}")
+
+    h, w = mask.shape[:2]
+    rgba = np.empty((h, w, 4), np.uint8)
+    rgba[:, :, 0] = 255
+    rgba[:, :, 1] = 255
+    rgba[:, :, 2] = 255
+    rgba[:, :, 3] = mask
+    ok, buf = cv2.imencode(".png", rgba)
+    if not ok:
+        raise HTTPException(status_code=500, detail="No se pudo codificar la máscara.")
+    return Response(content=buf.tobytes(), media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/bg/status/{base_key}")
 def bg_status(base_key: str) -> dict:
     """Metadatos del matte en caché: rango disponible, cadencia y tamaño."""
@@ -915,6 +992,83 @@ def scene_direction_put(project_id: str, body: dict = Body(default={})) -> dict:
     return scene_direction.save(project_id, body)
 
 
+@app.get("/api/projects/{project_id}/scene-direction/blueprint")
+def scene_direction_blueprint_get(project_id: str) -> dict:
+    """Dirección visual GLOBAL del proyecto (Fase 5) + catálogo de direcciones creativas."""
+    from . import scene_direction
+    from .motion import directions
+    proj = _project_or_404(project_id)
+    return {"blueprint": scene_direction.load_blueprint(proj),
+            "directions": directions.list_directions(),
+            "default_direction": directions.DEFAULT_DIRECTION,
+            "vocabulary_suggestions": list(scene_direction.VOCABULARY)}
+
+
+@app.put("/api/projects/{project_id}/scene-direction/blueprint")
+def scene_direction_blueprint_put(project_id: str, body: dict = Body(default={})) -> dict:
+    """Guarda la dirección visual global. Acepta el blueprint directo o {blueprint:{…}}."""
+    from . import scene_direction
+    _project_or_404(project_id)
+    body = body or {}
+    raw = body.get("blueprint", body) if isinstance(body, dict) else {}
+    try:
+        return {"blueprint": scene_direction.save_blueprint(project_id, raw)}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/api/projects/{project_id}/scene-direction/blueprint/generate")
+async def scene_direction_blueprint_generate(project_id: str, body: dict = Body(default={})) -> dict:
+    """La IA propone la dirección visual GLOBAL (Fase 5). apply=true (por defecto) la guarda."""
+    from . import scene_direction
+    from .motion import directions, scene_ai
+    proj = _project_or_404(project_id)
+    units, _ = scene_direction.script_units(proj)
+    script = " ".join(u["text"] for u in units)[:6000]
+    materials = scene_direction.material_catalog(proj)
+    if not script.strip() and not materials:
+        raise HTTPException(status_code=400, detail="No hay guion ni material: transcribe o añade material.")
+    dopts = [{"key": d["key"], "label": d["label"], "summary": d["summary"]} for d in directions.list_directions()]
+    events = [ev async for ev in scene_ai.blueprint_stream(
+        project_name=proj.name, script=script, materials=materials,
+        directions_list=dopts, vocabulary=list(scene_direction.VOCABULARY))]
+    err = next((e for e in reversed(events) if e.get("type") == "error"), None)
+    if err:
+        raise HTTPException(status_code=502, detail=err.get("message") or "Error de IA.")
+    bp = next((e for e in reversed(events) if e.get("type") == "blueprint"), None)
+    if not bp:
+        raise HTTPException(status_code=502, detail="La IA no devolvió un blueprint válido.")
+    raw = {**bp["blueprint"], "source": "ai"}
+    if (body or {}).get("apply", True):
+        return {"blueprint": scene_direction.save_blueprint(project_id, raw), "applied": True}
+    return {"blueprint": scene_direction.normalize_blueprint(raw), "applied": False}
+
+
+@app.post("/api/projects/{project_id}/scene-direction/plan-all")
+async def scene_direction_plan_all(project_id: str, body: dict = Body(default={})) -> dict:
+    """La IA rellena el plan editorial de TODA la escaleta en una pasada (Fase 5). apply=true guarda."""
+    from . import scene_direction
+    from .motion import scene_ai
+    proj = _project_or_404(project_id)
+    doc = scene_direction.load(proj)
+    if not doc["segments"]:
+        raise HTTPException(status_code=400, detail="No hay escaleta: crea los tramos primero.")
+    bp_text = "\n".join(scene_direction._blueprint_lines(scene_direction.load_blueprint(proj)))
+    materials = scene_direction.material_catalog(proj)
+    events = [ev async for ev in scene_ai.plan_all_stream(
+        blueprint_text=bp_text, escaleta=doc["segments"], materials=materials)]
+    err = next((e for e in reversed(events) if e.get("type") == "error"), None)
+    if err:
+        raise HTTPException(status_code=502, detail=err.get("message") or "Error de IA.")
+    ev = next((e for e in reversed(events) if e.get("type") == "plan_all"), None)
+    if not ev:
+        raise HTTPException(status_code=502, detail="La IA no devolvió un plan válido.")
+    if not (body or {}).get("apply", True):
+        return {"segments": ev["segments"], "applied": False}
+    res = scene_direction.apply_plan_all(project_id, ev["segments"])
+    return {"segments": res["segments"], "changed": res["changed"], "applied": True}
+
+
 @app.post("/api/projects/{project_id}/scene-direction/auto-split")
 def scene_direction_auto_split(project_id: str, body: dict = Body(default={})) -> dict:
     """Propone tramos por frases conservando los ya dirigidos. NO guarda: el editor decide."""
@@ -1227,6 +1381,55 @@ def sfx_file(relpath: str) -> FileResponse:
     path = sfx.resolve(relpath)
     if path is None:
         raise HTTPException(status_code=404, detail="Efecto de sonido no encontrado.")
+    return FileResponse(str(path))
+
+
+# --- Biblioteca de material reutilizable (colecciones externas) -------
+
+@app.get("/api/collections")
+def list_collections() -> dict:
+    from . import collections
+    return collections.list_collections()
+
+
+@app.post("/api/collections/root")
+def set_collections_root(body: dict = Body(...)) -> dict:
+    from . import collections
+    path = (body or {}).get("path") or ""
+    base = collections.set_root(path)
+    if base is None:
+        raise HTTPException(status_code=400, detail="Carpeta de material no válida.")
+    return collections.list_collections()
+
+
+@app.get("/api/collections/search")
+def search_collections(q: str = "", kind: str = "", collection: str = "") -> dict:
+    from . import collections
+    return collections.search(q=q, kind=kind, collection=collection)
+
+
+@app.patch("/api/collections/{cid}")
+def update_collection(cid: str, body: dict = Body(...)) -> dict:
+    from . import collections
+    data = body or {}
+    try:
+        collections.set_prefs(
+            cid,
+            enabled=data.get("enabled"),
+            favorite=data.get("favorite"),
+            label=data.get("label"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return collections.list_collections()
+
+
+@app.get("/api/collections/file/{ref:path}")
+def collection_file(ref: str) -> FileResponse:
+    from . import collections
+    path = collections.resolve(ref)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Material no encontrado.")
     return FileResponse(str(path))
 
 

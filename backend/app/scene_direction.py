@@ -59,6 +59,13 @@ MATERIAL_ROLES = ("full", "broll", "overlay", "pip", "side_panel", "circular",
 # b-roll + motion + stickman, no elegir uno solo. "keep" = mantener el plano (§3.11).
 COMPONENT_SOURCES = ("material", "motion", "stickman", "text", "graphic", "keep")
 
+# Dirección visual GLOBAL del proyecto (Fase 5, §5.1): la identidad + reglas que valen
+# para TODO el vídeo, para que el montaje sea coherente tramo a tramo y la IA decida con
+# criterio antes de bajar a cada tramo. Vocabulario = lenguaje visual sugerido (no cerrado).
+BLUEPRINT_VERSION = 1
+VOCABULARY = ("movie_footage", "paper_animation", "stickman", "motion_graphic",
+              "diagram", "handwritten_word", "generated_image", "text", "chart")
+
 SENTENCE_END = re.compile(r"[.!?…:;]$|[.!?…][\"»”)]?$")
 PAUSE_SPLIT = 0.6          # s de silencio entre palabras que cortan frase
 TARGET_SEG = 6.0           # s objetivo por tramo en la división automática
@@ -204,6 +211,72 @@ def save(project_id: str, raw: Any) -> dict[str, Any]:
     return doc
 
 
+# --- Dirección visual global (Fase 5, §5.1) ------------------------------------------
+
+def normalize_blueprint(raw: Any) -> dict[str, Any]:
+    """Normaliza la dirección visual GLOBAL del proyecto. Solo incluye claves con contenido;
+    devuelve ``{}`` si no hay nada útil (así "sin dirección global" es representable). ``direction``
+    se valida contra el catálogo de direcciones creativas; el resto es texto/listas acotadas."""
+    if not isinstance(raw, dict):
+        return {}
+    from .motion import directions
+    out: dict[str, Any] = {}
+    direction = str(raw.get("direction") or "").strip()
+    if direction in directions.DIRECTIONS:
+        out["direction"] = direction
+    ov = raw.get("direction_overrides")
+    if isinstance(ov, dict):
+        clean_ov: dict[str, Any] = {}
+        for k in ("accent", "bg", "surface", "ink", "secondary", "notes"):
+            v = ov.get(k)
+            if isinstance(v, str) and v.strip():
+                clean_ov[k] = v.strip()[:200]
+        forb = ov.get("forbidden")
+        if isinstance(forb, list):
+            items = [_clean(x, 80) for x in forb if str(x or "").strip()][:12]
+            if items:
+                clean_ov["forbidden"] = items
+        if clean_ov:
+            out["direction_overrides"] = clean_ov
+    identity = _clean(raw.get("identity"), 400)
+    if identity:
+        out["identity"] = identity
+    vocab = raw.get("vocabulary")
+    if isinstance(vocab, str):
+        vocab = re.split(r"[,;]", vocab)
+    if isinstance(vocab, (list, tuple)):
+        items = [_clean(x, 40) for x in vocab if str(x or "").strip()]
+        if items:
+            out["vocabulary"] = items[:12]
+    rules = raw.get("rules")
+    if isinstance(rules, str):
+        rules = [rules]
+    if isinstance(rules, (list, tuple)):
+        items = [_clean(x, 160) for x in rules if str(x or "").strip()]
+        if items:
+            out["rules"] = items[:10]
+    curve = _clean(raw.get("intensity_curve"), 300)
+    if curve:
+        out["intensity_curve"] = curve
+    if not out:
+        return {}
+    out["version"] = BLUEPRINT_VERSION
+    out["source"] = "ai" if str(raw.get("source")) == "ai" else "manual"
+    out["updated_at"] = raw.get("updated_at") or time.time()
+    return out
+
+
+def load_blueprint(proj) -> dict[str, Any]:
+    return normalize_blueprint(getattr(proj, "visual_blueprint", None) or {})
+
+
+def save_blueprint(project_id: str, raw: Any) -> dict[str, Any]:
+    bp = normalize_blueprint(raw)
+    if not projects.save_visual_blueprint(project_id, bp):
+        raise LookupError("Proyecto no encontrado.")
+    return bp
+
+
 def update_segment(project_id: str, segment_id: str, patch: dict) -> dict[str, Any]:
     proj = projects.get_project(project_id)
     if proj is None:
@@ -214,6 +287,36 @@ def update_segment(project_id: str, segment_id: str, patch: dict) -> dict[str, A
             doc["segments"][i] = {**s, **patch, "id": segment_id, "updated_at": time.time()}
             return save(project_id, doc)
     raise LookupError("Tramo no encontrado.")
+
+
+# Campos del PLAN editorial que rellena la pasada global (§5.2). Solo estos: la pasada
+# decide QUÉ y con cuánta intensidad, no compone ni elige material.
+_PLAN_ALL_KEYS = ("mode", "composition_intent", "complexity", "no_visual")
+
+
+def apply_plan_all(project_id: str, patches: Any) -> dict[str, Any]:
+    """Aplica un patch editorial por tramo (emparejado por ``id``) a toda la escaleta y guarda de
+    una vez (§5.2). Solo toca campos del PLAN (mode/composition_intent/complexity/no_visual); ignora
+    ids desconocidos y deja intactos los tramos no mencionados. Devuelve la escaleta + ``changed``."""
+    proj = projects.get_project(project_id)
+    if proj is None:
+        raise LookupError("Proyecto no encontrado.")
+    doc = load(proj)
+    by_id: dict[str, dict] = {}
+    for p in patches or []:
+        if isinstance(p, dict) and p.get("id"):
+            by_id[str(p["id"])] = p
+    changed = 0
+    for i, s in enumerate(doc["segments"]):
+        p = by_id.get(s["id"])
+        if not p:
+            continue
+        patch = {k: p[k] for k in _PLAN_ALL_KEYS if k in p}
+        if patch:
+            doc["segments"][i] = {**s, **patch, "updated_at": time.time()}
+            changed += 1
+    saved = save(project_id, doc)   # normaliza (descarta mode/complexity inválidos)
+    return {**saved, "changed": changed}
 
 
 def get_segment(proj, segment_id: str) -> tuple[dict, dict]:
@@ -628,6 +731,7 @@ def build_pack(proj, segment: dict, doc: dict | None = None) -> dict[str, Any]:
     fmt = sc.style_context(proj, start, end)
     return {
         "segment_id": segment["id"],
+        "blueprint": load_blueprint(proj),
         "range": {"start": _r(start), "end": _r(end), "duration": _r(end - start)},
         "script": {"source": source, "has_captions": bool(lines), "current": _clean(current, BUDGET["current"]),
                    "before": _clean(" ".join(before), BUDGET["side"]), "after": _clean(" ".join(after), BUDGET["side"])},
@@ -680,6 +784,28 @@ def _safe_area_lines(style: dict | None) -> list[str]:
             "reubícalo, redúcelo o recórtalo."
         )
     return out
+
+
+def _blueprint_lines(bp: dict | None) -> list[str]:
+    """Dirección visual GLOBAL del proyecto (Fase 5, §5.1): identidad, vocabulario permitido y
+    reglas duras que valen para TODO el vídeo. Es lo que da coherencia al montaje (que el tramo
+    3 y el 7 no tengan estilos distintos) y criterio a la IA antes de decidir este tramo."""
+    if not isinstance(bp, dict) or not bp:
+        return []
+    from .motion import directions
+    rows = ["DIRECCIÓN GLOBAL (vale para todo el vídeo; manténla coherente en este tramo):"]
+    if bp.get("direction"):
+        d = directions.get(bp["direction"])
+        rows.append(f"  dirección creativa: {d.get('label') or bp['direction']}")
+    if bp.get("identity"):
+        rows.append(f"  identidad: {bp['identity']}")
+    if bp.get("vocabulary"):
+        rows.append("  vocabulario permitido: " + " · ".join(bp["vocabulary"]))
+    if bp.get("rules"):
+        rows.append("  reglas: " + " · ".join(bp["rules"]))
+    if bp.get("intensity_curve"):
+        rows.append(f"  curva de intensidad del vídeo: {bp['intensity_curve']}")
+    return ["\n".join(rows)]
 
 
 def _occupancy_lines(pack: dict) -> list[str]:
@@ -743,6 +869,7 @@ def pack_text(pack: dict) -> str:
     r, s, d = pack["range"], pack["script"], pack["direction"]
     mode = MODES.get(d["mode"], MODES["propose"])
     lines = [f"TRAMO: {r['start']:.2f}s – {r['end']:.2f}s (dura {r['duration']:.2f}s)"]
+    lines += _blueprint_lines(pack.get("blueprint"))
     lines += _safe_area_lines(pack.get("style"))
     if s["current"]:
         lines.append(f"LO QUE DICE LA VOZ ({_SOURCE_TXT.get(s['source'], s['source'])}):\n«{s['current']}»")

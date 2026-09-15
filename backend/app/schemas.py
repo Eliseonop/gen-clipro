@@ -447,7 +447,7 @@ class TimelineClip(BaseModel):
     bg_removal: Optional[dict] = None     # eliminar fondo: matte IA + chroma key (ver clip_bg.py); None = apagado
     anim: Optional[dict] = None           # (legado) pistas {x,y,scale,rotation,opacity: [{t,v,ease}]}
     keyframes: Optional[dict] = None      # snapshots: {enabled, items: [{id,t,interpolation,props}]}
-    asset_scope: str = "project"          # "project" | "library"
+    asset_scope: str = "project"          # "project" | "library" | "collection"
     description: Optional[str] = None
     dup_of: Optional[str] = None          # id del clip original si es una copia
     composition_id: Optional[str] = None  # (motion) id de la MotionComposition de origen
@@ -480,6 +480,7 @@ class Project(BaseModel):
     timeline: Optional[Timeline] = None   # composición del editor de vídeo
     motion_compositions: list[dict] = []  # composiciones de Motion Studio (ver app/motion)
     scene_directions: dict = {}           # Dirección de escena: escaleta de tramos (ver app/scene_direction.py)
+    visual_blueprint: dict = {}           # Dirección visual GLOBAL del proyecto (Fase 5, ver app/scene_direction.py)
 
 
 class JobStatus(str, Enum):
@@ -505,5 +506,8 @@ class Job(BaseModel):
     # "Generar Motion" / add_to_timeline: clip insertado (id/track/comp) para que el
     # editor lo seleccione y ponga el cursor a su inicio tras recargar.
     motion_add: Optional[dict] = None
+    # "Exportar recorte" (bg-cutout): asset de vídeo transparente creado en el
+    # material ({asset_id, filename, label, media_version}) para reusarlo.
+    asset: Optional[dict] = None
     error: Optional[str] = None
     cancel_requested: bool = False        # cancelación cooperativa (best-effort)

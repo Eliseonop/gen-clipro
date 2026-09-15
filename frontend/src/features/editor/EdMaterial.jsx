@@ -11,6 +11,7 @@ import PaperElements from '../paper/PaperElements'
 import EdSettings from './EdSettings'
 import EdFxLibrary from './EdFxLibrary'
 import EdShapes from './EdShapes'
+import EdLibrary from './EdLibrary'
 import EdChat from './EdChat'
 import EdExplore from './EdExplore'
 import AudioTab from '../audio/AudioTab'
@@ -276,7 +277,8 @@ const MAT_NAV = [
   { id: 'image', icon: 'image', label: 'Imagen' },
   { id: 'audio', icon: 'mic', label: 'Audio' },
   { id: 'sfx', icon: 'graphic_eq', label: 'SFX' },
-  { id: 'effects', icon: 'auto_awesome', label: 'Efectos' },
+  { id: 'library', icon: 'collections_bookmark', label: 'Biblioteca', sep: true },
+  { id: 'effects', icon: 'auto_awesome', label: 'Efectos', sep: true },
   { id: 'shapes', icon: 'category', label: 'Figuras' },
   { id: 'text', icon: 'title', label: 'Texto' },
   { id: 'transitions', icon: 'animation', label: 'Transiciones' },
@@ -1107,7 +1109,7 @@ export default function EdMaterial({
         {tab === 'image' && imageFilter !== 'explore' && (shownImages.length === 0
           ? <Empty text={imageFilter === 'saved' ? 'No hay imágenes guardadas.' : 'Sin imágenes. Clic derecho para pegar, o pulsa +.'} />
           : (
-            <div className="ed-mat-grid">
+            <div className="ed-mat-grid adaptive">
               {shownImages.map((im) => (
                 <ImageCard
                   key={`${im.scope}-${im.id}`}
@@ -1170,6 +1172,7 @@ export default function EdMaterial({
       )}
 
       {tab === 'sfx' && <SfxTab onAdd={onAdd} onPlay={onPlayMedia} di={di} fav={fav} />}
+      {tab === 'library' && <EdLibrary onAdd={onAdd} onDragInfo={di} onPlay={onPlayMedia} />}
       {tab === 'shapes' && <EdShapes onAdd={onAdd} onDragInfo={di} />}
       {tab === 'effects' && (
         <EdFxLibrary

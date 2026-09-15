@@ -18,7 +18,7 @@ import { letterUrl, listLetters, uploadImages, uploadVideo } from '../../service
 import { useEditorHistory } from '../editor/hooks/useEditorHistory'
 import { EMPTY_ASSETS, loadPaperAssets } from './paperAssets.js'
 import { exportPaperFrame, exportPaperVideo } from './paperExport.js'
-import { applyMatte, ensureAsset, runMatteJob } from './paperBg.js'
+import { applyMatte, ensureAsset, isAnimatedAsset, runCutoutJob, runMatteJob } from './paperBg.js'
 import {
   applyAlphaToContent, buildPaperImage, cropView, decodeCanvas,
   loadBackgroundImage, loadObjectImage,
@@ -422,6 +422,23 @@ export function usePaperComp(projectId, { format, onUploaded } = {}) {
       assetRef.current = asset
       // Si hubo que subirla, el material del proyecto tiene una imagen nueva.
       if (isNew) { fileRef.current = null; onUploaded?.() }
+
+      // GIF animado: Paper es de imagen fija, así que hornear el alfa sobre el
+      // primer frame perdería la animación. En su lugar se renderiza un RECORTE
+      // ANIMADO transparente (WebM) al material, reutilizable en el timeline.
+      if (isAnimatedAsset(asset.filename)) {
+        const cut = await runCutoutJob(projectId, {
+          asset,
+          provider: stRef.current.edit.bgProvider,
+          onProgress: (progress, message) => setBgJob({ progress, message, status: 'running' }),
+          shouldCancel: () => cancelBgRef.current,
+        })
+        if (!cut || cancelBgRef.current) { setBgJob(null); return }
+        onUploaded?.()
+        setBgJob({ progress: 1, message: 'Recorte animado añadido a Vídeos', status: 'done' })
+        setTimeout(() => setBgJob((j) => (j?.status === 'done' ? null : j)), 2600)
+        return
+      }
 
       const result = await runMatteJob(projectId, {
         asset,

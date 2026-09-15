@@ -339,6 +339,40 @@ def _embeddings(provider, embed_key: str, index: int, frame: np.ndarray) -> dict
     return emb
 
 
+def segment_frame(path: Path, auto: dict, src_time: float,
+                  points: list[tuple[float, float, int]]) -> np.ndarray:
+    """Máscara INTERACTIVA de un solo fotograma (Lápiz mágico), vía SAM.
+
+    encode del fotograma en ``src_time`` (cacheado como NIVEL 1, reutilizado entre
+    clics) + decode(puntos) (barato). Devuelve el matte crudo (uint8, HxW).
+    Es la misma primitiva que usa ``build_matte`` por-frame, pero para un frame y
+    al vuelo: así el clic-a-máscara del preview no lanza el job de todos los frames.
+    """
+    provider = providers.get(auto["provider"])
+    if not bool(getattr(provider, "interactive", False)):
+        raise ValueError("El modelo seleccionado no admite selección por puntos (usa un modelo SAM).")
+    provider.ensure_ready()
+    mask_fps = int(auto["mask_fps"])
+    width, height = _extract_size(path, int(auto["mask_height"]))
+    idx = clip_bg.matte_frame_index(max(0.0, float(src_time)), mask_fps)
+
+    frame: Optional[np.ndarray] = None
+    try:
+        for f in _iter_frames(path, clip_bg.matte_frame_time(idx, mask_fps), 1,
+                              mask_fps, width, height):
+            frame = f
+            break
+    except Exception:  # noqa: BLE001 - imagen fija: ffmpeg no da fotogramas por tiempo
+        frame = None
+    if frame is None:
+        frame = _still_frame(path, height)
+
+    embed_key = _embed_key(source_id(path), provider, mask_fps, height)
+    emb = _embeddings(provider, embed_key, idx, frame)
+    pts = [(float(x), float(y), int(lab)) for x, y, lab in (points or [])]
+    return provider.decode(emb, pts, (height, width))
+
+
 # --- Nivel 1: matte crudo del modelo ---------------------------------------
 
 def build_matte(path: Path, auto: dict, t0: float, t1: float, still: bool = False,
@@ -362,8 +396,14 @@ def build_matte(path: Path, auto: dict, t0: float, t1: float, still: bool = Fals
     if still and src_dur <= 0.0:
         i0 = i1 = 0
     else:
+        # Vídeo: el tramo pedido [t0, t1]. Imagen ANIMADA (GIF: still con
+        # duración): toda la animación desde 0, indexada por tiempo de bucle —
+        # el preview ya indexa el matte con loopDur (matteIndexFor) y el GIF se
+        # decodifica con ffmpeg (_iter_frames), no con el primer frame de cv2.
         limit = src_dur if src_dur > 0 else t1
-        i0, i1 = index_range(max(0.0, t0), min(t1, limit), mask_fps)
+        lo_t = 0.0 if still else max(0.0, t0)
+        hi_t = limit if still else min(t1, limit)
+        i0, i1 = index_range(lo_t, hi_t, mask_fps)
         if i1 - i0 + 1 > MAX_MATTE_FRAMES:
             i1 = i0 + MAX_MATTE_FRAMES - 1
 
@@ -543,11 +583,20 @@ def build_clip_bg_mask(clip, fps: int) -> Optional[dict]:
     folder = ensure_derived(base, auto, i0, i1)
     if folder is None:
         return None
+    frames = int(i1 - i0 + 1)
+    # GIF animado: la secuencia PNG del matte tiene que dar la vuelta en sincronía
+    # con el RGB (``-ignore_loop 0``) cuando el clip dura más de un ciclo. Una
+    # imagen fija (1 frame) o un vídeo NO se marcan: el overlay ya repite el
+    # último fotograma con eof_action=repeat.
+    loop = bool(is_still_clip(clip)
+                and float(meta.get("source_duration") or 0.0) > 0.0
+                and frames > 1)
     return {
         "path": frame_pattern(folder),
         "start_number": int(i0) + 1,
         "mask_fps": mask_fps,
-        "frames": int(i1 - i0 + 1),
+        "frames": frames,
+        "loop": loop,
         "duration": round(src_dur, 3),
         "width": int(meta.get("width") or 0),
         "height": int(meta.get("height") or 0),

@@ -61,6 +61,13 @@ export const saveLibraryItem = (params) => post('/api/library/save', params)
 export const unsaveLibraryItem = (id) => del(`/api/library/${id}`)
 // Título/descripción de un material guardado (biblioteca).
 export const updateLibraryItem = (id, data) => patch(`/api/library/${encodeURIComponent(id)}`, data)
+// --- Biblioteca de material reutilizable (colecciones externas) ---
+export const listCollections = () => get('/api/collections')
+export const setCollectionsRoot = (path) => post('/api/collections/root', { path })
+export const searchCollections = ({ q = '', kind = '', collection = '' } = {}) =>
+  get(`/api/collections/search?q=${encodeURIComponent(q)}&kind=${encodeURIComponent(kind)}&collection=${encodeURIComponent(collection)}`)
+export const updateCollection = (cid, data) => patch(`/api/collections/${encodeURIComponent(cid)}`, data)
+
 export const getSettings = () => get('/api/settings')
 export const putSettings = (data) => put('/api/settings', data)
 // API keys: prueba todas, y gestión de varias claves por proveedor (por índice).
@@ -284,6 +291,34 @@ export const generateSubtitles = (pid, params) => post(`/api/projects/${pid}/sub
 // el export desde las propiedades del clip. Esto es solo para el matte de IA.
 export const listBgProviders = () => get('/api/bg/providers')
 export const createBgRemovalJob = (pid, params) => post(`/api/projects/${pid}/bg-removal`, params)
+// Hornea el clip con el fondo eliminado a un WebM transparente (conserva la
+// animación) y lo añade al material como vídeo. Devuelve un Job con progreso.
+export const createBgCutoutJob = (pid, params) => post(`/api/projects/${pid}/bg-cutout`, params)
+// "Lápiz mágico": máscara interactiva de UN fotograma (SAM). Devuelve la máscara
+// como Image ya decodificada (alfa = máscara) para pintar el overlay de selección.
+export async function segmentBg(pid, body) {
+  const res = await fetch(`/api/projects/${pid}/bg-segment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    let msg = `Error ${res.status}`
+    try { msg = (await res.json())?.detail || msg } catch { /* respuesta no JSON */ }
+    throw new Error(msg)
+  }
+  const url = URL.createObjectURL(await res.blob())
+  try {
+    return await new Promise((resolve, reject) => {
+      const img = new Image()
+      img.onload = () => resolve(img)
+      img.onerror = () => reject(new Error('No se pudo decodificar la máscara.'))
+      img.src = url
+    })
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
 export const getBgStatus = (baseKey) => get(`/api/bg/status/${encodeURIComponent(baseKey)}`)
 export const getBgCacheStats = () => get('/api/bg/cache')
 export const clearBgCache = (baseKey) =>

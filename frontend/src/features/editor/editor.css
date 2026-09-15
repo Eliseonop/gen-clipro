@@ -579,6 +579,40 @@
 
 /* SFX */
 .ed-sfx { flex: 1; display: flex; flex-direction: column; min-height: 0; gap: 8px; }
+
+/* ===== Biblioteca de material reutilizable (colecciones externas) ===== */
+.ed-library { flex: 1; display: flex; flex-direction: column; min-height: 0; gap: 8px; }
+.ed-lib-grid { flex: 1; }
+.ed-lib-folders {
+  display: flex; flex-direction: column; gap: 4px; padding: 8px; max-height: 230px; overflow-y: auto;
+  background: var(--card-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+}
+.ed-lib-folders-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em;
+}
+.ed-lib-root {
+  font-size: 10.5px; color: var(--muted); word-break: break-all; padding: 0 0 4px;
+  border-bottom: 1px solid var(--line); margin-bottom: 2px;
+}
+.ed-lib-empty { font-size: 11.5px; color: var(--muted); padding: 6px 2px; line-height: 1.4; }
+.ed-lib-folder {
+  display: flex; align-items: center; gap: 7px; padding: 4px 6px;
+  border-radius: 4px; background: var(--card-3);
+}
+.ed-lib-folder.off { opacity: 0.5; }
+.ed-lib-folder-name { flex: 1; min-width: 0; font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-lib-folder-count { font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ed-lib-fav { background: none; border: none; color: var(--muted); cursor: pointer; display: flex; padding: 2px; }
+.ed-lib-fav.on { color: #f5c518; }
+.ed-lib-toggle { display: flex; align-items: center; color: var(--muted); cursor: pointer; padding: 2px; }
+.ed-lib-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+.ed-card-media .gif-badge {
+  position: absolute; top: 4px; left: 4px; z-index: 2;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.05em; padding: 1px 4px; border-radius: 3px;
+  background: rgba(0, 0, 0, 0.65); color: #fff;
+}
+
 .ed-sfx-search {
   display: flex; align-items: center; gap: 6px; background: var(--card-2); border: 1px solid var(--line);
   border-radius: var(--radius-sm); padding: 6px 8px; color: var(--muted);
@@ -1141,6 +1175,34 @@ body.ed-mark-dragging, body.ed-mark-dragging * { cursor: ew-resize !important; }
   display: block;
   margin: 0;
 }
+
+/* ===== Biblioteca visual: masonry (grid con row-span) y miniaturas de proporción real ===== */
+/* Cada card conserva su relación de aspecto (acotada 9:16–16:9 en JS) y el alto se
+   traduce a un nº de filas (useMasonrySpan) para empaquetar sin huecos: el scroll
+   se vuelve una biblioteca que se recorre de un vistazo, no una tira de rectángulos. */
+.ed-mat-grid.adaptive {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  grid-auto-rows: 8px;
+  column-gap: 7px;
+  row-gap: 0;
+  align-content: start;
+}
+.ed-mat-grid.adaptive > .ed-card { margin-bottom: 7px; align-self: start; }
+/* Mensajes (vacío / cargando) ocupan todo el ancho y varias filas finas para no
+   quedar aplastados a la altura de una sola grid-auto-row. */
+.ed-mat-grid.adaptive > .grid-full { grid-column: 1 / -1; grid-row: auto / span 24; align-self: start; }
+/* La proporción la fija el estilo inline de cada card; aquí solo se liberan los
+   límites del rectángulo fijo para que vertical se vea vertical y horizontal ancho. */
+.ed-mat-grid.adaptive .ed-card.grid .ed-card-media {
+  max-height: none;
+  min-height: 0;
+}
+.ed-audio-media {
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted);
+  background: linear-gradient(135deg, #1c2230, #12151d);
+}
 .ed-play-ov {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
   width: 30px; height: 30px; border-radius: 50%; border: none; cursor: pointer;
@@ -1638,7 +1700,7 @@ body.ed-mark-dragging, body.ed-mark-dragging * { cursor: ew-resize !important; }
 .gm-field input, .gm-field textarea { width: 100%; box-sizing: border-box; background: var(--card); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 8px 10px; font: inherit; font-size: 13.5px; resize: vertical; }
 .gm-el-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--text); }
 .gm-preview { display: flex; flex-direction: column; gap: 10px; }
-.gm-preview-canvas { position: relative; height: 340px; background: repeating-conic-gradient(#2a2f38 0% 25%, #232830 0% 50%) 50% / 20px 20px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.gm-preview-canvas { position: relative; display: flex; height: 340px; background: repeating-conic-gradient(#2a2f38 0% 25%, #232830 0% 50%) 50% / 20px 20px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .gm-transport { display: flex; align-items: center; gap: 10px; }
 .gm-transport input[type="range"] { flex: 1; accent-color: var(--accent, #ff7a1a); }
 .gm-actions-preview { flex-wrap: wrap; }

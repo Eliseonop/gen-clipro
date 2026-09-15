@@ -384,6 +384,18 @@ def save_scene_directions(pid: str, doc: dict) -> bool:
     return False
 
 
+def save_visual_blueprint(pid: str, doc: dict) -> bool:
+    """Guarda la dirección visual GLOBAL del proyecto (Fase 5; doc ya normalizado)."""
+    with _lock:
+        data = _load()
+        for p in data["projects"]:
+            if p["id"] == pid:
+                p["visual_blueprint"] = doc
+                _save(data)
+                return True
+    return False
+
+
 def retarget_timeline_asset(
     pid: str, asset_kind: str, old_id: str, old_filename: str,
     new_id: str, new_filename: str, match_filename: bool = True,

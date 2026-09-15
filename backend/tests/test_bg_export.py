@@ -115,6 +115,23 @@ class FilterGraphTest(unittest.TestCase):
         self.assertEqual(cmd[i + 2], "-i")
         self.assertEqual(cmd[i + 3], "/tmp/m/%06d.png")
 
+    def test_gif_animado_repite_la_secuencia_del_matte(self):
+        """Un GIF animado (spec ``loop``) usa ``-stream_loop -1`` para que el
+        matte dé la vuelta en sincronía con el RGB cuando el clip dura más de un
+        ciclo. La imagen fija no lo lleva (el overlay clona el último frame)."""
+        clip = _clip(kind="image", asset_kind="images", filename="a.gif",
+                     bg_removal=_ready())
+        cmd, _ = _graph(clip, bg_files={"c1": {**_spec(), "loop": True}})
+        self.assertIn("-stream_loop", cmd)
+        sl = cmd.index("-stream_loop")
+        self.assertEqual(cmd[sl + 1], "-1")
+        self.assertEqual(cmd[sl + 2], "-framerate")     # justo antes de la entrada del matte
+        self.assertLess(sl, cmd.index("-start_number"))
+
+    def test_imagen_fija_no_repite_el_matte(self):
+        cmd, _ = _graph(_clip(bg_removal=_ready()), bg_files={"c1": _spec()})
+        self.assertNotIn("-stream_loop", cmd)
+
     def test_solo_croma_no_necesita_streams_extra(self):
         clip = _clip(bg_removal=_ready(
             auto={"enabled": False, "base_key": "", "status": "idle"},

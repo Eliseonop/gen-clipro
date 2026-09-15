@@ -15,7 +15,7 @@
 // La imagen tiene que estar en el material del proyecto: el job trabaja sobre el
 // ARCHIVO. Una imagen subida solo a Paper se sube antes al proyecto (`ensureAsset`).
 
-import { createBgRemovalJob, getJob, uploadImages } from '../../services/api'
+import { createBgCutoutJob, createBgRemovalJob, getJob, uploadImages } from '../../services/api'
 import { cutoutDrawable, resetBgMeta, resetCutout } from '../editor/bgCutout'
 import { defaultBg, normalizeBg } from '../../lib/clipBg'
 
@@ -42,6 +42,51 @@ export async function ensureAsset(projectId, asset, file, name) {
   const saved = (res?.images || [])[0]
   if (!saved?.filename) throw new Error(res?.errors?.[0]?.error || 'No se pudo subir la imagen al proyecto.')
   return { asset_id: String(saved.id), filename: saved.filename, label: saved.label || saved.filename }
+}
+
+const GIF_RE = /\.gif(\?|#|$)/i
+
+/** ¿El asset es animado (GIF)? Paper decodifica solo el primer frame, así que
+ *  para conservar la animación hay que hornear un recorte animado al material en
+ *  vez de aplicar el matte sobre la imagen fija. Los vídeos no se cargan en Paper. */
+export function isAnimatedAsset(filename) {
+  return GIF_RE.test(String(filename || ''))
+}
+
+/**
+ * Lanza el job "Exportar recorte" (backend) y espera: renderiza el GIF ENTERO
+ * con el fondo eliminado a un WebM transparente y lo mete en Vídeos. El resultado
+ * SIGUE SIENDO animado y reutilizable en el timeline.
+ * @returns {Promise<object|null>} el `asset` del job (asset_id/filename/label).
+ */
+export async function runCutoutJob(projectId, { asset, provider, onProgress, shouldCancel }) {
+  let job = await createBgCutoutJob(projectId, {
+    clip_id: PAPER_CLIP_ID,
+    kind: 'image',
+    asset_kind: 'images',
+    asset_id: String(asset.asset_id ?? ''),
+    filename: asset.filename,
+    asset_scope: 'project',
+    in_point: 0,
+    out_point: 0,
+    source_duration: 0,
+    label: asset.label || undefined,
+    bg_removal: {
+      enabled: true,
+      mode: 'auto',
+      auto: { ...defaultBg().auto, enabled: true, provider },
+      chroma: { enabled: false },
+    },
+  })
+
+  while (job && (job.status === 'pending' || job.status === 'running')) {
+    if (shouldCancel?.()) return null
+    onProgress?.(job.progress || 0, job.message || 'Procesando…')
+    await sleep(POLL_MS)
+    job = await getJob(job.id)
+  }
+  if (!job || job.status === 'error') throw new Error(job?.error || 'No se pudo exportar el recorte.')
+  return job.asset || {}
 }
 
 /** Pseudo-clip con el que `cutoutDrawable` sabe derivar el alfa. */

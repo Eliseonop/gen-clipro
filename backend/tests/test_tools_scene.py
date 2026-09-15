@@ -431,6 +431,151 @@ class RenderFrameTest(Base):
         self.assertEqual(ctx.exception.code, "invalid_parameter")
 
 
+class BlueprintTest(Base):
+    def test_normalize_keeps_only_useful_and_validates_direction(self):
+        bp = sd.normalize_blueprint({
+            "direction": "sketchbook", "identity": "  cinematográfico + educativo ",
+            "vocabulary": "movie_footage; paper_animation , stickman",
+            "rules": ["una idea dominante por plano", "  "], "intensity_curve": "hook alto → cierre medio",
+            "source": "ai", "bogus": 1})
+        self.assertEqual(bp["direction"], "sketchbook")
+        self.assertEqual(bp["identity"], "cinematográfico + educativo")
+        self.assertEqual(bp["vocabulary"], ["movie_footage", "paper_animation", "stickman"])
+        self.assertEqual(bp["rules"], ["una idea dominante por plano"])
+        self.assertEqual((bp["version"], bp["source"]), (sd.BLUEPRINT_VERSION, "ai"))
+        self.assertNotIn("bogus", bp)
+        # Dirección desconocida se descarta; sin nada útil → {}.
+        self.assertNotIn("direction", sd.normalize_blueprint({"direction": "no-existe"}))
+        self.assertEqual(sd.normalize_blueprint({}), {})
+        self.assertEqual(sd.normalize_blueprint("x"), {})
+
+    def test_set_get_and_persist(self):
+        out = tools_scene.scene_set_blueprint(self.pid, {"direction": "sketchbook",
+                                                         "identity": "papel + ciencia",
+                                                         "rules": ["preferir material existente"]})
+        self.assertEqual(out["blueprint"]["direction"], "sketchbook")
+        got = tools_scene.scene_get_blueprint(self.pid)
+        self.assertEqual(got["blueprint"]["identity"], "papel + ciencia")
+        self.assertTrue(got["direction_options"])
+        self.assertIn("default_direction", got)
+        self.assertEqual(sd.load_blueprint(projects.get_project(self.pid))["direction"], "sketchbook")
+
+    def test_bad_direction_raises_and_empty_clears(self):
+        with self.assertRaises(MCPError) as ctx:
+            tools_scene.scene_set_blueprint(self.pid, {"direction": "no-existe"})
+        self.assertEqual(ctx.exception.code, "invalid_parameter")
+        tools_scene.scene_set_blueprint(self.pid, {"identity": "x"})
+        self.assertEqual(tools_scene.scene_set_blueprint(self.pid, {})["blueprint"], {})
+
+    def test_blueprint_appears_in_pack_text(self):
+        tools_scene.scene_set_blueprint(self.pid, {"direction": "sketchbook",
+                                                   "identity": "cinematográfico + educativo",
+                                                   "vocabulary": ["paper_animation", "stickman"],
+                                                   "rules": ["una idea dominante por plano"],
+                                                   "intensity_curve": "hook alto → cierre medio"})
+        seg = sd.normalize_segment({"id": "s", "start": 0.0, "end": 3.0, "mode": "explain"})
+        pack = sd.build_pack(projects.get_project(self.pid), seg, {"segments": [seg]})
+        self.assertEqual(pack["blueprint"]["direction"], "sketchbook")
+        text = sd.pack_text(pack)
+        self.assertIn("DIRECCIÓN GLOBAL", text)
+        self.assertIn("vocabulario permitido: paper_animation · stickman", text)
+        self.assertIn("una idea dominante por plano", text)
+
+    def test_no_blueprint_no_block(self):
+        seg = sd.normalize_segment({"id": "s", "start": 0.0, "end": 3.0})
+        text = sd.pack_text(sd.build_pack(projects.get_project(self.pid), seg, {"segments": [seg]}))
+        self.assertNotIn("DIRECCIÓN GLOBAL", text)
+
+    def test_generate_from_ai_applies_and_validates_direction(self):
+        reply = json.dumps({"direction": "sketchbook", "identity": "papel + ciencia",
+                            "vocabulary": ["paper_animation", "stickman", "raro-inventado"],
+                            "rules": ["una idea dominante por plano"],
+                            "intensity_curve": "hook alto → cierre medio"})
+        with patch("app.motion.scene_ai.get_provider", return_value=QueueProvider([reply])):
+            out = tools_scene.scene_generate_blueprint(self.pid)
+        self.assertTrue(out["applied"])
+        self.assertEqual(out["blueprint"]["direction"], "sketchbook")
+        self.assertEqual(out["blueprint"]["source"], "ai")
+        self.assertIn("paper_animation", out["blueprint"]["vocabulary"])
+        # Se guardó y aparece en el pack.
+        self.assertEqual(sd.load_blueprint(projects.get_project(self.pid))["direction"], "sketchbook")
+
+    def test_generate_without_apply_does_not_save(self):
+        reply = json.dumps({"direction": "sketchbook", "identity": "x"})
+        with patch("app.motion.scene_ai.get_provider", return_value=QueueProvider([reply])):
+            out = tools_scene.scene_generate_blueprint(self.pid, apply=False)
+        self.assertFalse(out["applied"])
+        self.assertEqual(sd.load_blueprint(projects.get_project(self.pid)), {})
+
+    def test_generate_invalid_direction_kept_without_direction(self):
+        reply = json.dumps({"direction": "no-existe", "identity": "solo identidad"})
+        with patch("app.motion.scene_ai.get_provider", return_value=QueueProvider([reply])):
+            out = tools_scene.scene_generate_blueprint(self.pid)
+        self.assertNotIn("direction", out["blueprint"])
+        self.assertEqual(out["blueprint"]["identity"], "solo identidad")
+
+    def test_generate_provider_unavailable_is_configuration_error(self):
+        class Down:
+            def unavailable_reason(self):
+                return "Falta la API key del proveedor"
+
+        with patch("app.motion.scene_ai.get_provider", return_value=Down()):
+            with self.assertRaises(MCPError) as ctx:
+                tools_scene.scene_generate_blueprint(self.pid)
+        self.assertEqual(ctx.exception.code, "configuration_error")
+
+
+class PlanAllTest(Base):
+    def _escaleta(self):
+        sd.save(self.pid, {"segments": [
+            {"id": "sd_a", "start": 0.0, "end": 3.0},
+            {"id": "sd_b", "start": 3.0, "end": 6.0},
+        ]})
+
+    def test_apply_plan_all_merges_by_id_and_ignores_unknown(self):
+        self._escaleta()
+        res = sd.apply_plan_all(self.pid, [
+            {"id": "sd_a", "mode": "explain", "composition_intent": "clip + gráfico arriba",
+             "complexity": 3, "no_visual": False},
+            {"id": "sd_b", "no_visual": True, "complexity": 9},        # complexity inválida → se descarta
+            {"id": "nope", "complexity": 2},                           # id desconocido → se ignora
+        ])
+        self.assertEqual(res["changed"], 2)
+        by = {s["id"]: s for s in res["segments"]}
+        self.assertEqual(by["sd_a"]["mode"], "explain")
+        self.assertEqual(by["sd_a"]["complexity"], 3)
+        self.assertEqual(by["sd_a"]["status"], "ready")               # plan → deja de estar vacío
+        self.assertTrue(by["sd_b"]["no_visual"])
+        self.assertIsNone(by["sd_b"]["complexity"])                   # 9 descartada por normalize
+
+    def test_plan_all_from_ai_applies(self):
+        self._escaleta()
+        tools_scene.scene_set_blueprint(self.pid, {"direction": "sketchbook", "identity": "papel"})
+        reply = json.dumps({"segments": [
+            {"id": "sd_a", "mode": "explain", "composition_intent": "huerto principal", "complexity": 3},
+            {"id": "sd_b", "no_visual": True}]})
+        with patch("app.motion.scene_ai.get_provider", return_value=QueueProvider([reply])):
+            out = tools_scene.scene_plan_all(self.pid)
+        self.assertTrue(out["applied"])
+        self.assertEqual(out["changed"], 2)
+        saved = {s["id"]: s for s in sd.load(projects.get_project(self.pid))["segments"]}
+        self.assertEqual(saved["sd_a"]["composition_intent"], "huerto principal")
+        self.assertTrue(saved["sd_b"]["no_visual"])
+
+    def test_plan_all_without_apply_does_not_save(self):
+        self._escaleta()
+        reply = json.dumps({"segments": [{"id": "sd_a", "complexity": 4}]})
+        with patch("app.motion.scene_ai.get_provider", return_value=QueueProvider([reply])):
+            out = tools_scene.scene_plan_all(self.pid, apply=False)
+        self.assertFalse(out["applied"])
+        self.assertIsNone(sd.load(projects.get_project(self.pid))["segments"][0]["complexity"])
+
+    def test_plan_all_needs_escaleta(self):
+        with self.assertRaises(MCPError) as ctx:
+            tools_scene.scene_plan_all(self.pid)
+        self.assertEqual(ctx.exception.code, "invalid_parameter")
+
+
 class ToolsTest(Base):
     def test_get_returns_escaleta_units_modes_materials(self):
         sd.save(self.pid, {"segments": [{"id": "sd_a", "start": 0, "end": 3, "mode": "explain"}]})

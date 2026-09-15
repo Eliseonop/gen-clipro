@@ -98,7 +98,11 @@ def _clip_path(project: Project, clip: TimelineClip, shape_files: Optional[dict]
         kind = "image"
     if kind is None:
         return None
-    if (getattr(clip, "asset_scope", None) or "project") == "library":
+    scope = getattr(clip, "asset_scope", None) or "project"
+    if scope == "collection":
+        from . import collections
+        return collections.resolve(clip.filename)
+    if scope == "library":
         return storage.resolve_library_media(kind, clip.filename)
     return storage.resolve_media(project, kind, clip.filename)
 
@@ -614,8 +618,14 @@ def _bg_input_args(spec: dict) -> list[str]:
     ``-start_number`` es lo que alinea el matte con el recorte del clip: los PNG
     se numeran por fotograma ABSOLUTO de la fuente, así que recortar o mover el
     clip solo cambia el número de arranque — no hay que regenerar nada.
+
+    ``spec['loop']`` (GIF animado): ``-stream_loop -1`` repite la secuencia PNG
+    para que el matte dé la vuelta en sincronía con el RGB del GIF cuando el clip
+    dura más de un ciclo. Sin él (imagen fija o vídeo) la entrada no se repite.
     """
+    pre = ["-stream_loop", "-1"] if spec.get("loop") else []
     return [
+        *pre,
         "-framerate", f"{float(spec.get('mask_fps') or 15):.4f}",
         "-start_number", str(int(spec.get("start_number") or 1)),
         "-i", spec["path"],

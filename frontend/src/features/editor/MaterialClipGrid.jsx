@@ -5,6 +5,48 @@ import './editor.css'
 import { IMAGE_DEFAULT_DUR } from './editorModel.js'
 import { hasFaceTrack, materialDuration, segmentRange } from './clipExtract.js'
 
+// Proporción adaptativa de las miniaturas: se respeta el formato real del
+// material (9:16, 16:9, 1:1…) pero acotado a un rango para que ni un panorama ni
+// una tira vertical extrema se coman la cuadrícula. Fuera de rango se recorta un
+// poco (object-fit: cover); dentro del rango se ve completo y sin deformar.
+export const AR_MIN = 9 / 16   // 0.5625 → lo más vertical que se muestra
+export const AR_MAX = 16 / 9   // 1.778 → lo más horizontal que se muestra
+export const AR_PLACEHOLDER = 3 / 4   // mientras se miden las dimensiones reales
+
+export function clampAspect(w, h) {
+  const w0 = Number(w)
+  const h0 = Number(h)
+  if (!w0 || !h0) return null
+  return Math.min(AR_MAX, Math.max(AR_MIN, w0 / h0))
+}
+
+// Masonry en una grid CSS: el alto real de la card se traduce a un número de
+// filas (grid-auto-rows finas) para que las columnas empaqueten sin huecos aunque
+// cada miniatura tenga una proporción distinta. Solo actúa si la grid es .adaptive.
+export function useMasonrySpan() {
+  const ref = useRef(null)
+  const recalc = useCallback(() => {
+    const el = ref.current
+    const grid = el?.parentElement
+    if (!el || !grid || !grid.classList.contains('adaptive')) return
+    const gs = getComputedStyle(grid)
+    const rowH = parseFloat(gs.gridAutoRows) || 8
+    const rowGap = parseFloat(gs.rowGap) || 0
+    const marginB = parseFloat(getComputedStyle(el).marginBottom) || 0
+    const span = Math.max(1, Math.ceil((el.offsetHeight + marginB + rowGap) / (rowH + rowGap)))
+    el.style.gridRowEnd = `span ${span}`
+  }, [])
+  useEffect(() => {
+    recalc()
+    const el = ref.current
+    if (!el || typeof ResizeObserver === 'undefined') return undefined
+    const ro = new ResizeObserver(recalc)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [recalc])
+  return { ref, recalc }
+}
+
 // Al regenerar un clip el archivo se reescribe con la MISMA URL, así que el
 // navegador serviría el vídeo cacheado (viejo encuadre). Añadimos un token de
 // versión (created_at, que add_clips actualiza en cada guardado) para forzar la
@@ -18,12 +60,14 @@ export function bustUrl(url, item) {
 }
 
 export function dragPayload(assetKind, item) {
-  const fromLibrary = item?.scope === 'library' || String(item?.id || '').startsWith('lib_')
+  const isCollection = item?.scope === 'collection' || String(item?.id || '').startsWith('col_')
+  const fromExternal = isCollection || item?.scope === 'library' || String(item?.id || '').startsWith('lib_')
+  const scope = isCollection ? 'collection' : (fromExternal ? 'library' : 'project')
   const isImage = assetKind === 'images'
   const animatedGif = isImage && !!item.animated
   return JSON.stringify({
     asset_kind: assetKind,
-    asset_id: fromLibrary
+    asset_id: fromExternal
       ? String(item.id)
       : (assetKind === 'clips' ? String(item.index) : String(item.id)),
     filename: assetKind === 'sfx' ? item.id : item.filename,
@@ -36,7 +80,7 @@ export function dragPayload(assetKind, item) {
     animated: animatedGif || undefined,
     loop: animatedGif ? item.loop !== false : undefined,
     reframe: item.reframe || null,
-    scope: fromLibrary ? 'library' : 'project',
+    scope,
     description: item.description || item.text || null,
     media_version: item.created_at || item.media_version || null,
     // Segmento por referencia: el clip de la timeline recorta el vídeo original.
@@ -97,6 +141,7 @@ export function VideoCard({
   onEdit, onMenu, onDownload,
 }) {
   const { ref, playing, setPlaying, toggle } = useToggle(onPlay)
+  const { ref: msRef, recalc: msRecalc } = useMasonrySpan()
   const title = clip.label || (clip.scope === 'library' ? (clip.filename || 'Guardado') : `Clip #${clip.index}`)
   const desc = (clip.description || '').trim()
   const dur = materialDuration(clip)
@@ -110,8 +155,9 @@ export function VideoCard({
 
   function onMeta(e) {
     const v = e.currentTarget
-    if (v.videoWidth && v.videoHeight) setAr(`${v.videoWidth} / ${v.videoHeight}`)
+    if (v.videoWidth && v.videoHeight) setAr(clampAspect(v.videoWidth, v.videoHeight))
     if (seg) { try { v.currentTime = seg.in } catch { /* noop */ } }
+    requestAnimationFrame(msRecalc)
   }
 
   function onPlayClick(e) {
@@ -148,6 +194,7 @@ export function VideoCard({
 
   return (
     <div
+      ref={msRef}
       className={`ed-card grid video${draggable ? '' : ' no-drag'}`}
       draggable={draggable}
       onContextMenu={onMenu ? (e) => openCardMenu(e, onMenu) : undefined}
@@ -159,7 +206,7 @@ export function VideoCard({
     >
       <div
         className="ed-card-media"
-        style={ar ? { aspectRatio: ar } : undefined}
+        style={{ aspectRatio: ar || AR_PLACEHOLDER }}
         onPointerMove={onScrub}
         onPointerLeave={onScrubLeave}
       >
@@ -234,6 +281,10 @@ export function ImageCard({
   const [draft, setDraft] = useState(savedDesc)
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
+  // Proporción real: si el material ya trae dimensiones se usa al instante; si no
+  // (p.ej. imágenes de una colección externa) se mide al cargar el <img>.
+  const [ar, setAr] = useState(() => clampAspect(image.width, image.height))
+  const { ref: msRef, recalc: msRecalc } = useMasonrySpan()
 
   useEffect(() => {
     setDraft(image.description || '')
@@ -260,6 +311,7 @@ export function ImageCard({
 
   return (
     <div
+      ref={msRef}
       className={`ed-card grid image${draggable && !editing ? '' : ' no-drag'}`}
       draggable={draggable && !editing}
       onContextMenu={onMenu ? (e) => openCardMenu(e, onMenu) : undefined}
@@ -269,8 +321,16 @@ export function ImageCard({
       } : undefined}
       onDragEnd={draggable ? () => di?.(null) : undefined}
     >
-      <div className="ed-card-media">
-        <img src={bustUrl(image.url, image)} alt="" draggable={false} />
+      <div className="ed-card-media" style={{ aspectRatio: ar || AR_PLACEHOLDER }}>
+        <img
+          src={bustUrl(image.url, image)}
+          alt=""
+          draggable={false}
+          onLoad={(e) => {
+            if (!ar) setAr(clampAspect(e.currentTarget.naturalWidth, e.currentTarget.naturalHeight))
+            requestAnimationFrame(msRecalc)
+          }}
+        />
         <button className="ed-add-corner" onClick={(e) => { e.stopPropagation(); onAdd() }} title={addTitle}>
           <Icon name="add" size={16} />
         </button>
@@ -354,7 +414,7 @@ export default function MaterialClipGrid({
   const internalPlay = useExclusiveMedia()
   const play = onPlay || internalPlay
   return (
-    <div className="ed-mat-grid">
+    <div className="ed-mat-grid adaptive">
       {clips.length === 0
         ? <Empty text={emptyText} />
         : clips.map((c) => (

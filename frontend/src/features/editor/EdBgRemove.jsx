@@ -48,8 +48,10 @@ function StatusLine({ auto, job }) {
 }
 
 export default function EdBgRemove({
-  clip, job, providers, device,
+  clip, job, cutoutJob, providers, device,
   onToggleAuto, onApplyAuto, onCancelAuto, onChangeAuto,
+  onExportCutout, onCancelCutout,
+  magicMode, magicBusy, onToggleMagic, onConfirmMagic,
   brush, onBrush, onClearEdits, onUndoEdit,
   onToggleChroma, onChangeChroma, onResetChroma, onPickColor, picking,
   bgPreview, onBgPreview,
@@ -62,6 +64,12 @@ export default function EdBgRemove({
   const isSam = isInteractiveProvider(auto.provider)
   const strokes = auto.edits?.length || 0
   const provList = (providers?.length ? providers : BG_PROVIDERS.map((p) => ({ ...p, available: true })))
+  // "Exportar recorte" solo tiene sentido en material ANIMADO (vídeo o GIF): en
+  // una imagen fija el resultado sería un único fotograma. Disponible en cuanto
+  // hay algo que hornear (matte listo o chroma activo).
+  const isAnimated = clip?.kind === 'video' || /\.gif(\?|#|$)/i.test(clip?.filename || '')
+  const canExportCutout = isAnimated && (ready || chroma.enabled)
+  const cutoutRunning = cutoutJob && (cutoutJob.status === 'pending' || cutoutJob.status === 'running')
 
   return (
     <>
@@ -174,24 +182,86 @@ export default function EdBgRemove({
         )}
       </InspSection>
 
+      {/* --- Exportar recorte: hornea el clip animado a un vídeo transparente - */}
+      {canExportCutout && (
+        <InspSection title="Exportar recorte">
+          <p className="ed-insp-hint">
+            Guarda este {clip?.kind === 'video' ? 'vídeo' : 'GIF'} con el fondo
+            eliminado como un <b>vídeo transparente</b> (WebM) en el material,
+            con toda su animación. Reutilízalo en el timeline como cualquier clip.
+          </p>
+          <div className="ed-bg-actions">
+            {cutoutRunning ? (
+              <button type="button" className="ed-btn danger" onClick={() => onCancelCutout?.()}>
+                <Icon name="stop_circle" size={15} /> Cancelar
+              </button>
+            ) : (
+              <button type="button" className="ed-btn primary" onClick={() => onExportCutout?.()}>
+                <Icon name="movie_filter" size={15} /> Exportar recorte
+              </button>
+            )}
+          </div>
+          {cutoutRunning && (
+            <div className="ed-bg-status run">
+              <Icon name="progress_activity" size={14} />
+              <span>{cutoutJob.message || 'Procesando…'}</span>
+              <b>{Math.round((cutoutJob.progress || 0) * 100)}%</b>
+            </div>
+          )}
+          {cutoutJob?.status === 'done' && (
+            <div className="ed-bg-status ok">
+              <Icon name="check_circle" size={14} />
+              <span>{cutoutJob.message || 'Recorte añadido a Vídeos.'}</span>
+            </div>
+          )}
+          {cutoutJob?.status === 'error' && (
+            <div className="ed-bg-status err">
+              <Icon name="error" size={14} />
+              <span>{cutoutJob.error || 'No se pudo exportar el recorte.'}</span>
+            </div>
+          )}
+        </InspSection>
+      )}
+
       {/* --- 2. Selección: inteligente (SAM) o corrección manual (U²-Net) - */}
       {(ready || (isSam && auto.enabled)) && (
         <InspSection title={isSam ? 'Selección inteligente' : 'Eliminación personalizada'}>
-          <p className="ed-insp-hint">
-            {isSam ? (
-              <>
-                Marca el sujeto con el <b>Pincel inteligente</b> (+) y lo que sobra
-                con el <b>Borrador inteligente</b> (−); el modelo interpreta el
-                objeto entero. Luego pulsa <b>{ready ? 'Recalcular' : 'Aplicar'}</b>.
-              </>
-            ) : (
-              <>
-                Corrige lo que la IA no acertó pintando sobre el reproductor.
-                <b> Conservar</b> devuelve zonas visibles; <b>Eliminar</b> las vuelve
-                transparentes.
-              </>
-            )}
-          </p>
+          {isSam && (
+            <>
+              <div className="ed-bg-actions">
+                <button
+                  type="button"
+                  className={`ed-btn${magicMode ? ' primary' : ''}`}
+                  onClick={() => onToggleMagic?.(!magicMode)}
+                  title="Toca un objeto y el modelo lo selecciona entero"
+                >
+                  <Icon name="auto_fix_high" size={15} />
+                  {magicMode ? 'Lápiz mágico activo' : 'Lápiz mágico'}
+                </button>
+              </div>
+              <p className="ed-insp-hint">
+                {magicMode ? (
+                  <>
+                    Toca el objeto en el reproductor: se marca la selección con un
+                    borde animado. Añade toques para ampliarla o usa el
+                    <b> Borrador</b> (−) para quitar zonas.{magicBusy ? ' Analizando…' : ''}
+                  </>
+                ) : (
+                  <>
+                    Activa el <b>Lápiz mágico</b> y toca un objeto: el modelo lo
+                    detecta entero. Refínalo con toques + / − y confírmalo.
+                  </>
+                )}
+              </p>
+            </>
+          )}
+          {!isSam && (
+            <p className="ed-insp-hint">
+              Corrige lo que la IA no acertó pintando sobre el reproductor.
+              <b> Conservar</b> devuelve zonas visibles; <b>Eliminar</b> las vuelve
+              transparentes.
+            </p>
+          )}
           <div className="ed-bg-brush">
             <button
               type="button"
@@ -223,6 +293,15 @@ export default function EdBgRemove({
               <Icon name="restart_alt" size={15} /> Limpiar
             </button>
           </div>
+          {isSam && magicMode && (
+            <div className="ed-bg-actions">
+              <button type="button" className="ed-btn primary" disabled={!strokes}
+                      onClick={() => onConfirmMagic?.()}
+                      title="Aplica la eliminación de fondo a todos los fotogramas">
+                <Icon name="check_circle" size={15} /> Confirmar selección
+              </button>
+            </div>
+          )}
           <p className="ed-insp-hint">
             {strokes
               ? (isSam ? `${strokes} marca(s) de prompt guardadas con el clip.`
