@@ -197,12 +197,13 @@ def _bullet_list(comp_id: str, params: dict[str, Any]) -> MotionComposition:
     lis = "".join(
         f'<li class="bl-item"><span class="bl-dot"></span>'
         f'<span class="bl-t">{_html.escape(t)}</span></li>' for t in items)
-    markup = (f'<div class="bl"><div class="bl-title">{_html.escape(str(p["title"]).upper())}</div>'
-              f'<ul class="bl-items">{lis}</ul></div>')
+    markup = (f'<div class="bl-wrap"><div class="bl"><div class="bl-title">{_html.escape(str(p["title"]).upper())}</div>'
+              f'<ul class="bl-items">{lis}</ul></div></div>')
     css = f"""
-.bl{{position:absolute;left:8%;right:8%;top:26%;bottom:26%;display:flex;flex-direction:column;
-  gap:34px;background:{th['surface']};border:1px solid {th['border']};border-radius:{th['radius']}px;
-  padding:56px 52px;box-shadow:{th['shadow']};}}
+.bl-wrap{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;}}
+.bl{{width:84%;max-height:74%;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;
+  gap:28px;background:{th['surface']};border:1px solid {th['border']};border-radius:{th['radius']}px;
+  padding:52px;box-shadow:{th['shadow']};overflow:hidden;}}
 .bl-title{{font-family:{th['font_display']};font-weight:800;color:{th['text']};font-size:66px;
   letter-spacing:-0.5px;}}
 .bl-items{{list-style:none;display:flex;flex-direction:column;gap:26px;}}

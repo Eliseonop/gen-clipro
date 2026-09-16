@@ -38,23 +38,25 @@ def _system_prompt(*, frames: bool) -> str:
         "contexto de UN tramo de la timeline (el guion de ese momento, lo que ya "
         "hay en pantalla, los assets y el estilo) y propones UNA idea de motion "
         "graphic que refuerce lo que se dice en ese instante.",
-        "ESTILO: minimalista y moderno, tipo Tailwind UI / interfaces limpias. "
-        "Superficies claras y neutras (tarjetas blancas con borde fino y sombra suave), "
-        "UN acento sobrio, mucho espacio en blanco, tipografía Inter con jerarquía. "
-        "NADA de neón, glow ni colores saturados; animaciones sutiles y elegantes "
-        "(aparición con fade + desplazamiento corto), nunca rebotes exagerados.",
-        "Piensa como editor: el motion debe APORTAR y verse PROFESIONAL, no básico. "
-        "El estudio puede hacer números que cuentan, gráficos de barras animados, listas "
-        "escalonadas, citas, títulos con antetítulo y subrayado, y diagramas. Elige la "
-        "forma que MEJOR refuerce lo que se dice: si hay una cifra, un dato grande que "
-        "cuenta; si hay comparación, barras; si hay pasos/claves, una lista; si hay una "
-        "frase potente, una cita. Un solo elemento debe dominar, con mucho espacio y un "
-        "único acento. Sé breve, legible y respeta la franja de subtítulos (style.avoidY). "
-        "No repitas lo que ya está en pantalla (mira existingElements y motionInRange).",
+        "ESTILO: representación de CONCEPTO. El motion DIBUJA/ILUSTRA lo que se dice "
+        "(una red neuronal, un cerebro, dos figuras, objetos que aparecen en secuencia…), "
+        "no un cartel de texto. Puede tener profundidad y sombreado SUTIL (degradados "
+        "suaves, sombra proyectada blanda, ligera perspectiva) para que se vea con volumen, "
+        "SIN exagerar: nada de neón, glow fuerte ni colores saturados, y un solo acento "
+        "sobrio. Movimiento sutil y elegante (fade + desplazamiento corto, apariciones "
+        "encadenadas), nunca rebotes ni giros llamativos.",
+        "Piensa como director: primero decide QUÉ figura/ilustración representa la idea del "
+        "guion en ese instante y cómo aparece animada. Las tarjetas de texto, citas, listas "
+        "o números SOLO cuando el guion es literalmente un dato, una cifra, una comparación "
+        "o una frase para destacar; en el resto, representa el concepto con figuras/SVG. Si "
+        "hay texto, que sea corto e INTEGRADO en la escena (animado con lo demás), no un "
+        "cartel. Un solo protagonista domina, con espacio y un único acento. Respeta la "
+        "franja de subtítulos (style.avoidY) y no repitas lo que ya está en pantalla (mira "
+        "existingElements y motionInRange).",
         guide,
         "RESPONDE EXCLUSIVAMENTE con un objeto JSON (sin texto alrededor, sin ```):\n"
         "{\n"
-        '  "type": "title" | "lower_third" | "callout" | "diagram" | "list" | "quote" | "stat",\n'
+        '  "type": "concept" | "diagram" | "callout" | "title" | "lower_third" | "list" | "quote" | "stat",\n'
         '  "title": "nombre corto de la idea",\n'
         '  "concept": "1-3 frases: qué muestra, por qué encaja con el guion y cómo se anima",\n'
         '  "duration": número en segundos (usa la duración del tramo salvo buena razón),\n'
@@ -251,19 +253,22 @@ _CREATE_TOOLS = [
 
 # Filosofía de movimiento: lo que separa un motion pro y limpio de "texto + una línea".
 MOTION_PHILOSOPHY = (
-    "FILOSOFÍA DE DISEÑO (obligatoria — estilo minimalista tipo Tailwind UI):\n"
-    "1. UN protagonista por plano: un dato, un titular o una figura DOMINA; lo demás "
+    "FILOSOFÍA DE DISEÑO (obligatoria — representación de concepto, sobria):\n"
+    "1. UN protagonista por plano: una figura/ilustración (o un dato) DOMINA; lo demás "
     "es soporte. Nada compite con el elemento principal.\n"
-    "2. Paleta neutra y restringida: superficie clara + texto slate + UN acento sobrio. "
-    "NADA de neón, glow ni colores saturados. Usa los tokens del tema.\n"
-    "3. Prefiere TARJETAS limpias (superficie con borde fino + sombra suave + esquinas "
-    "redondeadas) para agrupar contenido; mucho espacio en blanco.\n"
+    "2. REPRESENTA la idea: dibuja el concepto del guion con figuras/SVG (redes, cerebros, "
+    "objetos, siluetas, flechas, apariciones encadenadas de elementos). Las TARJETAS de "
+    "texto solo cuando el contenido es puramente datos, cifras, comparaciones o una frase "
+    "para destacar. Si hay texto, corto e INTEGRADO en la escena, no un cartel suelto.\n"
+    "3. Profundidad y sombreado SUTIL permitidos: degradados suaves, sombra proyectada "
+    "blanda, ligera perspectiva CSS para dar volumen. Pero SIN exagerar: nada de neón, glow "
+    "fuerte ni colores saturados; UN acento sobrio del tema.\n"
     "4. Jerarquía tipográfica: display grueso (Inter 800) para el titular/dato, cuerpo "
     "legible para el resto, antetítulo pequeño en acento o gris.\n"
     "5. Movimiento SUTIL y elegante: entradas con fade + desplazamiento corto (16–44px) "
-    "usando power2.out/power3.out; reveals con power2.inOut. NUNCA back/elastic/bounce "
-    "(rebotes) ni lineal. Escalona hermanos (stagger 0.08–0.15s).\n"
-    "6. Remate discreto: un subrayado que se dibuja o un fade final; sin efectos llamativos.\n"
+    "usando power2.out/power3.out; reveals con power2.inOut y apariciones encadenadas "
+    "(stagger 0.08–0.15s). NUNCA back/elastic/bounce (rebotes) ni giros llamativos.\n"
+    "6. Remate discreto: un fade o un elemento que se asienta; sin efectos estridentes.\n"
     "7. Respeta la franja de subtítulos (style.avoidY): no la tapes.\n"
     "8. Sincroniza con el guion: el motion refuerza lo que se dice en ese instante."
 )
@@ -284,20 +289,25 @@ def _theme_brief(theme: dict) -> str:
 def _create_system_prompt(theme: dict) -> str:
     guide = help_content.guide("motion") or ""
     return "\n\n".join(x for x in [
-        "Eres un DIRECTOR de motion graphics de nivel profesional con un estilo "
-        "minimalista y moderno tipo Tailwind UI (limpio, claro, neutro, con mucho espacio "
-        "y un solo acento sobrio). Generas UNA composición para el tramo a partir de la "
-        "idea aprobada. NADA de neón, glow ni colores saturados.",
+        "Eres un DIRECTOR de motion graphics de nivel profesional. Generas UNA composición "
+        "que REPRESENTA el concepto del tramo (dibuja/ilustra la idea con figuras animadas), "
+        "a partir de la idea aprobada. Puede tener profundidad y sombreado SUTIL (degradados "
+        "suaves, sombra blanda, ligera perspectiva) para dar volumen, pero SIN exagerar: "
+        "nada de neón, glow fuerte ni colores saturados, y un solo acento sobrio del tema.",
         _theme_brief(theme),
         MOTION_PHILOSOPHY,
         "CÓMO CONSTRUIRLA — elige la vía correcta:\n"
-        "(A) Si la idea encaja con una PLANTILLA (pro_title, title, bullet_list, quote, "
-        "stat, bar_chart, lower-third, subscribe, neural_network), úsala: "
-        "motion_list_templates → motion_create_composition con template+params (incluye "
-        "theme y accent). Es lo que mejor se ve; prefiérelas.\n"
-        "(B) Para efectos RICOS que las primitivas no cubren (números que cuentan, barras "
-        "que se llenan, aparición por letras, flip de reloj, reveals con máscara, luz que "
-        "barre) usa una CAPA type:'html' (bloque HTML+GSAP): {type:'html', html, css, js}. "
+        "(A) Vía PRINCIPAL para representar un concepto: una CAPA type:'html' (bloque "
+        "HTML+GSAP) con SVG/figuras que ilustran la idea. Es la que permite dibujar redes, "
+        "cerebros, objetos, apariciones encadenadas y profundidad. IMPORTANTE: la capa html "
+        "a pantalla completa va con x=0, y=0, width=W, height=H (origen ARRIBA-IZQUIERDA; "
+        "llena el lienzo). NO la centres con x=W/2,y=H/2 (eso empuja el contenido fuera de "
+        "cuadro). Solo las capas text/shape usan x,y = CENTRO en px.\n"
+        "(B) Si la idea es puramente un dato/lista/cita/título, usa una PLANTILLA (pro_title, "
+        "title, bullet_list, quote, stat, bar_chart, lower-third, subscribe, neural_network): "
+        "motion_list_templates → motion_create_composition con template+params (theme y "
+        "accent). No fuerces plantilla cuando el guion pide representar un concepto.\n"
+        "REGLAS de la capa html (para la vía A): {type:'html', html, css, js}. "
         "'html' = markup SIN <script>; 'css' = estilos; 'js' = CUERPO de una función "
         "(tl, root, gsap, ctx) que añade tweens a la timeline 'tl' del bloque (queda "
         "seekable/determinista). ctx={width,height,duration,life,start,end,theme}. Reglas del "
@@ -308,7 +318,7 @@ def _create_system_prompt(theme: dict) -> str:
         "número anima un objeto proxy con fromTo({v:0},{v:target,onUpdate...}) y escribe "
         "textContent en onUpdate; envuelve <img>/<video> en un <div> y anima el <div> (nunca "
         "width/height/top/left del media directamente).\n"
-        "(C) Para overlays simples de texto/formas, emite 'composition' con layers text/shape.",
+        "(D) Para overlays simples de texto/formas, emite 'composition' con layers text/shape.",
         "REGLAS: (1) UNA sola llamada a motion_create_composition con TODO. (2) NO uses "
         "motion_add_to_timeline (aquí solo se crea el borrador). (3) Si el validador da error, "
         "corrige con motion_update_composition. (4) No expliques; solo llama a las herramientas. "

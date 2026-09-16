@@ -3798,7 +3798,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             {mainColTab === 'main' && (
               <>
                 <button className="accent" onClick={() => openGenerateMotion({ time: ctxMenu.time, clip: ctxMenu.clip })}>
-                  <Icon name="auto_awesome" size={15} /> Generar Escena{hasMarkRange(markRange) ? ' en el rango' : ''}
+                  <Icon name="auto_awesome" size={15} /> Generar recurso{hasMarkRange(markRange) ? ' en el rango' : ' aquí'}
                 </button>
                 <button onClick={() => openSceneDirection({ time: ctxMenu.time })}>
                   <Icon name="theaters" size={15} /> Dirección de escena{hasMarkRange(markRange) ? ' del rango' : ''}
@@ -3873,7 +3873,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           <div className="ed-ctx-backdrop" onPointerDown={() => setLaneMenu(null)} onContextMenu={(e) => { e.preventDefault(); setLaneMenu(null) }} />
           <AnchoredMenu className="ed-ctx-menu" x={laneMenu.x} y={laneMenu.y}>
             <button className="accent" onClick={() => openGenerateMotion({ time: laneMenu.time })}>
-              <Icon name="auto_awesome" size={15} /> Generar Escena {hasMarkRange(markRange) ? 'en el rango' : 'aquí'}
+              <Icon name="auto_awesome" size={15} /> Generar recurso {hasMarkRange(markRange) ? 'en el rango' : 'aquí'}
             </button>
             <button onClick={() => openSceneDirection({ time: laneMenu.time })}>
               <Icon name="theaters" size={15} /> Dirección de escena{hasMarkRange(markRange) ? ' del rango' : ''}
