@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import FlipSelect from '../../components/FlipSelect'
+import Icon from '../../components/Icon'
 import { FPS_CHOICES } from '../../lib/projectFps'
 import {
   ASPECTS, RESOLUTIONS, DIM_MAX, DIM_MIN, aspectOf, evenDim, resolutionOf,
   withAspect, withMediaAspect, withResolution,
 } from '../../lib/projectFormat'
+import { PLATFORM_OVERLAYS, overlayLabel } from './render/platformChrome'
 import { NumberStepper } from './EdTransform'
 
 const ZOOM_MIN = 25
@@ -15,7 +17,7 @@ const ZOOM_STEP = 5
 // formato de salida (aspecto, resolución, fps) y zoom visual (el zoom no toca el
 // clip ni el export). Cada editor (Main / Clip) tiene su propio estado.
 export default function EdViewerTools({
-  zoom, onZoom, width, height, onSize, fps, onFps, originalSize,
+  zoom, onZoom, width, height, onSize, fps, onFps, originalSize, overlay, onOverlay,
 }) {
   const [custom, setCustom] = useState(null)   // {w, h} mientras se edita el tamaño a mano
   const pct = Math.round((zoom ?? 1) * 100)
@@ -109,6 +111,23 @@ export default function EdViewerTools({
           onChange={(v) => onFps(Number(v))}
           title="Fotogramas por segundo del proyecto"
           options={FPS_CHOICES.map((n) => ({ value: n, label: `${n} fps` }))}
+        />
+      )}
+      {onOverlay && (
+        <FlipSelect
+          className={`mini ed-vt-sel ed-vt-ov${overlay && overlay !== 'none' ? ' on' : ''}`}
+          value={overlay || 'none'}
+          onChange={onOverlay}
+          title="Marco de plataforma (solo vista previa): simula cómo se verá dentro de TikTok o YouTube Shorts"
+          options={PLATFORM_OVERLAYS.map((o) => ({
+            value: o.id,
+            label: (
+              <span className="ed-vt-ov-opt">
+                <Icon name={o.id === 'none' ? 'crop_free' : 'smartphone'} size={15} />
+                {o.id === 'none' ? 'Sin marco' : overlayLabel(o.id)}
+              </span>
+            ),
+          }))}
         />
       )}
       <div className="ed-vt-zoom" title="Zoom del canvas (solo visual, no afecta a la exportación)">

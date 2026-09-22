@@ -178,6 +178,11 @@ export function defaultBg() {
   return normalizeBg({ enabled: true, mode: 'auto', auto: {}, chroma: {} })
 }
 
+/** Fondo por CROMA ya activado (para material que nace listo, p. ej. sticks). */
+export function chromaBg(color = '#00FF00') {
+  return normalizeBg({ enabled: true, mode: 'chroma', chroma: { enabled: true, color } })
+}
+
 // --- Índice de fotograma del matte ------------------------------------------
 
 /** Fotograma del matte para un instante ABSOLUTO de la fuente (0-based).

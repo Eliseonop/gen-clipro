@@ -1,14 +1,20 @@
 import assert from 'node:assert/strict'
 import {
   clampCrop,
+  cropCursor,
+  cropHandleAt,
+  cropHandleNorms,
   cropSizeFromCorner,
   cropWindow,
   destRect,
   destRectOnCanvas,
   freeFrameAt,
+  insideCrop,
   isOverlay,
   mediaSize,
   newTransform,
+  resizeCropFree,
+  resizeCropLocked,
   sourceCropPx,
   srcRectOn,
   videosAt,
@@ -201,5 +207,52 @@ const zoomed = freeFrameAt(
   0, fSrc.w, fSrc.h, fOutW, fOutH,
 )
 assert.ok(Math.abs(zoomed.zoom - zoom / 2) < 1e-6, `zoom ${zoomed.zoom}`)
+
+// --- Tiradores de recorte: bordes anclados (recortador de verdad) ---
+
+// 8 tiradores, sin el centro.
+const handles = cropHandleNorms(0.5, 0.5, 0.4, 0.6)
+assert.equal(handles.length, 8)
+assert.ok(!handles.some((h) => h.hx === 0 && h.hy === 0))
+// Esquina sup-izq en el borde del recuadro.
+const tl = handles.find((h) => h.hx === -1 && h.hy === -1)
+assert.ok(Math.abs(tl.x - 0.3) < 1e-9 && Math.abs(tl.y - 0.2) < 1e-9)
+
+// hit-testing: pixel-tolerancia sobre coords de pantalla.
+const rect = { width: 500, height: 500 }
+const crop = { cx: 0.5, cy: 0.5, wf: 0.4, hf: 0.4 }
+assert.deepEqual(cropHandleAt(0.3, 0.3, crop, rect), { hx: -1, hy: -1 }) // esquina
+assert.deepEqual(cropHandleAt(0.7, 0.5, crop, rect), { hx: 1, hy: 0 })  // lado derecho
+assert.equal(cropHandleAt(0.5, 0.5, crop, rect), null)                  // centro: sin tirador
+assert.ok(insideCrop(0.5, 0.5, crop) && !insideCrop(0.05, 0.05, crop))
+
+// Recorte LIBRE: tirar del lado derecho solo mueve el borde derecho (izq anclado).
+const startFree = { cx: 0.5, cy: 0.5, wf: 0.4, hf: 0.4 }
+const L0 = startFree.cx - startFree.wf / 2
+const R1 = resizeCropFree(startFree, 1, 0, 0.8, 0.5)
+assert.ok(Math.abs((R1.cx - R1.wf / 2) - L0) < 1e-9, 'borde izq anclado')
+assert.ok(Math.abs((R1.cx + R1.wf / 2) - 0.8) < 1e-9, 'borde der sigue al puntero')
+assert.ok(Math.abs(R1.hf - startFree.hf) < 1e-9) // alto intacto al tirar de un lado horizontal
+// Esquina inf-der: los bordes sup e izq quedan anclados.
+const C1 = resizeCropFree(startFree, 1, 1, 0.85, 0.9)
+assert.ok(Math.abs((C1.cx - C1.wf / 2) - L0) < 1e-9)
+assert.ok(Math.abs((C1.cy - C1.hf / 2) - (startFree.cy - startFree.hf / 2)) < 1e-9)
+
+// Recorte BLOQUEADO (fill): conserva el aspecto y ancla la esquina opuesta.
+const startLock = { cx: 0.5, cy: 0.5, wf: 0.2, hf: 0.4 }
+const r0 = startLock.wf / startLock.hf
+// Esquina sup-izq: la esquina inf-der (R,B) no se mueve.
+const Rb = startLock.cx + startLock.wf / 2
+const Bb = startLock.cy + startLock.hf / 2
+const K = resizeCropLocked(startLock, -1, -1, 0.2, 0.1, r0)
+assert.ok(Math.abs(K.wf / K.hf - r0) < 1e-9, 'aspecto conservado')
+assert.ok(Math.abs((K.cx + K.wf / 2) - Rb) < 1e-9, 'esquina der anclada')
+assert.ok(Math.abs((K.cy + K.hf / 2) - Bb) < 1e-9, 'esquina inf anclada')
+assert.ok(K.hf > startLock.hf, 'agranda hacia la esquina arrastrada')
+
+assert.equal(cropCursor(-1, -1), 'nwse-resize')
+assert.equal(cropCursor(1, -1), 'nesw-resize')
+assert.equal(cropCursor(1, 0), 'ew-resize')
+assert.equal(cropCursor(0, 1), 'ns-resize')
 
 console.log('clipLayout overlay crop/transform ok')

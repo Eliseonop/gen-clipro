@@ -273,6 +273,11 @@ def _element(proj, c, track_names: dict[str, str]) -> dict:
     desc = _material_desc(proj, c)
     if desc and desc != el["name"]:
         el["description"] = desc
+    # La nota dice qué SIGNIFICA este fragmento en la historia; la descripción solo
+    # qué es el archivo. Para la IA la nota vale mucho más, así que va aparte.
+    note = _clip_text(getattr(c, "note", None), 200)
+    if note:
+        el["note"] = note
     return el
 
 

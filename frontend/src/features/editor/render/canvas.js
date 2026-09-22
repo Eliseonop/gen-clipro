@@ -4,7 +4,7 @@
 // Estas funciones son puras respecto a React: reciben un `env` con las refs vivas del
 // componente (clipsRef, tracksRef, mediaEls, outRef, …) y leen `.current` en el momento
 // de la llamada, igual que hacía el componente. Así el comportamiento por frame no cambia.
-import { drawReframe, kfColor, cropCornerNorms, clamp } from '../../../lib/panning'
+import { drawReframe, kfColor, clamp } from '../../../lib/panning'
 import { drawTextClip } from '../../../lib/textstyles'
 import { drawShapeClip } from '../../../lib/shapes'
 import { drawAlignGuides } from '../../../lib/alignGuides'
@@ -18,9 +18,10 @@ import { beginMaskLayer, endMaskLayer, maskHandles, strokeMaskShape } from '../.
 import { cssFont } from '../../../lib/textstyles'
 import { keyframesOn, normalizeItems } from '../../../lib/clipKeyframes'
 import {
-  cropWindow, destRectOnFrame, frameRectOf, isOverlay, mediaSize, slotAspectOf, sourceCropPx,
-  srcRectOn, videosAt,
+  cropHandleNorms, cropWindow, destRectOnFrame, frameRectOf, isOverlay, mediaSize, slotAspectOf,
+  sourceCropPx, srcRectOn, videosAt,
 } from '../../../lib/clipLayout'
+import { drawPlatformChrome } from './platformChrome'
 
 // Desplaza geometría (dest / box / handles) del sistema local del recuadro Main
 // a coordenadas del canvas, para hit-testing e interacción.
@@ -615,7 +616,7 @@ export function drawMainView(head, env) {
   const {
     mainCanvasRef, clipsRef, mediaEls, outRef, selRef, selIdsRef, selKfRef,
     playingRef, framingModeRef, mainTextBox, alignGuidesRef, croppingRef,
-    viewZoomRef, mainStageRef, cropModeRef,
+    viewZoomRef, mainStageRef, cropModeRef, platformOverlayRef,
   } = env
   const canvas = mainCanvasRef.current
   if (!canvas) return
@@ -680,14 +681,22 @@ export function drawMainView(head, env) {
     ctx.strokeStyle = '#ff8c1a'; ctx.lineWidth = 2.5
     ctx.strokeRect(bx, by, bw, bh)
     if (croppingRef?.current) drawCropRuler(ctx, bx, by, bw, bh)
-    const hs = 5
+    // 8 tiradores: esquinas (cuadrado) + lados (barra). Igual que el hit-testing.
     ctx.fillStyle = '#ff8c1a'
     ctx.strokeStyle = '#fff'
     ctx.lineWidth = 1.5
-    cropCornerNorms(pcx, pcy, wf, hf).forEach(([nx, ny]) => {
-      const hx = nx * cw2, hy = ny * ch2
-      ctx.fillRect(hx - hs, hy - hs, hs * 2, hs * 2)
-      ctx.strokeRect(hx - hs, hy - hs, hs * 2, hs * 2)
+    const cs = 6 // media-esquina en px
+    const bar = 8 // media-longitud de la barra de lado
+    const thin = 3 // media-grosor de la barra de lado
+    cropHandleNorms(pcx, pcy, wf, hf).forEach(({ hx, hy, x, y }) => {
+      const px = x * cw2
+      const py = y * ch2
+      let w = cs * 2
+      let h = cs * 2
+      if (hx && !hy) { w = thin * 2; h = bar * 2 }       // lado izq/der
+      else if (hy && !hx) { w = bar * 2; h = thin * 2 }  // lado sup/inf
+      ctx.fillRect(px - w / 2, py - h / 2, w, h)
+      ctx.strokeRect(px - w / 2, py - h / 2, w, h)
     })
     return
   }
@@ -733,6 +742,9 @@ export function drawMainView(head, env) {
   const lw = ctx.lineWidth
   ctx.strokeRect(frame.x + lw / 2, frame.y + lw / 2, frame.w - lw, frame.h - lw)
   ctx.restore()
+  // Marco de plataforma (TikTok / Shorts): solo vista previa, encima del recuadro
+  // exportable. Se omite durante el encuadre de texto para no estorbar.
+  if (!framingModeRef.current) drawPlatformChrome(ctx, frame, platformOverlayRef?.current)
 }
 
 // Vista de RESULTADO en vivo (composición final) para el panel lateral mientras se

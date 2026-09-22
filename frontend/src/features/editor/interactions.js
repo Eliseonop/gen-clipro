@@ -1,14 +1,14 @@
 // Puntero del canvas: compuesto (mover/escalar/rotar/seleccionar) o recorte de fuente.
-import { clamp, clampCenter, frameAt, zoomFromCorner, isNearCropCorner } from '../../lib/panning'
+import { clamp, clampCenter } from '../../lib/panning'
 import {
-  canvasPointer, clampCrop, CLIP_POS_MAX, CLIP_POS_MIN, cropSizeFromCorner, cropWindow,
-  frameRectOf, hitTransformHandle, isOverlay, mediaSize,
+  canvasPointer, clampCrop, CLIP_POS_MAX, CLIP_POS_MIN, cropCursor, cropHandleAt,
+  cropWindow, frameRectOf, hitTransformHandle, isOverlay, mediaSize,
+  resizeCropFree, resizeCropLocked,
 } from '../../lib/clipLayout'
 import { canvasToSourceNorm, framingRect, hitFrontmost, pointInDest } from './render/canvas'
 import { snapAlign, textAlignTargets } from '../../lib/alignGuides'
 import { clipEnd, isVisualClip, timelineToSource } from './editorModel'
 import { clipMasksAt, clipPose, posedTransform } from '../../lib/clipAnim'
-import { keyframesOn } from '../../lib/clipKeyframes'
 import { MASK_FEATHER_MAX, maskHandleBox, maskHitMode, toMaskLocal } from '../../lib/clipMask'
 
 function nearHandle(px, py, h, pad = 12) {
@@ -321,20 +321,27 @@ export function createMainDownHandler(ctx) {
     const srcAspect = sz.w / sz.h
     const srcT = clamp(timelineToSource(clip, playhead), clip.in_point, clip.out_point)
     const clipT = Math.max(0, playhead - clip.start)
+    // Recuadro al iniciar el gesto: es el ancla FIJA. Redimensionar mueve solo el
+    // borde arrastrado; mover es relativo al punto de agarre (sin teletransporte).
     const crop = cropWindow(clip, srcAspect, outAspect, srcT, clipT)
     const toNorm = (ev) => {
       const p = canvasPointer(ev, canvas)
       return [clamp(p.x / canvas.width, 0, 1), clamp(p.y / canvas.height, 0, 1)]
     }
     const [nx0, ny0] = toNorm(e)
-    const zooming = isNearCropCorner(nx0, ny0, crop.cx, crop.cy, crop.wf, crop.hf, rect)
+    const handle = cropHandleAt(nx0, ny0, crop, rect)
+    const overlay = isOverlay(clip)
+    const ratio = crop.hf > 0 ? crop.wf / crop.hf : 1 // aspecto bloqueado (fill)
     const end = clipEnd(clip)
     const head = playheadRef?.current ?? playhead
     if (head < clip.start - 0.02 || head >= end) seek?.(clip.start + 0.02)
     if (croppingRef) croppingRef.current = true
+    const prevCursor = canvas.style.cursor
+    canvas.style.cursor = handle ? cropCursor(handle.hx, handle.hy) : 'move'
     const listenCrop = (move) => {
       const up = () => {
         if (croppingRef) croppingRef.current = false
+        canvas.style.cursor = prevCursor
         window.removeEventListener('pointermove', move)
         window.removeEventListener('pointerup', up)
       }
@@ -342,48 +349,40 @@ export function createMainDownHandler(ctx) {
       window.addEventListener('pointerup', up)
     }
 
-    if (isOverlay(clip)) {
-      const applyMove = (cx, cy) => {
-        const c = clampCrop(cx, cy, crop.wf, crop.hf)
-        upsertKeyframe(clip, srcT, c.cx, c.cy)
+    // Redimensionar tirando de un tirador: ancla el borde/esquina opuesto.
+    if (handle) {
+      const applyResize = (nx, ny) => {
+        if (overlay) {
+          const c = resizeCropFree(crop, handle.hx, handle.hy, nx, ny)
+          const cc = clampCrop(c.cx, c.cy, c.wf, c.hf)
+          changeReframe(clip.id, { crop_w: +cc.wf.toFixed(4), crop_h: +cc.hf.toFixed(4) })
+          upsertKeyframe(clip, srcT, cc.cx, cc.cy)
+        } else {
+          const c = resizeCropLocked(crop, handle.hx, handle.hy, nx, ny, ratio)
+          const z = +clamp(c.hf, 0.1, 1).toFixed(4)
+          const cc = clampCenter(c.cx, c.cy, z, srcAspect, outAspect)
+          upsertKeyframe(clip, srcT, cc.cx, cc.cy, { zoom: z })
+        }
       }
-      const applySize = (nx, ny) => {
-        const sized = cropSizeFromCorner(nx, ny, crop.cx, crop.cy)
-        const c = clampCrop(crop.cx, crop.cy, sized.wf, sized.hf)
-        changeReframe(clip.id, { crop_w: +c.wf.toFixed(4), crop_h: +c.hf.toFixed(4) })
-        upsertKeyframe(clip, srcT, c.cx, c.cy)
-      }
-      if (zooming) applySize(nx0, ny0)
-      else applyMove(nx0, ny0)
-      listenCrop((ev) => {
-        const [nx, ny] = toNorm(ev)
-        if (zooming) applySize(nx, ny)
-        else applyMove(nx, ny)
-      })
+      listenCrop((ev) => { const [nx, ny] = toNorm(ev); applyResize(nx, ny) })
       return
     }
 
-    const rf = clip.reframe
-    const pose = clipPose(clip, clipT, srcT)
-    const fr = keyframesOn(clip)
-      ? { zoom: pose.zoom, cx: pose.cx, cy: pose.cy }
-      : frameAt(rf?.keyframes, srcT, rf?.zoom ?? 1, rf?.pan_mode || 'smooth')
-    const applyMove = (cx, cy) => {
-      const c = clampCenter(cx, cy, fr.zoom, srcAspect, outAspect)
-      upsertKeyframe(clip, srcT, c.cx, c.cy)
+    // Mover todo el recuadro: relativo al agarre (el centro no salta al clic).
+    const startCx = crop.cx
+    const startCy = crop.cy
+    const applyMove = (nx, ny) => {
+      const cx = startCx + (nx - nx0)
+      const cy = startCy + (ny - ny0)
+      if (overlay) {
+        const c = clampCrop(cx, cy, crop.wf, crop.hf)
+        upsertKeyframe(clip, srcT, c.cx, c.cy)
+      } else {
+        const c = clampCenter(cx, cy, crop.hf, srcAspect, outAspect)
+        upsertKeyframe(clip, srcT, c.cx, c.cy)
+      }
     }
-    const applyZoom = (nx, ny) => {
-      const z = zoomFromCorner(nx, ny, crop.cx, crop.cy, srcAspect, outAspect)
-      const c = clampCenter(crop.cx, crop.cy, z, srcAspect, outAspect)
-      upsertKeyframe(clip, srcT, c.cx, c.cy, { zoom: z })
-    }
-    if (zooming) applyZoom(nx0, ny0)
-    else applyMove(nx0, ny0)
-    listenCrop((ev) => {
-      const [nx, ny] = toNorm(ev)
-      if (zooming) applyZoom(nx, ny)
-      else applyMove(nx, ny)
-    })
+    listenCrop((ev) => { const [nx, ny] = toNorm(ev); applyMove(nx, ny) })
   }
 }
 

@@ -28,6 +28,9 @@ export default function AudioTab({ project, onChange, initialYtUrl = '', sourceT
   const [extractedKey, setExtractedKey] = useState('')
   const [geminiKey, setGeminiKey] = useState('')
   const [savingKey, setSavingKey] = useState(false)
+  const [azureKey, setAzureKey] = useState('')
+  const [azureRegion, setAzureRegion] = useState('')
+  const [savingAzure, setSavingAzure] = useState(false)
   const toastedRef = useRef(null)
   const jobKindRef = useRef(null)
 
@@ -37,6 +40,7 @@ export default function AudioTab({ project, onChange, initialYtUrl = '', sourceT
   const available = curEngine?.available ?? true
   const isKokoro = engine === 'kokoro'
   const isGemini = engine === 'gemini'
+  const isAzure = engine === 'azure'
   const busy = job && (job.status === 'pending' || job.status === 'running')
   const readyYt = (initialYtUrl || '').trim()
   const extractLink = (readyYt || ytUrl).trim()
@@ -74,6 +78,12 @@ export default function AudioTab({ project, onChange, initialYtUrl = '', sourceT
     if (!voices.some((v) => v.id === voice)) setVoice(voices[0].id)
     if (!isKokoro) setVoice2('')
   }, [engine, engines])
+
+  // Prefill de la región guardada del recurso de Azure (no es secreta).
+  useEffect(() => {
+    const az = engines.find((e) => e.id === 'azure')
+    if (az?.region && !azureRegion) setAzureRegion(az.region)
+  }, [engines])
 
   useEffect(() => {
     if (!job || (job.status !== 'pending' && job.status !== 'running')) {
@@ -129,6 +139,21 @@ export default function AudioTab({ project, onChange, initialYtUrl = '', sourceT
       setToast({ type: 'success', message: 'API key de Gemini guardada.' })
     } catch (e) { setError(e.message) }
     setSavingKey(false)
+  }
+
+  async function saveAzure() {
+    const key = azureKey.trim()
+    const reg = azureRegion.trim()
+    if (!key || !reg) { setError('Pega la clave y la región de Azure (ej. eastus).'); return }
+    setSavingAzure(true)
+    setError('')
+    try {
+      await putSettings({ azure_region: reg, api_keys: { azure: key } })
+      setAzureKey('')
+      await reloadEngines()
+      setToast({ type: 'success', message: 'Credenciales de Azure guardadas.' })
+    } catch (e) { setError(e.message) }
+    setSavingAzure(false)
   }
 
   async function generate() {
@@ -236,7 +261,36 @@ export default function AudioTab({ project, onChange, initialYtUrl = '', sourceT
             </div>
           )}
 
-          {!available && !isGemini && (
+          {isAzure && !available && (
+            <div className="ed-gemini-key">
+              <p className="ed-caja-hint">{curEngine?.reason || 'Azure necesita clave y región.'}</p>
+              <div className="ed-gemini-key-row">
+                <input
+                  className="url"
+                  autoComplete="off"
+                  placeholder="Región (ej. eastus)"
+                  value={azureRegion}
+                  onChange={(e) => setAzureRegion(e.target.value)}
+                />
+              </div>
+              <div className="ed-gemini-key-row">
+                <input
+                  className="url"
+                  type="password"
+                  autoComplete="off"
+                  placeholder="Clave de Azure Speech"
+                  value={azureKey}
+                  onChange={(e) => setAzureKey(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && !savingAzure && saveAzure()}
+                />
+                <button className="ghost small" type="button" onClick={saveAzure} disabled={savingAzure || !azureKey.trim() || !azureRegion.trim()}>
+                  {savingAzure ? 'Guardando…' : 'Guardar'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!available && !isGemini && !isAzure && (
             <div className="warn">
               El motor <strong>{curEngine?.label || engine}</strong> no está instalado.
               {engine === 'piper'

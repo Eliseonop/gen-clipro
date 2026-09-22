@@ -34,6 +34,7 @@ from .schemas import (
     SaveLibraryRequest,
     RevealMediaRequest,
     SetFolderRequest,
+    SpeechTranscribeRequest,
     Timeline,
     TranscribeRequest,
     TTSRequest,
@@ -536,12 +537,18 @@ def generate_subtitles(project_id: str, body: dict = Body(...)) -> Job:
     asset_kind = (body or {}).get("asset_kind") or "audios"
     model = transcribe_settings.resolve((body or {}).get("model"))
     language = (body or {}).get("language")
+    engine = (body or {}).get("engine") or "whisper"
     if not filename:
         raise HTTPException(status_code=400, detail="Falta el archivo de audio.")
+    if engine == "azure":
+        from . import azure_stt
+        reason = azure_stt.unavailable_reason()
+        if reason:
+            raise HTTPException(status_code=400, detail=reason)
     job = jobs.create_job()
     jobs.start_subtitles_job(
         job, project_id, filename, asset_kind, model, language,
-        (body or {}).get("asset_scope") or "project",
+        (body or {}).get("asset_scope") or "project", engine=engine,
     )
     return job
 
@@ -749,6 +756,33 @@ def motion_template_preview(project_id: str, key: str, theme: str | None = None,
     except KeyError:
         raise HTTPException(status_code=404, detail="Plantilla desconocida.")
     return Response(content=generate_html(comp), media_type="text/html; charset=utf-8")
+
+
+@app.post("/api/projects/{project_id}/motion/templates/user")
+def motion_template_user_save(project_id: str, body: dict = Body(default={})) -> dict:
+    """Guarda una composición validada como plantilla reutilizable (§16). Sus imágenes
+    se copian a la Biblioteca para que la plantilla funcione en cualquier proyecto."""
+    from .motion import service as motion_service
+    from .motion.templates import user as user_templates
+    _project_or_404(project_id)
+    body = body or {}
+    comp = motion_service.get_composition(project_id, str(body.get("composition_id") or ""))
+    if comp is None:
+        raise HTTPException(status_code=404, detail="Composición no encontrada.")
+    try:
+        return user_templates.save(project_id, comp, name=str(body.get("name") or ""),
+                                   best_for=str(body.get("best_for") or ""),
+                                   tags=body.get("tags") if isinstance(body.get("tags"), list) else None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/projects/{project_id}/motion/templates/user/{key}")
+def motion_template_user_delete(project_id: str, key: str) -> dict:
+    from .motion.templates import user as user_templates
+    if not user_templates.delete(key):
+        raise HTTPException(status_code=404, detail="Plantilla no encontrada.")
+    return {"ok": True}
 
 
 # Historias con stickman: storyboard (IA) → composición editable. Antes de /motion/{comp_id}.
@@ -1181,6 +1215,62 @@ async def motion_generate_create(project_id: str, body: dict = Body(default={}))
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+@app.post("/api/projects/{project_id}/motion/resource/suggest")
+async def motion_resource_suggest(project_id: str, body: dict = Body(default={})) -> StreamingResponse:
+    """«Generar recurso» (§3): la IA analiza el tramo y propone RECURSOS VISUALES
+    eligiendo plantillas de la biblioteca. Eventos SSE: start / seed (heurísticas
+    instantáneas) / suggestions / done. No toca la timeline."""
+    from .motion import resource_ai, segment_context
+    proj = _project_or_404(project_id)
+    body = body or {}
+    ctx = segment_context.build_segment_context(
+        proj, body.get("start"), body.get("end"), body.get("playhead"), body.get("clip_id"))
+    stream = resource_ai.sse(project_id, ctx=ctx, hint=(body.get("hint") or ""))
+    return StreamingResponse(stream, media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/projects/{project_id}/motion/resource/build")
+def motion_resource_build(project_id: str, body: dict = Body(default={})) -> dict:
+    """Instancia una plantilla como BORRADOR del tramo (§16: reutilizar antes que
+    generar). Sin IA ni render: es inmediato y determinista. Para una sugerencia
+    sin plantilla, el cliente usa /motion/generate/create."""
+    from .motion import resource_ai
+    from .motion import service as motion_service
+    _project_or_404(project_id)
+    body = body or {}
+    template = str(body.get("template") or "").strip()
+    if not template:
+        raise HTTPException(status_code=400, detail="Falta 'template'.")
+    if body.get("start") is None or body.get("end") is None:
+        raise HTTPException(status_code=400, detail="Falta el rango del tramo (start/end).")
+    motion_service.cleanup_generate_drafts(project_id)
+    try:
+        return resource_ai.build_from_template(
+            project_id, template=template, params=body.get("params") or {},
+            for_range={"start": float(body["start"]), "end": float(body["end"])})
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"Template desconocido: {exc}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/projects/{project_id}/clip-notes/suggest")
+async def clip_notes_suggest(project_id: str, body: dict = Body(default={})) -> StreamingResponse:
+    """Propone la nota de contexto de uno o varios clips (§8). Eventos SSE:
+    note (por clip) / error / done. NO guarda nada: el usuario corrige y la nota
+    se persiste al guardar la timeline."""
+    from . import clip_notes
+    proj = _project_or_404(project_id)
+    body = body or {}
+    ids = body.get("clip_ids") or ([body["clip_id"]] if body.get("clip_id") else [])
+    ids = [str(x) for x in ids if x][:12]
+    if not ids:
+        raise HTTPException(status_code=400, detail="Falta 'clip_id' o 'clip_ids'.")
+    return StreamingResponse(clip_notes.sse_many(proj, ids), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.post("/api/projects/{project_id}/motion")
 def motion_create(project_id: str, body: dict = Body(default={})) -> dict:
     """Crea una composición: desde template (``template``+``params``) o desde un
@@ -1433,6 +1523,25 @@ def collection_file(ref: str) -> FileResponse:
     return FileResponse(str(path))
 
 
+@app.get("/api/sticks")
+def list_sticks() -> dict:
+    """Personajes (colecciones con stick.json) para el menú "Agregar Stick"."""
+    from . import stick_library
+    return stick_library.list_sticks()
+
+
+@app.get("/api/sticks/{cid}")
+def stick_detail(cid: str) -> dict:
+    """Recursos de un stick agrupados por expresión (vídeo/imagen)."""
+    from . import stick_library
+    try:
+        return stick_library.stick_detail(cid)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/letters")
 def list_letters() -> dict:
     """Letras recortadas de ``assets/alfnum`` para el texto de Paper Animator."""
@@ -1561,15 +1670,19 @@ def transcribe(req: TranscribeRequest) -> Job:
 
 @app.get("/api/voices")
 def voices() -> dict:
-    from . import gemini_tts, piper_tts
+    from . import azure_tts, gemini_tts, piper_tts
     engines = [
         {"id": "gemini", "label": "Gemini (cinematográfico)",
          "available": gemini_tts.available(), "voices": gemini_tts.VOICES,
          "styles": gemini_tts.STYLES,
          "reason": gemini_tts.unavailable_reason()},
+        {"id": "azure", "label": "Azure (voces neuronales)",
+         "available": azure_tts.available(), "voices": azure_tts.VOICES,
+         "reason": azure_tts.unavailable_reason(), "needs_key": True,
+         "region": azure_tts.region()},
         {"id": "kokoro", "label": "Kokoro (neutro)",
          "available": tts.available(), "voices": tts.VOICES},
-        {"id": "piper", "label": "Piper (mexicano)",
+        {"id": "piper", "label": "Piper (español)",
          "available": piper_tts.available(), "voices": piper_tts.list_voices()},
     ]
     # Compatibilidad: 'voices'/'available' apuntan a Kokoro por defecto.
@@ -1579,13 +1692,17 @@ def voices() -> dict:
 @app.post("/api/tts", response_model=Job)
 def create_tts(req: TTSRequest) -> Job:
     """Lanza un trabajo en segundo plano para generar el audio del narrador."""
-    from . import gemini_tts, piper_tts
+    from . import azure_tts, gemini_tts, piper_tts
     if projects.get_project(req.project_id) is None:
         raise HTTPException(status_code=400, detail="Proyecto no válido.")
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="El texto está vacío.")
     if req.engine == "gemini":
         reason = gemini_tts.unavailable_reason()
+        if reason:
+            raise HTTPException(status_code=400, detail=reason)
+    elif req.engine == "azure":
+        reason = azure_tts.unavailable_reason()
         if reason:
             raise HTTPException(status_code=400, detail=reason)
     elif req.engine == "piper":
@@ -1706,6 +1823,185 @@ def set_api_key(provider: str, index: int, body: dict = Body(...)) -> dict:
 def delete_api_key(provider: str, index: int) -> dict:
     settings.remove_key(provider, index)
     return settings.public()
+
+
+# --- Azure AI (Speech STT + Vision) ------------------------------------
+#
+# Toda credencial vive SOLO en el backend (settings.json o variables de entorno);
+# el frontend nunca habla con Azure directamente. Speech reutiliza el mismo
+# recurso que el TTS; Vision usa su propio recurso (clave + endpoint).
+
+@app.get("/api/ai/status")
+def ai_status() -> dict:
+    """Disponibilidad de los servicios Azure (sin exponer claves).
+
+    Speech y Vision son servicios independientes; Foundry es la capa GENERATIVA
+    que los complementa (no los reemplaza)."""
+    from . import azure_stt, azure_vision, foundry
+    return {
+        "speech": {
+            "available": azure_stt.available(),
+            "reason": azure_stt.unavailable_reason(),
+            "region": azure_stt.region(),
+        },
+        "vision": {
+            "available": azure_vision.available(),
+            "reason": azure_vision.unavailable_reason(),
+            "endpoint": azure_vision.endpoint(),
+        },
+        "foundry": foundry.config_public(),
+    }
+
+
+@app.post("/api/ai/speech/transcribe", response_model=Job)
+def ai_speech_transcribe(req: SpeechTranscribeRequest) -> Job:
+    """Transcribe un audio del proyecto (Whisper o Azure). Si el audio está en la
+    timeline, además crea la pista de subtítulos; siempre deja el ``transcript``."""
+    if projects.get_project(req.project_id) is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    if not req.filename.strip():
+        raise HTTPException(status_code=400, detail="Falta el archivo de audio.")
+    if req.engine == "azure":
+        from . import azure_stt
+        reason = azure_stt.unavailable_reason()
+        if reason:
+            raise HTTPException(status_code=400, detail=reason)
+    model = transcribe_settings.resolve(req.model)
+    job = jobs.create_job()
+    jobs.start_subtitles_job(
+        job, req.project_id, req.filename, req.asset_kind, model, req.language,
+        req.asset_scope, req.source_clip_id, engine=req.engine,
+    )
+    return job
+
+
+def _find_project_image(project, filename: str):
+    return next((im for im in project.images if im.filename == filename), None)
+
+
+def _read_vision_input(file: UploadFile | None, project_id: str | None, filename: str | None):
+    """Devuelve (image_bytes, image_info|None). Acepta un archivo subido o una
+    imagen del proyecto por nombre. No filtra la clave: solo resuelve la entrada."""
+    if file is not None:
+        data = file.file.read()
+        if not data:
+            raise HTTPException(status_code=400, detail="La imagen subida está vacía.")
+        return data, None
+    if not project_id or not filename:
+        raise HTTPException(status_code=400, detail="Falta la imagen (sube un archivo o indica project_id + filename).")
+    project = projects.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    info = _find_project_image(project, filename)
+    path = storage.resolve_media(project, "image", filename)
+    if path is None or not path.exists():
+        raise HTTPException(status_code=404, detail="No se encuentra la imagen.")
+    return path.read_bytes(), info
+
+
+@app.post("/api/ai/vision/analyze")
+def ai_vision_analyze(
+    file: UploadFile | None = File(default=None),
+    project_id: str | None = Form(default=None),
+    filename: str | None = Form(default=None),
+    language: str = Form(default="en"),
+    force: bool = Form(default=False),
+) -> dict:
+    """Análisis de imagen (caption, tags, objects, people, OCR) normalizado.
+
+    Para una imagen del proyecto, reutiliza el análisis previo salvo ``force``
+    (evita pagar dos veces a Azure por la misma imagen)."""
+    from . import azure_vision
+    reason = azure_vision.unavailable_reason()
+    if reason:
+        raise HTTPException(status_code=400, detail=reason)
+    image_bytes, info = _read_vision_input(file, project_id, filename)
+    if info is not None and info.analysis and not force:
+        return {"analysis": info.analysis, "cached": True}
+    try:
+        analysis = azure_vision.analyze_image(image_bytes, language=language)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    # Persistir en el material (base para búsqueda semántica futura).
+    if info is not None and project_id:
+        projects.update_material(project_id, "images", info.id, {"analysis": analysis})
+    return {"analysis": analysis, "cached": False}
+
+
+@app.post("/api/ai/vision/ocr")
+def ai_vision_ocr(
+    file: UploadFile | None = File(default=None),
+    project_id: str | None = Form(default=None),
+    filename: str | None = Form(default=None),
+    language: str = Form(default="en"),
+) -> dict:
+    """OCR de una imagen (texto, líneas, palabras, confianza) normalizado."""
+    from . import azure_vision
+    reason = azure_vision.unavailable_reason()
+    if reason:
+        raise HTTPException(status_code=400, detail=reason)
+    image_bytes, _info = _read_vision_input(file, project_id, filename)
+    try:
+        ocr = azure_vision.ocr_image(image_bytes, language=language)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"ocr": ocr}
+
+
+# --- Microsoft Foundry (capa de IA GENERATIVA) -------------------------
+#
+# Complementa Speech y Vision (no los reemplaza). Toda credencial vive SOLO en el
+# backend (settings.json o variables de entorno); el frontend nunca habla con
+# Foundry. Dos endpoints: ``/chat`` (asistente contextual libre) y ``/generate``
+# (operaciones estructuradas: mejorar guion, hooks, títulos, descripción,
+# sugerir recursos, prompts visuales, analizar escena).
+
+def _foundry_error_status(code: str) -> int:
+    """Mapea el ``code`` del error de Foundry a un status HTTP."""
+    return {
+        "not_configured": 400, "bad_request": 400, "auth": 502,
+        "model_unavailable": 502, "rate_limit": 429, "timeout": 504,
+        "network": 502, "upstream": 502,
+    }.get(code, 502)
+
+
+@app.post("/api/ai/foundry/chat")
+def ai_foundry_chat(body: dict = Body(...)) -> dict:
+    """Asistente contextual (Foundry). Entrada: {message, project_id?, context?}.
+    Salida normalizada: {text, model, usage}. Nunca expone credenciales."""
+    from . import foundry, foundry_ops
+    message = str((body or {}).get("message") or "").strip()
+    project_id = (body or {}).get("project_id") or None
+    context = (body or {}).get("context") if isinstance((body or {}).get("context"), dict) else None
+    language = str((body or {}).get("language") or "es")
+    try:
+        return foundry_ops.assistant(message, language=language,
+                                     project_id=project_id, context=context)
+    except foundry.FoundryError as exc:
+        raise HTTPException(status_code=_foundry_error_status(exc.code), detail=str(exc)) from exc
+
+
+@app.post("/api/ai/foundry/generate")
+def ai_foundry_generate(body: dict = Body(...)) -> dict:
+    """Operaciones generativas estructuradas (Foundry). Entrada:
+    {op, text?, message?, mode?, language?, n?, project_id?, context?}.
+    Devuelve el resultado normalizado de la operación (nunca modifica el proyecto)."""
+    from . import foundry, foundry_ops
+    op = str((body or {}).get("op") or "").strip()
+    context = (body or {}).get("context") if isinstance((body or {}).get("context"), dict) else None
+    try:
+        return foundry_ops.run(
+            op,
+            text=(body or {}).get("text"),
+            message=(body or {}).get("message"),
+            mode=str((body or {}).get("mode") or "improve"),
+            language=str((body or {}).get("language") or "es"),
+            n=(body or {}).get("n"),
+            project_id=(body or {}).get("project_id") or None,
+            context=context,
+        )
+    except foundry.FoundryError as exc:
+        raise HTTPException(status_code=_foundry_error_status(exc.code), detail=str(exc)) from exc
 
 
 # --- Chat IA (agente que opera el MCP existente) -----------------------

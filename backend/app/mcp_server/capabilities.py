@@ -55,7 +55,7 @@ def transcribe_models() -> list[dict]:
 
 def tts_engines() -> list[dict]:
     """Motores TTS con su disponibilidad REAL en esta máquina y sus voces."""
-    from .. import gemini_tts, piper_tts, tts
+    from .. import azure_tts, gemini_tts, piper_tts, tts
     out: list[dict] = []
     try:
         out.append({"id": "kokoro", "available": tts.available(),
@@ -73,6 +73,12 @@ def tts_engines() -> list[dict]:
                     "voices": [v["id"] for v in gemini_tts.VOICES]})
     except Exception:  # noqa: BLE001
         out.append({"id": "gemini", "available": False, "voices": []})
+    try:
+        reason = azure_tts.unavailable_reason()
+        out.append({"id": "azure", "available": reason is None, "reason": reason,
+                    "voices": [v["id"] for v in azure_tts.VOICES]})
+    except Exception:  # noqa: BLE001
+        out.append({"id": "azure", "available": False, "voices": []})
     return out
 
 

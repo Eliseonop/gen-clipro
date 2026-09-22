@@ -11,8 +11,7 @@ rebotes ni neón). Los tokens vienen de ``themes.py``.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 import html as _html
 
@@ -23,28 +22,12 @@ from ..models import (
     MotionLayer,
     MotionTween,
 )
+from . import user, visual
+from .base import Template
+from .base import p_ as _p
+from .base import theme_of as _theme_of
 
-
-@dataclass
-class Template:
-    key: str
-    name: str
-    category: str            # text | list | social | news | data | diagram | cinematic
-    description: str
-    parameters: dict[str, Any]
-    build: Callable[[str, dict[str, Any]], MotionComposition] = field(repr=False)
-
-
-def _p(params: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
-    out = dict(defaults)
-    for k, v in (params or {}).items():
-        if v is not None:
-            out[k] = v
-    return out
-
-
-def _theme_of(p: dict[str, Any]) -> dict:
-    return themes.resolve_theme(p.get("theme"), accent=p.get("accent"))
+__all__ = ["Template", "list_templates", "catalog", "instantiate", "get"]
 
 
 # --- SOCIAL: Subscribe (botón CTA limpio) ---
@@ -475,8 +458,7 @@ def _stick_scene(comp_id: str, params: dict[str, Any]) -> MotionComposition:
     return stick.demo_template(comp_id, params)
 
 
-_TEMPLATES: dict[str, Template] = {
-    t.key: t for t in [
+_LEGACY: list[Template] = [
         Template("stick_scene", "Historia con stickman", "story",
                  "Escena animada de stickman (reparto, escenario, planos con poses, cámara y "
                  "efectos) a partir de un storyboard. Para contar una anécdota o ilustrar el guion. "
@@ -534,18 +516,74 @@ _TEMPLATES: dict[str, Template] = {
                  {"inputs": ["X1", "X2", "X3"], "hidden": 5, "output": "GATO",
                   "duration": 8.0, "width": 1920, "height": 1080, "theme": "light", "accent": None},
                  _neural_network),
-    ]
+]
+
+# Las plantillas VISUALES van primero: son las que queremos que la IA elija por
+# defecto (§2 — el recurso es una composición, no un cartel de texto).
+_TEMPLATES: dict[str, Template] = {t.key: t for t in [*visual.TEMPLATES, *_LEGACY]}
+
+# Pistas de selección para las plantillas heredadas (las visuales las traen ya).
+_LEGACY_HINTS: dict[str, dict[str, Any]] = {
+    "stat": {"tags": ["cifra", "dato", "porcentaje", "numero", "estadistica"],
+             "best_for": "UNA cifra que hay que clavar (un porcentaje, un total)."},
+    "bar_chart": {"tags": ["barras", "comparar valores", "ranking", "datos"],
+                  "best_for": "Comparar 2-6 magnitudes entre sí."},
+    "bullet_list": {"tags": ["lista", "bullets", "claves"],
+                    "best_for": "Lista simple en tarjeta; para algo más visual usa stack_list."},
+    "quote": {"tags": ["cita", "frase", "testimonio"],
+              "best_for": "Destacar una frase textual de alguien."},
+    "pro_title": {"tags": ["titulo", "capitulo", "apertura"],
+                  "best_for": "Abrir un tema o marcar un capítulo."},
+    "title": {"tags": ["titulo"], "best_for": "Un título suelto y nada más."},
+    "lower-third": {"tags": ["rotulo", "nombre", "cargo"],
+                    "best_for": "Presentar a quien habla en pantalla."},
+    "subscribe": {"tags": ["cta", "suscribete"], "best_for": "Llamada a la acción."},
+    "neural_network": {"tags": ["red neuronal", "ia", "diagrama"],
+                       "best_for": "Explicar una red neuronal concreta."},
+    "stick_scene": {"tags": ["stickman", "historia", "personaje"],
+                    "best_for": "Contar una anécdota con figuras humanas."},
 }
 
 
+def _row(t: Template) -> dict[str, Any]:
+    hints = _LEGACY_HINTS.get(t.key, {})
+    return {"key": t.key, "name": t.name, "category": t.category,
+            "description": t.description, "parameters": t.parameters,
+            "tags": t.tags or hints.get("tags", []),
+            "best_for": t.best_for or hints.get("best_for", ""),
+            "slots": t.slots, "accepts_images": t.accepts_images}
+
+
+def _all() -> dict[str, Template]:
+    """Fijas + guardadas por el usuario (§16). Las del usuario se leen en cada
+    llamada: se añaden y borran en caliente desde el editor."""
+    return {**_TEMPLATES, **{t.key: t for t in user.as_templates()}}
+
+
 def list_templates() -> list[dict[str, Any]]:
-    return [{"key": t.key, "name": t.name, "category": t.category,
-             "description": t.description, "parameters": t.parameters}
-            for t in _TEMPLATES.values()]
+    return [_row(t) for t in _all().values()]
+
+
+def get(key: str) -> Template | None:
+    return _all().get(key)
+
+
+def catalog(*, visual_only: bool = False) -> list[dict[str, Any]]:
+    """Catálogo COMPACTO para el selector de la IA (§13): sin el JSON de parámetros
+    por defecto, que gasta tokens y no ayuda a elegir."""
+    rows = visual.TEMPLATES if visual_only else list(_all().values())
+    out = []
+    for t in rows:
+        r = _row(t)
+        out.append({k: v for k, v in
+                    {"key": r["key"], "name": r["name"], "category": r["category"],
+                     "best_for": r["best_for"], "tags": r["tags"], "slots": r["slots"],
+                     "accepts_images": r["accepts_images"]}.items() if v})
+    return out
 
 
 def instantiate(key: str, comp_id: str, params: dict[str, Any] | None = None) -> MotionComposition:
-    tpl = _TEMPLATES.get(key)
+    tpl = get(key)
     if not tpl:
         raise KeyError(f"Template desconocido: {key}")
     return tpl.build(comp_id, params or {})

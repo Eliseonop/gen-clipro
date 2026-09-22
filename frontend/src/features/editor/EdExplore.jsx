@@ -26,7 +26,27 @@ function ChipRow({ items, value, onChange }) {
   )
 }
 
-function ExploreCard({ item, onView, onAdd, onMenu, adding }) {
+function explorePayload(item) {
+  return JSON.stringify({
+    _explore: true,
+    id: item.id,
+    provider: item.provider,
+    kind: item.kind,
+    download_url: item.download_url,
+    thumb_url: item.thumb_url,
+    preview_url: item.preview_url,
+    title: item.title,
+    author: item.author,
+    source_url: item.source_url,
+    license_info: item.license_info,
+    width: item.width,
+    height: item.height,
+    duration: item.duration,
+    external_id: item.external_id,
+  })
+}
+
+function ExploreCard({ item, onView, onAdd, onMenu, adding, onDragInfo }) {
   const [hover, setHover] = useState(false)
   const vidRef = useRef(null)
   const isVideo = item.kind === 'video'
@@ -49,6 +69,14 @@ function ExploreCard({ item, onView, onAdd, onMenu, adding }) {
   return (
     <div
       className="ed-card grid ed-explore-card"
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('application/x-explore', explorePayload(item))
+        e.dataTransfer.effectAllowed = 'copy'
+        const dragKind = item.kind === 'video' ? 'video' : 'image'
+        onDragInfo?.({ kind: dragKind, duration: item.duration || 3, name: item.title || item.provider })
+      }}
+      onDragEnd={() => onDragInfo?.(null)}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       onClick={() => onView(item)}
@@ -127,7 +155,7 @@ function ExplorePreview({ item, onClose, onAdd, adding }) {
 }
 
 export default function EdExplore({
-  projectId, project, timelineClips, onImported, onToast, onOpenSettings, active = true,
+  projectId, project, timelineClips, onImported, onToast, onOpenSettings, onDragInfo, active = true,
 }) {
   const boot = useRef(readExploreSession())
   const [draft, setDraft] = useState(boot.current.draft)
@@ -177,7 +205,7 @@ export default function EdExplore({
   useEffect(() => {
     getSettings().then((s) => {
       const keys = s.api_keys && typeof s.api_keys === 'object' ? s.api_keys : {}
-      setConfigured({ pexels: !!keys.pexels, giphy: !!keys.giphy })
+      setConfigured({ pexels: !!keys.pexels, giphy: !!keys.giphy, pixabay: !!keys.pixabay, unsplash: !!keys.unsplash })
     }).catch(() => {})
   }, [])
 
@@ -247,7 +275,7 @@ export default function EdExplore({
   }, [media, provider]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const shown = filterExploreItems(items, media, provider)
-  const noKeys = !configured.pexels && !configured.giphy
+  const noKeys = !configured.pexels && !configured.giphy && !configured.pixabay && !configured.unsplash
 
   async function addItem(item) {
     if (!projectId || addingId) return
@@ -317,7 +345,7 @@ export default function EdExplore({
             <span>Fotos, videos y GIFs</span>
             {noKeys && (
               <button type="button" className="ghost small" onClick={onOpenSettings}>
-                Configura Pexels y GIPHY en Ajustes
+                Configura Pexels, Pixabay, Unsplash o GIPHY en Ajustes
               </button>
             )}
             <p className="ed-explore-hint">Prueba con:</p>
@@ -376,6 +404,7 @@ export default function EdExplore({
                   onView={setPreview}
                   onAdd={addItem}
                   onMenu={(e, it) => setMenu({ x: e.clientX, y: e.clientY, item: it })}
+                  onDragInfo={onDragInfo}
                 />
               ))}
             </div>

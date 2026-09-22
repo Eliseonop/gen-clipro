@@ -4,7 +4,16 @@ import { motionTemplatePreviewUrl } from '../../services/api'
 // Árbol de categorías de la biblioteca (orden + etiqueta + nota). Las que aún no
 // tienen plantillas se muestran como "Próximamente" para dejar ver la estructura
 // y dónde entrarán las siguientes tandas de componentes.
+// Las visuales van primero: son las que se quieren por defecto (el recurso es la
+// composición, no el texto). Las claves salen de templates/visual.py.
 const CATEGORIES = [
+  { key: 'user', label: 'Mis plantillas', note: 'Composiciones que guardaste desde Generar recurso' },
+  { key: 'list', label: 'Listas', note: 'Pilas que caen, cuadrículas y filas editoriales' },
+  { key: 'compare', label: 'Comparaciones', note: 'Cara a cara y antes / después' },
+  { key: 'diagram', label: 'Diagramas', note: 'Procesos, árboles y mapas conceptuales' },
+  { key: 'time', label: 'Tiempo', note: 'Timelines e hitos fechados' },
+  { key: 'asset', label: 'Assets', note: 'Tus PNG e imágenes como protagonistas' },
+  { key: 'concept', label: 'Conceptuales', note: 'Anotaciones, piezas que se ensamblan' },
   { key: 'story', label: 'Historias', note: 'Stickman animados a partir de tu guion (pestaña Historia)' },
   { key: 'captions', label: 'Subtítulos', note: 'Texto sincronizado con la voz' },
   { key: 'titles', label: 'Títulos', note: 'Titulares, antetítulos e introducciones' },
@@ -100,7 +109,7 @@ function TemplatePreview({ pid, tkey, theme, w, h }) {
 
 // Galería de plantillas agrupada por categoría con previews animados. Al pulsar
 // una tarjeta se crea la composición desde esa plantilla (con el tema elegido).
-export default function MotionTemplates({ pid, templates, format, theme, onThemeChange, onPick, onBlank }) {
+export default function MotionTemplates({ pid, templates, format, theme, onThemeChange, onPick, onBlank, onDeleteUser }) {
   const w = format?.width || 1080
   const h = format?.height || 1920
 
@@ -129,7 +138,7 @@ export default function MotionTemplates({ pid, templates, format, theme, onTheme
           <div key={key} className={`mtpl-group ${items.length ? '' : 'empty'}`}>
             <div className="mtpl-grouphead">
               <span className="motion-panel-title">{label}</span>
-              {items.length === 0 && <span className="mtpl-soon">Próximamente</span>}
+              {items.length === 0 && <span className="mtpl-soon">{key === 'user' ? 'Vacía' : 'Próximamente'}</span>}
             </div>
             <div className="mtpl-note">{note}</div>
             {items.length > 0 && (
@@ -139,6 +148,13 @@ export default function MotionTemplates({ pid, templates, format, theme, onTheme
                     title={t.description} onClick={() => onPick?.(t.key, theme)}>
                     <TemplatePreview pid={pid} tkey={t.key} theme={theme} w={w} h={h} />
                     <span className="mtpl-name">{t.name}</span>
+                    {t.category === 'user' && onDeleteUser && (
+                      <span role="button" tabIndex={0} className="mtpl-del" title="Borrar esta plantilla"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (window.confirm(`¿Borrar la plantilla "${t.name}"?`)) onDeleteUser(t.key)
+                        }}>×</span>
+                    )}
                   </button>
                 ))}
               </div>

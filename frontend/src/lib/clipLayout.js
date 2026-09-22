@@ -43,7 +43,11 @@ export function isOverlay(clip) {
 // El canvas del editor conserva el aspecto de salida; el "Main" (área exportada)
 // es un recuadro concéntrico dentro del canvas. Lo que queda fuera del recuadro es
 // contexto (el clip se ve, atenuado) que NO se exporta. `viewZoom` es solo visual.
-export const MAIN_FRAME_FRAC = 0.82
+// A zoom 1 el recuadro llena la dimensión limitante del stage (toda la altura en un
+// stage apaisado): sin banda atenuada arriba/abajo por defecto. El desborde lateral
+// (p. ej. 16:9 dentro de 9:16) sigue viéndose como contexto; con zoom se puede
+// alejar para ver también el desborde vertical.
+export const MAIN_FRAME_FRAC = 1
 
 // Rango de posición (centro del clip) en coords normalizadas del cuadro de salida.
 // El cuadro naranja es solo el área exportada, NO el límite de movimiento: el clip
@@ -115,6 +119,93 @@ export function cropSizeFromCorner(nx, ny, cx, cy) {
     wf: clamp(Math.abs(nx - cx) * 2, 0.05, 1),
     hf: clamp(Math.abs(ny - cy) * 2, 0.05, 1),
   }
+}
+
+// --- Tiradores del recuadro de recorte (estilo recortador con bordes anclados) --
+// 8 tiradores: 4 esquinas + 4 lados. hx/hy ∈ {-1,0,1} indican qué borde arrastra
+// (izq/der, sup/inf). (0,0) queda excluido: el interior es "mover todo el recuadro".
+export function cropHandleNorms(cx, cy, wf, hf) {
+  const xs = [cx - wf / 2, cx, cx + wf / 2]
+  const ys = [cy - hf / 2, cy, cy + hf / 2]
+  const out = []
+  for (let iy = 0; iy < 3; iy++) {
+    for (let ix = 0; ix < 3; ix++) {
+      if (ix === 1 && iy === 1) continue
+      out.push({ hx: ix - 1, hy: iy - 1, x: xs[ix], y: ys[iy] })
+    }
+  }
+  return out
+}
+
+/** Tirador bajo el puntero (coords norm), con tolerancia en px de pantalla. null si ninguno. */
+export function cropHandleAt(nx, ny, crop, rect, px = 12) {
+  let best = null
+  let bestD = px * px
+  for (const h of cropHandleNorms(crop.cx, crop.cy, crop.wf, crop.hf)) {
+    const dx = (nx - h.x) * (rect?.width || 1)
+    const dy = (ny - h.y) * (rect?.height || 1)
+    const d = dx * dx + dy * dy
+    if (d <= bestD) { bestD = d; best = { hx: h.hx, hy: h.hy } }
+  }
+  return best
+}
+
+/** ¿El puntero (norm) cae dentro del recuadro? (para mover todo el recuadro). */
+export function insideCrop(nx, ny, crop) {
+  return nx >= crop.cx - crop.wf / 2 && nx <= crop.cx + crop.wf / 2
+    && ny >= crop.cy - crop.hf / 2 && ny <= crop.cy + crop.hf / 2
+}
+
+/**
+ * Redimensiona un recorte de aspecto LIBRE (overlay): el borde/esquina arrastrado
+ * sigue al puntero y el opuesto queda anclado. `start` = recorte al iniciar el gesto.
+ */
+export function resizeCropFree(start, hx, hy, nx, ny, min = 0.05) {
+  let L = start.cx - start.wf / 2
+  let R = start.cx + start.wf / 2
+  let T = start.cy - start.hf / 2
+  let B = start.cy + start.hf / 2
+  if (hx < 0) L = clamp(Math.min(nx, R - min), 0, R - min)
+  else if (hx > 0) R = clamp(Math.max(nx, L + min), L + min, 1)
+  if (hy < 0) T = clamp(Math.min(ny, B - min), 0, B - min)
+  else if (hy > 0) B = clamp(Math.max(ny, T + min), T + min, 1)
+  const wf = R - L
+  const hf = B - T
+  return { cx: L + wf / 2, cy: T + hf / 2, wf, hf }
+}
+
+/**
+ * Redimensiona un recorte de aspecto BLOQUEADO (fill): conserva la relación `r`
+ * (= wf/hf) y ancla el borde/esquina opuesto. En un lado, el eje sin tirador crece
+ * simétrico (su centro no se mueve). Devuelve cx/cy/wf/hf.
+ */
+export function resizeCropLocked(start, hx, hy, nx, ny, r, min = 0.1) {
+  const L = start.cx - start.wf / 2
+  const R = start.cx + start.wf / 2
+  const T = start.cy - start.hf / 2
+  const B = start.cy + start.hf / 2
+  // Tamaño deseado, medido desde el borde opuesto (anclado).
+  const wantW = hx < 0 ? (R - nx) : hx > 0 ? (nx - L) : null
+  const wantH = hy < 0 ? (B - ny) : hy > 0 ? (ny - T) : null
+  const fromW = wantW != null ? wantW / r : null
+  let hf = start.hf
+  if (fromW != null && wantH != null) hf = Math.max(fromW, wantH) // esquina: cubre el puntero
+  else if (fromW != null) hf = fromW
+  else if (wantH != null) hf = wantH
+  hf = clamp(hf, min, 1)
+  let wf = hf * r
+  if (wf > 1) { wf = 1; hf = wf / r }
+  const cx = hx < 0 ? R - wf / 2 : hx > 0 ? L + wf / 2 : start.cx
+  const cy = hy < 0 ? B - hf / 2 : hy > 0 ? T + hf / 2 : start.cy
+  return { cx, cy, wf, hf }
+}
+
+/** Cursor CSS para un tirador de recorte. */
+export function cropCursor(hx, hy) {
+  if (hx && hy) return hx === hy ? 'nwse-resize' : 'nesw-resize'
+  if (hx) return 'ew-resize'
+  if (hy) return 'ns-resize'
+  return 'move'
 }
 
 /**

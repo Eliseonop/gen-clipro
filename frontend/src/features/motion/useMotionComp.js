@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  listMotionTemplates, createMotion, getMotion, updateMotion,
+  listMotionTemplates, createMotion, getMotion, updateMotion, deleteUserTemplate,
   addMotionToTimeline, getJob,
 } from '../../services/api'
 import { newTextLayer, updateLayer, removeLayer, moveLayer, clampComposition } from './motionModel'
@@ -16,9 +16,17 @@ export function useMotionComp(pid, { onReloadTimeline } = {}) {
   const [error, setError] = useState('')
   const dirtyRef = useRef(false)
 
-  useEffect(() => {
+  // Las plantillas del usuario cambian en caliente (se guardan desde Generar recurso):
+  // la galería recarga al abrirse.
+  const reloadTemplates = useCallback(() => {
     if (pid) listMotionTemplates(pid).then((r) => setTemplates(r.templates || [])).catch(() => {})
   }, [pid])
+  useEffect(() => { reloadTemplates() }, [reloadTemplates])
+
+  const removeUserTemplate = useCallback(async (key) => {
+    try { await deleteUserTemplate(pid, key) } catch (e) { setError(e.message) }
+    reloadTemplates()
+  }, [pid, reloadTemplates])
 
   // Autosave (debounce) — persiste para render y para que preview.html refleje el estado.
   useEffect(() => {
@@ -145,7 +153,7 @@ export function useMotionComp(pid, { onReloadTimeline } = {}) {
 
   return {
     comp, setComp, selLayer, selLayerId, setSelLayerId,
-    templates, addJob, error, setError,
+    templates, reloadTemplates, removeUserTemplate, addJob, error, setError,
     edit, editLayer, moveLayerBy, addLayer, deleteLayer, setName, setDuration,
     loadComp, createBlank, createFromTemplate, addToProject, close, applyTiming,
     setStoryboard, openComp,

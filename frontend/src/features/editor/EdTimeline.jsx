@@ -133,7 +133,7 @@ export default function EdTimeline({
   onFaceTrack, faceTrackBusy, faceTrackDisabled,
   linkPick, onPickLinkTrack, onCancelLinkPick, onCopyDesc, audioMaterials,
   mcpBusyIds, onMarqueeSelect,
-  markRange, onContextLane, onSceneDirection,
+  markRange, onContextLane, onSceneDirection, onGenerateResource,
   onMarkChange, onCreateSegment, segmentBusy, segmentLabelText, markKeys = ['I', 'O'],
 }) {
   const lanesRef = useRef(null)
@@ -476,12 +476,21 @@ export default function EdTimeline({
   function onLaneDrop(e, track) {
     e.preventDefault()
     setDropHint(null)
+    const rawExplore = e.dataTransfer.getData('application/x-explore')
+    if (rawExplore) {
+      let ex
+      try { ex = JSON.parse(rawExplore) } catch { return }
+      const exKind = ex.kind === 'video' ? 'video' : 'image'
+      if (laneKindFor(exKind) !== track.kind) return
+      const intent = laneIntent(e, track, ex.duration || 3)
+      onDropAsset({ ...ex, _explore: true }, track.id, intent.start, intent)
+      return
+    }
     const raw = e.dataTransfer.getData('application/x-material')
     if (!raw) return
     let payload
     try { payload = JSON.parse(raw) } catch { return }
     if (laneKindFor(payload.asset_kind) !== track.kind) return
-    // La duración sale del payload: al soltar, dragInfo ya puede estar vacío.
     const intent = laneIntent(e, track, payload.duration)
     onDropAsset(payload, track.id, intent.start, intent)
   }
@@ -580,15 +589,19 @@ export default function EdTimeline({
           )}
         </div>
         <div className="ed-tl-tools-right">
-          {onSceneDirection && (
-            <>
-              <button className="ghost small accent" onClick={onSceneDirection}
-                title="Dirección de escena: recorre el guion tramo a tramo y decide qué se ve en cada uno">
-                <Icon name="theaters" size={15} /> Dirección de escena
-              </button>
-              <span className="ed-tl-sep" />
-            </>
+          {onGenerateResource && (
+            <button className="ghost small accent" onClick={onGenerateResource}
+              title="Genera un recurso visual para el tramo marcado (o 5 s desde el cursor): la IA lee el guion y propone qué dibujar">
+              <Icon name="auto_awesome" size={15} /> Generar recurso
+            </button>
           )}
+          {onSceneDirection && (
+            <button className="ghost small" onClick={onSceneDirection}
+              title="Dirección de escena: recorre el guion entero tramo a tramo y decide qué se ve en cada uno">
+              <Icon name="theaters" size={15} /> Dirección
+            </button>
+          )}
+          {(onGenerateResource || onSceneDirection) && <span className="ed-tl-sep" />}
           <button className="ghost small" onClick={() => onMatchDuration?.()} disabled={selectedIds.length < 2} title="Copiar el rango de tiempo del primer clip (mismo inicio y mismo fin). Cada uno se queda en su pista. Un vídeo o audio no se alarga más que su fuente.">
             <Icon name="straighten" size={15} /> Igualar
           </button>
@@ -830,13 +843,17 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
   return (
     <div className={`ed-clip ${clip.kind} ${layout.variant !== 'solo' ? layout.variant : ''} ${selected ? 'sel' : ''} ${clip.muted ? 'muted' : ''} ${mcpBusy ? 'mcp-busy' : ''}`}
       style={{ left, width: w, top: layout.top, height: layout.height, zIndex: layout.z }}
-      title={clip.name}
+      title={clip.note ? `${clip.name}
+
+${clip.note}` : clip.name}
       data-clip-id={clip.id}
       data-cluster-id={layout.clusterId || undefined}
       onPointerDown={(e) => onDown(e, 'move')}
       onContextMenu={onContext} onDoubleClick={onDouble}>
       <div className="ed-clip-handle left" onPointerDown={(e) => onDown(e, 'trim-left')} />
       <div className="ed-clip-handle right" onPointerDown={(e) => onDown(e, 'trim-right')} />
+      {/* Indicador de nota de contexto: el texto va en el title del clip. */}
+      {clip.note && <span className="ed-clip-note" aria-hidden="true"><Icon name="sticky_note_2" size={11} /></span>}
 
       {isVideo && <div className="ed-clip-label"><Icon name={clip.kind === 'image' ? 'image' : (clip.muted ? 'volume_off' : 'movie')} size={12} /> {clip.name}{speedBadge}</div>}
       {isText && <div className="ed-clip-label"><Icon name="title" size={12} /> {clip.text || clip.name}</div>}

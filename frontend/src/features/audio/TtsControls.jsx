@@ -21,11 +21,16 @@ export default function TtsControls({
     <div className="tts-controls">
       <label className="field"><span>Motor</span>
         <select className="select" value={engine} onChange={(e) => setEngine(e.target.value)}>
-          {engines.map((e) => (
-            <option key={e.id} value={e.id} disabled={!e.available && e.id !== 'gemini'}>
-              {e.label}{e.available || e.id === 'gemini' ? '' : ' — no instalado'}
-            </option>
-          ))}
+          {engines.map((e) => {
+            // Los motores de nube (con clave) se pueden elegir aunque falte la
+            // credencial: así el usuario ve el hueco para pegarla.
+            const cloud = e.id === 'gemini' || e.needs_key
+            return (
+              <option key={e.id} value={e.id} disabled={!e.available && !cloud}>
+                {e.label}{e.available || cloud ? '' : ' — no instalado'}
+              </option>
+            )
+          })}
         </select>
       </label>
       <label className="field"><span>Voz</span>

@@ -5,9 +5,10 @@ import Toast from '../../components/Toast'
 import { fmt } from '../../lib/utils'
 import { getTimeline, saveTimeline, prepareReframe, getJob, createClipJob, getSettings,
   createBgRemovalJob, createBgCutoutJob, segmentBg, listBgProviders, cancelJob, addMotionToTimeline,
-  createSegments, faceTrackMaterial } from '../../services/api'
-import { dragMark, markToSourceRange, materialDuration, segmentDescription, segmentLabel } from './clipExtract'
+  createSegments, faceTrackMaterial, importExplore } from '../../services/api'
+import { dragMark, markToSourceRange, materialDuration, segmentDescription, segmentLabel, MIN_SEGMENT } from './clipExtract'
 import SegmentConfirmModal from './SegmentConfirmModal'
+import EdStickMenu from './EdStickMenu'
 import { clamp } from '../../lib/panning'
 import { defaultTextStyle, subtitleStyle, wrappedText, ensureEditorFonts, selectedSubtitleThemeId, clearTextTheme, effectiveTextStyle } from '../../lib/textstyles'
 import { applyThemeToStyle, wordsPerBoxOptions, activeWordsPerBox, splitCaptionWords } from '../../lib/textKaraoke'
@@ -34,10 +35,10 @@ import { SHAPE_DEFAULT_DUR } from '../../lib/shapes'
 import { readRowHeight, writeRowHeight } from './trackRows'
 import { newTrackIndex, resolveNewTrack } from './dropIntent'
 import { MASK_KF_KEYS, clipMasks, defaultMask, maskId, normalizeMask } from '../../lib/clipMask'
-import { autoActive, bgCapable, clipBg, defaultBg, isInteractiveProvider, normalizeBg } from '../../lib/clipBg'
+import { autoActive, bgCapable, chromaBg, clipBg, defaultBg, isInteractiveProvider, normalizeBg } from '../../lib/clipBg'
 import { clearMagic, setMagicMask } from './bgMagic'
 import { resetBgMeta, resetCutout } from './bgCutout'
-import { cropWindow, freeFrameAt, isOverlay, mediaSize, newTransform, sourceCropPx, videosAt } from '../../lib/clipLayout'
+import { canvasPointer, cropCursor, cropHandleAt, cropWindow, freeFrameAt, isOverlay, mediaSize, newTransform, sourceCropPx, videosAt } from '../../lib/clipLayout'
 import {
   AUDIO_FX_KEYS, applyVolumeFade, canKeyframe, clipPropsAt, clipVolumeAt, clampVolume, deleteKeyframeItem,
   copyKeyframeAt, disableKeyframes, duplicateKeyframeAt, enableKeyframes, flattenPatch,
@@ -48,8 +49,9 @@ import { drawMainView, drawResultView } from './render/canvas'
 import MotionCanvas from '../motion/MotionCanvas'
 import MotionProps from '../motion/MotionProps'
 import GenerateSceneModal from '../motion/GenerateSceneModal'
+import GenerateResourceModal from '../motion/GenerateResourceModal'
 import SceneDirectionWorkspace from '../direction/SceneDirectionWorkspace'
-import { patchDirectionSegment } from '../../services/api'
+import { patchDirectionSegment, suggestClipNotes } from '../../services/api'
 import { EMPTY_MARK, hasMarkRange, resolveGenerateTarget, setMark } from './motionTarget'
 import { useMotionComp } from '../motion/useMotionComp'
 import PaperCanvas from '../paper/PaperCanvas'
@@ -234,6 +236,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [markRange, setMarkRange] = useState(EMPTY_MARK)
   const markRangeRef = useRef(EMPTY_MARK); markRangeRef.current = markRange
   const [laneMenu, setLaneMenu] = useState(null)    // { x, y, time, track }
+  const [stickMenu, setStickMenu] = useState(null)  // { x, y, time, trackId } — "Agregar Stick"
   // Extractor del Clip Editor: Z / X marcan inicio y fin (arrastrables en la
   // regla) y "Crear clip" guarda el tramo en Materiales por referencia. Estado
   // aparte del I/O de Main para que un rango no se cuele en el otro editor.
@@ -246,6 +249,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const segAskRef = useRef(null); segAskRef.current = segAsk
   const [genMotion, setGenMotion] = useState(null)  // { start, end, playhead, explicit, clipId }
   const genMotionRef = useRef(null); genMotionRef.current = genMotion
+  // "Generar recurso": modal rapido (mismo target que genMotion). Es la via por
+  // defecto; el wizard largo (genMotion) solo se abre desde Direccion de escena.
+  const [genResource, setGenResource] = useState(null)
+  const genResourceRef = useRef(null); genResourceRef.current = genResource
   // "Dirección de escena": workspace de tramos del guion ({ focus }) y el tramo con el que
   // se abrió Generar Escena ({ segment, pack }). directionReload refresca la escaleta.
   const [directionWs, setDirectionWs] = useState(null)
@@ -285,6 +292,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   // Zoom SOLO visual del canvas (aleja/acerca la vista para ver alrededor del encuadre).
   // No toca el clip ni el export. Independiente por editor (Main vs Clip).
   const [mainZoom, setMainZoom] = useState(1)
+  // Marco de plataforma (TikTok / Shorts): solo vista previa sobre el canvas Main.
+  // Guía de zona segura; no se exporta.
+  const [platformOverlay, setPlatformOverlay] = useState('none')
   // Máscara: `maskMode` muestra y permite manipularla sobre el reproductor
   // (se enciende al abrir Video → Máscara); `maskDraw` es el pincel.
   const [maskMode, setMaskMode] = useState(false)
@@ -358,6 +368,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const bgPreviewUrlRef = useRef('')    // objectURL a revocar al reemplazar
   const chromaPickRef = useRef(false); chromaPickRef.current = chromaPick
   const viewZoomRef = useRef(1); viewZoomRef.current = viewZoom
+  const platformOverlayRef = useRef('none'); platformOverlayRef.current = platformOverlay
   const previewVolRef = useRef(previewVol); previewVolRef.current = previewVol
   const alignGuidesRef = useRef(null)
   const croppingRef = useRef(false)
@@ -574,6 +585,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       playingRef, framingModeRef, mainCanvasRef, mainStageRef, resultCanvasRef, mainTextBox, topVideoAt, alignGuidesRef,
       clipModeRef, cropModeRef, croppingRef, fpsRef, hitListRef, viewZoomRef,
       maskModeRef, maskDrawRef, bgBrushRef, bgPreviewRef, bgPreviewElRef, magicRef,
+      platformOverlayRef,
     }
     const tick = () => {
       const total = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
@@ -830,10 +842,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     else { c.setLoop(true); c.play(); setMotionPlaying(true) }
   }
 
-  // "Generar Motion": tramo = rango I/O si está marcado; si no, el instante del
+  // "Generar recurso": tramo = rango I/O si está marcado; si no, el instante del
   // clic + 5 s. Se guarda la timeline antes de abrir porque el backend construye
-  // el contexto (guion, elementos del tramo) desde la versión guardada.
-  async function openGenerateMotion({ time, clip } = {}) {
+  // el contexto (guion, elementos del tramo, notas) desde la versión guardada.
+  //
+  // Es el camino normal desde el editor. El wizard largo (GenerateSceneModal, en
+  // `genMotion`) ya no se abre desde aquí: solo desde Dirección de escena, cuando
+  // se dirige el guion entero tramo a tramo.
+  async function openGenerateResource({ time, clip } = {}) {
     setCtxMenu(null)
     setLaneMenu(null)
     if (clipModeRef.current || motionModeRef.current || paperModeRef.current) return
@@ -845,7 +861,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     stopPlayback()
     seek(target.start)
     try { await saveTimeline(project.id, timelinePayload()) } catch { /* se usa lo último guardado */ }
-    setGenMotion(target)
+    setGenResource(target)
   }
 
   // "Dirección de escena": abre la escaleta enfocada en el rango marcado (o en el tramo
@@ -1234,6 +1250,40 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       descMode: sourceDescription ? 'source' : 'manual',
       description: '',
       sourceDescription,
+      phase: 'edit',
+      progress: 0,
+      message: '',
+      error: '',
+    })
+  }
+
+  // Anticlick "Agregar a material" (modo Clip Editor): el clip de vídeo ENTERO
+  // (su in/out actuales, como hace saveClip) pasa a Materiales por referencia,
+  // sin marcar Z/X y sin render. Antes de confirmar el usuario revisa 2 inputs
+  // —título y descripción— ya rellenados con los del vídeo de origen.
+  function addClipToMaterial(video) {
+    if (segBusyRef.current || !clipModeRef.current || segAskRef.current) return
+    if (!video || video.kind !== 'video') return
+    const meta = clipMetaRef.current
+    const off = meta.segStart || 0
+    const start = +(off + (video.in_point || 0)).toFixed(3)
+    const end = +(off + (video.out_point ?? meta.segEnd ?? (video.in_point || 0))).toFixed(3)
+    if (end - start < MIN_SEGMENT) {
+      setClipToast({ type: 'error', message: 'El clip es demasiado corto para guardarlo como material.' })
+      return
+    }
+    stopPlayback()
+    const sourceDescription = String(meta.description || '').trim()
+    setSegAsk({
+      start,
+      end,
+      clipId: video.id,
+      remote: meta.sourceIdent == null,
+      title: String(meta.title || '').trim() || 'Clip',
+      descMode: 'manual',
+      description: sourceDescription,
+      sourceDescription,
+      simple: true,
       phase: 'edit',
       progress: 0,
       message: '',
@@ -1640,6 +1690,28 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setSelClipIds([clip.id])
   }
 
+  // "Agregar Stick" desde la timeline: un recurso de colección (vídeo/imagen)
+  // entra en la pista/instante del clic derecho, YA con fondo por croma activado
+  // (los sticks vienen sobre verde). No hay que configurar el croma a mano.
+  function addStickClip(item, opts = {}) {
+    const assetKind = item.kind === 'video' ? 'clips' : 'images'
+    const clipKind = item.kind === 'video' ? 'video' : 'image'
+    const track = (opts.trackId && tracksRef.current.find((t) => t.id === opts.trackId))
+      || targetTrackFor(trackKindForClip(clipKind))
+    if (!track) return
+    const at = opts.time != null ? Math.max(0, opts.time) : Math.max(0, playheadRef.current || 0)
+    const dur = assetKind === 'images'
+      ? (item.animated && Number(item.duration) > 0 ? Number(item.duration) : IMAGE_DEFAULT_DUR)
+      : (materialDuration(item) || 1)
+    const at0 = freeStartOnTrack(clipsRef.current, track.id, at, dur)
+    const base = makeClip(assetKind, item, track.id, at0, dur)
+    const clip = { ...base, bg_removal: chromaBg(item.chromaColor) }
+    setClips((prev) => [...prev, clip])
+    setSelClipId(clip.id)
+    setSelClipIds([clip.id])
+    setStickMenu(null)
+  }
+
   // Aplica la intención deducida al soltar (ver dropIntent.js). Devuelve la
   // pista definitiva y el instante, o null si hay que esperar confirmación.
   function resolveDropTarget(payload, trackId, startTime, intent) {
@@ -1660,9 +1732,44 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   }
 
   function dropAsset(payload, trackId, startTime, intent) {
+    if (payload._explore) {
+      dropExploreAsset(payload, trackId, startTime, intent)
+      return
+    }
     const spot = resolveDropTarget(payload, trackId, startTime, intent)
     if (!spot) return                       // el modal de reemplazo decide
     placeAsset(payload, spot.trackId, spot.start)
+  }
+
+  async function dropExploreAsset(item, trackId, startTime, intent) {
+    setClipToast({ type: 'info', message: 'Importando material…' })
+    try {
+      const res = await importExplore(project.id, item)
+      onChange?.()
+      const imported = res.item || res
+      const isVideo = res.kind === 'clips'
+      const assetKind = isVideo ? 'clips' : 'images'
+      const materialPayload = {
+        asset_kind: assetKind,
+        asset_id: isVideo ? String(imported.index) : String(imported.id),
+        filename: imported.filename,
+        name: imported.label || imported.name || imported.filename,
+        url: imported.url,
+        duration: isVideo ? (imported.duration || item.duration || 3) : (imported.animated ? (imported.duration || 3) : IMAGE_DEFAULT_DUR),
+        kind: isVideo ? 'video' : 'image',
+        animated: imported.animated || undefined,
+        loop: imported.animated ? imported.loop !== false : undefined,
+        scope: 'project',
+        description: imported.description || null,
+        media_version: imported.created_at || null,
+      }
+      const spot = resolveDropTarget(materialPayload, trackId, startTime, intent)
+      if (!spot) return
+      placeAsset(materialPayload, spot.trackId, spot.start)
+      setClipToast({ type: 'success', message: isVideo ? 'Vídeo añadido a la timeline.' : 'Imagen añadida a la timeline.' })
+    } catch (e) {
+      setClipToast({ type: 'error', message: e.message || 'No se pudo importar.' })
+    }
   }
 
   // Confirmado el reemplazo: fuera el clip de debajo y el nuevo ocupa su sitio.
@@ -2647,6 +2754,25 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
 
   // Cursor del pincel sobre el lienzo (el círculo lo dibuja drawComposite).
   function onCanvasBgMove(e) {
+    // Cursor de recorte al pasar por los tiradores (modo Recortar, sin arrastre en curso).
+    if (cropModeRef.current && !croppingRef.current && selectedClip && isVisualClip(selectedClip)) {
+      const cv = mainCanvasRef.current
+      const el = mediaEls.current.get(selectedClip.id)
+      const sz = mediaSize(el)
+      if (cv && el && sz.w) {
+        const srcAspect = sz.w / sz.h
+        const srcT = clamp(timelineToSource(selectedClip, playhead), selectedClip.in_point, selectedClip.out_point)
+        const clipT = Math.max(0, playhead - selectedClip.start)
+        const crop = cropWindow(selectedClip, srcAspect, outAspect, srcT, clipT)
+        const p = canvasPointer(e, cv)
+        const nx = clamp(p.x / cv.width, 0, 1)
+        const ny = clamp(p.y / cv.height, 0, 1)
+        const h = cropHandleAt(nx, ny, crop, p.rect)
+        cv.style.cursor = h ? cropCursor(h.hx, h.hy) : 'move'
+      }
+    } else if (mainCanvasRef.current?.style.cursor) {
+      mainCanvasRef.current.style.cursor = '' // sin recorte: manda el cursor del stage
+    }
     if (!bgBrushRef.current.on) return
     const canvas = mainCanvasRef.current
     if (!canvas) return
@@ -3038,7 +3164,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     }
     function onKey(e) {
       if (typingTarget(document.activeElement) || typingTarget(e.target)) return
-      if (genMotionRef.current || directionWsRef.current) return   // Generar Escena / Dirección de escena tienen el teclado
+      if (genMotionRef.current || genResourceRef.current || directionWsRef.current) return   // los modales de generar / Dirección de escena tienen el teclado
       if (segAskRef.current) return      // el modal de Crear clip tiene el teclado
       // Paper Animator tiene su propio estado y su propio historial: solo comparte
       // los atajos que significan lo mismo (deshacer, play, mover el cabezal).
@@ -3209,6 +3335,29 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const trackAudioClip = isAudioTrackSel
     ? clips.find((c) => c.track_id === selTrackObj.id && (c.kind === 'audio' || c.kind === 'video'))
     : null
+
+  // Nota de contexto de un clip (§5-§8): qué representa el fragmento en la historia.
+  // Es una propiedad más del clip, así que va por el flujo normal de la timeline
+  // (estado → guardado → deshacer), sin endpoint propio.
+  function setClipNote(clipId, note, source = 'user') {
+    const text = (note || '').trim()
+    setClips((prev) => prev.map((c) => (
+      c.id === clipId ? { ...c, note: text || null, note_source: text ? source : null } : c)))
+  }
+
+  // Propuesta de la IA para la nota. Guarda la timeline antes: el backend lee de
+  // ahí el guion del tramo y los materiales de alrededor.
+  async function suggestClipNoteFor(clipId) {
+    try { await saveTimeline(project.id, timelinePayload()) } catch { /* usa lo último guardado */ }
+    let note = ''
+    let degraded = ''
+    await suggestClipNotes(project.id, [clipId], (ev) => {
+      if (ev.type === 'note') { note = ev.note || ''; degraded = ev.degraded || '' }
+      else if (ev.type === 'error') throw new Error(ev.message || 'No se pudo proponer la nota.')
+    })
+    if (degraded && !note) throw new Error(degraded)
+    return note
+  }
 
   function patchClipFx(patch) {
     const ids = new Set(selIdsRef.current)
@@ -3432,14 +3581,22 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             onPointerMove={onCanvasBgMove}
             onPointerLeave={onCanvasBgLeave}
             onDragOver={(e) => {
-              if ([...e.dataTransfer.types].includes('application/x-material')) e.preventDefault()
+              const types = [...e.dataTransfer.types]
+              if (types.includes('application/x-material') || types.includes('application/x-explore')) e.preventDefault()
             }}
             onDrop={(e) => {
               e.preventDefault()
+              const rawExplore = e.dataTransfer.getData('application/x-explore')
+              if (rawExplore) {
+                try {
+                  const ex = JSON.parse(rawExplore)
+                  const at = freeStartOnTrack(clipsRef.current, selTrackId, playhead, ex.duration || 3)
+                  dropAsset({ ...ex, _explore: true }, selTrackId, at)
+                } catch { /* noop */ }
+                return
+              }
               const raw = e.dataTransfer.getData('application/x-material')
               if (!raw) return
-              // Soltar en el lienzo no apunta a un punto de la timeline: entra
-              // en el cabezal, pero sin pisar lo que ya hubiera en la pista.
               try {
                 const p = JSON.parse(raw)
                 const at = freeStartOnTrack(clipsRef.current, selTrackId, playhead, p.duration || SHAPE_DEFAULT_DUR)
@@ -3534,6 +3691,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               fps={fps}
               onFps={setFps}
               originalSize={hasVisualClip ? originalMediaSize : null}
+              overlay={platformOverlay}
+              onOverlay={setPlatformOverlay}
             />
           </div>
           {exportJob?.status === 'error' && <div className="error small">⚠️ {exportJob.error}</div>}
@@ -3560,6 +3719,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           cropping={cropMode}
           onCropping={setCropMode}
           clipMode={mainColTab === 'clip'}
+          noteProps={selectedClip && !isAudioTrackSel && !isTextTrackSel
+            ? { onChange: setClipNote, onSuggest: suggestClipNoteFor } : null}
           effectsProps={{
             clip: isAudioTrackSel ? (trackAudioClip || { kind: 'audio', volume: 1, muted: false, audio_fx: {}, start: 0 }) : selectedClip,
             onChangeFx: isAudioTrackSel ? (patch) => patchTrackAudio(selTrackObj.id, patch) : patchClipFx,
@@ -3743,6 +3904,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           segmentBusy={segBusy || !!clipSaving}
           markKeys={mainColTab === 'clip' ? ['Z', 'X'] : ['I', 'O']}
           segmentLabelText={mainColTab === 'clip' && clipMark.in == null && clipMark.out == null ? 'Z inicio · X fin' : ''}
+          onGenerateResource={mainColTab === 'main' ? () => openGenerateResource() : undefined}
           onSceneDirection={mainColTab === 'main' ? () => openSceneDirection() : undefined}
           onContextLane={mainColTab === 'main' ? (e, track, time) => {
             setCtxMenu(null)
@@ -3795,9 +3957,18 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         <>
           <div className="ed-ctx-backdrop" onPointerDown={() => setCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null) }} />
           <AnchoredMenu className="ed-ctx-menu" x={ctxMenu.x} y={ctxMenu.y}>
+            {mainColTab === 'clip' && ctxMenu.clip.kind === 'video' && (
+              <>
+                <button className="accent" disabled={segBusy || !!clipSaving}
+                  onClick={() => { addClipToMaterial(ctxMenu.clip); setCtxMenu(null) }}>
+                  <Icon name="add_to_photos" size={15} /> Agregar a material
+                </button>
+                <div className="ed-ctx-sep" />
+              </>
+            )}
             {mainColTab === 'main' && (
               <>
-                <button className="accent" onClick={() => openGenerateMotion({ time: ctxMenu.time, clip: ctxMenu.clip })}>
+                <button className="accent" onClick={() => openGenerateResource({ time: ctxMenu.time, clip: ctxMenu.clip })}>
                   <Icon name="auto_awesome" size={15} /> Generar recurso{hasMarkRange(markRange) ? ' en el rango' : ' aquí'}
                 </button>
                 <button onClick={() => openSceneDirection({ time: ctxMenu.time })}>
@@ -3872,7 +4043,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         <>
           <div className="ed-ctx-backdrop" onPointerDown={() => setLaneMenu(null)} onContextMenu={(e) => { e.preventDefault(); setLaneMenu(null) }} />
           <AnchoredMenu className="ed-ctx-menu" x={laneMenu.x} y={laneMenu.y}>
-            <button className="accent" onClick={() => openGenerateMotion({ time: laneMenu.time })}>
+            <button className="accent" onClick={() => { setStickMenu({ x: laneMenu.x, y: laneMenu.y, time: laneMenu.time, trackId: laneMenu.track?.id }); setLaneMenu(null) }}>
+              <Icon name="emoji_people" size={15} /> Agregar Stick
+            </button>
+            <button className="accent" onClick={() => openGenerateResource({ time: laneMenu.time })}>
               <Icon name="auto_awesome" size={15} /> Generar recurso {hasMarkRange(markRange) ? 'en el rango' : 'aquí'}
             </button>
             <button onClick={() => openSceneDirection({ time: laneMenu.time })}>
@@ -3893,6 +4067,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         </>
       )}
 
+      {stickMenu && (
+        <EdStickMenu
+          x={stickMenu.x}
+          y={stickMenu.y}
+          onPick={(item) => addStickClip(item, { time: stickMenu.time, trackId: stickMenu.trackId })}
+          onClose={() => setStickMenu(null)}
+        />
+      )}
+
       {directionWs && (
         <SceneDirectionWorkspace
           projectId={project.id}
@@ -3908,6 +4091,17 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           }}
           onOpenComposition={(cid) => { setDirectionWs(null); goMotionTab(cid) }}
           onToast={(t) => { setClipToast(t); if (t?.type === 'success') reloadTimeline() }}
+        />
+      )}
+
+      {genResource && (
+        <GenerateResourceModal
+          projectId={project.id}
+          target={genResource}
+          onChangeTarget={setGenResource}
+          onClose={() => setGenResource(null)}
+          onEditInStudio={(cid) => { setGenResource(null); goMotionTab(cid) }}
+          onAddToTimeline={addMotionDraftToTimeline}
         />
       )}
 

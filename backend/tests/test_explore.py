@@ -11,6 +11,9 @@ from app.media_search import (
     map_giphy_gif,
     map_pexels_photo,
     map_pexels_video,
+    map_pixabay_photo,
+    map_pixabay_video,
+    map_unsplash_photo,
     merge_items,
     pick_video_download,
     pick_video_preview,
@@ -74,6 +77,64 @@ class MapProvidersTest(unittest.TestCase):
         self.assertEqual(item["preview_url"], "https://media.giphy.com/p.gif")
         self.assertEqual(item["thumb_url"], "https://media.giphy.com/s.png")
 
+    def test_pixabay_photo(self):
+        item = map_pixabay_photo({
+            "id": 42,
+            "tags": "clock, time",
+            "user": "Ada",
+            "pageURL": "https://pixabay.com/photos/clock-42/",
+            "webformatURL": "https://pixabay.com/get/web.jpg",
+            "largeImageURL": "https://pixabay.com/get/large.jpg",
+            "imageWidth": 1920,
+            "imageHeight": 1080,
+        })
+        self.assertEqual(item["id"], "pixabay:photo:42")
+        self.assertEqual(item["kind"], "photo")
+        self.assertEqual(item["provider"], "pixabay")
+        self.assertEqual(item["download_url"], "https://pixabay.com/get/large.jpg")
+        self.assertEqual(item["thumb_url"], "https://pixabay.com/get/web.jpg")
+        self.assertEqual(item["author"], "Ada")
+
+    def test_pixabay_video_elige_stream_usable(self):
+        item = map_pixabay_video({
+            "id": 7,
+            "tags": "ocean",
+            "user": "Bob",
+            "duration": 12,
+            "pageURL": "https://pixabay.com/videos/ocean-7/",
+            "videos": {
+                "large": {"url": "https://cdn.pixabay.com/large.mp4", "width": 3840, "height": 2160, "thumbnail": "https://cdn.pixabay.com/l.jpg"},
+                "medium": {"url": "https://cdn.pixabay.com/medium.mp4", "width": 1920, "height": 1080},
+                "tiny": {"url": "https://cdn.pixabay.com/tiny.mp4", "width": 640, "height": 360},
+            },
+        })
+        self.assertEqual(item["kind"], "video")
+        # medium (1920) es el mayor ≤ 1920, no el 4K.
+        self.assertEqual(item["download_url"], "https://cdn.pixabay.com/medium.mp4")
+        self.assertEqual(item["width"], 1920)
+        # preview = el más ligero (tiny).
+        self.assertEqual(item["preview_url"], "https://cdn.pixabay.com/tiny.mp4")
+        self.assertEqual(item["duration"], 12)
+
+    def test_unsplash_photo(self):
+        item = map_unsplash_photo({
+            "id": "xY",
+            "description": "a clock",
+            "alt_description": "wall clock",
+            "width": 4000,
+            "height": 3000,
+            "urls": {"full": "https://images.unsplash.com/full", "small": "https://images.unsplash.com/small"},
+            "links": {"html": "https://unsplash.com/photos/xY"},
+            "user": {"name": "Cлеo"},
+        })
+        self.assertEqual(item["id"], "unsplash:photo:xY")
+        self.assertEqual(item["kind"], "photo")
+        self.assertEqual(item["download_url"], "https://images.unsplash.com/full")
+        self.assertEqual(item["thumb_url"], "https://images.unsplash.com/small")
+        self.assertEqual(item["title"], "a clock")
+        self.assertEqual(item["author"], "Cлеo")
+        self.assertEqual(item["source_url"], "https://unsplash.com/photos/xY")
+
     def test_merge_intercala(self):
         a = [{"id": "p1"}, {"id": "p2"}]
         b = [{"id": "v1"}]
@@ -131,6 +192,8 @@ class AllowedUrlTest(unittest.TestCase):
         self.assertTrue(allowed_download_url("https://images.pexels.com/photos/1.jpg"))
         self.assertTrue(allowed_download_url("https://media4.giphy.com/media/x.gif"))
         self.assertTrue(allowed_download_url("https://player.vimeocdn.com/x.mp4"))
+        self.assertTrue(allowed_download_url("https://pixabay.com/get/abc123.jpg"))
+        self.assertTrue(allowed_download_url("https://images.unsplash.com/photo-123"))
         self.assertFalse(allowed_download_url("https://evil.example/steal"))
         self.assertFalse(allowed_download_url("file:///etc/passwd"))
 

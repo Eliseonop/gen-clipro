@@ -68,6 +68,10 @@ export const searchCollections = ({ q = '', kind = '', collection = '' } = {}) =
   get(`/api/collections/search?q=${encodeURIComponent(q)}&kind=${encodeURIComponent(kind)}&collection=${encodeURIComponent(collection)}`)
 export const updateCollection = (cid, data) => patch(`/api/collections/${encodeURIComponent(cid)}`, data)
 
+// --- Sticks (personajes de la biblioteca con stick.json, para "Agregar Stick") ---
+export const listSticks = () => get('/api/sticks')
+export const getStick = (cid) => get(`/api/sticks/${encodeURIComponent(cid)}`)
+
 export const getSettings = () => get('/api/settings')
 export const putSettings = (data) => put('/api/settings', data)
 // API keys: prueba todas, y gestión de varias claves por proveedor (por índice).
@@ -133,6 +137,35 @@ export const getTimeline = (pid) => get(`/api/projects/${pid}/timeline`)
 export const saveTimeline = (pid, timeline) => put(`/api/projects/${pid}/timeline`, timeline)
 export const exportTimeline = (pid, timeline) => post(`/api/projects/${pid}/export`, { timeline })
 
+// --- Azure AI (Speech STT + Vision) ---
+// Las credenciales viven SOLO en el backend; aquí solo se pide el resultado.
+export const getAiStatus = () => get('/api/ai/status')
+// Transcribe un audio del proyecto (engine: 'whisper' | 'azure'). Devuelve un Job.
+export const transcribeAudio = (params) => post('/api/ai/speech/transcribe', params)
+// Vision sobre una imagen del proyecto (por nombre) o un archivo subido.
+function visionForm({ projectId, filename, file, language, force } = {}) {
+  const body = new FormData()
+  if (file) body.append('file', file)
+  if (projectId) body.append('project_id', projectId)
+  if (filename) body.append('filename', filename)
+  if (language) body.append('language', language)
+  if (force) body.append('force', 'true')
+  return body
+}
+export const analyzeImage = (opts) =>
+  req('/api/ai/vision/analyze', { method: 'POST', body: visionForm(opts) })
+export const ocrImage = (opts) =>
+  req('/api/ai/vision/ocr', { method: 'POST', body: visionForm(opts) })
+
+// --- Microsoft Foundry (capa de IA generativa) ---
+// Credenciales SOLO en el backend. Complementa Speech/Vision, no los reemplaza.
+// Asistente contextual libre (devuelve {text, model, usage}).
+export const foundryChat = ({ projectId, message, context, language } = {}) =>
+  post('/api/ai/foundry/chat', { project_id: projectId, message, context, language })
+// Operaciones estructuradas: op ∈ improve_script | generate_hooks | generate_titles |
+// generate_description | suggest_resources | visual_prompt | analyze_scene | assistant.
+export const foundryGenerate = (body) => post('/api/ai/foundry/generate', body)
+
 // --- Chat IA (agente sobre el MCP) ---
 export const getAiConfig = () => get('/api/ai/config')
 export const getLmStudioModels = (baseUrl) =>
@@ -186,6 +219,12 @@ export async function aiChat({ projectId, message, conversationId, context, sign
 // --- Motion Studio (motion graphics editables) ---
 export const listMotion = (pid) => get(`/api/projects/${pid}/motion`)
 export const listMotionTemplates = (pid) => get(`/api/projects/${pid}/motion/templates`)
+// Plantillas del usuario (§16): una composición validada pasa a la biblioteca.
+export const saveUserTemplate = (pid, { compositionId, name, bestFor, tags }) =>
+  post(`/api/projects/${pid}/motion/templates/user`,
+    { composition_id: compositionId, name, best_for: bestFor || '', tags: tags || [] })
+export const deleteUserTemplate = (pid, key) =>
+  del(`/api/projects/${pid}/motion/templates/user/${encodeURIComponent(key)}`)
 export const createMotion = (pid, body) => post(`/api/projects/${pid}/motion`, body || {})
 export const getMotion = (pid, cid) => get(`/api/projects/${pid}/motion/${cid}`)
 export const updateMotion = (pid, cid, composition) => put(`/api/projects/${pid}/motion/${cid}`, composition)
@@ -224,6 +263,29 @@ export const getMotionSegmentContext = (pid, { start, end, playhead, clipId } = 
 }
 export const setMotionFocus = (pid, { start, end, playhead, clipId } = {}) =>
   post(`/api/projects/${pid}/motion/focus`, { start, end, playhead, clip_id: clipId || null })
+
+// "Generar recurso": la IA analiza el tramo y propone recursos VISUALES eligiendo
+// plantillas de la biblioteca. SSE: start / seed / suggestions / done.
+export const suggestResources = (pid, { start, end, playhead, clipId, hint } = {}, onEvent, signal) =>
+  streamSSE(`/api/projects/${pid}/motion/resource/suggest`,
+    { start, end, playhead, clip_id: clipId || null, hint: hint || '' }, onEvent, signal)
+// Instancia una plantilla como borrador del tramo (sin IA, inmediato).
+export const buildResource = (pid, { start, end, template, params }) =>
+  post(`/api/projects/${pid}/motion/resource/build`, { start, end, template, params: params || {} })
+// Sin plantilla que encaje: la IA compone el borrador desde cero.
+// SSE: start / text / tool_* / created / error / done.
+export const createMotionFromProposal = (pid, { start, end, playhead, clipId, proposal, variantOf },
+  onEvent, signal) =>
+  streamSSE(`/api/projects/${pid}/motion/generate/create`,
+    { start, end, playhead, clip_id: clipId || null, proposal, variant_of: variantOf || null },
+    onEvent, signal)
+
+// Nota de contexto de un material de la timeline: qué representa el fragmento en
+// la historia. SSE: note (por clip) / error / done. No guarda: eso lo hace el
+// guardado normal de la timeline.
+export const suggestClipNotes = (pid, clipIds, onEvent, signal) =>
+  streamSSE(`/api/projects/${pid}/clip-notes/suggest`,
+    { clip_ids: Array.isArray(clipIds) ? clipIds : [clipIds] }, onEvent, signal)
 
 // "Generar Escena" (docs/GENERAR_ESCENA.md). `range` = { start, end, playhead, clipId }.
 // Con `directionId` el backend usa el tramo de la escaleta y su paquete de contexto.

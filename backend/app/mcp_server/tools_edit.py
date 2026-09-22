@@ -65,7 +65,7 @@ def _resolve_asset(proj, asset_kind: str, asset_id: str) -> dict:
     """Resuelve un asset del proyecto a los campos que necesita un clip."""
     if asset_kind == "clips":
         for c in proj.clips:
-            if str(c.index) == str(asset_id):
+            if str(c.index) == str(asset_id) or (c.id and str(c.id) == str(asset_id)):
                 dur = round((c.end or 0.0) - (c.start or 0.0), 3)
                 # Segmento por referencia: el archivo es el vídeo original y el
                 # tramo empieza en in_point (in/out del clip se desplazan).
@@ -170,7 +170,8 @@ def remove_clip(project_id: str, clip_id: str) -> dict:
 def update_clip(project_id: str, clip_id: str, patch: dict) -> dict:
     """Actualiza propiedades escalares de un clip en UNA operación. patch: opacity(0–1),
     speed(0.1–10)/keep_pitch/reverse, appear/exit, position(full|top|bottom|free)/start/duration,
-    role(caption|free). Para efectos/audio_fx/volumen/keyframes usa sus tools propias."""
+    role(caption|free), note (qué representa el fragmento en la historia; "" la borra).
+    Para efectos/audio_fx/volumen/keyframes usa sus tools propias."""
     return _apply(project_id, "update_clip", {"clip_id": clip_id, "patch": patch})
 
 

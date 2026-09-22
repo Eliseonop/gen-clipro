@@ -534,7 +534,7 @@ def set_text_role(tl: Timeline, clip_id: str, role: str) -> EditResult:
 
 # Claves aceptadas por update_clip → sub-op que las aplica (orden de aplicación).
 _UPDATE_CLIP_KEYS = ("opacity", "speed", "keep_pitch", "reverse", "appear", "exit",
-                     "position", "start", "duration", "role")
+                     "position", "start", "duration", "role", "note")
 
 
 def update_clip(tl: Timeline, clip_id: str, patch: dict | None = None) -> EditResult:
@@ -571,8 +571,30 @@ def update_clip(tl: Timeline, clip_id: str, patch: dict | None = None) -> EditRe
     if "role" in patch:
         r = set_text_role(cur, clip_id, patch["role"])
         cur, warnings = r.timeline, warnings + r.warnings
+    if "note" in patch:
+        r = set_clip_note(cur, clip_id, patch["note"])
+        cur, warnings = r.timeline, warnings + r.warnings
 
     return EditResult(cur, changed=[clip_id], warnings=warnings)
+
+
+def set_clip_note(tl: Timeline, clip_id: str, note: str | None,
+                  source: str = "user") -> EditResult:
+    """Nota semántica del fragmento: qué representa dentro de la historia.
+
+    ``note=None`` o vacío la borra. ``source='ai'`` marca la nota como propuesta
+    automática, para que la UI pueda distinguirla de lo que escribió el usuario;
+    una propuesta de IA NO pisa una nota escrita por el usuario (eso lo decide
+    quien llama, igual que ``description_ai`` en los materiales).
+    """
+    out = _copy(tl)
+    c = _find_clip(out, clip_id)
+    text = (note or "").strip()
+    if len(text) > 400:
+        text = text[:399].rstrip() + "…"
+    c.note = text or None
+    c.note_source = (source if text and source in ("user", "ai") else None)
+    return EditResult(out, changed=[clip_id])
 
 
 def set_clip_bg_removal(tl: Timeline, clip_id: str, bg_removal: dict | None,

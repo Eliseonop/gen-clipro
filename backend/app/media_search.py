@@ -1,4 +1,4 @@
-"""Búsqueda de material externo (Pexels + GIPHY) para la pestaña Explorar."""
+"""Búsqueda de material externo (Pexels + GIPHY + Pixabay + Unsplash) para Explorar."""
 from __future__ import annotations
 
 import json
@@ -12,6 +12,9 @@ from . import settings
 PEXELS_PHOTOS = "https://api.pexels.com/v1/search"
 PEXELS_VIDEOS = "https://api.pexels.com/videos/search"
 GIPHY_SEARCH = "https://api.giphy.com/v1/gifs/search"
+PIXABAY_PHOTOS = "https://pixabay.com/api/"
+PIXABAY_VIDEOS = "https://pixabay.com/api/videos/"
+UNSPLASH_SEARCH = "https://api.unsplash.com/search/photos"
 
 _UA = "Mozilla/5.0 (compatible; video-yt/1.0)"
 _TIMEOUT = 12
@@ -20,7 +23,12 @@ _PER_PAGE = 24
 LICENSE = {
     "pexels": "Licencia Pexels (uso libre, atribución recomendada)",
     "giphy": "Contenido GIPHY (consulta sus términos de uso)",
+    "pixabay": "Licencia Pixabay (uso libre, sin atribución obligatoria)",
+    "unsplash": "Licencia Unsplash (uso libre, atribución recomendada)",
 }
+
+# Nombre legible de cada proveedor (para los avisos de "falta la clave").
+_LABEL = {"pexels": "Pexels", "giphy": "GIPHY", "pixabay": "Pixabay", "unsplash": "Unsplash"}
 
 
 def _fetch_json(url: str, headers: dict | None = None, timeout: float = _TIMEOUT) -> dict:
@@ -162,6 +170,99 @@ def map_giphy_gif(gif: dict) -> dict | None:
     }
 
 
+def map_pixabay_photo(hit: dict) -> dict | None:
+    pid = str(hit.get("id") or "")
+    download = hit.get("largeImageURL") or hit.get("fullHDURL") or hit.get("webformatURL")
+    if not pid or not download:
+        return None
+    return {
+        "id": f"pixabay:photo:{pid}",
+        "provider": "pixabay",
+        "external_id": pid,
+        "kind": "photo",
+        "title": (hit.get("tags") or "").strip() or None,
+        "thumb_url": hit.get("webformatURL") or hit.get("previewURL") or download,
+        "preview_url": None,
+        "download_url": download,
+        "width": _int(hit.get("imageWidth")),
+        "height": _int(hit.get("imageHeight")),
+        "duration": None,
+        "author": (hit.get("user") or "").strip() or None,
+        "source_url": hit.get("pageURL") or f"https://pixabay.com/photos/-{pid}/",
+        "license_info": LICENSE["pixabay"],
+    }
+
+
+def pick_pixabay_stream(videos: dict | None) -> dict | None:
+    """Mejor stream usable de un vídeo Pixabay: large/medium ≤ 1920, si no el mayor."""
+    streams = [v for v in (videos or {}).values() if isinstance(v, dict) and v.get("url")]
+    if not streams:
+        return None
+    under = [v for v in streams if (_int(v.get("width"), 0) or 0) <= 1920]
+    pool = under or streams
+    return max(pool, key=lambda v: _int(v.get("width"), 0) or 0)
+
+
+def pick_pixabay_preview(videos: dict | None) -> dict | None:
+    """Stream más ligero (para el hover)."""
+    streams = [v for v in (videos or {}).values() if isinstance(v, dict) and v.get("url")]
+    if not streams:
+        return None
+    return min(streams, key=lambda v: _int(v.get("width"), 99999) or 99999)
+
+
+def map_pixabay_video(hit: dict) -> dict | None:
+    vid = str(hit.get("id") or "")
+    videos = hit.get("videos") if isinstance(hit.get("videos"), dict) else {}
+    best = pick_pixabay_stream(videos)
+    if not vid or not best:
+        return None
+    prev = pick_pixabay_preview(videos)
+    return {
+        "id": f"pixabay:video:{vid}",
+        "provider": "pixabay",
+        "external_id": vid,
+        "kind": "video",
+        "title": (hit.get("tags") or "").strip() or None,
+        "thumb_url": best.get("thumbnail") or (prev or {}).get("thumbnail"),
+        "preview_url": (prev or best).get("url"),
+        "download_url": best.get("url"),
+        "width": _int(best.get("width")),
+        "height": _int(best.get("height")),
+        "duration": _num(hit.get("duration")),
+        "author": (hit.get("user") or "").strip() or None,
+        "source_url": hit.get("pageURL") or f"https://pixabay.com/videos/-{vid}/",
+        "license_info": LICENSE["pixabay"],
+    }
+
+
+def map_unsplash_photo(hit: dict) -> dict | None:
+    pid = str(hit.get("id") or "")
+    urls = hit.get("urls") if isinstance(hit.get("urls"), dict) else {}
+    download = urls.get("full") or urls.get("regular") or urls.get("raw")
+    if not pid or not download:
+        return None
+    links = hit.get("links") if isinstance(hit.get("links"), dict) else {}
+    user = hit.get("user") if isinstance(hit.get("user"), dict) else {}
+    title = (hit.get("description") or hit.get("alt_description") or "").strip() or None
+    return {
+        "id": f"unsplash:photo:{pid}",
+        "provider": "unsplash",
+        "external_id": pid,
+        "kind": "photo",
+        "title": title,
+        "thumb_url": urls.get("small") or urls.get("thumb") or urls.get("regular") or download,
+        "preview_url": None,
+        "download_url": download,
+        "width": _int(hit.get("width")),
+        "height": _int(hit.get("height")),
+        "duration": None,
+        "author": (user.get("name") or user.get("username") or "").strip() or None,
+        "source_url": links.get("html") or f"https://unsplash.com/photos/{pid}",
+        "license_info": LICENSE["unsplash"],
+    }
+
+
 def merge_items(*groups: list[dict]) -> list[dict]:
     """Entrelaza grupos para mezclar fotos, vídeos y GIFs en la galería."""
     queues = [list(g) for g in groups if g]
@@ -214,6 +315,8 @@ class MediaSearchService:
         configured = {
             "pexels": bool(settings.api_key("pexels")),
             "giphy": bool(settings.api_key("giphy")),
+            "pixabay": bool(settings.api_key("pixabay")),
+            "unsplash": bool(settings.api_key("unsplash")),
         }
         empty = {
             "query": q,
@@ -228,42 +331,46 @@ class MediaSearchService:
         if not q:
             return empty
 
-        jobs = []
+        # (src, kind, fn, per_page) por cada fuente pedida. Si el proveedor no tiene
+        # clave se anota como error en vez de lanzarlo; varias fuentes dan la misma
+        # clase (varias "photo"), así que se agrupan por (src, kind) para no pisarse.
+        jobs: list[tuple] = []
         errors: list[dict] = []
-        need_pexels = _want(media, provider, "photo", "pexels") or _want(media, provider, "video", "pexels")
-        need_giphy = _want(media, provider, "gif", "giphy")
-        if need_pexels and not configured["pexels"]:
-            errors.append({"provider": "pexels", "message": "Falta la clave de Pexels en Ajustes."})
-        else:
-            if _want(media, provider, "photo", "pexels"):
-                jobs.append(("pexels", "photo", self._pexels_photos, q, page, per_page))
-            if _want(media, provider, "video", "pexels"):
-                jobs.append(("pexels", "video", self._pexels_videos, q, page, min(per_page, 16)))
-        if need_giphy and not configured["giphy"]:
-            errors.append({"provider": "giphy", "message": "Falta la clave de GIPHY en Ajustes."})
-        elif need_giphy:
-            jobs.append(("giphy", "gif", self._giphy_gifs, q, page, per_page))
 
-        groups: dict[str, list[dict]] = {}
+        def _add(src, kind, fn, n):
+            if not _want(media, provider, kind, src):
+                return
+            if not configured.get(src):
+                errors.append({"provider": src, "message": f"Falta la clave de {_LABEL[src]} en Ajustes."})
+            else:
+                jobs.append((src, kind, fn, n))
+
+        _add("pexels", "photo", self._pexels_photos, per_page)
+        _add("pexels", "video", self._pexels_videos, min(per_page, 16))
+        _add("pixabay", "photo", self._pixabay_photos, per_page)
+        _add("pixabay", "video", self._pixabay_videos, min(per_page, 16))
+        _add("unsplash", "photo", self._unsplash_photos, per_page)
+        _add("giphy", "gif", self._giphy_gifs, per_page)
+
+        results: dict[tuple, list[dict]] = {}
         more = False
         if jobs:
-            with ThreadPoolExecutor(max_workers=3) as pool:
-                futs = {
-                    pool.submit(fn, q, page, n): (src, kind)
-                    for src, kind, fn, q, page, n in jobs
-                }
+            with ThreadPoolExecutor(max_workers=min(6, len(jobs))) as pool:
+                futs = {pool.submit(fn, q, page, n): (src, kind) for src, kind, fn, n in jobs}
                 for fut in as_completed(futs):
                     src, kind = futs[fut]
                     try:
-                        items, has_more = fut.result()
-                        groups[kind] = items
+                        found, has_more = fut.result()
+                        results[(src, kind)] = found
                         more = more or has_more
                     except ValueError as exc:
                         errors.append({"provider": src, "message": str(exc)})
                     except Exception as exc:  # noqa: BLE001
                         errors.append({"provider": src, "message": str(exc) or "Fuente no disponible."})
 
-        items = merge_items(groups.get("photo") or [], groups.get("video") or [], groups.get("gif") or [])
+        # Entrelaza en el orden en que se pidieron las fuentes (determinista) para
+        # mezclar proveedores y tipos en la galería.
+        items = merge_items(*[results[(s, k)] for (s, k, _fn, _n) in jobs if (s, k) in results])
         uniq_err: list[dict] = []
         seen_src: set[str] = set()
         for e in errors:
@@ -276,9 +383,13 @@ class MediaSearchService:
         partial = bool(errors) and bool(items)
         warning = "Algunas fuentes no están disponibles." if partial else None
         if errors and not items:
-            missing = [e.get("provider") for e in errors if "clave" in (e.get("message") or "").lower()]
-            if "pexels" in missing and "giphy" in missing:
-                warning = "Faltan las claves de Pexels y GIPHY en Ajustes."
+            missing = list(dict.fromkeys(
+                e.get("provider") for e in errors if "clave" in (e.get("message") or "").lower()
+            ))
+            if len(missing) > 1:
+                warning = "Faltan claves en Ajustes: " + ", ".join(_LABEL.get(m, m) for m in missing) + "."
+            elif missing:
+                warning = f"Falta la clave de {_LABEL.get(missing[0], missing[0])} en Ajustes."
             else:
                 warning = errors[0]["message"]
         return {
@@ -326,6 +437,42 @@ class MediaSearchService:
         pag = data.get("pagination") if isinstance(data.get("pagination"), dict) else {}
         total = _int(pag.get("total_count"), 0) or 0
         return items, offset + len(items) < total
+
+    def _pixabay_photos(self, query: str, page: int, per_page: int) -> tuple[list[dict], bool]:
+        key = settings.api_key("pixabay")
+        if not key:
+            raise ValueError("Falta la clave de Pixabay en Ajustes.")
+        n = max(3, min(int(per_page), 200))
+        url = f"{PIXABAY_PHOTOS}?{urlencode({'key': key, 'q': query, 'page': page, 'per_page': n, 'image_type': 'photo', 'safesearch': 'true'})}"
+        data = _fetch_json(url)
+        hits = [map_pixabay_photo(h) for h in (data.get("hits") or [])]
+        items = [h for h in hits if h]
+        total = _int(data.get("totalHits"), 0) or 0
+        return items, page * n < total
+
+    def _pixabay_videos(self, query: str, page: int, per_page: int) -> tuple[list[dict], bool]:
+        key = settings.api_key("pixabay")
+        if not key:
+            raise ValueError("Falta la clave de Pixabay en Ajustes.")
+        n = max(3, min(int(per_page), 200))
+        url = f"{PIXABAY_VIDEOS}?{urlencode({'key': key, 'q': query, 'page': page, 'per_page': n, 'safesearch': 'true'})}"
+        data = _fetch_json(url)
+        hits = [map_pixabay_video(h) for h in (data.get("hits") or [])]
+        items = [h for h in hits if h]
+        total = _int(data.get("totalHits"), 0) or 0
+        return items, page * n < total
+
+    def _unsplash_photos(self, query: str, page: int, per_page: int) -> tuple[list[dict], bool]:
+        key = settings.api_key("unsplash")
+        if not key:
+            raise ValueError("Falta la clave de Unsplash en Ajustes.")
+        n = max(1, min(int(per_page), 30))
+        url = f"{UNSPLASH_SEARCH}?{urlencode({'query': query, 'page': page, 'per_page': n, 'content_filter': 'high'})}"
+        data = _fetch_json(url, headers={"Authorization": f"Client-ID {key}"})
+        results = [map_unsplash_photo(h) for h in (data.get("results") or [])]
+        items = [r for r in results if r]
+        total_pages = _int(data.get("total_pages"), 0) or 0
+        return items, page < total_pages
 
 
 media_search = MediaSearchService()

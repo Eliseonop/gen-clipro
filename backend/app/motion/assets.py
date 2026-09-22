@@ -78,12 +78,15 @@ def data_uri_for(project_id: str, image_id: str, max_side: int = MAX_SIDE) -> st
 
 
 def embedded_assets(comp: MotionComposition) -> dict[str, str]:
-    """``{id: data_uri}`` de las imágenes referenciadas (vacío si no hay project_id)."""
-    pid = (comp.metadata or {}).get("project_id")
-    if not pid:
-        return {}
+    """``{id: data_uri}`` de las imágenes referenciadas.
+
+    Sin ``project_id`` solo se resuelven las de la Biblioteca (``lib_…``), que no
+    dependen del proyecto: así se ven en la galería las plantillas guardadas."""
+    pid = (comp.metadata or {}).get("project_id") or ""
     out: dict[str, str] = {}
     for iid in referenced_ids(comp):
+        if not pid and not iid.startswith("lib_"):
+            continue
         uri = data_uri_for(pid, iid)
         if uri:
             out[iid] = uri

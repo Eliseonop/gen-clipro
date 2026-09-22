@@ -8,6 +8,7 @@ import { bgCapable } from '../../lib/clipBg'
 import { maskable } from '../../lib/clipMask'
 import { isVisualClip } from './editorModel'
 import EdBgRemove from './EdBgRemove'
+import EdClipNote from './EdClipNote'
 import EdMask from './EdMask'
 import EdShape from './EdShape'
 import EdText, { TextFxPanel } from './EdText'
@@ -48,6 +49,7 @@ export default function EdInspector({
   shapeProps,
   maskProps,
   bgProps,
+  noteProps,
   clipMode,
 }) {
   const clip = selectedClip
@@ -126,6 +128,13 @@ export default function EdInspector({
             <Icon name="tune" size={28} />
             <p>Selecciona un elemento para editar sus propiedades.</p>
           </div>
+        )}
+
+        {/* Qué SIGNIFICA este fragmento en la historia. Va lo primero: es lo que
+            después lee la IA, y es lo que no se puede deducir mirando los frames. */}
+        {clip && noteProps && sub === 'basic' && ['video', 'audio', 'texto'].includes(activeNav) && (
+          <EdClipNote clip={clip} onChange={(note, source) => noteProps.onChange?.(clip.id, note, source)}
+            onSuggest={noteProps.onSuggest} />
         )}
 
         {hasTarget && activeNav === 'video' && sub === 'basic' && visual && onCropping && (

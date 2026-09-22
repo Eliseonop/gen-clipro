@@ -282,7 +282,7 @@ class AudioInfo(BaseModel):
     text: Optional[str] = None
     duration: Optional[float] = None
     created_at: Optional[str] = None
-    engine: Optional[str] = None       # "kokoro" | "piper" | "gemini"
+    engine: Optional[str] = None       # "kokoro" | "piper" | "gemini" | "azure"
     label: Optional[str] = None
     description: Optional[str] = None
     origin: Optional[str] = None              # "tts" | "youtube"
@@ -294,7 +294,7 @@ class AudioInfo(BaseModel):
 class TTSRequest(BaseModel):
     project_id: str
     text: str
-    engine: str = "kokoro"             # "kokoro" | "piper" | "gemini"
+    engine: str = "kokoro"             # "kokoro" | "piper" | "gemini" | "azure"
     voice: str = "ef_dora"
     voice2: Optional[str] = None       # voz secundaria para mezclar (más natural/variado)
     blend: float = 0.5                 # peso de la voz principal (0-1)
@@ -321,6 +321,7 @@ class ImageInfo(BaseModel):
     label: Optional[str] = None
     description: Optional[str] = None
     semantic: Optional[dict] = None           # metadata semántica para dirigir escenas (ver scene_direction.normalize_semantic)
+    analysis: Optional[dict] = None           # análisis de Azure Vision (caption, tags, objects, ocr_text…); base para búsqueda semántica futura
     origin: Optional[str] = "upload"
     source: Optional[str] = "external"
     provider: Optional[str] = None            # "pexels" | "giphy"
@@ -380,6 +381,22 @@ class ExploreItem(BaseModel):
 class ClipTranscribeRequest(BaseModel):
     model: Optional[str] = None   # None = modelo de ajustes
     language: Optional[str] = None
+
+
+class SpeechTranscribeRequest(BaseModel):
+    """Transcribir un audio del proyecto (o biblioteca) con Whisper o Azure Speech.
+
+    Comparte el flujo de subtítulos: si el audio está en la timeline, además crea
+    la pista de subtítulos; siempre devuelve el ``transcript`` con words[].
+    """
+    project_id: str
+    filename: str
+    asset_kind: str = "audios"        # "audios" | "clips" | "sfx"
+    asset_scope: str = "project"      # "project" | "library"
+    engine: str = "whisper"           # "whisper" | "azure"
+    model: Optional[str] = None       # solo Whisper (None = ajustes)
+    language: Optional[str] = None
+    source_clip_id: Optional[str] = None
 
 
 # --- Editor de vídeo (timeline multipista) -----------------------------
@@ -449,6 +466,12 @@ class TimelineClip(BaseModel):
     keyframes: Optional[dict] = None      # snapshots: {enabled, items: [{id,t,interpolation,props}]}
     asset_scope: str = "project"          # "project" | "library" | "collection"
     description: Optional[str] = None
+    # Nota SEMÁNTICA del fragmento: qué representa ESTE trozo dentro de la historia
+    # ("el científico escribe la ecuación"), no qué es el archivo. Es lo que
+    # permite entender un recorte 00:12→00:17 sin verlo, y viaja al contexto que
+    # recibe la IA al generar recursos o animaciones (ver motion/segment_context.py).
+    note: Optional[str] = None
+    note_source: Optional[str] = None     # "user" | "ai"; la del usuario nunca se pisa
     dup_of: Optional[str] = None          # id del clip original si es una copia
     composition_id: Optional[str] = None  # (motion) id de la MotionComposition de origen
 

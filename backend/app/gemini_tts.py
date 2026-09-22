@@ -133,6 +133,19 @@ STYLES = [
             "Íntimo y sereno."
         ),
     },
+    {
+        "id": "realtor",
+        "label": "Vendedor inmobiliario",
+        "instr": (
+            "Cuéntalo como un asesor inmobiliario que enseña una propiedad y "
+            "quiere enamorar al cliente: voz cálida, segura y persuasiva, con "
+            "entusiasmo controlado y una sonrisa en la voz. Ritmo ágil pero "
+            "claro, marcando con orgullo los puntos fuertes (ubicación, luz, "
+            "acabados, precio) y creando deseo y urgencia amable ('no te lo "
+            "puedes perder'), sin sonar a teletienda ni a presión agresiva. "
+            "Cercano, confiable y aspiracional."
+        ),
+    },
 ]
 
 _STYLE_BY_ID = {s["id"]: s for s in STYLES}
@@ -147,6 +160,8 @@ _STYLE_ALIASES = {
     "enérgico": "energetic",
     "energico": "energetic",
     "tranquilo": "calm",
+    "vendedor": "realtor",
+    "inmobiliario": "realtor",
 }
 
 

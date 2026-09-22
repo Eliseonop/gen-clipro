@@ -3,16 +3,25 @@
 Descarga solo el audio y lo transcribe en segmentos con marcas de tiempo,
 para tener el "guion" del vídeo. Los modelos se descargan y cachean solos la
 primera vez (tiny ~75MB … large-v3 ~3GB).
+
+Usa BatchedInferencePipeline (4-12× más rápido) con batch size adaptativo
+según la VRAM libre, igual que el proyecto transcryp.
 """
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
 import tempfile
 import threading
 from pathlib import Path
 from typing import Callable, Optional
 
 from faster_whisper import WhisperModel
+try:
+    from faster_whisper import BatchedInferencePipeline
+except ImportError:
+    BatchedInferencePipeline = None  # type: ignore[assignment,misc]
 
 from . import gpu, transcribe_settings, ytdlp
 
@@ -24,6 +33,7 @@ ProgressCb = Callable[[float, str], None]
 MODELS = list(transcribe_settings.MODELS)
 
 _models: dict[str, tuple[str, WhisperModel]] = {}
+_pipelines: dict[str, object] = {}
 _infer_lock = threading.Lock()
 
 
@@ -56,6 +66,34 @@ def shape_words(raw) -> list[dict]:
     return out
 
 
+def _vram_libre_mb() -> int:
+    """MB de VRAM libre en la GPU 0 (nvidia-smi). 0 si no se puede leer."""
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits", "--id=0"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0:
+            return int(r.stdout.strip().split("\n")[0])
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
+
+
+def _batch_size(device: str, model_size: str) -> int:
+    """Elige batch size adaptativo según VRAM libre (como transcryp)."""
+    if device != "cuda":
+        return max(4, os.cpu_count() or 4)
+    libre = _vram_libre_mb()
+    if model_size == "large-v3":
+        if libre < 6000:
+            return 4
+        if libre < 11000:
+            return 8
+        return 16
+    return 16
+
+
 def _get_model(size: str) -> tuple[str, WhisperModel]:
     """Carga (y cachea) un modelo. Usa GPU (cuda/float16) si hay; si no, o si la
     carga en CUDA falla (faltan cuBLAS/cuDNN), cae a CPU (int8)."""
@@ -63,18 +101,38 @@ def _get_model(size: str) -> tuple[str, WhisperModel]:
     if cached is not None:
         return cached
     device, compute = gpu.whisper_device()
+    cpu_threads = (os.cpu_count() or 4) if device == "cpu" else 4
     try:
-        model = WhisperModel(size, device=device, compute_type=compute)
-        log.info("Whisper '%s' cargado en %s (%s).", size, device, compute)
+        model = WhisperModel(size, device=device, compute_type=compute,
+                             cpu_threads=cpu_threads)
+        log.info("Whisper '%s' cargado en %s (%s), threads=%d.", size, device, compute, cpu_threads)
     except Exception as exc:  # noqa: BLE001 - fallback seguro a CPU
         if device == "cpu":
             raise
         log.warning("Whisper en %s falló (%s); usando CPU (int8).", device, exc)
         device, compute = "cpu", "int8"
-        model = WhisperModel(size, device=device, compute_type=compute)
-        log.info("Whisper '%s' cargado en cpu (int8).", size)
+        cpu_threads = os.cpu_count() or 4
+        model = WhisperModel(size, device=device, compute_type=compute,
+                             cpu_threads=cpu_threads)
+        log.info("Whisper '%s' cargado en cpu (int8), threads=%d.", size, cpu_threads)
     _models[size] = (device, model)
     return device, model
+
+
+def _get_pipeline(size: str) -> tuple[str, object, int]:
+    """Devuelve el pipeline batched + batch_size óptimo para el modelo.
+
+    Si BatchedInferencePipeline no está disponible (faster-whisper <1.0),
+    devuelve el modelo directo con batch_size=0 (modo secuencial).
+    """
+    device, model = _get_model(size)
+    if BatchedInferencePipeline is None:
+        return device, model, 0
+    if size not in _pipelines:
+        _pipelines[size] = BatchedInferencePipeline(model=model)
+        log.info("BatchedInferencePipeline creado para '%s'.", size)
+    bs = _batch_size(device, size)
+    return device, _pipelines[size], bs
 
 
 def _download_audio(url: str, dest_dir: Path, on_progress: ProgressCb) -> Path:
@@ -117,20 +175,27 @@ def _collect_segments(segments, info, on_progress: ProgressCb, base: float) -> d
     return {"language": info.language, "duration": round(total, 1), "segments": out}
 
 
+def _do_transcribe(pipeline, path: str, language: Optional[str], bs: int):
+    """Llama a transcribe con o sin batch_size según el pipeline."""
+    kwargs: dict = {"language": language or None, "word_timestamps": True}
+    if bs > 0:
+        kwargs["batch_size"] = bs
+    return pipeline.transcribe(str(path), **kwargs)
+
+
 def _transcribe_path(path: str, model_size: str, language: Optional[str],
                      on_progress: ProgressCb, base: float = 0.3) -> dict:
-    """Transcribe un archivo de audio/vídeo ya en disco."""
+    """Transcribe un archivo de audio/vídeo ya en disco (batched pipeline)."""
     model_size = transcribe_settings.resolve(model_size)
 
     on_progress(base * 0.66, f"Cargando modelo {model_size}…")
     with _infer_lock:
-        device, model = _get_model(model_size)
-        on_progress(base, f"Transcribiendo ({device})…")
-        log.info("Whisper '%s' infiriendo en %s: %s", model_size, device, path)
+        device, pipeline, bs = _get_pipeline(model_size)
+        mode = f"batch={bs}" if bs else "secuencial"
+        on_progress(base, f"Transcribiendo ({device}, {mode})…")
+        log.info("Whisper '%s' %s en %s: %s", model_size, mode, device, path)
         try:
-            segments, info = model.transcribe(
-                str(path), language=language or None, word_timestamps=True,
-            )
+            segments, info = _do_transcribe(pipeline, path, language, bs)
             result = _collect_segments(segments, info, on_progress, base)
         except Exception as exc:  # noqa: BLE001
             if device == "cpu":
@@ -138,11 +203,11 @@ def _transcribe_path(path: str, model_size: str, language: Optional[str],
             log.warning("Whisper CUDA falló al inferir (%s); reintento en CPU.", exc)
             gpu.mark_cuda_broken()
             _models.pop(model_size, None)
-            device, model = _get_model(model_size)
-            on_progress(base, "Transcribiendo (cpu)…")
-            segments, info = model.transcribe(
-                str(path), language=language or None, word_timestamps=True,
-            )
+            _pipelines.pop(model_size, None)
+            device, pipeline, bs = _get_pipeline(model_size)
+            mode = f"batch={bs}" if bs else "secuencial"
+            on_progress(base, f"Transcribiendo (cpu, {mode})…")
+            segments, info = _do_transcribe(pipeline, path, language, bs)
             result = _collect_segments(segments, info, on_progress, base)
         log.info("Whisper '%s' listo: %s segmentos.", model_size, len(result["segments"]))
         return result

@@ -98,6 +98,8 @@ export const MEDIA_FILTERS = [
 export const PROVIDER_FILTERS = [
   { id: 'all', label: 'Todos los proveedores' },
   { id: 'pexels', label: 'Pexels' },
+  { id: 'pixabay', label: 'Pixabay' },
+  { id: 'unsplash', label: 'Unsplash' },
   { id: 'giphy', label: 'GIPHY' },
 ]
 
@@ -110,6 +112,8 @@ export function kindLabel(kind) {
 export function providerLabel(provider) {
   if (provider === 'giphy') return 'GIPHY'
   if (provider === 'pexels') return 'Pexels'
+  if (provider === 'pixabay') return 'Pixabay'
+  if (provider === 'unsplash') return 'Unsplash'
   return provider || ''
 }
 
@@ -157,7 +161,7 @@ const EMPTY_EXPLORE_SESSION = {
   hasMore: false,
   warning: null,
   searched: false,
-  configured: { pexels: false, giphy: false },
+  configured: { pexels: false, giphy: false, pixabay: false, unsplash: false },
 }
 
 function cloneExploreSession(s) {
@@ -165,7 +169,7 @@ function cloneExploreSession(s) {
     ...EMPTY_EXPLORE_SESSION,
     ...s,
     items: Array.isArray(s?.items) ? [...s.items] : [],
-    configured: { pexels: false, giphy: false, ...(s?.configured || {}) },
+    configured: { pexels: false, giphy: false, pixabay: false, unsplash: false, ...(s?.configured || {}) },
   }
 }
 

@@ -46,6 +46,12 @@ def get_composition(project_id: str, comp_id: str) -> MotionComposition | None:
 
 def save_composition(project_id: str, comp: MotionComposition, *, bump: bool = True) -> MotionComposition:
     """Valida y persiste. ``bump`` incrementa version (invalida el render cacheado)."""
+    # Las imágenes del material (``asset:image/<id>``) se resuelven con el proyecto
+    # de la composición: sin él, una plantilla con PNG saldría con la imagen rota.
+    meta = dict(comp.metadata or {})
+    if meta.get("project_id") != project_id:
+        meta["project_id"] = project_id
+        comp = comp.model_copy(update={"metadata": meta})
     errors = validate(comp)
     if errors:
         raise MotionValidationError(errors)

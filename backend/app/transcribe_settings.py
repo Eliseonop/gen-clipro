@@ -10,7 +10,7 @@ MODEL_INFO = (
     {"id": "base", "label": "Base", "hint": "Equilibrio velocidad / calidad (~140 MB)"},
     {"id": "small", "label": "Small", "hint": "Mejor precisión, un poco más lento (~460 MB)"},
     {"id": "medium", "label": "Medium", "hint": "Alta precisión, más lento (~1.5 GB)"},
-    {"id": "large-v3", "label": "Large v3", "hint": "Máxima precisión (~3 GB)"},
+    {"id": "large-v3", "label": "Large v3", "hint": "Máxima precisión, batched pipeline (~3 GB)"},
 )
 
 

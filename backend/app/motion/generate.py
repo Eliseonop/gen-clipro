@@ -225,6 +225,7 @@ async def propose_stream(project_id: str, *, ctx: dict, hint: str = "",
 # --- Fase 3: generación de la composición (borrador con preview) --------------
 
 CREATE_MAX_ITERS = 6
+CREATE_TIMEOUT = 180.0   # s; con herramientas y modelos lentos tarda varios turnos
 
 # Herramientas que puede usar la IA al GENERAR (subconjunto de motion). Sin
 # add_to_timeline: aquí solo se crea el borrador; insertarlo es un paso aparte.
@@ -422,11 +423,14 @@ async def create_stream(project_id: str, *, ctx: dict, proposal: dict,
 
     async def worker() -> None:
         try:
-            await provider.run(
+            await asyncio.wait_for(provider.run(
                 system=_create_system_prompt(theme), history=[],
                 user_message=_create_user_prompt(ctx, proposal), tools=_CREATE_TOOLS,
                 call_tool=call_tool, emit=emit, max_iters=CREATE_MAX_ITERS,
-            )
+            ), timeout=CREATE_TIMEOUT)
+        except asyncio.TimeoutError:
+            # Si ya hay borrador se entrega el que haya; si no, el mensaje final lo explica.
+            state["timeout"] = True
         except Exception as exc:  # noqa: BLE001
             await emit({"type": "error", "message": f"Error del modelo: {exc}"})
         finally:
@@ -450,7 +454,9 @@ async def create_stream(project_id: str, *, ctx: dict, proposal: dict,
                "version": comp.version if comp else None,
                "duration": comp.duration if comp else None}
     else:
-        yield {"type": "error", "message": "La IA no llegó a generar la composición. Reintenta."}
+        msg = ("La IA tardó demasiado. Prueba con una propuesta de plantilla."
+               if state.get("timeout") else "La IA no llegó a generar la composición. Reintenta.")
+        yield {"type": "error", "message": msg}
     yield {"type": "done"}
 
 

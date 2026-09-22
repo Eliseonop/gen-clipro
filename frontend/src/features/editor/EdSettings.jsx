@@ -4,38 +4,46 @@ import Toast from '../../components/Toast'
 import { FPS_CHOICES, normalizeFps } from '../../lib/projectFps'
 import { getSettings, putSettings, getAiConfig, getLmStudioModels, testApiKeys, addApiKey, setApiKeyAt, deleteApiKeyAt } from '../../services/api'
 
+// `use` = etiqueta corta de PARA QUÉ sirve la clave (chip). `icon` = material-icons
+// clásico (por ligadura). `wired: false` = la clave se guarda y se puede probar,
+// pero todavía ninguna función de la app la consume (p. ej. Unsplash: la búsqueda
+// de stock solo usa Pexels + GIPHY).
 const API_PROVIDERS = [
-  { id: 'gemini', label: 'Google Gemini', hint: 'Narración TTS, guion e imágenes', keys: 'https://aistudio.google.com/apikey' },
-  { id: 'openai', label: 'OpenAI', hint: 'GPT, Whisper e imágenes', keys: 'https://platform.openai.com/api-keys' },
-  { id: 'anthropic', label: 'Anthropic', hint: 'Claude para guiones', keys: 'https://console.anthropic.com/settings/keys' },
-  { id: 'elevenlabs', label: 'ElevenLabs', hint: 'Voces TTS', keys: 'https://elevenlabs.io/app/settings/api-keys' },
-  { id: 'openrouter', label: 'OpenRouter', hint: 'Varios modelos con una sola clave', keys: 'https://openrouter.ai/keys' },
-  { id: 'groq', label: 'Groq', hint: 'Chat IA gratis y muy rápido', keys: 'https://console.groq.com/keys' },
-  { id: 'cerebras', label: 'Cerebras', hint: 'Chat IA gratis, inferencia ultrarrápida', keys: 'https://cloud.cerebras.ai/platform' },
-  { id: 'mistral', label: 'Mistral', hint: 'Chat IA gratis (La Plateforme)', keys: 'https://console.mistral.ai/api-keys' },
-  { id: 'pexels', label: 'Pexels', hint: 'Vídeo e imágenes de stock', keys: 'https://www.pexels.com/api/' },
-  { id: 'giphy', label: 'GIPHY', hint: 'GIFs animados', keys: 'https://developers.giphy.com/dashboard/' },
-  { id: 'pixabay', label: 'Pixabay', hint: 'Stock libre', keys: 'https://pixabay.com/api/docs/' },
-  { id: 'unsplash', label: 'Unsplash', hint: 'Fotos de stock', keys: 'https://unsplash.com/oauth/applications' },
-  { id: 'youtube', label: 'YouTube Data', hint: 'Metadatos y búsqueda', keys: 'https://console.cloud.google.com/apis/credentials' },
-  { id: 'replicate', label: 'Replicate', hint: 'Modelos de imagen y vídeo', keys: 'https://replicate.com/account/api-tokens' },
-  { id: 'fal', label: 'Fal.ai', hint: 'Generación rápida', keys: 'https://fal.ai/dashboard/keys' },
-  { id: 'huggingface', label: 'Hugging Face', hint: 'Modelos abiertos', keys: 'https://huggingface.co/settings/tokens' },
-  { id: 'assemblyai', label: 'AssemblyAI', hint: 'Transcripción', keys: 'https://www.assemblyai.com/app/account' },
-  { id: 'removebg', label: 'Remove.bg', hint: 'Quitar fondo', keys: 'https://www.remove.bg/dashboard#api-key' },
-  { id: 'stability', label: 'Stability AI', hint: 'Imagen y vídeo', keys: 'https://platform.stability.ai/account/keys' },
+  { id: 'gemini', label: 'Google Gemini', use: 'IA · voz · img', icon: 'auto_awesome', hint: 'Narración TTS, guion e imágenes', keys: 'https://aistudio.google.com/apikey' },
+  { id: 'openai', label: 'OpenAI', use: 'IA · voz · img', icon: 'auto_awesome', hint: 'GPT, Whisper e imágenes', keys: 'https://platform.openai.com/api-keys' },
+  { id: 'anthropic', label: 'Anthropic', use: 'Guiones', icon: 'edit_note', hint: 'Claude para guiones', keys: 'https://console.anthropic.com/settings/keys' },
+  { id: 'elevenlabs', label: 'ElevenLabs', use: 'Voces TTS', icon: 'record_voice_over', wired: false, hint: 'Voces TTS — aún sin cablear (se usan Kokoro/Piper/Gemini/Azure)', keys: 'https://elevenlabs.io/app/settings/api-keys' },
+  { id: 'openrouter', label: 'OpenRouter', use: 'Chat IA', icon: 'forum', hint: 'Varios modelos con una sola clave', keys: 'https://openrouter.ai/keys' },
+  { id: 'groq', label: 'Groq', use: 'Chat IA', icon: 'bolt', hint: 'Chat IA gratis y muy rápido', keys: 'https://console.groq.com/keys' },
+  { id: 'cerebras', label: 'Cerebras', use: 'Chat IA', icon: 'bolt', hint: 'Chat IA gratis, inferencia ultrarrápida', keys: 'https://cloud.cerebras.ai/platform' },
+  { id: 'mistral', label: 'Mistral', use: 'Chat IA', icon: 'forum', hint: 'Chat IA gratis (La Plateforme)', keys: 'https://console.mistral.ai/api-keys' },
+  { id: 'pexels', label: 'Pexels', use: 'Fotos y vídeo', icon: 'image', hint: 'Vídeo e imágenes de stock (pestaña Explorar)', keys: 'https://www.pexels.com/api/' },
+  { id: 'giphy', label: 'GIPHY', use: 'GIFs', icon: 'gif', hint: 'GIFs animados (pestaña Explorar)', keys: 'https://developers.giphy.com/dashboard/' },
+  { id: 'pixabay', label: 'Pixabay', use: 'Fotos y vídeo', icon: 'image', hint: 'Fotos y vídeo de stock (pestaña Explorar)', keys: 'https://pixabay.com/api/docs/' },
+  { id: 'unsplash', label: 'Unsplash', use: 'Fotos', icon: 'image', hint: 'Fotos de stock (pestaña Explorar)', keys: 'https://unsplash.com/oauth/applications' },
+  { id: 'youtube', label: 'YouTube Data', use: 'Metadatos', icon: 'smart_display', wired: false, hint: 'Metadatos y búsqueda — aún sin cablear', keys: 'https://console.cloud.google.com/apis/credentials' },
+  { id: 'replicate', label: 'Replicate', use: 'Imagen/vídeo IA', icon: 'movie_filter', wired: false, hint: 'Modelos de imagen y vídeo — aún sin cablear', keys: 'https://replicate.com/account/api-tokens' },
+  { id: 'fal', label: 'Fal.ai', use: 'Imagen IA', icon: 'movie_filter', wired: false, hint: 'Generación rápida — aún sin cablear', keys: 'https://fal.ai/dashboard/keys' },
+  { id: 'huggingface', label: 'Hugging Face', use: 'Chat IA', icon: 'hub', hint: 'Modelos abiertos', keys: 'https://huggingface.co/settings/tokens' },
+  { id: 'assemblyai', label: 'AssemblyAI', use: 'Transcripción', icon: 'subtitles', wired: false, hint: 'Transcripción — aún sin cablear (se usa Whisper local)', keys: 'https://www.assemblyai.com/app/account' },
+  { id: 'removebg', label: 'Remove.bg', use: 'Quitar fondo', icon: 'auto_fix_high', wired: false, hint: 'Quitar fondo — aún sin cablear (se usa matte IA local)', keys: 'https://www.remove.bg/dashboard#api-key' },
+  { id: 'stability', label: 'Stability AI', use: 'Imagen/vídeo IA', icon: 'movie_filter', wired: false, hint: 'Imagen y vídeo — aún sin cablear', keys: 'https://platform.stability.ai/account/keys' },
 ]
 
+function provider(id) {
+  return API_PROVIDERS.find((p) => p.id === id)
+}
+
 function providerLabel(id) {
-  return API_PROVIDERS.find((p) => p.id === id)?.label || id
+  return provider(id)?.label || id
 }
 
 function providerHint(id) {
-  return API_PROVIDERS.find((p) => p.id === id)?.hint || ''
+  return provider(id)?.hint || ''
 }
 
 function providerKeysUrl(id) {
-  return API_PROVIDERS.find((p) => p.id === id)?.keys || ''
+  return provider(id)?.keys || ''
 }
 
 const FPS_OPTS = FPS_CHOICES
@@ -98,6 +106,16 @@ export default function EdSettings({ audioDb, onAudioDb }) {
   const [lmStatus, setLmStatus] = useState('idle')
   const [lmReason, setLmReason] = useState('')
   const [lmTick, setLmTick] = useState(0)
+  // Azure Vision: recurso PROPIO (clave + endpoint), separado de Azure Speech.
+  const [azVisionEndpoint, setAzVisionEndpoint] = useState('')
+  const [azVisionKey, setAzVisionKey] = useState('')
+  const [azVisionEdit, setAzVisionEdit] = useState(false)
+  // Microsoft Foundry: capa de IA generativa (endpoint + deployment + api-version + clave).
+  const [azFoundryEndpoint, setAzFoundryEndpoint] = useState('')
+  const [azFoundryDeployment, setAzFoundryDeployment] = useState('')
+  const [azFoundryApiVersion, setAzFoundryApiVersion] = useState('')
+  const [azFoundryKey, setAzFoundryKey] = useState('')
+  const [azFoundryEdit, setAzFoundryEdit] = useState(false)
 
   const savedIds = useMemo(
     () => API_PROVIDERS.map((p) => p.id).filter((id) => setKeys[id]),
@@ -125,6 +143,55 @@ export default function EdSettings({ audioDb, onAudioDb }) {
     const model = models.some((m) => m.id === tx.model) ? tx.model : (models[0]?.id || 'base')
     setTxCfg({ model })
     setTxDraft(model)
+    setAzVisionEndpoint(typeof s.azure_vision_endpoint === 'string' ? s.azure_vision_endpoint : '')
+    setAzFoundryEndpoint(typeof s.azure_foundry_endpoint === 'string' ? s.azure_foundry_endpoint : '')
+    setAzFoundryDeployment(typeof s.azure_foundry_deployment === 'string' ? s.azure_foundry_deployment : '')
+    setAzFoundryApiVersion(typeof s.azure_foundry_api_version === 'string' ? s.azure_foundry_api_version : '')
+  }
+
+  async function saveAzVision() {
+    const ep = azVisionEndpoint.trim()
+    const key = azVisionKey.trim()
+    if (!ep) { setErr('Pega el endpoint de Azure Vision.'); return }
+    setBusy(true)
+    setErr('')
+    try {
+      const patch = { azure_vision_endpoint: ep }
+      if (key) patch.api_keys = { azure_vision: key }
+      await putSettings(patch)
+      setAzVisionKey('')
+      await reload()
+      setAzVisionEdit(false)
+      setToast({ type: 'success', message: 'Credenciales de Azure Vision guardadas.' })
+    } catch (e) {
+      setErr(e.message || 'No se pudo guardar.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function saveAzFoundry() {
+    const ep = azFoundryEndpoint.trim()
+    const dep = azFoundryDeployment.trim()
+    const key = azFoundryKey.trim()
+    if (!ep) { setErr('Pega el endpoint de Microsoft Foundry.'); return }
+    if (!dep) { setErr('Indica el nombre del deployment/modelo de Foundry.'); return }
+    setBusy(true)
+    setErr('')
+    try {
+      const patch = { azure_foundry_endpoint: ep, azure_foundry_deployment: dep }
+      if (azFoundryApiVersion.trim()) patch.azure_foundry_api_version = azFoundryApiVersion.trim()
+      if (key) patch.api_keys = { azure_foundry: key }
+      await putSettings(patch)
+      setAzFoundryKey('')
+      await reload()
+      setAzFoundryEdit(false)
+      setToast({ type: 'success', message: 'Credenciales de Foundry guardadas.' })
+    } catch (e) {
+      setErr(e.message || 'No se pudo guardar.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function reloadAi() {
@@ -512,6 +579,122 @@ export default function EdSettings({ audioDb, onAudioDb }) {
             </div>
           </div>
 
+          <div className="ed-key-row">
+            <div className="ed-key-row-head">
+              <span className="ed-key-name">Azure Vision</span>
+              {!azVisionEdit && (
+                <span className={`ed-key-set ${setKeys.azure_vision && azVisionEndpoint ? '' : 'off'}`}>
+                  {setKeys.azure_vision && azVisionEndpoint ? 'Configurado' : 'Sin configurar'}
+                </span>
+              )}
+              {!azVisionEdit && (
+                <div className="ed-key-actions">
+                  <button type="button" className="ghost small" onClick={() => setAzVisionEdit(true)} disabled={busy}>Editar</button>
+                </div>
+              )}
+            </div>
+            <div className="ed-key-form">
+              <p className="ed-key-hint">OCR y análisis de imagen. Recurso propio de Azure Vision (distinto de Azure Speech).</p>
+              <label className="field">
+                <span>Endpoint</span>
+                <input
+                  className="ed-cfg-input"
+                  value={azVisionEndpoint}
+                  disabled={!azVisionEdit || busy}
+                  onChange={(e) => setAzVisionEndpoint(e.target.value)}
+                  placeholder="https://<recurso>.cognitiveservices.azure.com"
+                />
+              </label>
+              {azVisionEdit && (
+                <label className="field">
+                  <span>Clave {setKeys.azure_vision ? '(deja vacío para conservar la actual)' : ''}</span>
+                  <input
+                    className="ed-cfg-input"
+                    type="password"
+                    autoComplete="off"
+                    value={azVisionKey}
+                    onChange={(e) => setAzVisionKey(e.target.value)}
+                    placeholder="Clave de Azure Vision"
+                  />
+                </label>
+              )}
+              {azVisionEdit && (
+                <div className="ed-key-actions">
+                  <button type="button" className="ghost small" onClick={() => { setAzVisionEdit(false); setAzVisionKey(''); reload() }} disabled={busy}>Cancelar</button>
+                  <button type="button" className="primary small" onClick={saveAzVision} disabled={busy || !azVisionEndpoint.trim()}>{busy ? 'Guardando…' : 'Guardar'}</button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="ed-key-row">
+            <div className="ed-key-row-head">
+              <span className="ed-key-name">Microsoft Foundry</span>
+              {!azFoundryEdit && (
+                <span className={`ed-key-set ${setKeys.azure_foundry && azFoundryEndpoint && azFoundryDeployment ? '' : 'off'}`}>
+                  {setKeys.azure_foundry && azFoundryEndpoint && azFoundryDeployment ? 'Configurado' : 'Sin configurar'}
+                </span>
+              )}
+              {!azFoundryEdit && (
+                <div className="ed-key-actions">
+                  <button type="button" className="ghost small" onClick={() => setAzFoundryEdit(true)} disabled={busy}>Editar</button>
+                </div>
+              )}
+            </div>
+            <div className="ed-key-form">
+              <p className="ed-key-hint">IA generativa (guiones, hooks, títulos, prompts visuales). Recurso propio de Azure AI Foundry / Azure OpenAI. Complementa a Speech y Vision.</p>
+              <label className="field">
+                <span>Endpoint</span>
+                <input
+                  className="ed-cfg-input"
+                  value={azFoundryEndpoint}
+                  disabled={!azFoundryEdit || busy}
+                  onChange={(e) => setAzFoundryEndpoint(e.target.value)}
+                  placeholder="https://<recurso>.services.ai.azure.com/openai/v1"
+                />
+              </label>
+              <label className="field">
+                <span>Deployment / modelo</span>
+                <input
+                  className="ed-cfg-input"
+                  value={azFoundryDeployment}
+                  disabled={!azFoundryEdit || busy}
+                  onChange={(e) => setAzFoundryDeployment(e.target.value)}
+                  placeholder="nombre del deployment (p. ej. gpt-5-mini)"
+                />
+              </label>
+              <label className="field">
+                <span>API version (opcional)</span>
+                <input
+                  className="ed-cfg-input"
+                  value={azFoundryApiVersion}
+                  disabled={!azFoundryEdit || busy}
+                  onChange={(e) => setAzFoundryApiVersion(e.target.value)}
+                  placeholder="2024-10-21"
+                />
+              </label>
+              {azFoundryEdit && (
+                <label className="field">
+                  <span>Clave {setKeys.azure_foundry ? '(deja vacío para conservar la actual)' : ''}</span>
+                  <input
+                    className="ed-cfg-input"
+                    type="password"
+                    autoComplete="off"
+                    value={azFoundryKey}
+                    onChange={(e) => setAzFoundryKey(e.target.value)}
+                    placeholder="Clave de Foundry"
+                  />
+                </label>
+              )}
+              {azFoundryEdit && (
+                <div className="ed-key-actions">
+                  <button type="button" className="ghost small" onClick={() => { setAzFoundryEdit(false); setAzFoundryKey(''); reload() }} disabled={busy}>Cancelar</button>
+                  <button type="button" className="primary small" onClick={saveAzFoundry} disabled={busy || !azFoundryEndpoint.trim() || !azFoundryDeployment.trim()}>{busy ? 'Guardando…' : 'Guardar'}</button>
+                </div>
+              )}
+            </div>
+          </div>
+
           {err && <div className="ed-mat-err">{err}</div>}
         </div>
       )}
@@ -552,64 +735,114 @@ export default function EdSettings({ audioDb, onAudioDb }) {
           )}
 
           {rows.map((id) => {
+            const meta = provider(id) || {}
             const count = Math.max(1, keyCounts[id] || 1)
             const editingExtra = form?.mode === 'addExtra' && form.id === id
+            const single = count === 1
+            const editing0 = form?.mode === 'edit' && form.id === id && (form.index || 0) === 0
             return (
-              <div className="ed-key-row" key={id}>
+              <div className={`ed-key-row${single ? ' compact' : ''}`} key={id}>
                 <div className="ed-key-row-head">
+                  <span className="ed-key-ico"><Icon name={meta.icon || 'vpn_key'} size={15} /></span>
                   <span className="ed-key-name">{providerLabel(id)}</span>
-                  {count > 1 && <span className="ed-key-count">{count} claves</span>}
-                </div>
-                <div className="ed-key-slots">
-                  {Array.from({ length: count }).map((_, index) => {
-                    const editing = form?.mode === 'edit' && form.id === id && (form.index || 0) === index
-                    const res = resultFor(id, index)
-                    return (
-                      <div className="ed-key-slot" key={index}>
-                        <div className="ed-key-slot-head">
-                          <span className="ed-key-num">#{index + 1}</span>
-                          <KeyStatus testing={testing} res={res} />
-                          {!editing && (
-                            <div className="ed-key-actions">
-                              <button type="button" className="ghost small" onClick={() => openEdit(id, index)} disabled={busy || testing}>Editar</button>
-                              <button type="button" className="ghost small danger" onClick={() => remove(id, index)} disabled={busy || testing}>Quitar</button>
-                            </div>
-                          )}
-                        </div>
-                        {editing && (
-                          <KeyForm
-                            selectId={id}
-                            providers={[{ id, label: providerLabel(id) }]}
-                            selectLocked
-                            hint={providerHint(id)}
-                            value={value}
-                            setValue={setValue}
-                            busy={busy}
-                            onSave={save}
-                            onCancel={cancel}
-                          />
-                        )}
-                      </div>
-                    )
-                  })}
-                  {editingExtra ? (
-                    <KeyForm
-                      selectId={id}
-                      providers={[{ id, label: providerLabel(id) }]}
-                      selectLocked
-                      hint={`Otra clave de ${providerLabel(id)} (de otra cuenta).`}
-                      value={value}
-                      setValue={setValue}
-                      busy={busy}
-                      onSave={save}
-                      onCancel={cancel}
-                    />
-                  ) : (
-                    <button type="button" className="ghost small ed-key-otra" onClick={() => openAddExtra(id)} disabled={busy || testing || !!form}>
-                      <Icon name="add" size={14} /> otra
-                    </button>
+                  {meta.use && <span className="ed-key-use" title={providerHint(id)}>{meta.use}</span>}
+                  {meta.wired === false && (
+                    <span className="ed-key-unused" title="La clave se guarda y se puede probar, pero ninguna función de la app la usa todavía.">sin uso</span>
+                  )}
+                  {count > 1 && <span className="ed-key-count">{count}</span>}
+                  {single && !editing0 && (
+                    <div className="ed-key-actions">
+                      <KeyStatus testing={testing} res={resultFor(id, 0)} />
+                      <button type="button" className="ghost small" onClick={() => openEdit(id, 0)} disabled={busy || testing}>Editar</button>
+                      <button type="button" className="ghost small danger" onClick={() => remove(id, 0)} disabled={busy || testing}>Quitar</button>
+                      <button type="button" className="icon-btn ed-key-otra" title={`Otra clave de ${providerLabel(id)}`} onClick={() => openAddExtra(id)} disabled={busy || testing || !!form}>
+                        <Icon name="add" size={14} />
+                      </button>
+                    </div>
                   )}
                 </div>
+
+                {single ? (
+                  <>
+                    {editing0 && (
+                      <KeyForm
+                        selectId={id}
+                        providers={[{ id, label: providerLabel(id) }]}
+                        selectLocked
+                        hint={providerHint(id)}
+                        value={value}
+                        setValue={setValue}
+                        busy={busy}
+                        onSave={save}
+                        onCancel={cancel}
+                      />
+                    )}
+                    {editingExtra && (
+                      <KeyForm
+                        selectId={id}
+                        providers={[{ id, label: providerLabel(id) }]}
+                        selectLocked
+                        hint={`Otra clave de ${providerLabel(id)} (de otra cuenta).`}
+                        value={value}
+                        setValue={setValue}
+                        busy={busy}
+                        onSave={save}
+                        onCancel={cancel}
+                      />
+                    )}
+                  </>
+                ) : (
+                  <div className="ed-key-slots">
+                    {Array.from({ length: count }).map((_, index) => {
+                      const editing = form?.mode === 'edit' && form.id === id && (form.index || 0) === index
+                      const res = resultFor(id, index)
+                      return (
+                        <div className="ed-key-slot" key={index}>
+                          <div className="ed-key-slot-head">
+                            <span className="ed-key-num">#{index + 1}</span>
+                            <KeyStatus testing={testing} res={res} />
+                            {!editing && (
+                              <div className="ed-key-actions">
+                                <button type="button" className="ghost small" onClick={() => openEdit(id, index)} disabled={busy || testing}>Editar</button>
+                                <button type="button" className="ghost small danger" onClick={() => remove(id, index)} disabled={busy || testing}>Quitar</button>
+                              </div>
+                            )}
+                          </div>
+                          {editing && (
+                            <KeyForm
+                              selectId={id}
+                              providers={[{ id, label: providerLabel(id) }]}
+                              selectLocked
+                              hint={providerHint(id)}
+                              value={value}
+                              setValue={setValue}
+                              busy={busy}
+                              onSave={save}
+                              onCancel={cancel}
+                            />
+                          )}
+                        </div>
+                      )
+                    })}
+                    {editingExtra ? (
+                      <KeyForm
+                        selectId={id}
+                        providers={[{ id, label: providerLabel(id) }]}
+                        selectLocked
+                        hint={`Otra clave de ${providerLabel(id)} (de otra cuenta).`}
+                        value={value}
+                        setValue={setValue}
+                        busy={busy}
+                        onSave={save}
+                        onCancel={cancel}
+                      />
+                    ) : (
+                      <button type="button" className="ghost small ed-key-otra" onClick={() => openAddExtra(id)} disabled={busy || testing || !!form}>
+                        <Icon name="add" size={14} /> otra
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             )
           })}

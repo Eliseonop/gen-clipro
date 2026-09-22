@@ -45,7 +45,7 @@ export default function SegmentConfirmModal({ ask, onChange, onConfirm, onCancel
     >
       <div className="modal seg-confirm" role="dialog" aria-modal="true" aria-labelledby="seg-confirm-title">
         <div className="modal-head">
-          <h3 id="seg-confirm-title"><Icon name="add_to_photos" size={20} /> Crear clip</h3>
+          <h3 id="seg-confirm-title"><Icon name="add_to_photos" size={20} /> {ask.simple ? 'Agregar a material' : 'Crear clip'}</h3>
           <button className="icon-btn" onClick={onCancel} disabled={running} title="Cerrar">
             <Icon name="close" size={18} />
           </button>
@@ -77,24 +77,26 @@ export default function SegmentConfirmModal({ ask, onChange, onConfirm, onCancel
 
           <div className="seg-field">
             <span>Descripción</span>
-            <div className="seg-desc-modes" role="radiogroup" aria-label="Qué descripción usar">
-              {DESC_MODES.map((m) => {
-                const disabled = m.id === 'source' && !String(ask.sourceDescription || '').trim()
-                return (
-                  <label key={m.id} className={`seg-desc-mode${ask.descMode === m.id ? ' on' : ''}${disabled ? ' off' : ''}`}>
-                    <input
-                      type="radio"
-                      name="seg-desc-mode"
-                      checked={ask.descMode === m.id}
-                      disabled={disabled}
-                      onChange={() => onChange?.({ descMode: m.id })}
-                    />
-                    {m.label}
-                  </label>
-                )
-              })}
-            </div>
-            {ask.descMode === 'manual' && (
+            {!ask.simple && (
+              <div className="seg-desc-modes" role="radiogroup" aria-label="Qué descripción usar">
+                {DESC_MODES.map((m) => {
+                  const disabled = m.id === 'source' && !String(ask.sourceDescription || '').trim()
+                  return (
+                    <label key={m.id} className={`seg-desc-mode${ask.descMode === m.id ? ' on' : ''}${disabled ? ' off' : ''}`}>
+                      <input
+                        type="radio"
+                        name="seg-desc-mode"
+                        checked={ask.descMode === m.id}
+                        disabled={disabled}
+                        onChange={() => onChange?.({ descMode: m.id })}
+                      />
+                      {m.label}
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+            {(ask.simple || ask.descMode === 'manual') && (
               <textarea
                 rows={3}
                 value={ask.description}
@@ -102,7 +104,7 @@ export default function SegmentConfirmModal({ ask, onChange, onConfirm, onCancel
                 onChange={(e) => onChange?.({ description: e.target.value })}
               />
             )}
-            {ask.descMode === 'source' && (
+            {!ask.simple && ask.descMode === 'source' && (
               <p className="seg-desc-preview">{ask.sourceDescription}</p>
             )}
           </div>

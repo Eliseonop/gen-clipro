@@ -17,6 +17,8 @@ _ALLOWED_SUFFIXES = (
     "giphy.com",
     "vimeocdn.com",
     "vimeo.com",
+    "pixabay.com",
+    "unsplash.com",
 )
 
 
@@ -32,7 +34,7 @@ def allowed_download_url(url: str) -> bool:
 
 def _download(url: str) -> bytes:
     if not allowed_download_url(url):
-        raise ValueError("La URL de descarga no es de Pexels o GIPHY.")
+        raise ValueError("La URL de descarga no es de un proveedor permitido.")
     req = Request(url, headers={"User-Agent": _UA, "Accept": "*/*"})
     try:
         with urlopen(req, timeout=TIMEOUT) as resp:

@@ -54,12 +54,15 @@ const TABS = [
 //  · Proyecto: agregar al proyecto y motions ya guardados.
 export default function MotionElements({ pid, m, format, onReloadTimeline, onBack, timelineCompIds, onSeek, timeRef }) {
   const { comp, selLayerId, setSelLayerId, addLayer, deleteLayer, edit,
-          templates, error, addJob, addToProject, setName, setDuration,
+          templates, reloadTemplates, removeUserTemplate, error, addJob, addToProject, setName, setDuration,
           loadComp, createBlank, createFromTemplate } = m
 
   const isStory = !!comp?.metadata?.stick
   const [tab, setTab] = useState(comp ? (isStory ? 'historia' : 'editar') : 'plantillas')
   const [galleryTheme, setGalleryTheme] = useState('light')
+
+  // Al volver a la galería se recargan: puede haber plantillas nuevas del usuario.
+  useEffect(() => { if (tab === 'plantillas') reloadTemplates?.() }, [tab, reloadTemplates])
 
   // Al crear/abrir una composición, salta a su pestaña natural (una historia se
   // edita en "Historia"; el resto en "Editar") si estabas en Plantillas.
@@ -101,7 +104,7 @@ export default function MotionElements({ pid, m, format, onReloadTimeline, onBac
         <div className="motion-tabpane">
           <MotionTemplates pid={pid} templates={templates} format={format}
             theme={galleryTheme} onThemeChange={setGalleryTheme}
-            onPick={pickTemplate} onBlank={makeBlank} />
+            onPick={pickTemplate} onBlank={makeBlank} onDeleteUser={removeUserTemplate} />
         </div>
       )}
 

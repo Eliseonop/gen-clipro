@@ -24,11 +24,22 @@ BINARIES = {
     "darwin": "piper_macos_x64.tar.gz",
 }
 
-# Voces mexicanas del repo oficial rhasspy/piper-voices.
-VOICE_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX"
-MX_VOICES = [
-    ("ald", "medium"),      # es_MX-ald-medium  (voz masculina)
-    ("claude", "high"),     # es_MX-claude-high (voz femenina/infantil, alta calidad)
+# Voces en español del repo oficial rhasspy/piper-voices (Apache/MIT).
+# Cada entrada: (region, name, quality). El backend las detecta solas al
+# dejar el .onnx (+ .onnx.json) en models/piper/voices/.
+VOICE_ROOT = "https://huggingface.co/rhasspy/piper-voices/resolve/main/es"
+ES_VOICES = [
+    # México
+    ("es_MX", "ald", "medium"),        # hombre
+    ("es_MX", "claude", "high"),       # mujer / infantil, alta calidad
+    # España
+    ("es_ES", "davefx", "medium"),     # hombre, buena calidad
+    ("es_ES", "carlfm", "x_low"),      # hombre, ligera (rápida)
+    ("es_ES", "sharvard", "medium"),   # 2 hablantes (H+M) en un modelo
+    ("es_ES", "mls_9972", "low"),      # mujer
+    ("es_ES", "mls_10246", "low"),     # hombre
+    # Argentina
+    ("es_AR", "daniela", "high"),      # mujer argentina, alta calidad
 ]
 
 
@@ -63,21 +74,21 @@ def get_binary() -> None:
 
 def get_voices() -> None:
     VOICES.mkdir(parents=True, exist_ok=True)
-    for name, quality in MX_VOICES:
-        stem = f"es_MX-{name}-{quality}"
+    for region, name, quality in ES_VOICES:
+        stem = f"{region}-{name}-{quality}"
         onnx = VOICES / f"{stem}.onnx"
         if onnx.exists():
             print(f"• Voz {stem} ya presente, la salto.")
             continue
         print(f"• Descargando voz {stem}…")
-        base = f"{VOICE_BASE}/{name}/{quality}/{stem}"
+        base = f"{VOICE_ROOT}/{region}/{name}/{quality}/{stem}"
         onnx.write_bytes(_download(f"{base}.onnx"))
         (VOICES / f"{stem}.onnx.json").write_bytes(_download(f"{base}.onnx.json"))
         print(f"  ✓ {stem} lista.")
 
 
 if __name__ == "__main__":
-    print("== Instalando Piper (voces mexicanas) ==")
+    print("== Instalando Piper (voces en español: MX / ES / AR) ==")
     try:
         get_binary()
         get_voices()

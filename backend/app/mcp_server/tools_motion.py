@@ -98,7 +98,12 @@ def motion_create_composition(project_id: str, composition: dict | None = None,
     cid = motion_service.new_id()
     try:
         if template:
-            comp = motion_templates.instantiate(template, cid, params or {})
+            params = dict(params or {})
+            if for_range:
+                # La plantilla maqueta con su ancho/alto: instanciarla a otro tamaño y
+                # forzar luego el formato del tramo la dejaría escalada y recortada.
+                params.update({k: v for k, v in _project_format(proj).items() if k != "fps"})
+            comp = motion_templates.instantiate(template, cid, params)
         elif composition:
             raw = dict(composition)
             raw["id"] = cid

@@ -15,6 +15,7 @@ import EdLibrary from './EdLibrary'
 import EdChat from './EdChat'
 import EdExplore from './EdExplore'
 import AudioTab from '../audio/AudioTab'
+import AiTab from '../ai/AiTab'
 import MotionElements from '../motion/MotionElements'
 import ConfirmModal from '../../components/ConfirmModal'
 import AnchoredMenu from '../../components/AnchoredMenu'
@@ -284,6 +285,7 @@ const MAT_NAV = [
   { id: 'transitions', icon: 'animation', label: 'Transiciones' },
   { id: 'motion', icon: 'animation', label: 'Motion', sep: true },
   { id: 'paper', icon: 'draw', label: 'Paper' },
+  { id: 'ai', icon: 'smart_toy', label: 'IA', sep: true },
   { id: 'settings', icon: 'settings', label: 'Configuración', sep: true },
   { id: 'chat', icon: 'forum', label: 'Chat IA' },
 ]
@@ -1135,6 +1137,7 @@ export default function EdMaterial({
               onImported={() => onRefresh?.()}
               onToast={setMatToast}
               onOpenSettings={() => setTab('settings')}
+              onDragInfo={di}
             />
         </div>
       </div>
@@ -1169,6 +1172,11 @@ export default function EdMaterial({
               />
             )))}
         </div>
+      )}
+
+      {tab === 'ai' && (
+        <AiTab project={project} onChange={onRefresh} onGoAudio={() => setTab('audio')}
+          onGoSettings={() => setTab('settings')} editorContext={aiContext} />
       )}
 
       {tab === 'sfx' && <SfxTab onAdd={onAdd} onPlay={onPlayMedia} di={di} fav={fav} />}

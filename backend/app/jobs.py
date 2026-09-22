@@ -261,6 +261,39 @@ def start_clip_transcribe_job(job: Job, pid: str, index: str, model: str, langua
     thread.start()
 
 
+def _fmt_num(v) -> str:
+    """Formatea un float de forma compacta: 1.0→'1', 1.20→'1.2', 0.40→'0.4'."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "0"
+    s = f"{f:.2f}".rstrip("0").rstrip(".")
+    return s or "0"
+
+
+def _tts_stem(req: TTSRequest) -> str:
+    """Nombre descriptivo del audio TTS.
+
+    Orden: voz (y voz2 si hay mezcla) + velocidad + pausa + estilo + motor,
+    luego el inicio del texto (o el nombre dado). El id aleatorio lo añade
+    quien llama. Ej: ``ef_dora_x1.2_p0.4_kokoro_hola-mundo``.
+    """
+    from . import storage
+
+    parts = [storage.safe_name(req.voice or "voz", 30)]
+    if req.engine == "kokoro" and req.voice2:
+        parts[0] += "+" + storage.safe_name(req.voice2, 20)
+    parts.append(f"x{_fmt_num(req.speed)}")   # velocidad
+    parts.append(f"p{_fmt_num(req.pause)}")   # pausa entre frases
+    if getattr(req, "style", None):
+        parts.append(storage.safe_name(req.style, 16))
+    parts.append(req.engine)
+    head = storage.safe_name(req.name or req.text or "audio", 40)
+    if head:
+        parts.append(head.replace(" ", "-"))
+    return "_".join(p for p in parts if p)
+
+
 def _run_tts(job_id: str, req: TTSRequest) -> None:
     job = _jobs[job_id]
     job.status = JobStatus.running
@@ -274,13 +307,13 @@ def _run_tts(job_id: str, req: TTSRequest) -> None:
     try:
         from urllib.parse import quote
 
-        from . import gemini_tts, piper_tts, storage, tts
+        from . import azure_tts, gemini_tts, piper_tts, storage, tts
 
         project = projects.get_project(req.project_id)
         base = storage.ensure_dirs(storage.project_base(project))
 
         aid = uuid.uuid4().hex[:8]
-        stem = storage.safe_name(req.name or req.text[:40] or "audio")
+        stem = _tts_stem(req)
         filename = f"{stem}_{aid}.wav"
         out_path = base / "audio" / filename
 
@@ -288,6 +321,8 @@ def _run_tts(job_id: str, req: TTSRequest) -> None:
             engine = piper_tts
         elif req.engine == "gemini":
             engine = gemini_tts
+        elif req.engine == "azure":
+            engine = azure_tts
         else:
             engine = tts
         info = engine.run(
@@ -776,7 +811,8 @@ def _find_timeline_clip_by_filename(pid: str, filename: str) -> str | None:
 
 
 def _run_subtitles(job_id: str, pid: str, filename: str, asset_kind: str, model: str, language,
-                   asset_scope: str = "project", source_clip_id: str | None = None) -> None:
+                   asset_scope: str = "project", source_clip_id: str | None = None,
+                   engine: str = "whisper") -> None:
     job = _jobs[job_id]
     job.status = JobStatus.running
 
@@ -801,8 +837,13 @@ def _run_subtitles(job_id: str, pid: str, filename: str, asset_kind: str, model:
         if path is None or not path.exists():
             raise RuntimeError("No se encuentra el archivo de audio.")
 
-        model = transcribe_settings.resolve(model)
-        result = transcribe.run_file(str(path), model, language, on_progress)
+        if engine == "azure":
+            from . import azure_stt
+            model = "azure"
+            result = azure_stt.run_file(str(path), None, language, on_progress)
+        else:
+            model = transcribe_settings.resolve(model)
+            result = transcribe.run_file(str(path), model, language, on_progress)
         segs = [TranscriptSegment(**s) for s in result["segments"]]
         tr = Transcript(
             id=uuid.uuid4().hex[:8],
@@ -840,10 +881,11 @@ def _run_subtitles(job_id: str, pid: str, filename: str, asset_kind: str, model:
 
 
 def start_subtitles_job(job: Job, pid: str, filename: str, asset_kind: str, model: str, language,
-                        asset_scope: str = "project", source_clip_id: str | None = None) -> None:
+                        asset_scope: str = "project", source_clip_id: str | None = None,
+                        engine: str = "whisper") -> None:
     thread = threading.Thread(
         target=_run_subtitles,
-        args=(job.id, pid, filename, asset_kind, model, language, asset_scope, source_clip_id),
+        args=(job.id, pid, filename, asset_kind, model, language, asset_scope, source_clip_id, engine),
         daemon=True,
     )
     thread.start()
