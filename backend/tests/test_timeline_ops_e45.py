@@ -209,7 +209,7 @@ class CapabilitiesTest(unittest.TestCase):
         for c in ("media.shape", "clip.opacity:0-1", "clip.effects:blur|grayscale|sepia|brightness|contrast|saturation",
                   "clip.keyframes:x|y|scale|rotation|opacity|volume|audio_fx", "voice:kokoro|piper|gemini", "tracks.link"):
             self.assertIn(c, caps)
-        self.assertIn("clip.animate:zoom|spin|slide|fade|pop|pulse|follow_audio", caps)
+        self.assertIn("clip.animate:zoom|spin|slide|fade|pop|pulse|draw_in|follow_audio", caps)
 
 
 if __name__ == "__main__":

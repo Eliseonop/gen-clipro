@@ -8,20 +8,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from .clip_filters import filters_ffmpeg
+
 FX_DUR = 0.4
 ZOOM_FROM = 1.18
 POP_FROM = 0.72
-
-_LOOK_FFMPEG = {
-    "none": "",
-    "bw": "hue=s=0",
-    "cinematic": "eq=contrast=1.15:saturation=0.85:brightness=-0.08",
-    "vintage": "eq=contrast=1.1:saturation=0.75:gamma=0.92",
-    "contrast": "eq=contrast=1.35:saturation=1.1",
-    "warm": "eq=saturation=1.15:gamma_r=1.08:gamma_b=0.92",
-    "cool": "eq=saturation=0.9:brightness=0.04:gamma_b=1.1:gamma_r=0.94",
-    "saturated": "eq=saturation=1.55:contrast=1.08",
-}
 
 
 def _field(clip: Any, key: str, default: str = "none") -> str:
@@ -100,14 +91,6 @@ def _effects_map(clip: Any) -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
-def _audio_fx_map(clip: Any) -> dict:
-    if isinstance(clip, dict):
-        raw = clip.get("audio_fx")
-    else:
-        raw = getattr(clip, "audio_fx", None)
-    return raw if isinstance(raw, dict) else {}
-
-
 def _fx_on(raw, key: str) -> bool:
     val = raw.get(key)
     if val is True:
@@ -166,36 +149,12 @@ def effects_ffmpeg(clip: Any, W: int, H: int) -> str:
         eq_bits.append(f"saturation={max(0.0, 1 + s):.3f}")
     if eq_bits:
         parts.append("eq=" + ":".join(eq_bits))
+    # Exposición/Blancos/Temperatura/Tono: una matriz, al final (igual que el preview).
+    from .clip_adjust import colorchannelmixer
+    mix = colorchannelmixer(e)
+    if mix:
+        parts.append(mix)
     return ",".join(parts)
-
-
-def audio_fx_chain(clip: Any) -> str:
-    fx = _audio_fx_map(clip)
-    parts: list[str] = []
-    eq = min(1.0, max(0.0, _fx_num(fx, "eq")))
-    if eq > 0:
-        parts.append(f"equalizer=f=3000:t=q:w=1:g={4.0 * eq:.2f}")
-    comp = min(1.0, max(0.0, _fx_num(fx, "compressor")))
-    if comp > 0:
-        parts.append(f"acompressor=threshold=0.1:ratio={1.0 + 7.0 * comp:.2f}:attack=20:release=200")
-    rev = min(1.0, max(0.0, _fx_num(fx, "reverb")))
-    if rev > 0:
-        parts.append(f"aecho=0.8:0.88:{40.0 * rev:.1f}:{0.4 * rev:.2f}")
-    echo = min(1.0, max(0.0, _fx_num(fx, "echo")))
-    if echo > 0:
-        parts.append(f"aecho=0.8:0.9:{1000.0 * echo:.1f}:{0.3 * echo:.2f}")
-    den = min(1.0, max(0.0, _fx_num(fx, "denoise")))
-    if den > 0:
-        parts.append("highpass=f=80,lowpass=f=12000")
-    dist = min(1.0, max(0.0, _fx_num(fx, "distortion")))
-    if dist > 0:
-        bits = max(4.0, min(12.0, 12.0 - 8.0 * dist))
-        parts.append(f"acrusher=bits={bits:.0f}:mode=log")
-    return ",".join(parts)
-
-
-def look_ffmpeg(look: str | None) -> str:
-    return _LOOK_FFMPEG.get(look or "none", "")
 
 
 def _split_xy(base_xy: str) -> tuple[str, str]:
@@ -279,7 +238,8 @@ def video_fx_chain(
     clip: Any, dur: float, W: int, H: int, fit_canvas: bool = True, motion: bool = True,
 ) -> str:
     parts: list[str] = []
-    look = look_ffmpeg(_field(clip, "look"))
+    # Filtros de color (#18): la pila entera es una matriz (los `look` antiguos incluidos).
+    look = filters_ffmpeg(clip)
     if look:
         parts.append(look)
     extra = effects_ffmpeg(clip, W, H)

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { createPortal } from 'react-dom'
 import Icon from '../../components/Icon'
+import Hint from '../../components/Hint'
 import { fmt, parseTime } from '../../lib/utils'
 import { FAV_CAT } from '../../lib/favorites'
 import { analyze, listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryItem, unsaveLibraryItem, uploadImages, uploadVideo, uploadAudio, getSettings, putSettings, deleteMaterial, updateMaterial, fetchRemoteImage } from '../../services/api'
@@ -141,10 +142,12 @@ function CargarCustom({
   return (
     <div className="ed-cargar-custom">
       <div className="ed-key-row-head">
-        <span className="ed-key-name">Clip personalizado</span>
+        <span className="ed-key-name">
+          Clip personalizado
+          <Hint>Inicio y fin sobre el vídeo completo. También puedes usarlo entero.</Hint>
+        </span>
         <span className="ed-key-set">{fmt(span)}</span>
       </div>
-      <p className="ed-key-hint">Inicio y fin sobre el vídeo completo. También puedes usarlo entero.</p>
       <div className="ed-cargar-times">
         <TimeInput label="Inicio" value={inT} onCommit={clampStart} />
         <TimeInput label="Fin" value={outT} onCommit={clampEnd} />
@@ -300,6 +303,7 @@ export default function EdMaterial({
   motion, motionFormat, onGoMotion, onMotionBack, onMotionSeek, motionTimeRef,
   paper, onGoPaper, onExitStudio, onGeneratePaper,
   onFaceTrackMaterial, faceTrackBusyIdent,
+  onPen, penActive, onAddAdjustment, onAddCinemaBars, onApplyRecipe, recipeBusy, selectedClips,
 }) {
   const [tabState, setTabState] = useState('video')
   const tab = matTab ?? tabState
@@ -1181,12 +1185,17 @@ export default function EdMaterial({
 
       {tab === 'sfx' && <SfxTab onAdd={onAdd} onPlay={onPlayMedia} di={di} fav={fav} />}
       {tab === 'library' && <EdLibrary onAdd={onAdd} onDragInfo={di} onPlay={onPlayMedia} />}
-      {tab === 'shapes' && <EdShapes onAdd={onAdd} onDragInfo={di} />}
+      {tab === 'shapes' && <EdShapes onAdd={onAdd} onDragInfo={di} onPen={onPen} penActive={penActive} />}
       {tab === 'effects' && (
         <EdFxLibrary
           mode="effects"
           clip={selectedClip}
           onChangeFx={onChangeFx}
+          onAddAdjustment={onAddAdjustment}
+          onAddCinemaBars={onAddCinemaBars}
+          onApplyRecipe={onApplyRecipe}
+          recipeBusy={recipeBusy}
+          selectedClips={selectedClips}
           onNeedClip={() => setMatToast({ type: 'error', message: 'Selecciona un clip en la timeline.' })}
         />
       )}

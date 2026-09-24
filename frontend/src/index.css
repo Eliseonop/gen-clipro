@@ -9,3 +9,20 @@ body { margin: 0; }
   font-style: normal;
   font-display: swap;
 }
+
+/* Ayuda contextual (components/Hint.jsx): ⓘ discreto + globo al pasar el ratón. */
+.ui-hint {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 13px; height: 13px; margin-left: 5px; border-radius: 50%;
+  border: 1px solid currentColor; color: var(--muted, #8b8b99); opacity: 0.7;
+  font: italic 700 9px/1 Georgia, serif; cursor: help; vertical-align: middle;
+  user-select: none; transition: opacity 0.12s, color 0.12s;
+}
+.ui-hint:hover, .ui-hint:focus-visible { opacity: 1; color: var(--text, #fff); outline: none; }
+.ui-hint-tip {
+  position: fixed; z-index: 10000; box-sizing: border-box; pointer-events: none;
+  padding: 7px 9px; border-radius: 7px; font-size: 11px; line-height: 1.45; font-weight: 400;
+  color: #e7e7ee; background: #1d1d24; border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); text-align: left; white-space: normal;
+}
+.ui-hint-tip b { color: #fff; font-weight: 650; }

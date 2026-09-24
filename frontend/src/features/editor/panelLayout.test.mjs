@@ -41,3 +41,33 @@ assert.equal(readPanelLayout(storage).inspector, 500)
 assert.ok(store.get(PANEL_LAYOUT_KEY).includes('"materials":500'))
 
 console.log('panelLayout ok')
+
+// Disposiciones del workspace: el signo del arrastre sigue al lado del panel
+{
+  const { WORKSPACE_PRESETS, workspacePreset, readWorkspacePreset, writeWorkspacePreset } = await import('./panelLayout.js')
+  assert.equal(workspacePreset('nope').id, 'default')
+  assert.ok(WORKSPACE_PRESETS.length >= 4)
+  const o = { materials: 380, inspector: 340, bottom: 240, crops: 268 }
+  const b = { workW: 1600, bottomW: 1600, editorH: 900, topbarH: 44 }
+  assert.equal(applyPanelDrag('materials', o, 40, 0, b, 'mirror').materials, 340)
+  assert.equal(applyPanelDrag('inspector', o, 40, 0, b, 'main-right').inspector, 380)
+  assert.equal(applyPanelDrag('inspector', o, 40, 0, b).inspector, 300)
+  const mem = new Map()
+  const st = { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v) }
+  assert.equal(readWorkspacePreset(st), 'default')
+  writeWorkspacePreset(st, 'main-left')
+  assert.equal(readWorkspacePreset(st), 'main-left')
+  writeWorkspacePreset(st, 'bogus')
+  assert.equal(readWorkspacePreset(st), 'default')
+}
+
+// Main a toda altura: el separador del inspector redimensiona el Main
+{
+  const o = { materials: 380, inspector: 340, bottom: 240, crops: 268, main: 440 }
+  const b = { workW: 1600, bottomW: 1000, editorH: 900, topbarH: 44 }
+  const r = applyPanelDrag('inspector', o, -60, 0, b, 'tall-main')
+  assert.equal(r.main, 500)
+  assert.equal(r.inspector, 340)
+  const tightMain = clampPanelLayout({ ...o, main: 3000 }, b)
+  assert.ok(tightMain.materials + tightMain.main + PANEL_MIN.inspector <= 1600)
+}

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config, migrations
-from .schemas import AudioInfo, ClipInfo, ImageInfo, Project, Transcript
+from .schemas import AudioInfo, ClipInfo, ImageInfo, Project, ProjectGroup, Transcript
 
 _lock = threading.Lock()
 _FILE: Path = config.PROJECTS_FILE
@@ -112,7 +112,7 @@ def get_project(pid: str) -> Project | None:
     return None
 
 
-def create_project(name: str) -> Project:
+def create_project(name: str, group_id: str | None = None) -> Project:
     proj = Project(
         id=uuid.uuid4().hex[:8],
         name=(name or "").strip() or "Sin título",
@@ -121,9 +121,79 @@ def create_project(name: str) -> Project:
     )
     with _lock:
         data = _load()
+        # Una carpeta que ya no existe no es error: el proyecto queda sin carpeta.
+        if group_id and any(g["id"] == group_id for g in data.get("groups", [])):
+            proj.group_id = group_id
         data["projects"].insert(0, proj.model_dump())
         _save(data)
     return proj
+
+
+# --- Carpetas del inicio -------------------------------------------------
+# Solo organizan la lista de proyectos (``group_id`` en cada proyecto); no mueven
+# archivos. Los proyectos sin ``group_id`` (o de versiones anteriores) quedan en
+# la raíz, "sin carpeta".
+
+def list_groups() -> list[ProjectGroup]:
+    return [ProjectGroup(**g) for g in _load().get("groups", [])]
+
+
+def _clean_name(name: str) -> str:
+    n = (name or "").strip()
+    if not n:
+        raise ValueError("El nombre no puede estar vacío.")
+    return n
+
+
+def create_group(name: str) -> ProjectGroup:
+    group = ProjectGroup(id=uuid.uuid4().hex[:8], name=_clean_name(name), created_at=_now())
+    with _lock:
+        data = _load()
+        data.setdefault("groups", []).append(group.model_dump())
+        _save(data)
+    return group
+
+
+def rename_group(gid: str, name: str) -> ProjectGroup | None:
+    new_name = _clean_name(name)
+    with _lock:
+        data = _load()
+        for g in data.get("groups", []):
+            if g["id"] == gid:
+                g["name"] = new_name
+                _save(data)
+                return ProjectGroup(**g)
+    return None
+
+
+def delete_group(gid: str) -> bool:
+    """Borra la carpeta; sus proyectos NO se borran, vuelven a la raíz."""
+    with _lock:
+        data = _load()
+        groups = data.get("groups", [])
+        kept = [g for g in groups if g["id"] != gid]
+        if len(kept) == len(groups):
+            return False
+        data["groups"] = kept
+        for p in data["projects"]:
+            if p.get("group_id") == gid:
+                p["group_id"] = None
+        _save(data)
+        return True
+
+
+def move_project(pid: str, group_id: str | None) -> Project | None:
+    """Mete el proyecto en una carpeta (``None`` = sacarlo a la raíz)."""
+    with _lock:
+        data = _load()
+        if group_id and not any(g["id"] == group_id for g in data.get("groups", [])):
+            raise ValueError("La carpeta no existe.")
+        for p in data["projects"]:
+            if p["id"] == pid:
+                p["group_id"] = group_id or None
+                _save(data)
+                return _project_from_dict(p)
+    return None
 
 
 def rename_project(pid: str, name: str) -> Project | None:

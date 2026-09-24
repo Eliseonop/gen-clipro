@@ -43,10 +43,16 @@ export const getJob = (jobId) => get(`/api/job/${jobId}`)
 
 // --- Proyectos ---
 export const listProjects = () => get('/api/projects')
-export const createProject = (name) => post('/api/projects', { name })
+export const createProject = (name, groupId = null) => post('/api/projects', { name, group_id: groupId })
 export const deleteProject = (id) => del(`/api/projects/${id}`)
 export const renameProject = (id, name) => patch(`/api/projects/${id}`, { name })
 export const duplicateProject = (id) => post(`/api/projects/${id}/duplicate`, {})
+// Carpetas del inicio (solo organizan la lista; null = sin carpeta).
+export const listProjectGroups = () => get('/api/project-groups')
+export const createProjectGroup = (name) => post('/api/project-groups', { name })
+export const renameProjectGroup = (id, name) => patch(`/api/project-groups/${id}`, { name })
+export const deleteProjectGroup = (id) => del(`/api/project-groups/${id}`)
+export const moveProjectToGroup = (id, groupId) => post(`/api/projects/${id}/group`, { group_id: groupId })
 export const pickFolder = () => post('/api/pick-folder', {})
 // Abre el explorador del sistema resaltando el archivo del material (solo local).
 export const revealMaterial = ({ projectId, kind, filename, scope }) =>
@@ -86,6 +92,15 @@ export const uploadImages = (pid, files) => {
   for (const f of files) body.append('files', f)
   return req(`/api/projects/${pid}/images`, { method: 'POST', body })
 }
+// Beats (#12) del audio de un clip: { times: [s del archivo], bpm }.
+export const detectBeats = (pid, clip) => post(`/api/projects/${pid}/beats`, { clip })
+// Congelar fotograma (#11): imagen fija del fotograma `time` (s del archivo) del clip.
+export const freezeFrame = (pid, clip, time) => post(`/api/projects/${pid}/freeze-frame`, { clip, time })
+export const trackObject = (pid, clip, box, at) => post(`/api/projects/${pid}/track-object`, { clip, box, at })
+export const soundDesign = (pid, clip) => post(`/api/projects/${pid}/sound-design`, { clip })
+export const listRecipes = () => get('/api/recipes')
+export const applyRecipe = (pid, recipe, clipIds, params = {}) =>
+  post(`/api/projects/${pid}/recipes/${encodeURIComponent(recipe)}`, { clip_ids: clipIds, params })
 export async function fetchRemoteImage(url) {
   const res = await fetch('/api/images/fetch', {
     method: 'POST',
@@ -165,6 +180,10 @@ export const foundryChat = ({ projectId, message, context, language } = {}) =>
 // Operaciones estructuradas: op ∈ improve_script | generate_hooks | generate_titles |
 // generate_description | suggest_resources | visual_prompt | analyze_scene | assistant.
 export const foundryGenerate = (body) => post('/api/ai/foundry/generate', body)
+// Analizar material con visión de Foundry → Job (resumen en job.result).
+// body: { only_missing?, rename_generic?, items?: [{kind:'clips'|'images', id}] }
+export const analyzeMaterials = (projectId, body = {}) =>
+  post(`/api/projects/${projectId}/ai/analyze-materials`, body)
 
 // --- Chat IA (agente sobre el MCP) ---
 export const getAiConfig = () => get('/api/ai/config')

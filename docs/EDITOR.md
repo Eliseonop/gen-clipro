@@ -16,6 +16,8 @@ Es un editor de vídeo web pensado para crear **clips cortos y verticales** (for
 
 El editor se divide en dos zonas: parte superior (3 columnas) y parte inferior (timeline).
 
+El orden de las columnas se cambia desde el botón **Diseño** (icono de cuadrícula) de la barra superior: predeterminado, Main a la derecha, Main a la izquierda, invertido, materiales a toda altura o Main a toda altura (a la derecha, de arriba abajo). Detalle: [DISENO_VENTANA.md](DISENO_VENTANA.md).
+
 **Columna izquierda — Material y paneles.** Barra de pestañas:
 - **Video** — clips del proyecto, clips guardados y "Cargar" (pegar URL de YouTube o subir/arrastrar un archivo).
 - **Imagen** — imágenes del proyecto + búsqueda de stock (Explorar).
@@ -62,9 +64,13 @@ El editor se divide en dos zonas: parte superior (3 columnas) y parte inferior (
 
 **Efectos**
 - Filtros visuales: desenfoque, enfoque, glow, grayscale, sepia, pixelado, VHS, grano.
+- **Filtros de color** apilables con intensidad (Cine, Naranja y turquesa, Vintage, Noir, Hora dorada…), iguales en vista previa y export: [FILTROS_COLOR.md](FILTROS_COLOR.md).
+- **Capa de ajuste**: un clip que aplica filtros y color a todo lo que tiene debajo mientras dura (Efectos → *Capa de ajuste*): [CAPA_AJUSTE.md](CAPA_AJUSTE.md).
+- **Barras de cine** en un clic (2,39:1, 2:1, 1,85:1, 16:9), con entrada animada opcional: [BARRAS_CINE.md](BARRAS_CINE.md).
+- **Recetas en un clic** (Efectos → *Recetas*): etalonaje de cine, texto con reflejo, texto que atraviesas, franjas al ritmo y sujeto que se adelanta: [RECETAS.md](RECETAS.md).
 - Ajustes de color: brillo, contraste, saturación y presets (B/N, cinematic, vintage, warm, cool…).
 - Transiciones de entrada/salida: fade, dissolve, wipe, zoom, slide, pop.
-- Audio: volumen (con keyframes), fundidos de entrada/salida, ecualizador, compresor, reverb, echo, reducción de ruido, distorsión.
+- Audio: volumen (con keyframes), fundidos de entrada/salida, ecualizador, compresor, reverb, echo, reducción de ruido, distorsión y **filtros de sonido** (bajo el agua, teléfono, radio, megáfono, amortiguado) con intensidad animable; se oyen en la vista previa: [FILTROS_SONIDO.md](FILTROS_SONIDO.md).
 - Cambiar **velocidad** del clip (con o sin cambio de tono) y reproducción inversa.
 - **Eliminar fondo** de un vídeo o imagen: automático con IA, corrección a pincel y chroma key.
 
@@ -76,6 +82,7 @@ El editor se divide en dos zonas: parte superior (3 columnas) y parte inferior (
 
 **Figuras**
 - Insertar formas básicas, flechas, elementos geométricos y de UI, con posición, tamaño, rotación y opacidad.
+- **Pluma**: trazar una línea o ruta clic a clic en el visor; trazo **discontinuo o punteado**; **dibujar trazo** (el trazo aparece poco a poco, con keyframes): [TRAZADO_PLUMA.md](TRAZADO_PLUMA.md).
 
 **Salida**
 - Elegir **formato**: 9:16, 9:16 HD, 16:9, 1:1, 4:5, 4:3 (o personalizado).
@@ -88,6 +95,20 @@ El editor se divide en dos zonas: parte superior (3 columnas) y parte inferior (
 
 ## Funciones en detalle
 
+> Novedades recientes: ver [NOVEDADES.md](NOVEDADES.md).
+
+### Recortar
+
+Botón **Recortar** en el toolbar de la timeline: modal estilo CapCut con la fuente completa,
+recuadro con tiradores, scrub, rotación y proporciones. Detalle: [RECORTAR.md](RECORTAR.md).
+
+### Máscaras y ajustes
+
+Máscaras de división, **rollo de película**, círculo, rectángulo, estrella, corazón, texto y
+pincel, en vídeo, imagen, figura y **texto**; **máscara de ajuste** (los ajustes de color solo
+actúan dentro), ajustes **Exposición / Blancos / Temperatura / Tono** y **Seguir cara**.
+Incluye las 10 recetas de máscaras de CapCut. Detalle: [MASCARAS.md](MASCARAS.md).
+
 ### Reencuadre y seguimiento de cara
 
 Pensado para pasar vídeo horizontal (16:9) a vertical sin perder al sujeto.
@@ -97,8 +118,16 @@ Pensado para pasar vídeo horizontal (16:9) a vertical sin perder al sujeto.
 - **Seguimiento de cara automático:** genera keyframes que siguen al rostro a lo largo del clip. Dos modos:
   - **Suave** — el encuadre acompaña a la cara con movimiento amortiguado (menos brusco).
   - **Directo** — sigue la posición de la cara de forma más literal.
-- **Animación con keyframes:** cada punto de encuadre queda como keyframe numerado (panel *Keyframes* junto a la timeline). Puedes añadirlos en la posición del cabezal, seleccionarlos, borrarlos y elegir el **tipo de transición** entre ellos (cómo llega el encuadre a ese punto). Los keyframes también sirven para animar posición, escala, rotación, opacidad y volumen.
+- **Animación con keyframes:** cada punto de encuadre queda como keyframe numerado (panel *Keyframes* junto a la timeline). Puedes añadirlos en la posición del cabezal, seleccionarlos, borrarlos y elegir el **tipo de transición** entre ellos (cómo llega el encuadre a ese punto). Los keyframes también sirven para animar posición, escala, rotación, opacidad y volumen. Cada keyframe tiene su **curva de velocidad** (cúbicas, rebote, bézier personalizada): [CURVAS_ANIMACION.md](CURVAS_ANIMACION.md).
 - **Superponer (overlay / PIP):** en lugar de rellenar todo el cuadro, el clip se coloca **encima** de la composición con su propia posición, **escala** y **rotación** (se ajusta arrastrando en la vista de Resultado). El encuadre de la fuente y el tamaño en pantalla son independientes.
+- **Voltear:** horizontal y vertical en Transformación (o clic derecho), para vídeo, imagen, figura y texto: [VOLTEAR.md](VOLTEAR.md).
+- **Modo de fusión:** Multiplicar, Trama, Superponer, Luz suave… en *Mezcla* (debajo de Opacidad): [MODOS_FUSION.md](MODOS_FUSION.md).
+- **Desactivar clip (V):** el clip se queda en la timeline pero no se ve, no suena ni se exporta: [DESACTIVAR_CLIP.md](DESACTIVAR_CLIP.md).
+- **Congelar fotograma:** botón *Congelar* de la timeline: imagen fija de 3 s del fotograma del cursor: [CONGELAR_FOTOGRAMA.md](CONGELAR_FOTOGRAMA.md).
+- **Marcadores y beats:** **M** pone un marcador; *Detectar beats* marca los golpes de la música; los clips se enganchan a ambos: [BEATS_MARCADORES.md](BEATS_MARCADORES.md).
+- **Sonorizar con IA:** clic derecho en un vídeo o imagen → la IA propone sonidos de tu biblioteca (ambiente y puntuales) y los coloca en pistas SFX: [SONORIZAR_IA.md](SONORIZAR_IA.md).
+- **Seguimiento de objetos:** Animación → *Seguimiento*: un texto, figura o imagen acompaña a un objeto del vídeo (posición, escala y giro): [SEGUIMIENTO_OBJETOS.md](SEGUIMIENTO_OBJETOS.md).
+- **Copiar / pegar atributos:** **Ctrl+Alt+C** en un clip y **Ctrl+Alt+V** en uno o varios; eliges qué se pega (posición, animación, máscara, audio…): [PEGAR_ATRIBUTOS.md](PEGAR_ATRIBUTOS.md).
 - **Guardar clip:** el resultado (con su reencuadre y animación) se "hornea" y se guarda como clip reutilizable del material, con título y descripción. Si editabas uno existente, lo sobrescribe.
 
 ### Eliminar fondo
@@ -125,6 +154,8 @@ combinar:
   color (con paleta o cuentagotas sobre el reproductor) y ajusta *Tolerancia*,
   *Suavizado* y *Derrame* (quita el tinte del color en piel y pelo). Se ve al
   instante y no genera ningún archivo.
+- **Contorno.** Borde de color (o halo, con *Difuminado*) alrededor del sujeto
+  recortado: [CONTORNO_SUJETO.md](CONTORNO_SUJETO.md).
 
 El resultado se ve en el reproductor y sale igual en la exportación: por donde
 se quitó el fondo asoma lo que haya debajo (otro clip, una imagen, un color o
@@ -141,7 +172,7 @@ reabrir el proyecto y al exportar.
   - En un **vídeo** → "Generar transcripción".
   - En un **audio** → "Generar subtítulos".
   - Se procesan con **Whisper** (modelo configurable: Tiny → Large v3) y crean automáticamente los clips de texto en una pista, sincronizados con el habla.
-- **Estilo del texto:** fuente, tamaño (px), alineación, color de texto/borde/fondo, grosor de borde, sombra, brillo, negrita, caja de fondo y opacidad (del texto y del fondo).
+- **Estilo del texto:** fuente, tamaño (px), alineación, color de texto/borde/fondo, grosor de borde, sombra (color, opacidad, desenfoque, distancia y ángulo), espaciado entre letras, interlineado ([TEXTO_ESTILO.md](TEXTO_ESTILO.md)), brillo, negrita, caja de fondo y opacidad (del texto y del fondo).
 - **Temas de subtítulo (presets):** galería de estilos predefinidos aplicables con un clic.
 - **Efecto karaoke** (resaltado palabra a palabra): color de la palabra activa, opacidad de palabras activas/inactivas y efectos combinables sobre la palabra que se está diciendo.
 - **Palabras por cuadro:** límite de palabras que se muestran a la vez (1–10). **Fragmentar** parte un texto largo en varios clips respetando los tiempos originales.
@@ -150,6 +181,11 @@ reabrir el proyecto y al exportar.
   - **Global** — copia estilo y posición de un texto a todos los del timeline.
   - **Nivel pista** — el estilo de la pista se aplica a todos sus textos y a los nuevos.
 - **Favoritos:** guardar estilos (encuadre + tema + tamaño) y reutilizarlos después.
+- **Texto 3D:** inclinar y girar en 3D con perspectiva (con keyframes): [TEXTO_ESTILO.md](TEXTO_ESTILO.md#texto-3d-4).
+- **Texto animado:** los keyframes de posición, escala, giro y opacidad de un texto
+  salen en el export igual que en la vista previa. Detalle: [TEXTO_ANIMADO.md](TEXTO_ANIMADO.md).
+- **Trucos de CapCut:** plan de funcionalidades nuevas sacado del vídeo de Matt Loui,
+  con su estado: [TRUCOS_CAPCUT.md](TRUCOS_CAPCUT.md).
 
 ### Audio y voz (TTS)
 
@@ -163,7 +199,7 @@ Pestaña **Audio**, con dos modos:
   - El audio generado se añade al proyecto; puedes ponerle nombre.
 - **YouTube (extraer audio):** obtiene la pista de audio de un vídeo de YouTube y la deja en el proyecto (opción de guardarla para reutilizar en otros proyectos).
 
-Una vez en la timeline, todo audio (o el audio de un vídeo) admite **volumen** (con keyframes), **fundidos** de entrada/salida, **velocidad** (con o sin cambio de tono) y efectos: ecualizador, compresor, reverb, echo, reducción de ruido y distorsión.
+Una vez en la timeline, todo audio (o el audio de un vídeo) admite **volumen** (con keyframes), **fundidos** de entrada/salida, **velocidad** (con o sin cambio de tono) y efectos: ecualizador, compresor, reverb, echo, reducción de ruido y distorsión, más los **filtros de sonido** con intensidad animable ([FILTROS_SONIDO.md](FILTROS_SONIDO.md)).
 
 ## Flujo básico de trabajo
 

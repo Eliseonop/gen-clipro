@@ -4,21 +4,27 @@
 // Estas funciones son puras respecto a React: reciben un `env` con las refs vivas del
 // componente (clipsRef, tracksRef, mediaEls, outRef, …) y leen `.current` en el momento
 // de la llamada, igual que hacía el componente. Así el comportamiento por frame no cambia.
-import { drawReframe, kfColor, clamp } from '../../../lib/panning'
+import { drawReframe, clamp } from '../../../lib/panning'
 import { drawTextClip } from '../../../lib/textstyles'
-import { drawShapeClip } from '../../../lib/shapes'
+import { drawShapeClip, pathAnchorPoints, pathPoints } from '../../../lib/shapes'
 import { drawAlignGuides } from '../../../lib/alignGuides'
-import { clipDur, clipEnd, isVisualClip, newReframe, timelineToSource, safeMediaTime } from '../editorModel'
+import { clipDur, timelineToSource } from '../editorModel'
 import { gifFrameAt, gifInfo } from '../gifPlayer'
 import { cutoutDrawable } from '../bgCutout'
 import { hasMagic, magicOverlayCanvas } from '../bgMagic'
 import { applyCanvasFx, clipFxAt } from '../../../lib/clipFx'
 import { posedTransform, clipPose, clipMasksAt } from '../../../lib/clipAnim'
 import { beginMaskLayer, endMaskLayer, maskHandles, strokeMaskShape } from '../../../lib/clipMask'
-import { cssFont } from '../../../lib/textstyles'
-import { keyframesOn, normalizeItems } from '../../../lib/clipKeyframes'
+import { adjustPasses } from '../../../lib/clipAdjust'
+import { blendOp } from '../../../lib/clipBlend'
+import { adjustmentMatrix } from '../../../lib/clipFilters'
+import { colorMatrix, matrixFilterUrl } from '../../../lib/clipAdjust'
+import { cssFont, effectiveTextStyle } from '../../../lib/textstyles'
+import { clipPropsAt, keyframesOn } from '../../../lib/clipKeyframes'
+import { focalOf, planeProject, text3dAngles } from '../../../lib/text3d'
+import { warpLayer } from './warp3d'
 import {
-  cropHandleNorms, cropWindow, destRectOnFrame, frameRectOf, isOverlay, mediaSize, slotAspectOf,
+  clipFlip, cropWindow, destRectOnFrame, frameRectOf, isOverlay, mediaSize, slotAspectOf,
   sourceCropPx, srcRectOn, videosAt,
 } from '../../../lib/clipLayout'
 import { drawPlatformChrome } from './platformChrome'
@@ -46,6 +52,55 @@ function offsetHandles(handles, ox, oy) {
 function offsetRender(r, ox, oy) {
   if (!r) return r
   return { ...r, box: offsetBox(r.box, ox, oy), handles: offsetHandles(r.handles, ox, oy) }
+}
+
+// --- Texto 3D (#4): el texto se pinta en una capa del tamaño del canvas y la capa
+// se deforma con WebGL (render/warp3d.js), alrededor del centro de su caja. Igual
+// que el export (text_ass.text_warp_spec + filtro perspective).
+let _text3dLayer = null
+function text3dLayer(w, h) {
+  if (typeof document === 'undefined' || !w || !h) return null
+  if (!_text3dLayer) _text3dLayer = document.createElement('canvas')
+  if (_text3dLayer.width !== w) _text3dLayer.width = w
+  if (_text3dLayer.height !== h) _text3dLayer.height = h
+  return _text3dLayer
+}
+
+// Caja y tiradores del texto, proyectados (coordenadas del recuadro Main).
+function projectTextRender(r, pr) {
+  if (!r?.box) return r
+  const { x, y, w, h } = r.box
+  const pts = [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].map(([X, Y]) => pr(X, Y))
+  const xs = pts.map((p) => p.x)
+  const ys = pts.map((p) => p.y)
+  const box = { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) }
+  let handles = null
+  if (r.handles) {
+    handles = {}
+    for (const [k, p] of Object.entries(r.handles)) handles[k] = p ? { ...p, ...pr(p.x, p.y) } : p
+  }
+  return { ...r, box, handles }
+}
+
+function drawText3d(g, c, ang, { cw, ch, ox, oy, head, track, localT, selected }) {
+  const layer = text3dLayer(g.canvas?.width, g.canvas?.height)
+  if (!layer) return null
+  const l = layer.getContext('2d')
+  l.setTransform(1, 0, 0, 1, 0, 0)
+  l.clearRect(0, 0, layer.width, layer.height)
+  l.translate(ox, oy)
+  const r = drawTextClip(l, c, cw, ch, { selected, time: head, trackStyle: track?.style })
+  const pose = clipPose(c, localT)
+  const f = focalOf(ch, effectiveTextStyle(track?.style, c.style).perspective)
+  const cx = ox + pose.x * cw
+  const cy = oy + pose.y * ch
+  const warped = warpLayer(layer, cx, cy, ang[0], ang[1], f)
+  g.drawImage(warped || layer, 0, 0)
+  const pr = (X, Y) => {
+    const p = planeProject(cx, cy, ang[0], ang[1], f, X + ox, Y + oy)
+    return { x: p.x - ox, y: p.y - oy }
+  }
+  return projectTextRender(r, pr)
 }
 
 export function fillDestRect(cw, ch, clip, localT) {
@@ -151,7 +206,8 @@ function drawOverlayLayer(ctx, media, drawEl, clip, srcTime, outW, outH, fx, loc
   ctx.globalAlpha = fx.opacity * pose.opacity
   ctx.translate(dest.dx + dest.dw / 2 + fx.tx * dest.dw, dest.dy + dest.dh / 2 + fx.ty * dest.dh)
   ctx.rotate((dest.rotation || 0) * Math.PI / 180)
-  ctx.scale(fx.scale, fx.scale)
+  const flip = clipFlip(clip)
+  ctx.scale(fx.scale * (flip.h ? -1 : 1), fx.scale * (flip.v ? -1 : 1))
   try { ctx.drawImage(drawEl, px.sx, px.sy, px.sw, px.sh, -dest.dw / 2, -dest.dh / 2, dest.dw, dest.dh) } catch { /* noop */ }
   ctx.restore()
   return dest
@@ -261,7 +317,7 @@ function gifLoopDur(clip, el) {
 // resolución (el recorte topa el lado mayor), así que quien dibuje debe traducir
 // los píxeles de origen con `srcRectOn`. Mismo gancho que ya usaba el GIF: para el
 // resto del dibujo esto "es" la fuente.
-function drawSourceFor(clip, el, srcTime) {
+export function drawSourceFor(clip, el, srcTime) {
   const gif = gifDrawable(clip, el, srcTime)
   const base = gif || el
   return cutoutDrawable(clip, base, srcTime, gifLoopDur(clip, el)) || base
@@ -287,6 +343,8 @@ export function canvasToSourceNorm(clip, px, py, frame, env, head) {
   // clip con transición dejaría el trazo desplazado.
   const fx = clipFxAt(clip, localT, clipDur(clip))
   const fxs = fx.scale || 1
+  // Volteo (#7): va dentro de la pose, justo antes de dibujar la fuente.
+  const flip = clipFlip(clip)
 
   const unrotate = (x, y, deg) => {
     if (!deg) return [x, y]
@@ -304,6 +362,8 @@ export function canvasToSourceNorm(clip, px, py, frame, env, head) {
     ;[x, y] = unrotate(x, y, dest.rotation || 0)
     x /= fxs
     y /= fxs
+    if (flip.h) x = -x
+    if (flip.v) y = -y
     const u = (x + dest.dw / 2) / dest.dw
     const v = (y + dest.dh / 2) / dest.dh
     if (u < 0 || u > 1 || v < 0 || v > 1) return null
@@ -325,6 +385,8 @@ export function canvasToSourceNorm(clip, px, py, frame, env, head) {
   ;[x, y] = unrotate(x, y, pose.rotation || 0)
   const sc = pose.scale ?? 1
   if (sc) { x /= sc; y /= sc }
+  if (flip.h) x = -x
+  if (flip.v) y = -y
   const u = (x + cw / 2) / cw
   const v = (y + ch / 2) / ch
   if (u < 0 || u > 1 || v < 0 || v > 1) return null
@@ -447,20 +509,32 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
   let overlayDestSel = null
   let selRender = null
   const hits = []
-  for (const clip of videosAt(head, clipsRef.current, tracksRef.current)) {
+  // Máscara de ajuste: un clip puede pintarse en dos pasadas (base sin ajustes de
+  // color + fantasma con ajustes recortado por esas máscaras). Solo la base da hit.
+  const passes = []
+  for (const c of videosAt(head, clipsRef.current, tracksRef.current)) passes.push(...adjustPasses(c))
+  for (const { clip, ghost } of passes) {
+    // Capa de ajuste (#19): filtra lo ya compuesto dentro del cuadro (lo de debajo).
+    if (clip.kind === 'adjustment') {
+      applyAdjustmentLayer(ctx, clip, fr)
+      continue
+    }
     const localT = Math.max(0, head - (clip.start || 0))
-    // Con máscara el clip se pinta en una capa aparte y la máscara recorta su
-    // alfa; sin máscara se pinta directo (mismo camino de siempre).
+    // Con máscara o modo de fusión (#8) el clip se pinta en una capa aparte: la
+    // máscara recorta su alfa y la capa se funde entera con lo de debajo (como el
+    // export). Sin nada de eso se pinta directo (mismo camino de siempre).
     const masks = clipMasksAt(clip, localT)
-    const layer = masks.length ? beginMaskLayer(ctx) : null
+    const op = blendOp(clip)
+    const layer = (masks.length || op) ? beginMaskLayer(ctx) : null
     const g = layer ? layer.ctx : ctx
-    const flush = () => { if (layer) endMaskLayer(ctx, layer, masks, fr, { cssFontOf: cssFont }) }
+    const flush = () => { if (layer) endMaskLayer(ctx, layer, masks, fr, { cssFontOf: cssFont, op }) }
     if (clip.kind === 'shape') {
       const isSel = selected.has(clip.id)
       g.save(); g.translate(ox, oy)
-      const r = drawShapeClip(g, clip, cw, ch, { selected: isSel, time: localT })
+      const r = drawShapeClip(g, clip, cw, ch, { selected: isSel && !ghost, time: localT })
       g.restore()
       flush()
+      if (ghost) continue
       if (isSel) selRender = offsetRender(r, ox, oy)
       const dest = r?.box ? boxToDest(offsetBox(r.box, ox, oy), r.box.rotation || 0) : offsetDest(fillDestRect(cw, ch, clip, localT), ox, oy)
       hits.push({ id: clip.id, kind: 'shape', dest, handles: offsetHandles(r?.handles, ox, oy) })
@@ -482,8 +556,9 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
     if (isOverlay(clip)) {
       const dest = drawOverlayLayer(g, el, drawEl, clip, srcTime, outW, outH, fx, localT, fr)
       // Misma geometría de overlay, con el overlay de selección encima.
-      if (magicEl) drawOverlayLayer(g, el, magicEl, clip, srcTime, outW, outH, fx, localT, fr)
+      if (magicEl && !ghost) drawOverlayLayer(g, el, magicEl, clip, srcTime, outW, outH, fx, localT, fr)
       flush()
+      if (ghost) continue
       hits.push({ id: clip.id, kind: clip.kind, dest, overlay: true })
       if (selected.has(clip.id)) overlayDestSel = dest
     } else {
@@ -495,10 +570,11 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
       const dy = (pose.y - 0.5) * ch
       const rot = pose.rotation || 0
       const sc = pose.scale ?? 1
-      if (dx || dy || rot || Math.abs(sc - 1) > 0.001) {
+      const flip = clipFlip(clip)
+      if (dx || dy || rot || Math.abs(sc - 1) > 0.001 || flip.h || flip.v) {
         g.translate(cw / 2 + dx, ch / 2 + dy)
         g.rotate(rot * Math.PI / 180)
-        g.scale(sc, sc)
+        g.scale(sc * (flip.h ? -1 : 1), sc * (flip.v ? -1 : 1))
         g.translate(-cw / 2, -ch / 2)
       }
       const rfDraw = reframeForDraw(clip, localT, srcTime)
@@ -507,6 +583,7 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
       if (magicEl) drawReframe(g, magicEl, rfDraw, srcTime, outW / outH, { clear: false, dest: { dx: 0, dy: 0, dw: cw, dh: ch } })
       g.restore()
       flush()
+      if (ghost) continue
       const dest = offsetDest(fillDestRect(cw, ch, clip, localT), ox, oy)
       hits.push({ id: clip.id, kind: clip.kind, dest, overlay: false })
       if (selected.has(clip.id) && !overlayDestSel) overlayDestSel = dest
@@ -514,15 +591,35 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
   }
 
   for (const c of clipsRef.current) {
-    if (c.kind !== 'text') continue
+    if (c.kind !== 'text' || c.disabled) continue
     const track = tracksRef.current.find((t) => t.id === c.track_id)
     if (track?.hidden) continue
     const activeText = head >= c.start - 0.02 && head < c.start + clipDur(c)
     if (!activeText) continue
     const isSel = selected.has(c.id)
-    ctx.save(); ctx.translate(ox, oy)
-    const r = drawTextClip(ctx, c, cw, ch, { selected: isSel, time: head, trackStyle: track?.style })
-    ctx.restore()
+    // Máscara en texto ("revelar texto") y modo de fusión: misma capa que los visuales.
+    const tMasks = clipMasksAt(c, Math.max(0, head - (c.start || 0)))
+    const tOp = blendOp(c)
+    const tLayer = (tMasks.length || tOp) ? beginMaskLayer(ctx) : null
+    const tg = tLayer ? tLayer.ctx : ctx
+    const tLocal = Math.max(0, head - (c.start || 0))
+    const ang3d = text3dAngles(clipPropsAt(c, tLocal))
+    let r
+    if (ang3d) {
+      r = drawText3d(tg, c, ang3d, { cw, ch, ox, oy, head, track, localT: tLocal, selected: isSel && !tLayer })
+    } else {
+      tg.save(); tg.translate(ox, oy)
+      r = drawTextClip(tg, c, cw, ch, { selected: isSel && !tLayer, time: head, trackStyle: track?.style })
+      tg.restore()
+    }
+    if (tLayer) endMaskLayer(ctx, tLayer, tMasks, fr, { cssFontOf: cssFont, op: tOp })
+    // En capa, la caja de selección se pinta aparte (si no, la máscara la recortaría
+    // y el modo de fusión la teñiría).
+    if (tLayer && isSel && !ang3d) {
+      ctx.save(); ctx.translate(ox, oy)
+      drawTextClip(ctx, c, cw, ch, { selected: true, selectionOnly: true, time: head, trackStyle: track?.style })
+      ctx.restore()
+    }
     if (isSel) selRender = offsetRender(r, ox, oy)
     if (r?.box) hits.push({ id: c.id, kind: 'text', dest: boxToDest(offsetBox(r.box, ox, oy)), handles: offsetHandles(r.handles, ox, oy) })
   }
@@ -537,11 +634,99 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
     const selId = selected.values().next().value
     const selClip = selId ? clipsRef.current.find((c) => c.id === selId) : null
     const selLocalT = selClip ? Math.max(0, head - (selClip.start || 0)) : 0
-    const selMasks = selClip ? clipMasksAt(selClip, selLocalT) : []
+    const selMasks = selClip ? clipMasksAt(selClip, selLocalT, { includeAdjust: true }) : []
     if (selMasks.length) drawMaskOverlay(ctx, selMasks[0], fr)
+  }
+  // Seguimiento (#15): recuadro del objeto mientras se arrastra.
+  const tb = env.trackBoxRef?.current
+  if (tb) {
+    ctx.save()
+    ctx.fillStyle = 'rgba(250, 204, 21, 0.12)'
+    ctx.strokeStyle = '#facc15'
+    ctx.lineWidth = 2
+    ctx.setLineDash([6, 4])
+    const x = Math.min(tb.x0, tb.x1), y = Math.min(tb.y0, tb.y1)
+    ctx.fillRect(x, y, Math.abs(tb.x1 - tb.x0), Math.abs(tb.y1 - tb.y0))
+    ctx.strokeRect(x, y, Math.abs(tb.x1 - tb.x0), Math.abs(tb.y1 - tb.y0))
+    ctx.restore()
+  }
+  // Pluma (#14): el trazado que se está dibujando; si no, las anclas del
+  // trazado seleccionado cuando se editan sus puntos.
+  const pen = env.penRef?.current
+  if (pen) drawPenOverlay(ctx, pen, env.penHoverRef?.current, fr)
+  else if (env.pathEditRef?.current) {
+    const selId = selected.values().next().value
+    const selClip = selId ? clipsRef.current.find((c) => c.id === selId) : null
+    if (selClip?.kind === 'shape' && selClip.shape?.type === 'path') {
+      drawPathAnchors(ctx, pathAnchorPoints(selClip, fr, Math.max(0, head - (selClip.start || 0))), !!selClip.shape.closed)
+    }
   }
   if (env.hitListRef) env.hitListRef.current = hits
   return selRender
+}
+
+function drawAnchor(ctx, x, y, r, first) {
+  ctx.beginPath()
+  ctx.arc(x, y, r, 0, Math.PI * 2)
+  ctx.fillStyle = first ? '#38bdf8' : '#fff'
+  ctx.fill()
+  ctx.lineWidth = 1.5
+  ctx.strokeStyle = first ? '#fff' : '#38bdf8'
+  ctx.stroke()
+}
+
+// Pluma (#14): curva provisional (con el puntero como siguiente punto) + anclas.
+// El primer punto va resaltado: pulsarlo cierra el trazado.
+export function drawPenOverlay(ctx, pen, hover, frame) {
+  const toPx = ([x, y]) => [frame.x + x * frame.w, frame.y + y * frame.h]
+  const pts = pen.points || []
+  const line = hover ? [...pts, hover] : pts
+  ctx.save()
+  if (line.length >= 2) {
+    ctx.strokeStyle = 'rgba(56,189,248,0.95)'
+    ctx.lineWidth = 2
+    ctx.lineJoin = 'round'
+    ctx.beginPath()
+    pathPoints(line, { smooth: true }).map(toPx).forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)))
+    ctx.stroke()
+  }
+  pts.forEach((p, i) => { const [x, y] = toPx(p); drawAnchor(ctx, x, y, i === 0 && pts.length >= 3 ? 6.5 : 4.5, i === 0) })
+  ctx.restore()
+}
+
+// Editar puntos de un trazado: polígono de anclas (discontinuo) + anclas.
+export function drawPathAnchors(ctx, anchors, closed) {
+  if (!anchors.length) return
+  ctx.save()
+  ctx.strokeStyle = 'rgba(56,189,248,0.55)'
+  ctx.lineWidth = 1
+  ctx.setLineDash([4, 4])
+  ctx.beginPath()
+  anchors.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)))
+  if (closed) ctx.closePath()
+  ctx.stroke()
+  ctx.setLineDash([])
+  anchors.forEach(([x, y]) => drawAnchor(ctx, x, y, 5, false))
+  ctx.restore()
+}
+
+let _adjCanvas = null
+// Capa de ajuste (#19): copia el cuadro ya compuesto y lo vuelve a pintar a través
+// de la matriz de la capa (un feColorMatrix = el colorchannelmixer del export).
+function applyAdjustmentLayer(ctx, clip, fr) {
+  const url = matrixFilterUrl(adjustmentMatrix(clip, colorMatrix(clip.effects || {})))
+  if (!url || typeof document === 'undefined') return
+  const w = Math.max(1, Math.round(fr.w))
+  const h = Math.max(1, Math.round(fr.h))
+  if (!_adjCanvas) _adjCanvas = document.createElement('canvas')
+  if (_adjCanvas.width !== w || _adjCanvas.height !== h) { _adjCanvas.width = w; _adjCanvas.height = h }
+  const g = _adjCanvas.getContext('2d')
+  g.clearRect(0, 0, w, h)
+  g.drawImage(ctx.canvas, fr.x, fr.y, fr.w, fr.h, 0, 0, w, h)
+  ctx.save()
+  ctx.filter = url
+  ctx.drawImage(_adjCanvas, 0, 0, w, h, fr.x, fr.y, fr.w, fr.h)
+  ctx.restore()
 }
 
 // Guía de edición de la máscara: contorno + caja + tiradores (tamaño, giro, pluma).
@@ -578,128 +763,19 @@ export function drawMaskOverlay(ctx, mask, frame) {
   }
 }
 
-function drawCropRuler(ctx, bx, by, bw, bh) {
-  ctx.save()
-  ctx.strokeStyle = 'rgba(255,255,255,0.4)'
-  ctx.lineWidth = 1
-  ctx.setLineDash([5, 4])
-  for (const f of [1 / 3, 2 / 3]) {
-    ctx.beginPath()
-    ctx.moveTo(bx + bw * f, by)
-    ctx.lineTo(bx + bw * f, by + bh)
-    ctx.moveTo(bx, by + bh * f)
-    ctx.lineTo(bx + bw, by + bh * f)
-    ctx.stroke()
-  }
-  ctx.setLineDash([])
-  ctx.strokeStyle = 'rgba(255, 213, 0, 0.92)'
-  for (let i = 0; i <= 10; i++) {
-    const f = i / 10
-    const x = bx + bw * f
-    const y = by + bh * f
-    const big = i % 5 === 0
-    const len = big ? 8 : 4
-    ctx.beginPath()
-    ctx.moveTo(x, by)
-    ctx.lineTo(x, by - len)
-    ctx.moveTo(bx, y)
-    ctx.lineTo(bx - len, y)
-    ctx.stroke()
-  }
-  ctx.restore()
-}
-
-// Canvas principal: el compuesto (resultado) es la vista por defecto.
-// El recorte de fuente (vídeo completo + recuadro) aparece en Clip Editor
-// y en Encuadre (al seleccionar un fill, o al pulsar Encuadre).
+// Canvas principal: siempre el compuesto. El recorte de la fuente se edita en su
+// propio modal (EdCropModal), no en este lienzo.
 export function drawMainView(head, env) {
   const {
-    mainCanvasRef, clipsRef, mediaEls, outRef, selRef, selIdsRef, selKfRef,
-    playingRef, framingModeRef, mainTextBox, alignGuidesRef, croppingRef,
-    viewZoomRef, mainStageRef, cropModeRef, platformOverlayRef,
+    mainCanvasRef, clipsRef, outRef, selRef, selIdsRef,
+    framingModeRef, mainTextBox, alignGuidesRef,
+    viewZoomRef, mainStageRef, platformOverlayRef,
   } = env
   const canvas = mainCanvasRef.current
   if (!canvas) return
   const ctx = canvas.getContext('2d')
 
   const clip = clipsRef.current.find((c) => c.id === selRef.current)
-  // Vista de recorte (fuente completa + recuadro naranja móvil, zonas fuera atenuadas)
-  // cuando se pulsa "Recortar" sobre el clip. Si no, compuesto (marco fijo). Estable
-  // en play. Con el panel de Máscara abierto siempre se muestra el compuesto: es donde
-  // se manipula la máscara (la vista de recorte no la puede representar).
-  const cropEdit = !!(clip && isVisualClip(clip) && !framingModeRef.current
-    && !env.maskModeRef?.current
-    && cropModeRef?.current)
-
-  // Recorte (fuente + recuadro): Clip Editor, o herramienta Encuadre con un visual seleccionado.
-  if (cropEdit && clip && isVisualClip(clip)) {
-    const el = mediaEls.current.get(clip.id)
-    const { w: vw, h: vh } = mediaSize(el)
-    if (!el || !vw) {
-      ctx.fillStyle = '#05060a'
-      ctx.fillRect(0, 0, canvas.width, canvas.height)
-      return
-    }
-    const srcAspect = vw / vh
-    const cw2 = 520, ch2 = Math.round(cw2 / srcAspect)
-    if (canvas.width !== cw2 || canvas.height !== ch2) { canvas.width = cw2; canvas.height = ch2 }
-    const active = head >= clip.start - 0.02 && head < clipEnd(clip)
-    const clampedHead = clamp(head, clip.start, clipEnd(clip))
-    const srcTime = clamp(timelineToSource(clip, clampedHead), clip.in_point, clip.out_point)
-    if (!(playingRef.current && active) && clip.kind !== 'image') {
-      const seekT = safeMediaTime(el, srcTime, env.fpsRef?.current)
-      if (Math.abs(el.currentTime - seekT) > 0.06) { try { el.currentTime = seekT } catch { /* noop */ } }
-    }
-    ctx.clearRect(0, 0, cw2, ch2)
-    const drawEl = drawSourceFor(clip, el, srcTime)
-    try { ctx.drawImage(drawEl, 0, 0, cw2, ch2) } catch { /* noop */ }
-    const rf = clip.reframe || newReframe()
-    // El recorte se hace respecto al aspecto del SLOT (Completo=salida; mitades≈1:1).
-    const outA = slotAspectOf(clip, outRef.current.w / outRef.current.h)
-    const srcT = (playingRef.current && active && clip.kind !== 'image') ? el.currentTime : srcTime
-    const localHead = Math.max(0, head - clip.start)
-    const crop = cropWindow(clip, srcAspect, outA, srcT, localHead)
-    const { cx: pcx, cy: pcy, wf, hf } = crop
-    const bx = (pcx - wf / 2) * cw2, by = (pcy - hf / 2) * ch2, bw = wf * cw2, bh = hf * ch2
-    ctx.fillStyle = 'rgba(3,5,12,0.58)'
-    ctx.fillRect(0, 0, cw2, by)
-    ctx.fillRect(0, by + bh, cw2, ch2 - (by + bh))
-    ctx.fillRect(0, by, bx, bh)
-    ctx.fillRect(bx + bw, by, cw2 - (bx + bw), bh)
-    const kfs = keyframesOn(clip)
-      ? normalizeItems(clip.keyframes.items)
-      : [...(rf.keyframes || [])].sort((a, b) => a.t - b.t)
-    kfs.forEach((k, i) => {
-      const g = keyframesOn(clip)
-        ? cropWindow(clip, srcAspect, outA, srcT, k.t)
-        : cropWindow({ ...clip, reframe: { ...rf, keyframes: [k] } }, srcAspect, outA, k.t)
-      const kx = (g.cx - g.wf / 2) * cw2, ky = (g.cy - g.hf / 2) * ch2
-      ctx.strokeStyle = kfColor(i)
-      ctx.lineWidth = k.id === selKfRef.current ? 3 : 1.5
-      ctx.strokeRect(kx, ky, g.wf * cw2, g.hf * ch2)
-    })
-    ctx.strokeStyle = '#ff8c1a'; ctx.lineWidth = 2.5
-    ctx.strokeRect(bx, by, bw, bh)
-    if (croppingRef?.current) drawCropRuler(ctx, bx, by, bw, bh)
-    // 8 tiradores: esquinas (cuadrado) + lados (barra). Igual que el hit-testing.
-    ctx.fillStyle = '#ff8c1a'
-    ctx.strokeStyle = '#fff'
-    ctx.lineWidth = 1.5
-    const cs = 6 // media-esquina en px
-    const bar = 8 // media-longitud de la barra de lado
-    const thin = 3 // media-grosor de la barra de lado
-    cropHandleNorms(pcx, pcy, wf, hf).forEach(({ hx, hy, x, y }) => {
-      const px = x * cw2
-      const py = y * ch2
-      let w = cs * 2
-      let h = cs * 2
-      if (hx && !hy) { w = thin * 2; h = bar * 2 }       // lado izq/der
-      else if (hy && !hx) { w = bar * 2; h = thin * 2 }  // lado sup/inf
-      ctx.fillRect(px - w / 2, py - h / 2, w, h)
-      ctx.strokeRect(px - w / 2, py - h / 2, w, h)
-    })
-    return
-  }
 
   // El canvas ocupa TODO el stage (más ancho que la salida), para ver el desborde del
   // clip fuera del cuadro naranja (p. ej. 16:9 dentro de 9:16). El cuadro va centrado.
@@ -747,21 +823,3 @@ export function drawMainView(head, env) {
   if (!framingModeRef.current) drawPlatformChrome(ctx, frame, platformOverlayRef?.current)
 }
 
-// Vista de RESULTADO en vivo (composición final) para el panel lateral mientras se
-// recorta la fuente. Reusa drawComposite en un canvas propio con el aspecto de
-// salida. Sin selección/handles ni hit-list (no debe interferir con la edición del recorte).
-export function drawResultView(head, env) {
-  const { resultCanvasRef, outRef } = env
-  const canvas = resultCanvasRef?.current
-  if (!canvas) return
-  const ctx = canvas.getContext('2d')
-  const a = outRef.current.w / outRef.current.h
-  const long = 640
-  const cw = a >= 1 ? long : Math.max(2, Math.round(long * a))
-  const ch = a >= 1 ? Math.max(2, Math.round(long / a)) : long
-  if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch }
-  ctx.fillStyle = '#000'
-  ctx.fillRect(0, 0, cw, ch)
-  const resultEnv = { ...env, hitListRef: null }
-  drawComposite(ctx, head, [], resultEnv, { x: 0, y: 0, w: cw, h: ch })
-}

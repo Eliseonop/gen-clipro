@@ -1,7 +1,10 @@
 import Icon from '../../components/Icon'
 import FlipSelect from '../../components/FlipSelect'
 import { fmt } from '../../lib/utils'
-import { FONTS, FONT_SIZES, FONT_SIZE_REF, cssFont, selectedSubtitleThemeId, themePreviewStyle } from '../../lib/textstyles'
+import {
+  FONTS, FONT_SIZES, FONT_SIZE_REF, LETTER_SPACING_RANGE, LINE_HEIGHT_DEFAULT, LINE_HEIGHT_RANGE, SHADOW_DEFAULTS,
+  cssFont, lineHeightOf, selectedSubtitleThemeId, themePreviewStyle,
+} from '../../lib/textstyles'
 import { SUBTITLE_THEMES, WORD_FX_OPTIONS, BLOCK_APPEAR_OPTIONS, WORDS_PER_BOX } from '../../lib/subtitleThemes'
 import { hasWordFx, toggleWordFx, styleOpacity, splitCaptionWords, wordsPerBoxOptions, activeWordsPerBox } from '../../lib/textKaraoke'
 import { isFreeText } from '../../lib/textRole'
@@ -107,11 +110,13 @@ export function TextFxPanel({ section = 'look', style, mode = 'clip', onChangeSt
           <input type="checkbox" checked={st.bg && st.bg !== 'none'} onChange={(e) => set({ bg: e.target.checked ? (st.bg && st.bg !== 'none' ? st.bg : '#111318') : 'none' })} /> Caja
         </label>
       </div>
+      {st.shadow && !st.glow && <ShadowControls st={st} set={set} />}
       <label className="ed-mini" title="Opacidad del texto">
         <span>Opacidad {Math.round(styleOpacity(st) * 100)}%</span>
         <input type="range" min="0" max="100" step="1" value={Math.round(styleOpacity(st) * 100)}
           onChange={(e) => set({ opacity: Number(e.target.value) / 100 })} />
       </label>
+      <SpacingControls st={st} set={set} />
       {st.bg && st.bg !== 'none' && (
         <label className="ed-mini"><span>Opacidad fondo</span>
           <input type="range" min="0.1" max="1" step="0.05" value={st.bg_opacity ?? 0.55}
@@ -132,6 +137,69 @@ export function TextFxPanel({ section = 'look', style, mode = 'clip', onChangeSt
           </label>
         </div>
       )}
+    </>
+  )
+}
+
+// Espaciado entre letras (−50…100 → −0,5…1 em) e interlineado (× tamaño de letra), #6.
+function SpacingControls({ st, set }) {
+  const ls = Math.round((Number.isFinite(Number(st.letter_spacing)) ? Number(st.letter_spacing) : 0) * 100)
+  const lh = lineHeightOf(st)
+  return (
+    <div className="ed-text-dense two">
+      <label className="ed-mini" title="Espacio entre letras (negativo = más juntas)">
+        <span>Espaciado {ls}</span>
+        <input type="range" min={LETTER_SPACING_RANGE[0] * 100} max={LETTER_SPACING_RANGE[1] * 100} step="1" value={ls}
+          onChange={(e) => set({ letter_spacing: Number(e.target.value) / 100 })} />
+      </label>
+      <label className="ed-mini" title={`Distancia entre líneas (por defecto ${LINE_HEIGHT_DEFAULT})`}>
+        <span>Interlineado {lh.toFixed(2)}</span>
+        <input type="range" min={LINE_HEIGHT_RANGE[0] * 100} max={LINE_HEIGHT_RANGE[1] * 100} step="1" value={Math.round(lh * 100)}
+          onChange={(e) => set({ line_height: Number(e.target.value) / 100 })} />
+      </label>
+    </div>
+  )
+}
+
+// Sombra paralela (estilo CapCut): distancia y desenfoque en "em" del texto.
+// Distancia 0–100 → 0–1 em; desenfoque 0–100 → 0–0,5 em.
+function ShadowControls({ st, set }) {
+  const num = (v, d) => (v != null && Number.isFinite(Number(v)) ? Number(v) : d)
+  const opacity = Math.round(num(st.shadow_opacity, SHADOW_DEFAULTS.opacity) * 100)
+  const dist = Math.round(num(st.shadow_distance, SHADOW_DEFAULTS.distance) * 100)
+  const blur = Math.round(num(st.shadow_blur, SHADOW_DEFAULTS.blur) * 200)
+  const angle = Math.round(num(st.shadow_angle, SHADOW_DEFAULTS.angle))
+  return (
+    <>
+      <div className="ed-fx-label">Sombra</div>
+      <div className="ed-text-dense five">
+        <label className="ed-mini ed-swatch" title="Color de la sombra">
+          <span>Color</span>
+          <input type="color" value={st.shadow_color || '#000000'} onChange={(e) => set({ shadow_color: e.target.value })} />
+        </label>
+      </div>
+      <div className="ed-text-dense two">
+        <label className="ed-mini" title="Opacidad de la sombra">
+          <span>Opacidad {opacity}%</span>
+          <input type="range" min="0" max="100" step="1" value={opacity}
+            onChange={(e) => set({ shadow_opacity: Number(e.target.value) / 100 })} />
+        </label>
+        <label className="ed-mini" title="Desenfoque de la sombra">
+          <span>Desenfoque {blur}</span>
+          <input type="range" min="0" max="100" step="1" value={blur}
+            onChange={(e) => set({ shadow_blur: Number(e.target.value) / 200 })} />
+        </label>
+        <label className="ed-mini" title="Distancia entre el texto y su sombra">
+          <span>Distancia {dist}</span>
+          <input type="range" min="0" max="100" step="1" value={dist}
+            onChange={(e) => set({ shadow_distance: Number(e.target.value) / 100 })} />
+        </label>
+        <label className="ed-mini" title="Hacia dónde cae la sombra (0° derecha, 90° abajo)">
+          <span>Ángulo {angle}°</span>
+          <input type="range" min="-180" max="180" step="1" value={angle}
+            onChange={(e) => set({ shadow_angle: Number(e.target.value) })} />
+        </label>
+      </div>
     </>
   )
 }

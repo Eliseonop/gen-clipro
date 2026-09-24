@@ -17,6 +17,7 @@ MOTIONS = (
     "zoom_in", "zoom_out", "spin", "spin_in",
     "slide_left", "slide_right", "slide_up", "slide_down",
     "fade_in", "fade_out", "pop", "pulse",
+    "draw_in",      # figuras: el trazo se dibuja de 0 a 100 % (#14)
 )
 _ALIASES = {
     "zoom": "zoom_in",
@@ -25,9 +26,13 @@ _ALIASES = {
     "spin_out": "spin",
     "whoosh": "slide_left",
     "hit": "pop",
+    "draw": "draw_in",
 }
 ANIMATABLE = frozenset({"video", "image", "text", "shape"})
 _POSE = ("x", "y", "scale", "rotation", "opacity", "cx", "cy", "zoom")
+# Claves que puede llevar un item. «draw» solo lo escribe draw_in: los demás
+# movimientos no lo tocan, así no pisan un trazo que ya se está dibujando.
+_ITEM_KEYS = (*_POSE, "draw")
 _APPEAR = frozenset({
     "zoom_in", "spin_in", "slide_left", "slide_right", "slide_up", "slide_down",
     "fade_in", "pop",
@@ -187,7 +192,7 @@ def _item(t: float, props: dict, interpolation: str) -> dict:
         "id": _uid(),
         "t": round(max(0.0, t), 3),
         "interpolation": interpolation,
-        "props": {k: round(_num(props.get(k), 0.0), 4) for k in _POSE if k in props},
+        "props": {k: round(_num(props.get(k), 0.0), 4) for k in _ITEM_KEYS if k in props},
     }
 
 
@@ -270,6 +275,11 @@ def build_motion_items(
     motion = normalize_motion(motion)
     rest = _rest(clip)
     clip_dur = max(0.05, clip_timeline_duration(clip))
+    if motion == "draw_in":
+        if _kind(clip) != "shape":
+            raise ValueError("draw_in solo aplica a figuras (trazado, línea, flecha…)")
+        window = min(max(0.1, _num(duration, 1.5) if duration is not None else 1.5), clip_dur)
+        return [_item(0.0, {"draw": 0.0}, "linear"), _item(window, {"draw": 1.0}, "ease-in-out")]
     inten = max(0.15, min(2.0, _num(intensity, 1.0)))
     nturns = max(0.25, min(4.0, _num(turns, 1.0)))
     env = parse_envelope(envelope)
@@ -330,7 +340,7 @@ def merge_visual_keyframes(clip: Any, items: list[dict]) -> dict:
         base = clip_props_at(data, t)
         props = dict(base)
         extra = it.get("props") if isinstance(it.get("props"), dict) else {}
-        for k in _POSE:
+        for k in _ITEM_KEYS:
             if k in extra:
                 props[k] = extra[k]
         merged.append({

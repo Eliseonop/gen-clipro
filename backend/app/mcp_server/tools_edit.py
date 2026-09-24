@@ -162,6 +162,128 @@ def split_clip(project_id: str, clip_id: str, at_time: float) -> dict:
     return _apply(project_id, "split_clip", {"clip_id": clip_id, "at_time": at_time})
 
 
+def freeze_frame(project_id: str, clip_id: str, at_time: float, duration: float = 3.0) -> dict:
+    """Congela el fotograma de un vídeo en at_time (s de timeline): parte el clip e inserta una imagen fija de `duration` s con su misma pose/recorte/efectos; desplaza lo que viene detrás."""
+    from ..clip_speed import clip_speed
+    from ..freeze import freeze_frame_image
+
+    proj = _project_or_raise(project_id)
+    tl = proj.timeline
+    clip = next((c for c in (tl.clips if tl else []) if c.id == clip_id), None)
+    if clip is None:
+        raise ValueError(f"Clip inexistente: {clip_id}")
+    rel = max(0.0, float(at_time) - clip.start) * clip_speed(clip)
+    src = (clip.out_point - rel) if clip.reverse else (clip.in_point + rel)
+    image = freeze_frame_image(proj, clip, min(max(src, clip.in_point), clip.out_point))
+    return _apply(project_id, "freeze_frame", {
+        "clip_id": clip_id, "at_time": float(at_time), "duration": float(duration),
+        "image": {"id": image.id, "filename": image.filename, "label": image.label}})
+
+
+def detect_beats(project_id: str, clip_id: str, every: int = 1) -> dict:
+    """Detecta los beats del audio de un clip (audio/vídeo) y los guarda en el clip (imán al ritmo). every=1|2|4 deja uno de cada N."""
+    from .. import compose
+    from ..beats import detect_beats as _detect
+
+    proj = _project_or_raise(project_id)
+    tl = proj.timeline
+    clip = next((c for c in (tl.clips if tl else []) if c.id == clip_id), None)
+    if clip is None:
+        raise ValueError(f"Clip inexistente: {clip_id}")
+    path = compose._clip_path(proj, clip)
+    if path is None or not path.exists():
+        raise ValueError("No se encuentra el archivo del clip.")
+    res = _detect(path)
+    out = _apply(project_id, "set_clip_beats",
+                 {"clip_id": clip_id, "beats": {**res, "every": every}})
+    out["beats"] = {"bpm": res["bpm"], "count": len(res["times"])}
+    return out
+
+
+def set_timeline_markers(project_id: str, markers: list) -> dict:
+    """Sustituye los marcadores de la timeline: [{t (s), label?, color?}]. [] los borra."""
+    return _apply(project_id, "set_markers", {"markers": markers})
+
+
+def paste_clip_attributes(project_id: str, source_clip_id: str, target_clip_ids: list,
+                          groups: list | None = None) -> dict:
+    """Pega atributos de un clip en otros (un solo undo). groups: transform, flip, blend, animation, transitions, crop, effects, mask, chroma, style, speed, audio (None = todos los que apliquen)."""
+    return _apply(project_id, "paste_clip_attributes", {
+        "source_clip_id": source_clip_id, "target_clip_ids": list(target_clip_ids or []),
+        "groups": groups})
+
+
+def track_object(project_id: str, clip_id: str, box: dict, at_time: float,
+                 follower_clip_id: str | None = None, mode: str = "position_scale") -> dict:
+    """Sigue un objeto de un clip de vídeo: box = {cx, cy, w, h} en 0–1 del fotograma FUENTE en at_time (s de timeline; míralo con get_frame). Con follower_clip_id ese clip (texto, figura, imagen…) lo acompaña; mode position|position_scale|position_scale_rotation. Devuelve job (wait_for_job)."""
+    from .. import jobs
+    from ..clip_speed import clip_speed
+    from ..object_track import FOLLOW_MODES
+
+    proj = _project_or_raise(project_id)
+    tl = proj.timeline
+    clip = next((c for c in (tl.clips if tl else []) if c.id == clip_id), None)
+    if clip is None:
+        raise ValueError(f"Clip inexistente: {clip_id}")
+    if clip.kind != "video":
+        raise ValueError("solo se siguen objetos de un clip de vídeo")
+    try:
+        bx = {k: float(box[k]) for k in ("cx", "cy", "w", "h")}
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("box debe ser {cx, cy, w, h} en 0–1") from None
+    if follower_clip_id is not None:
+        if mode not in FOLLOW_MODES:
+            raise ValueError(f"mode debe ser uno de {list(FOLLOW_MODES)}")
+        if not any(c.id == follower_clip_id for c in tl.clips):
+            raise ValueError(f"Clip inexistente: {follower_clip_id}")
+    rel = max(0.0, float(at_time) - clip.start) * clip_speed(clip)
+    src = (clip.out_point - rel) if clip.reverse else (clip.in_point + rel)
+    src = min(max(src, clip.in_point), clip.out_point)
+    follow = ({"follower_clip_id": follower_clip_id, "anchor_t": float(at_time), "mode": mode}
+              if follower_clip_id else None)
+    job = jobs.create_job()
+    jobs.start_object_track_job(job, project_id, clip.model_dump(), bx, src, follow)
+    return dto.job_dto(job)
+
+
+def sound_design(project_id: str, clip_id: str, apply: bool = True) -> dict:
+    """Sonoriza una escena con IA: propone SFX de la biblioteca (viento, pasos, un helicóptero…) según lo que se ve/dice en el clip y, con apply, los coloca en pistas SFX. Devuelve job (wait_for_job); result.missing = lo que no está en la biblioteca."""
+    from .. import jobs
+
+    proj = _project_or_raise(project_id)
+    tl = proj.timeline
+    clip = next((c for c in (tl.clips if tl else []) if c.id == clip_id), None)
+    if clip is None:
+        raise ValueError(f"Clip inexistente: {clip_id}")
+    if clip.kind not in ("video", "image"):
+        raise ValueError("sound_design funciona con clips de vídeo o imagen")
+    job = jobs.create_job()
+    jobs.start_sound_design_job(job, project_id, clip.model_dump(), bool(apply))
+    return dto.job_dto(job)
+
+
+def add_adjustment_layer(project_id: str, start: float = 0.0, duration: float = 5.0,
+                         filters: list | None = None, effects: dict | None = None,
+                         intensity: float = 1.0) -> dict:
+    """Capa de ajuste: filtra TODO lo de debajo (vídeos, imágenes, figuras; no textos) de start a start+duration. filters=[{id, amount}] (ver set_clip_effects), effects = brightness|contrast|saturation|exposure|whites|temperature|hue; intensity 0–1."""
+    return _apply(project_id, "add_adjustment_layer", {
+        "start": start, "duration": duration, "filters": filters, "effects": effects, "intensity": intensity})
+
+
+def add_cinema_bars(project_id: str, ratio: str = "2.39", start: float = 0.0,
+                    duration: float | None = None, animate: bool = False) -> dict:
+    """Barras de cine (letterbox) encima de todo: ratio 2.39|2|1.85|16:9 (o un número) = proporción de lo que queda visible. Sin duration, hasta el final. animate = entran en 1 s."""
+    return _apply(project_id, "add_cinema_bars",
+                  {"ratio": ratio, "start": start, "duration": duration, "animate": animate})
+
+
+def apply_recipe(project_id: str, recipe: str, clip_ids: list | None = None,
+                 params: dict | None = None) -> dict:
+    """Receta en un clic (un truco completo, un solo undo): cinema_grade (etalonaje + barras), text_reflection (texto con reflejo; clip_ids = textos), pass_through_text (el texto se atraviesa), film_strips (≥2 vídeos/imágenes en franjas al ritmo), subject_pop (un vídeo: el sujeto recortado se adelanta; luego genera su recorte IA). params: zoom_time, frames."""
+    return _apply(project_id, "apply_recipe",
+                  {"recipe": recipe, "clip_ids": list(clip_ids or []), "params": dict(params or {})})
+
+
 def remove_clip(project_id: str, clip_id: str) -> dict:
     """Elimina un clip de la timeline (deshacible con undo)."""
     return _apply(project_id, "remove_clip", {"clip_id": clip_id})
@@ -170,7 +292,11 @@ def remove_clip(project_id: str, clip_id: str) -> dict:
 def update_clip(project_id: str, clip_id: str, patch: dict) -> dict:
     """Actualiza propiedades escalares de un clip en UNA operación. patch: opacity(0–1),
     speed(0.1–10)/keep_pitch/reverse, appear/exit, position(full|top|bottom|free)/start/duration,
-    role(caption|free), note (qué representa el fragmento en la historia; "" la borra).
+    role(caption|free), note (qué representa el fragmento en la historia; "" la borra),
+    flip_h/flip_v (voltear en horizontal/vertical: vídeo, imagen, figura o texto),
+    blend_mode (normal|darken|multiply|color_burn|lighten|screen|color_dodge|overlay|
+    soft_light|hard_light|difference|exclusion), disabled (true = desactivado: sigue en la
+    timeline pero no se ve, no suena ni se exporta).
     Para efectos/audio_fx/volumen/keyframes usa sus tools propias."""
     return _apply(project_id, "update_clip", {"clip_id": clip_id, "patch": patch})
 
@@ -180,6 +306,15 @@ def reframe_clip(project_id: str, clip_id: str, mode: str = "center", zoom: floa
     """Encuadre de FUENTE de un clip: mode center (zoom) o manual (zoom + paneo {cx,cy}). No es animación."""
     return _apply(project_id, "reframe_clip",
                   {"clip_id": clip_id, "mode": mode, "zoom": zoom, "pan_from": pan_from, "pan_to": pan_to})
+
+
+def crop_clip(project_id: str, clip_ids: list[str] | None = None, track_id: str | None = None,
+              reset: bool = False, cx: float | None = None, cy: float | None = None,
+              w: float | None = None, h: float | None = None) -> dict:
+    """Recorte fijo (modal Recortar) de clips visuales libres: ventana cx,cy,w,h (0-1) o reset=true. clip_ids y/o track_id."""
+    return _apply(project_id, "crop_clip",
+                  {"clip_ids": clip_ids, "track_id": track_id, "reset": reset,
+                   "cx": cx, "cy": cy, "w": w, "h": h})
 
 
 def add_subtitles(project_id: str, source_clip_id: str, segments: list,
@@ -202,16 +337,23 @@ def set_project_format(project_id: str, aspect: str | None = None, resolution: i
 
 # --- Propiedades por-clip (Etapa 4.5) ------------------------------------
 
-def set_clip_effects(project_id: str, clip_id: str, effects: dict, replace: bool = False) -> dict:
-    """Efectos visuales: blur|grayscale|sepia|brightness|contrast|saturation. MERGE por defecto; solo visuales."""
+def set_clip_effects(project_id: str, clip_id: str, effects: dict | None = None, replace: bool = False,
+                     filters: list | None = None) -> dict:
+    """Efectos visuales: blur|grayscale|sepia|brightness|contrast|saturation|exposure|whites|temperature|hue (MERGE). filters = pila de filtros de color [{id, amount 0–1}] en orden (sustituye; [] los quita). Solo visuales."""
     return _apply(project_id, "set_clip_effects",
-                  {"clip_id": clip_id, "effects": effects, "replace": replace})
+                  {"clip_id": clip_id, "effects": effects, "replace": replace, "filters": filters})
 
 
-def set_clip_audio_fx(project_id: str, clip_id: str, audio_fx: dict, replace: bool = False) -> dict:
-    """Efectos de audio: eq|compressor|reverb|echo|denoise|distortion (0–1). MERGE por defecto; solo vídeo/audio."""
+def set_clip_masks(project_id: str, clip_id: str, masks: list | None = None) -> dict:
+    """Sustituye las máscaras del clip (tipos linear|film|circle|rectangle|star|heart|text|brush; target clip|adjust)."""
+    return _apply(project_id, "set_clip_masks", {"clip_id": clip_id, "masks": masks})
+
+
+def set_clip_audio_fx(project_id: str, clip_id: str, audio_fx: dict, replace: bool = False,
+                      ramp: dict | None = None) -> dict:
+    """Efectos de audio (0–1): eq|compressor|reverb|echo|denoise|distortion y filtros underwater|telephone|radio|megaphone|muffled. MERGE; solo vídeo/audio. ramp={start,end,from=0} (s del clip) los anima."""
     return _apply(project_id, "set_clip_audio_fx",
-                  {"clip_id": clip_id, "audio_fx": audio_fx, "replace": replace})
+                  {"clip_id": clip_id, "audio_fx": audio_fx, "replace": replace, "ramp": ramp})
 
 
 def set_clip_volume(project_id: str, clip_id: str, volume: float | None = None,
@@ -233,7 +375,7 @@ def set_track_audio(project_id: str, track_id: str, volume: float | None = None,
 
 
 def set_clip_keyframes(project_id: str, clip_id: str, keyframes: dict | None) -> dict:
-    """Keyframes {enabled, items:[{id,t,interpolation,props}]} o None. Escape hatch experto: prefiere animate_clip."""
+    """Keyframes {enabled, items:[{id,t,interpolation,bezier?,props}]} o None (curvas: help://clips). Escape hatch experto: prefiere animate_clip."""
     return _apply(project_id, "set_clip_keyframes", {"clip_id": clip_id, "keyframes": keyframes})
 
 
@@ -277,7 +419,7 @@ def _follow_audio_envelope(project_id: str, clip_id: str, follow_audio_id: str):
 def animate_clip(project_id: str, clip_id: str, motion: str, duration: float | None = None,
                  follow_audio_id: str | None = None, intensity: float = 1.0,
                  turns: float = 1.0) -> dict:
-    """Anima un clip (el servidor genera los keyframes). motion: zoom_in|zoom_out|spin|spin_in|slide_left|slide_right|slide_up|slide_down|fade_in|fade_out|pop|pulse. follow_audio_id: sigue el volumen de un clip de audio/SFX."""
+    """Anima un clip (el servidor genera los keyframes). motion: zoom_in|zoom_out|spin|spin_in|slide_left|slide_right|slide_up|slide_down|fade_in|fade_out|pop|pulse|draw_in (figuras: el trazo se dibuja; duration = s que tarda). follow_audio_id: sigue el volumen de un clip de audio/SFX."""
     envelope = None
     extra_warn: list[str] = []
     if follow_audio_id:
@@ -299,10 +441,11 @@ def duplicate_clip(project_id: str, clip_id: str, start: float | None = None) ->
 # --- Figuras / material nuevo --------------------------------------------
 
 def add_shape(project_id: str, shape: dict | None = None, track_id: str | None = None,
-              start: float = 0.0, duration: float | None = None) -> dict:
-    """Añade una figura vectorial (rect/línea/flecha/estrella…) a una pista de vídeo. shape = {type, fill, stroke, …}."""
+              start: float = 0.0, duration: float | None = None, points: list | None = None) -> dict:
+    """Añade una figura vectorial (rect/línea/flecha/estrella…) a una pista de vídeo. shape = {type, fill, stroke, strokeWidth, dash: solid|dash|dot, …}. Trazado libre: points = [[x, y], …] en 0–1 del cuadro (shape.closed/smooth opcionales)."""
     return _apply(project_id, "add_shape",
-                  {"shape": shape, "track_id": track_id, "start": start, "duration": duration})
+                  {"shape": shape, "track_id": track_id, "start": start, "duration": duration,
+                   "points": points})
 
 
 # --- Pistas --------------------------------------------------------------
@@ -360,11 +503,22 @@ def register(mcp) -> None:
     tool(mcp, access="write")(split_clip)
     tool(mcp, access="destructive")(remove_clip)
     tool(mcp, access="write")(update_clip)
+    tool(mcp, access="write")(freeze_frame)
+    tool(mcp, access="write")(detect_beats)
+    tool(mcp, access="write")(set_timeline_markers)
+    tool(mcp, access="write")(paste_clip_attributes)
+    tool(mcp, access="write")(track_object)
+    tool(mcp, access="write")(sound_design)
+    tool(mcp, access="write")(add_adjustment_layer)
+    tool(mcp, access="write")(add_cinema_bars)
+    tool(mcp, access="write")(apply_recipe)
     tool(mcp, access="write")(reframe_clip)
+    tool(mcp, access="write")(crop_clip)
     tool(mcp, access="write")(add_subtitles)
     tool(mcp, access="write")(set_project_format)
     # Etapa 4.5 — propiedades por-clip + figuras.
     tool(mcp, access="write")(set_clip_effects)
+    tool(mcp, access="write")(set_clip_masks)
     tool(mcp, access="write")(set_clip_audio_fx)
     tool(mcp, access="write")(set_clip_volume)
     tool(mcp, access="write")(set_track_audio)

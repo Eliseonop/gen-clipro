@@ -1,17 +1,18 @@
 import { useEffect, useState } from 'react'
+import EdFilters from './EdFilters'
 import Icon from '../../components/Icon'
 import FlipSelect from '../../components/FlipSelect'
 import {
-  APPEAR_OPTIONS, AUDIO_FX_TOGGLES, COLOR_FX, EXIT_OPTIONS, LOOK_OPTIONS,
+  APPEAR_OPTIONS, AUDIO_FX_TOGGLES, COLOR_FX, EXIT_OPTIONS,
   VIDEO_FX_TOGGLES, fxNum, fxOn,
 } from '../../lib/clipFx'
 import { isVisualClip } from './editorModel'
 import EdText, { TextFxPanel } from './EdText'
 import EdTransform from './EdTransform'
 import {
-  canKeyframe, clipPropsAt, clipVolumeAt, clampVolume, KF_INTERPS, keyframesEnabled,
-  normalizeInterp, targetInterpItem, VOL_MAX,
+  canKeyframe, clipPropsAt, clipVolumeAt, clampVolume, keyframesEnabled, VOL_MAX,
 } from '../../lib/clipKeyframes'
+import { KfCurvePanel } from './EdCurve'
 
 function fxTabs(clip, textMode, audioMode) {
   if (textMode === 'clip' || textMode === 'track' || clip?.kind === 'text') return ['text', 'transitions']
@@ -32,23 +33,9 @@ function tabLabel(id) {
   return 'Audio'
 }
 
-export function KfTransitionSelect({ clip, selKfId, playhead, onInterp, fps }) {
-  const localT = Math.max(0, (playhead ?? 0) - (clip?.start || 0))
-  const target = targetInterpItem(clip, selKfId, localT, fps)
-  if (!target) return null
-  return (
-    <>
-      <label className="ed-prop">
-        Tipo de transición
-        <FlipSelect
-          value={normalizeInterp(target.interpolation)}
-          options={KF_INTERPS.map((o) => ({ value: o.id, label: o.label }))}
-          onChange={(v) => onInterp?.(target, v)}
-        />
-      </label>
-      <p className="ed-key-hint">Cómo llega el encuadre a este punto de la timeline.</p>
-    </>
-  )
+// Curva con que la animación llega al keyframe (presets + bézier editable).
+export function KfTransitionSelect(props) {
+  return <KfCurvePanel {...props} />
 }
 
 export function VolumePanel({ clip, playhead, onChangeFx, onPose, onAddKf, onFade, trackMode }) {
@@ -154,32 +141,39 @@ export function AudioFxGrid({ clip, playhead, onChangeFx, onPose, trackMode }) {
     setFx(item.id, on ? 0 : (item.def ?? 1))
   }
 
+  const card = (item) => {
+    const v = valueOf(item.id)
+    const on = v > 0
+    return (
+      <div key={item.id} className={`ed-fx-card ${on ? 'on' : ''}`}>
+        <button type="button" className="ed-fx-card-btn" onClick={() => toggle(item)}>
+          <Icon name={item.icon} size={18} />
+          <span>{item.label}</span>
+        </button>
+        {on && (
+          <input
+            type="range"
+            min={item.min ?? 0}
+            max={item.max ?? 1}
+            step={item.step ?? 0.05}
+            value={v}
+            aria-label={`Intensidad ${item.label}`}
+            title={`${Math.round(v * 100)} %`}
+            onChange={(e) => setFx(item.id, Number(e.target.value))}
+          />
+        )}
+      </div>
+    )
+  }
+  // Filtros de sonido (#16) aparte: son «personajes» (bajo el agua, teléfono…),
+  // no retoques. La intensidad se anima con keyframes como el volumen.
   return (
-    <div className="ed-fx-grid">
-      {AUDIO_FX_TOGGLES.map((item) => {
-        const v = valueOf(item.id)
-        const on = v > 0
-        return (
-          <div key={item.id} className={`ed-fx-card ${on ? 'on' : ''}`}>
-            <button type="button" className="ed-fx-card-btn" onClick={() => toggle(item)}>
-              <Icon name={item.icon} size={18} />
-              <span>{item.label}</span>
-            </button>
-            {on && (
-              <input
-                type="range"
-                min={item.min ?? 0}
-                max={item.max ?? 1}
-                step={item.step ?? 0.05}
-                value={v}
-                aria-label={`Intensidad ${item.label}`}
-                onChange={(e) => setFx(item.id, Number(e.target.value))}
-              />
-            )}
-          </div>
-        )
-      })}
-    </div>
+    <>
+      <div className="ed-fx-label">Filtros de sonido</div>
+      <div className="ed-fx-grid">{AUDIO_FX_TOGGLES.filter((i) => i.group === 'filter').map(card)}</div>
+      <div className="ed-fx-label">Efectos</div>
+      <div className="ed-fx-grid">{AUDIO_FX_TOGGLES.filter((i) => i.group !== 'filter').map(card)}</div>
+    </>
   )
 }
 
@@ -208,6 +202,7 @@ export default function EdEffects({
       playhead={playhead}
       onPose={onPose}
       onChangeFrame={onChangeFrame}
+      onTextStyle={clip?.kind === 'text' ? onChangeTextStyle : undefined}
     />
   ) : null
 
@@ -371,19 +366,7 @@ export default function EdEffects({
         {volumeBlock}
         {activeTab === 'video' && (
           <>
-            <div className="ed-fx-label">Estilo</div>
-            <div className="ed-fx-chips">
-              {LOOK_OPTIONS.map((o) => (
-                <button
-                  key={o.id}
-                  type="button"
-                  className={`ed-fx-chip ${(clip.look || 'none') === o.id ? 'on' : ''}`}
-                  onClick={() => onChangeFx?.({ look: o.id })}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
+            <EdFilters clip={clip} onChangeFx={onChangeFx} />
 
             <div className="ed-fx-label">Color</div>
             {COLOR_FX.map((item) => (

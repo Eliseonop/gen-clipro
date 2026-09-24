@@ -45,8 +45,19 @@ TOOL_DOMAINS: dict[str, str] = {
     "remove_clip": "clips",
     "duplicate_clip": "clips",
     "update_clip": "clips",
+    "freeze_frame": "clips",
+    "paste_clip_attributes": "clips",
+    "track_object": "clips",
+    "sound_design": "audio",
+    "add_adjustment_layer": "clips",
+    "add_cinema_bars": "clips",
+    "apply_recipe": "clips",
+    "detect_beats": "audio",
+    "set_timeline_markers": "timeline",
     "reframe_clip": "clips",
+    "crop_clip": "clips",
     "set_clip_effects": "clips",
+    "set_clip_masks": "clips",
     "set_clip_keyframes": "clips",
     "animate_clip": "clips",
     "add_shape": "clips",
@@ -73,6 +84,7 @@ TOOL_DOMAINS: dict[str, str] = {
     # vision
     "get_frame": "vision",
     "set_clip_ai_description": "vision",
+    "analyze_materials": "vision",
     # history
     "undo": "history",
     "redo": "history",
@@ -206,42 +218,115 @@ HELP: dict[str, str] = {
         "texto/imagen/figura]; appear/exit (none|fade|dissolve|wipe|zoom|slide_*|"
         "pop); position (full|top|bottom|free) + start + duration; role "
         "(caption|free, solo texto); note (qué REPRESENTA ese fragmento en la historia, "
-        "p.ej. 'el científico escribe la ecuación'; \"\" la borra). Ej.: "
+        "p.ej. 'el científico escribe la ecuación'; \"\" la borra); flip_h / flip_v "
+        "(voltear en horizontal/vertical vídeo, imagen, figura o texto: el reflejo "
+        "de un título es una copia con flip_v); blend_mode (modo de fusión con lo de "
+        "debajo: normal|darken|multiply|color_burn|lighten|screen|color_dodge|overlay|"
+        "soft_light|hard_light|difference|exclusion; screen quita el negro de un "
+        "overlay de luces, multiply el blanco). Ej.: "
         "update_clip(id, {\"position\":\"top\", \"opacity\":0.8}).\n"
+        "- Pegar atributos (como Ctrl+Alt+V de CapCut): paste_clip_attributes(source_clip_id, "
+        "target_clip_ids, groups?) copia de un clip a otros, en un solo undo, los grupos "
+        "elegidos: transform (posición/escala/giro), flip, blend (opacidad + fusión), "
+        "animation (keyframes de pose), transitions (appear/exit), crop (encuadre), "
+        "effects (filtro + efectos + ajustes), mask, chroma (croma + contorno; nunca el "
+        "recorte IA), style (texto→texto o figura→figura), speed, audio (volumen + fx). "
+        "Sin groups pega todos los que apliquen; el contenido y los tiempos no cambian.\n"
+        "- Recetas (trucos completos en un paso, un solo undo): apply_recipe(recipe, "
+        "clip_ids?, params?). cinema_grade = etalonaje de cine (capa de ajuste + barras); "
+        "text_reflection = reflejo de un texto (copia volteada, máscara y Superponer); "
+        "pass_through_text = la cámara atraviesa el texto (escala ×60 al final); "
+        "film_strips = 2–6 clips en franjas que entran en los beats (detect_beats antes); "
+        "subject_pop = el sujeto recortado aparece antes que su plano (luego hay que "
+        "generar su recorte IA en el editor).\n"
+        "- Barras de cine: add_cinema_bars(ratio=2.39|2|1.85|16:9, start=0, duration?, "
+        "animate=False): figura letterbox encima de todo; sin duration llega al final. "
+        "En 9:16 las barras de 2.39 son muy gruesas: para un toque sutil usa 16:9 o ajusta "
+        "shape.bar (alto de cada barra, 0–0.45).\n"
+        "- Capa de ajuste (etalonaje de toda una escena): add_adjustment_layer(start, "
+        "duration=5, filters?, effects?, intensity=1) filtra todo lo que tiene debajo "
+        "(vídeos, imágenes, figuras; los textos quedan encima). Se edita con "
+        "set_clip_effects y update_clip(opacity = intensidad).\n"
+        "- Seguimiento (tracking): track_object(clip_id, box, at_time, follower_clip_id?, "
+        "mode=position_scale) sigue un objeto de un vídeo desde at_time (hacia delante y "
+        "atrás, en su tramo). box = {cx, cy, w, h} en 0–1 del fotograma FUENTE (mira "
+        "get_frame(clip_id, at_time) para situarlo). Con follower_clip_id ese texto/figura/"
+        "imagen acompaña al objeto (keyframes; mode position | position_scale | "
+        "position_scale_rotation). Es un job: wait_for_job.\n"
+        "- Congelar fotograma: freeze_frame(clip_id, at_time, duration=3) parte un vídeo "
+        "en at_time (s de timeline) e inserta una imagen fija de ese fotograma con la "
+        "misma pose/recorte/efectos; lo que viene detrás en la pista se desplaza.\n"
         "- Notas de contexto: la nota de cada clip llega en existingElements[].note de "
         "motion_segment_context. Léela antes de diseñar (dice qué significa el fragmento, "
         "cosa que los frames no cuentan) y escríbela con update_clip cuando la sepas.\n"
         "- Encuadre de FUENTE (no es animación): reframe_clip(clip_id, mode, zoom?, "
         "pan_from?, pan_to?). mode center (zoom) | manual (zoom + paneo estático "
         "en pan_from, o animado pan_from→pan_to; cada uno {cx,cy}).\n"
+        "- Recorte (como el modal Recortar/CapCut) de objetos libres: crop_clip(clip_ids?, "
+        "track_id?, reset?, cx?, cy?, w?, h?). Ventana sobre la fuente en 0-1, fija en todo "
+        "el clip. reset=true = Restablecer (fotograma completo); track_id = toda la pista "
+        "en un solo undo.\n"
         "- Efectos visuales: set_clip_effects(effects, replace=False) blur|grayscale|"
-        "sepia|brightness|contrast|saturation (MERGE por defecto, solo visuales).\n"
+        "sepia|brightness|contrast|saturation y ajustes de color exposure (-1..1, pasos "
+        "de diafragma) | whites (-1..1, punto blanco) | temperature (-1..1, >0 cálido) | "
+        "hue (-180..180°) (MERGE por defecto, solo visuales). Filtros de color apilables "
+        "(como CapCut): set_clip_effects(clip_id, filters=[{id, amount 0–1}, …]) en orden de "
+        "aplicación; ids bw, noir, sepia, vintage, faded, matte, cinematic, teal_orange, "
+        "night, matrix, contrast, saturated, warm, golden, cool (filters=[] los quita). "
+        "Etalonaje de cine = p. ej. [{id: teal_orange, amount: 0.7}, {id: faded, amount: 0.3}].\n"
+        "- Máscaras (como CapCut): set_clip_masks(clip_id, masks) sustituye la lista. "
+        "Cada máscara {type, x, y (0-1 del lienzo), w, h (unidades de ALTO), rotation, "
+        "feather (0-0.25), invert, opacity, target}. type: linear (división) | film "
+        "(rollo de película: banda de alto h) | circle | rectangle | star | heart | text | "
+        "brush. target: clip (qué parte del clip se ve) | adjust (los ajustes de color "
+        "solo actúan dentro). Vale para vídeo, imagen, figura y TEXTO. masks[0] anima "
+        "con keyframes (mx,my,mw,mh,msx,msy,mrot,mfeather).\n"
         "- Animación de aparición: usa animate_clip, NO set_clip_keyframes a mano. "
         "animate_clip(clip_id, motion, duration?, follow_audio_id?, intensity=1, "
         "turns=1). motion: zoom_in, zoom_out, spin, spin_in, slide_left, "
-        "slide_right, slide_up, slide_down, fade_in, fade_out, pop, pulse. "
+        "slide_right, slide_up, slide_down, fade_in, fade_out, pop, pulse, draw_in "
+        "(solo figuras: el trazo se dibuja de 0 a 100 % en duration s, ~1.5). "
         "duration = ventana de la intro (~0.45s). turns = vueltas (spin/spin_in). "
         "follow_audio_id = id de un clip de audio/SFX en la timeline: la animación "
         "sigue su volumen (aparece/gira/entra con los golpes). Ej.: «haz zoom»→"
         "zoom_in; «que entre girando»→spin_in; «que aparezca de la izquierda con "
         "el sfx»→slide_left + follow_audio_id.\n"
         "- set_clip_keyframes(clip_id, keyframes|None): escape hatch experto. "
-        "{enabled, items:[{id,t,interpolation,props}]}. props: x/y/scale/rotation/"
-        "opacity y también volume (0–2) y fx de audio. Casi nunca a mano.\n"
-        "- add_shape(shape, track_id?, start=0, duration?): figura vectorial "
-        "(rect/línea/flecha/estrella/corazón…) en una pista de vídeo."
+        "{enabled, items:[{id,t,interpolation,bezier?,props}]}. props: x/y/scale/rotation/"
+        "opacity (en textos también rot_x/rot_y: giro 3D, −75…75°) y también volume "
+        "(0–2) y fx de audio. interpolation = curva con que "
+        "se LLEGA a ese keyframe: linear, ease-in, ease-out, ease-in-out, cubic-in, "
+        "cubic-out, cubic-in-out, back-out (rebote), hold o bezier (+ bezier:[x1,y1,x2,y2] "
+        "como cubic-bezier de CSS; x 0–1, y −1…2). Casi nunca a mano.\n"
+        "- add_shape(shape, track_id?, start=0, duration?, points?): figura vectorial "
+        "(rect/línea/flecha/estrella/corazón…) en una pista de vídeo. shape.dash = "
+        "solid|dash|dot (trazo continuo, discontinuo o punteado). Trazado libre "
+        "(ruta sobre un mapa, subrayado a mano): points = [[x, y], …] en 0–1 del "
+        "cuadro; la curva pasa por todos (shape.smooth=false → rectas; "
+        "shape.closed=true lo cierra). Para que se dibuje solo: animate_clip(id, draw_in)."
     ),
     "audio": (
         "Audio de clips y pistas + TTS + SFX:\n"
+        "- detect_beats(clip_id, every=1): detecta los beats de la música de un clip de "
+        "audio/vídeo y los guarda en el clip (puntos de imán al mover/recortar clips en "
+        "el editor; every 2|4 deja uno de cada N). Devuelve bpm y nº de beats.\n"
         "- set_clip_volume(clip_id, volume?, muted?, fade?, fade_dur=0.5): volume "
         "0–2 (1=100%, máx 200%); fade in|out crea keyframes de volumen (no recorta "
         "el audio).\n"
         "- set_track_audio(track_id, volume?, muted?, audio_fx?, fade?, "
         "fade_dur=0.5): aplica a TODOS los clips de una pista de audio (o vídeo con "
         "audio). Úsalo cuando el usuario hable de 'esa línea'/'esa pista'.\n"
-        "- set_clip_audio_fx(clip_id, audio_fx, replace=False): eq, compressor, "
-        "reverb, echo, denoise, distortion (0–1). MERGE por defecto; solo vídeo/"
-        "audio.\n"
+        "- sound_design(clip_id, apply=True): sonoriza una escena de vídeo/imagen con IA "
+        "(mira sus fotogramas si hay Foundry): elige SFX de la biblioteca (ambiente a volumen "
+        "bajo + sonidos puntuales en su momento) y los coloca en pistas SFX. Job: "
+        "wait_for_job; result.missing dice qué sonidos faltan en la biblioteca.\n"
+        "- set_clip_audio_fx(clip_id, audio_fx, replace=False, ramp?): efectos eq, "
+        "compressor, reverb, echo, denoise, distortion y filtros de sonido underwater "
+        "(bajo el agua), telephone, radio, megaphone, muffled (habitación de al lado), "
+        "0–1 = intensidad. MERGE por defecto; solo vídeo/audio. ramp={start, end, "
+        "from=0} (s del clip) anima la intensidad: «la música se va hundiendo al "
+        "entrar al agua» = set_clip_audio_fx(id, {underwater: 1}, ramp={start: 2, "
+        "end: 3.5}).\n"
         "- generate_voice(text, engine=kokoro, voice=ef_dora, voice2?, blend=0.5, "
         "speed=1, pause=0.4, name?, style?): TTS de narrador → audio del proyecto. "
         "engine kokoro|piper|gemini (deben estar disponibles). Devuelve job.\n"
@@ -251,6 +336,9 @@ HELP: dict[str, str] = {
     ),
     "timeline": (
         "Pistas y colocación:\n"
+        "- set_timeline_markers(markers): sustituye los marcadores de la timeline "
+        "[{t (s), label?, color?}] ([] los borra); get_timeline los devuelve en "
+        "'markers'. Son puntos de imán como los beats.\n"
         "- add_track(kind, name?): kind video|audio|text; name opcional (SFX, Voz…); "
         "si se omite, A1/A2/V1…\n"
         "- rename_track(track_id, name): el id no cambia; el nombre es lo que se ve.\n"
@@ -285,7 +373,13 @@ HELP: dict[str, str] = {
         "(por defecto el centro). Úsalo para entender/etiquetar un clip antes de "
         "editarlo.\n"
         "- set_clip_ai_description(clip_index, description): guarda tu descripción "
-        "en un campo APARTE (description_ai); NO pisa la del usuario."
+        "en un campo APARTE (description_ai); NO pisa la del usuario.\n"
+        "- analyze_materials(only_missing=True, rename_generic=True): EN LOTE con la "
+        "visión de Microsoft Foundry (3 fotogramas por clip + el guion). Guarda "
+        "description_ai + semantic en clips e imágenes; rellena description solo si "
+        "estaba vacía y el título solo si era genérico (vacío, nombre de archivo, "
+        "'image', o repetido como el del tráiler). Devuelve job; result = resumen. "
+        "Úsalo ANTES de dirigir escenas: mejora scene_rank_materials y el pack."
     ),
     "history": (
         "Toda edición estructural de la timeline es transaccional y deshacible:\n"

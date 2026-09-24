@@ -733,6 +733,160 @@ button.select.flip-select::after {
   font-size: 12.5px;
 }
 
+/* Tarjeta arrastrándose y carpetas como tarjetas en la raíz */
+.proj-card[draggable="true"] { cursor: grab; }
+.proj-card.is-dragging { opacity: 0.4; transform: none; }
+.folder-thumb { color: #fbbf24; }
+.folder-card.drop,
+.side-item.drop,
+.crumb.drop {
+  border-color: var(--accent);
+  background: rgba(255, 59, 92, 0.14);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* ==========================================================================
+   HOME: barra lateral de carpetas + contenido
+   ========================================================================== */
+
+.home-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.home-main { min-width: 0; }
+
+.home-side {
+  position: sticky;
+  top: 20px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+}
+.side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 12px 4px 4px 8px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.side-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.side-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.side-item:hover { background: rgba(255, 255, 255, 0.05); color: var(--text); }
+.side-item.on { background: rgba(255, 59, 92, 0.12); color: #fff; }
+.side-item > .material-icons { flex-shrink: 0; color: var(--muted); }
+.side-item.on > .material-icons { color: var(--accent); }
+.side-list .side-item > .material-icons { color: #fbbf24; }
+.side-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.side-count {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.side-actions { display: none; gap: 2px; }
+.side-item:hover .side-actions,
+.side-item:focus-within .side-actions { display: flex; }
+.side-list .side-item:hover .side-count,
+.side-list .side-item:focus-within .side-count { display: none; }
+.side-actions button {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+}
+.side-actions button:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); }
+.side-actions button[title^="Eliminar"]:hover { color: var(--danger); }
+.side-input {
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--text);
+  background: var(--card-2);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 7px 10px;
+  outline: none;
+  margin: 2px 0;
+}
+.side-input.inline { flex: 1; min-width: 0; padding: 2px 6px; margin: 0; }
+.side-empty { font-size: 12.5px; margin: 4px 8px; line-height: 1.5; }
+/* Mientras se arrastra un proyecto, los destinos de la barra se marcan. */
+.home-layout.dragging .side-item:not(.on) { border-style: dashed; border-color: var(--line-bright); }
+
+.home-folder-pick { width: 190px; flex-shrink: 0; display: flex; }
+.home-folder-pick .flip-select { padding: 12px 14px; font-size: 14px; border-radius: var(--radius-md); }
+
+.home-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+.home-crumbs strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 16px;
+}
+.home-crumbs strong .material-icons { color: #fbbf24; }
+.crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+}
+.crumb:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
+
+@media (max-width: 760px) {
+  .home-layout { grid-template-columns: 1fr; }
+  .home-side { position: static; max-height: none; }
+  .home-main .row { flex-wrap: wrap; }
+  .home-folder-pick { width: 100%; }
+}
+
 /* ==========================================================================
    ACTIONS ROW & LINKS
    ========================================================================== */

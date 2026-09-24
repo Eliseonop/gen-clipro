@@ -75,11 +75,11 @@ class ModeloTest(unittest.TestCase):
         self.assertEqual(len(brush["points"]), 2)   # el punto inválido se descarta
         self.assertEqual(brush["points"][1]["m"], 1)
 
-    def test_maskable_solo_visuales_y_figuras(self):
+    def test_maskable_visuales_figuras_y_texto(self):
         self.assertTrue(maskable({"kind": "video"}))
         self.assertTrue(maskable({"kind": "image"}))
         self.assertTrue(maskable({"kind": "shape"}))
-        self.assertFalse(maskable({"kind": "text"}))
+        self.assertTrue(maskable({"kind": "text"}))   # "revelar texto" (antes: clip combinado)
         self.assertFalse(maskable({"kind": "audio"}))
 
     def test_clip_sin_masks_no_tiene_mascara(self):

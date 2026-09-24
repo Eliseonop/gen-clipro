@@ -6,7 +6,9 @@
 // igual que la imagen.
 
 import { useMemo, useState } from 'react'
+import JobProgress from '../../components/JobProgress'
 import Icon from '../../components/Icon'
+import Hint from '../../components/Hint'
 import FlipSelect from '../../components/FlipSelect'
 import { letterUrl } from '../../services/api'
 import { TEXT_ASSIGN, TEXT_MODES, candidatesFor, elementAt, indexLibrary } from './paperText.js'
@@ -68,7 +70,7 @@ export default function PaperTextPanel({ paper, onGoPaper }) {
     return (
       <>
         <div className="motion-panel-title">Paper · Texto</div>
-        <div className="ed-bg-status run"><Icon name="progress_activity" size={14} /><span>Cargando letras…</span></div>
+        <JobProgress message="Cargando letras…" />
       </>
     )
   }
@@ -123,7 +125,14 @@ export default function PaperTextPanel({ paper, onGoPaper }) {
       </div>
 
       <div className="paper-text-row">
-        <span className="paper-text-lab">Composición</span>
+        <span className="paper-text-lab">
+          Composición
+          <Hint>
+            <b>Frase</b>: se anima como una sola imagen; sus propiedades están en el panel derecho.
+            <b> Letras</b>: cada letra (o grupo) es un objeto con sus propias propiedades y animación;
+            selecciónalo aquí o en el lienzo. Ctrl+clic marca varias.
+          </Hint>
+        </span>
         <Chips value={text.mode} options={TEXT_MODES} onChange={setTextMode} disabled={!text.glyphs.length} />
       </div>
 
@@ -199,11 +208,6 @@ export default function PaperTextPanel({ paper, onGoPaper }) {
 
       {text.elements.length > 0 && (
         <>
-          <p className="ed-key-hint">
-            {text.mode === 'phrase'
-              ? 'La frase se anima como una sola imagen. Sus propiedades están en el panel derecho.'
-              : 'Cada letra (o grupo) es un objeto con sus propias propiedades y animación: selecciónalo aquí o en el lienzo. Ctrl+clic marca varias.'}
-          </p>
           <div className="paper-actions">
             <button type="button" className="ed-btn danger" onClick={() => { setMarked([]); clearText() }}>
               <Icon name="close" size={14} /> Quitar texto

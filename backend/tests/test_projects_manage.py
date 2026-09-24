@@ -69,6 +69,51 @@ class ProjectsManageTest(unittest.TestCase):
     def test_duplicate_missing(self):
         self.assertIsNone(projects.duplicate_project("nope"))
 
+    # --- Carpetas del inicio ---------------------------------------------
+
+    def test_legacy_projects_have_no_group(self):
+        # projects.json de versiones anteriores: sin "groups" ni "group_id".
+        projects._FILE.write_text('{"projects": [{"id": "old1", "name": "Viejo", '
+                                  '"created_at": "2025-01-01T00:00:00+00:00"}]}', encoding="utf-8")
+        self.assertIsNone(projects.get_project("old1").group_id)
+        self.assertEqual(projects.list_groups(), [])
+
+    def test_create_in_group(self):
+        g = projects.create_group("  Shorts ")
+        self.assertEqual(g.name, "Shorts")
+        self.assertEqual(projects.create_project("A", g.id).group_id, g.id)
+        # Carpeta inexistente: el proyecto se crea igual, sin carpeta.
+        self.assertIsNone(projects.create_project("B", "nope").group_id)
+
+    def test_move_between_groups(self):
+        g = projects.create_group("Shorts")
+        pid = projects.create_project("A").id
+        self.assertEqual(projects.move_project(pid, g.id).group_id, g.id)
+        self.assertIsNone(projects.move_project(pid, None).group_id)
+        with self.assertRaises(ValueError):
+            projects.move_project(pid, "nope")
+        self.assertIsNone(projects.move_project("nope", g.id))
+
+    def test_delete_group_keeps_projects(self):
+        g = projects.create_group("Shorts")
+        pid = projects.create_project("A", g.id).id
+        self.assertTrue(projects.delete_group(g.id))
+        self.assertFalse(projects.delete_group(g.id))
+        self.assertIsNone(projects.get_project(pid).group_id)
+        self.assertEqual(projects.list_groups(), [])
+
+    def test_rename_group(self):
+        g = projects.create_group("A")
+        self.assertEqual(projects.rename_group(g.id, "B").name, "B")
+        self.assertIsNone(projects.rename_group("nope", "B"))
+        with self.assertRaises(ValueError):
+            projects.create_group("   ")
+
+    def test_duplicate_stays_in_group(self):
+        g = projects.create_group("Shorts")
+        pid = projects.create_project("A", g.id).id
+        self.assertEqual(projects.duplicate_project(pid).group_id, g.id)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,7 +11,7 @@ def _field(clip, key, default=None):
 
 
 def clip_speed(clip) -> float:
-    if _field(clip, "kind") in ("text", "image"):
+    if _field(clip, "kind") in ("text", "image", "adjustment"):
         return 1.0
     raw = _field(clip, "speed")
     try:

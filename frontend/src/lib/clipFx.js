@@ -1,3 +1,7 @@
+import { colorMatrix, matrixFilterUrl } from './clipAdjust.js'
+import { AUDIO_FX } from './audioFx.js'
+import { clipFilters, stackMatrix } from './clipFilters.js'
+
 // Efectos de clip (aparición, salida, filtro visual).
 // `localT` es el tiempo desde el inicio del clip en la timeline (0 = primer fotograma).
 // tx/ty son fracción del destino (+x derecha, +y abajo).
@@ -43,42 +47,17 @@ export const COLOR_FX = [
   { id: 'brightness', label: 'Brillo', min: -0.5, max: 0.5, step: 0.05 },
   { id: 'contrast', label: 'Contraste', min: -0.5, max: 0.5, step: 0.05 },
   { id: 'saturation', label: 'Saturación', min: -1, max: 1, step: 0.05 },
+  // Ajustes estilo CapCut (matriz de color, ver clipAdjust.js).
+  { id: 'exposure', label: 'Exposición', min: -1, max: 1, step: 0.05 },
+  { id: 'whites', label: 'Blancos', min: -1, max: 1, step: 0.05 },
+  { id: 'temperature', label: 'Temperatura', min: -1, max: 1, step: 0.05 },
+  { id: 'hue', label: 'Tono', min: -180, max: 180, step: 1, ui: 1, suffix: '°' },
 ]
 
-export const AUDIO_FX_TOGGLES = [
-  { id: 'eq', label: 'Equalizer', icon: 'equalizer', kind: 'range', min: 0, max: 1, step: 0.05, def: 1 },
-  { id: 'compressor', label: 'Compressor', icon: 'compress', kind: 'range', min: 0, max: 1, step: 0.05, def: 1 },
-  { id: 'reverb', label: 'Reverb', icon: 'waves', kind: 'range', min: 0, max: 1, step: 0.05, def: 1 },
-  { id: 'echo', label: 'Echo', icon: 'record_voice_over', kind: 'range', min: 0, max: 1, step: 0.05, def: 1 },
-  { id: 'denoise', label: 'Noise reduction', icon: 'hearing', kind: 'range', min: 0, max: 1, step: 0.05, def: 1 },
-  { id: 'distortion', label: 'Distortion', icon: 'speaker', kind: 'range', min: 0, max: 1, step: 0.05, def: 1 },
-]
-
-export const LOOK_OPTIONS = [
-  { id: 'none', label: 'Ninguno' },
-  { id: 'bw', label: 'Blanco y negro' },
-  { id: 'cinematic', label: 'Cinematic' },
-  { id: 'vintage', label: 'Vintage' },
-  { id: 'contrast', label: 'Alto contraste' },
-  { id: 'warm', label: 'Warm' },
-  { id: 'cool', label: 'Cool' },
-  { id: 'saturated', label: 'Saturado' },
-]
-
-const LOOK_CSS = {
-  none: 'none',
-  bw: 'grayscale(1)',
-  cinematic: 'contrast(1.15) saturate(0.85) brightness(0.92)',
-  vintage: 'sepia(0.45) contrast(1.1) saturate(0.8)',
-  contrast: 'contrast(1.35) saturate(1.1)',
-  warm: 'sepia(0.25) saturate(1.15) hue-rotate(-10deg)',
-  cool: 'hue-rotate(15deg) saturate(0.9) brightness(1.05)',
-  saturated: 'saturate(1.55) contrast(1.08)',
-}
-
-export function lookCss(look) {
-  return LOOK_CSS[look] || 'none'
-}
+// Efectos y filtros de sonido (#16): la definición vive en lib/audioFx.js.
+export const AUDIO_FX_TOGGLES = AUDIO_FX.map((f) => ({
+  id: f.id, label: f.label, icon: f.icon, group: f.group, kind: 'range', min: 0, max: 1, step: 0.05, def: 1,
+}))
 
 function fxNum(e, id) {
   const v = e?.[id]
@@ -96,8 +75,9 @@ function fxOn(e, id) {
 
 export function effectsCss(clip) {
   const parts = []
-  const look = lookCss(clip?.look)
-  if (look && look !== 'none') parts.push(look)
+  // Filtros de color (#18): toda la pila es una matriz (los `look` antiguos incluidos).
+  const look = matrixFilterUrl(stackMatrix(clipFilters(clip)))
+  if (look) parts.push(look)
   const e = clip?.effects || {}
   const blur = fxNum(e, 'blur')
   if (blur > 0) parts.push(`blur(${blur}px)`)
@@ -116,6 +96,9 @@ export function effectsCss(clip) {
   if (c) parts.push(`contrast(${1 + c})`)
   const s = fxNum(e, 'saturation')
   if (s) parts.push(`saturate(${Math.max(0, 1 + s)})`)
+  // Exposición/Blancos/Temperatura/Tono: una matriz, al final (igual que el export).
+  const adj = matrixFilterUrl(colorMatrix(e))
+  if (adj) parts.push(adj)
   return parts.length ? parts.join(' ') : 'none'
 }
 

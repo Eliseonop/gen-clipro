@@ -6,7 +6,7 @@ Precondiciones inválidas → ValueError. Estado inválido → validate_timeline
 import unittest
 
 from app import timeline_ops as ops
-from app.schemas import Timeline, TimelineClip, TimelineTrack
+from app.schemas import Keyframe, Reframe, Timeline, TimelineClip, TimelineTrack
 
 
 def base_tl():
@@ -297,6 +297,53 @@ class AddSubtitlesTest(unittest.TestCase):
     def test_pista_destino_no_texto_falla(self):
         with self.assertRaises(ValueError):
             ops.add_subtitles(self._tl_with_source(), "c1", self._segments(), track_id="V1")
+
+
+def free_tl():
+    """Dos clips libres en V1 (uno recortado y animado) + un texto."""
+    tl = base_tl()
+    c1 = tl.clips[0]
+    c1.layout, c1.frame = "overlay", "free"
+    c1.reframe = Reframe(crop_w=0.48, crop_h=0.96,
+                         keyframes=[Keyframe(t=0, cx=0.3, cy=0.5), Keyframe(t=4, cx=0.7, cy=0.5)])
+    c1.keyframes = {"enabled": True, "items": [
+        {"id": "k1", "t": 0, "props": {"x": 0.5, "scale": 1.2, "cx": 0.3, "cy": 0.5}}]}
+    c2 = TimelineClip(id="c2", track_id="V1", kind="video", asset_kind="clips", asset_id="0",
+                      filename="a.mp4", start=5.0, in_point=2.0, out_point=4.0,
+                      source_duration=10.0, layout="overlay", frame="free")
+    tl.clips.append(c2)
+    return tl
+
+
+class CropClipTest(unittest.TestCase):
+    def test_reset_de_toda_la_pista_en_una_op(self):
+        r = ops.crop_clip(free_tl(), track_id="V1", reset=True)
+        self.assertEqual(sorted(r.changed), ["c1", "c2"])
+        for c in r.timeline.clips:
+            self.assertEqual((c.reframe.crop_w, c.reframe.crop_h), (1.0, 1.0))
+            self.assertEqual(len(c.reframe.keyframes), 1)   # sin paneo animado
+            k = c.reframe.keyframes[0]
+            self.assertEqual((k.t, k.cx, k.cy), (c.in_point, 0.5, 0.5))
+        props = r.timeline.clips[0].keyframes["items"][0]["props"]
+        self.assertEqual((props["cx"], props["cy"]), (0.5, 0.5))
+        self.assertEqual(props["scale"], 1.2)                # el resto no se toca
+        self.assertEqual(ops.validate_timeline(r.timeline), [])
+
+    def test_recorte_fijo_acotado_a_la_fuente(self):
+        r = ops.crop_clip(free_tl(), clip_ids=["c2"], cx=0.95, cy=0.1, w=0.5, h=0.4)
+        rf = r.timeline.clips[1].reframe
+        self.assertEqual((rf.crop_w, rf.crop_h), (0.5, 0.4))
+        self.assertAlmostEqual(rf.keyframes[0].cx, 0.75)   # no se sale por la derecha
+        self.assertAlmostEqual(rf.keyframes[0].cy, 0.2)    # ni por arriba
+        self.assertEqual(r.timeline.clips[0].reframe.crop_w, 0.48)  # c1 intacto
+
+    def test_errores(self):
+        with self.assertRaises(ValueError):
+            ops.crop_clip(free_tl(), clip_ids=["c2"])        # sin tamaño ni reset
+        with self.assertRaises(ValueError):
+            ops.crop_clip(base_tl(), clip_ids=["c1"], reset=True)   # fill, no libre
+        with self.assertRaises(ValueError):
+            ops.crop_clip(free_tl(), track_id="A1", reset=True)     # pista sin visuales
 
 
 class ReframeClipTest(unittest.TestCase):

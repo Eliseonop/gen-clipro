@@ -7,11 +7,13 @@
 //
 // Nada de esto toca el archivo original: todo son propiedades del clip, así que
 // entra por el undo/redo del editor y viaja con el proyecto.
+import JobProgress from '../../components/JobProgress'
+import Hint from '../../components/Hint'
 import Icon from '../../components/Icon'
 import FlipSelect from '../../components/FlipSelect'
 import {
   BG_PROVIDERS, CHROMA_PRESETS, MATTE_FEATHER_MAX, autoActive, clipBg,
-  isInteractiveProvider,
+  isInteractiveProvider, normalizeOutline,
 } from '../../lib/clipBg'
 import { InspSection, InspSlider } from './EdTransform'
 
@@ -20,13 +22,7 @@ const parsePct = (raw) => parseFloat(String(raw).replace(/[^\d.-]/g, ''))
 
 function StatusLine({ auto, job }) {
   if (job && (job.status === 'pending' || job.status === 'running')) {
-    return (
-      <div className="ed-bg-status run">
-        <Icon name="progress_activity" size={14} />
-        <span>{job.message || 'Procesando…'}</span>
-        <b>{Math.round((job.progress || 0) * 100)}%</b>
-      </div>
-    )
+    return <JobProgress job={job} progress={job.progress || 0} />
   }
   if (job?.status === 'error') {
     return (
@@ -54,11 +50,14 @@ export default function EdBgRemove({
   magicMode, magicBusy, onToggleMagic, onConfirmMagic,
   brush, onBrush, onClearEdits, onUndoEdit,
   onToggleChroma, onChangeChroma, onResetChroma, onPickColor, picking,
+  onChangeOutline,
   bgPreview, onBgPreview,
 }) {
   const bg = clipBg(clip)
   const auto = bg?.auto || { enabled: false, status: 'idle', edits: [], provider: 'u2net' }
   const chroma = bg?.chroma || { enabled: false, color: '#00FF00' }
+  const outline = bg?.outline || normalizeOutline(null)
+  const hasCut = autoActive(bg) || !!chroma.enabled
   const running = job && (job.status === 'pending' || job.status === 'running')
   const ready = autoActive(bg)
   const isSam = isInteractiveProvider(auto.provider)
@@ -74,7 +73,11 @@ export default function EdBgRemove({
   return (
     <>
       {/* --- 1. Eliminación automática ---------------------------------- */}
-      <InspSection title="Eliminación automática">
+      <InspSection
+        title="Eliminación automática"
+        hint={<>Detecta el sujeto y lo separa del fondo con IA. El archivo original no se
+          modifica: se guarda una máscara reutilizable en el proyecto.</>}
+      >
         <div className="ed-insp-tools">
           <label className={`ed-mode-toggle ${auto.enabled ? 'on' : ''}`}
                  title="Detecta el sujeto principal y separa el fondo con IA">
@@ -97,7 +100,13 @@ export default function EdBgRemove({
         {auto.enabled && (
           <>
             <label className="ed-insp-select">
-              Modelo
+              <span>
+                Modelo
+                <Hint>
+                  {provList.find((p) => p.id === auto.provider)?.hint || ''}
+                  {device ? ` Se ejecuta en ${device}.` : ''}
+                </Hint>
+              </span>
               <FlipSelect
                 value={auto.provider}
                 options={provList.map((p) => ({
@@ -107,21 +116,15 @@ export default function EdBgRemove({
                 onChange={(v) => onChangeAuto?.({ provider: v })}
               />
             </label>
-            <p className="ed-insp-hint">
-              {provList.find((p) => p.id === auto.provider)?.hint || ''}
-              {device ? ` Se ejecuta en ${device}.` : ''}
-            </p>
             {clip?.kind === 'video' && (
               <>
                 <InspSlider
                   label="Estabilizar" value={Math.round((auto.stabilize ?? 0) * 100)}
                   min={0} max={100} step={1} format={pct} suffix="%" parse={parsePct}
                   onChange={(v) => onChangeAuto?.({ stabilize: v / 100 })} stepper
+                  hint={<>Suaviza la máscara entre fotogramas para evitar parpadeo del
+                    borde. Cambia el cálculo: pulsa <b>{ready ? 'Recalcular' : 'Aplicar'}</b> tras ajustarlo.</>}
                 />
-                <p className="ed-insp-hint">
-                  Suaviza la máscara entre fotogramas para evitar parpadeo del
-                  borde. Cambia el cálculo: pulsa <b>{ready ? 'Recalcular' : 'Aplicar'}</b> tras ajustarlo.
-                </p>
               </>
             )}
 
@@ -145,6 +148,7 @@ export default function EdBgRemove({
                   label="Umbral" value={Math.round(auto.threshold * 100)} min={0} max={100} step={1}
                   format={pct} suffix="%" parse={parsePct}
                   onChange={(v) => onChangeAuto?.({ threshold: v / 100 })} stepper
+                  hint="Se aplica al instante: no vuelve a ejecutar el modelo."
                 />
                 <InspSlider
                   label="Suavizado" value={Math.round(auto.softness * 100)} min={0} max={100} step={1}
@@ -160,36 +164,27 @@ export default function EdBgRemove({
                   label="Expandir" value={Math.round((auto.expansion ?? 0) * 100)}
                   min={-100} max={100} step={1} format={pct} suffix="%" parse={parsePct}
                   onChange={(v) => onChangeAuto?.({ expansion: v / 100 })} stepper
+                  hint="Crece (+) o encoge (−) el borde del sujeto."
                 />
                 <InspSlider
                   label="Opacidad" value={Math.round((auto.opacity ?? 1) * 100)}
                   min={0} max={100} step={1} format={pct} suffix="%" parse={parsePct}
                   onChange={(v) => onChangeAuto?.({ opacity: v / 100 })} stepper
                 />
-                <p className="ed-insp-hint">
-                  Estos ajustes se aplican al instante: no vuelven a ejecutar el modelo.
-                  <b> Expandir</b> crece (+) o encoge (−) el borde del sujeto.
-                </p>
               </>
             )}
           </>
-        )}
-        {!auto.enabled && (
-          <p className="ed-insp-hint">
-            Detecta el sujeto y lo separa del fondo. El archivo original no se
-            modifica: se guarda una máscara reutilizable en el proyecto.
-          </p>
         )}
       </InspSection>
 
       {/* --- Exportar recorte: hornea el clip animado a un vídeo transparente - */}
       {canExportCutout && (
-        <InspSection title="Exportar recorte">
-          <p className="ed-insp-hint">
-            Guarda este {clip?.kind === 'video' ? 'vídeo' : 'GIF'} con el fondo
+        <InspSection
+          title="Exportar recorte"
+          hint={<>Guarda este {clip?.kind === 'video' ? 'vídeo' : 'GIF'} con el fondo
             eliminado como un <b>vídeo transparente</b> (WebM) en el material,
-            con toda su animación. Reutilízalo en el timeline como cualquier clip.
-          </p>
+            con toda su animación. Reutilízalo en el timeline como cualquier clip.</>}
+        >
           <div className="ed-bg-actions">
             {cutoutRunning ? (
               <button type="button" className="ed-btn danger" onClick={() => onCancelCutout?.()}>
@@ -202,11 +197,7 @@ export default function EdBgRemove({
             )}
           </div>
           {cutoutRunning && (
-            <div className="ed-bg-status run">
-              <Icon name="progress_activity" size={14} />
-              <span>{cutoutJob.message || 'Procesando…'}</span>
-              <b>{Math.round((cutoutJob.progress || 0) * 100)}%</b>
-            </div>
+            <JobProgress job={cutoutJob} progress={cutoutJob.progress || 0} />
           )}
           {cutoutJob?.status === 'done' && (
             <div className="ed-bg-status ok">
@@ -225,7 +216,16 @@ export default function EdBgRemove({
 
       {/* --- 2. Selección: inteligente (SAM) o corrección manual (U²-Net) - */}
       {(ready || (isSam && auto.enabled)) && (
-        <InspSection title={isSam ? 'Selección inteligente' : 'Eliminación personalizada'}>
+        <InspSection
+          title={isSam ? 'Selección inteligente' : 'Eliminación personalizada'}
+          hint={isSam
+            ? <>Activa el <b>Lápiz mágico</b> y toca un objeto en el reproductor: el modelo lo
+                detecta entero. Añade toques para ampliarlo o usa el <b>Borrador</b> (−) para
+                quitar zonas, y confírmalo. Las marcas se guardan con el clip.</>
+            : <>Corrige lo que la IA no acertó pintando sobre el reproductor.
+                <b> Conservar</b> devuelve zonas visibles; <b>Eliminar</b> las vuelve
+                transparentes. El zoom y el desplazamiento del reproductor siguen funcionando.</>}
+        >
           {isSam && (
             <>
               <div className="ed-bg-actions">
@@ -239,28 +239,8 @@ export default function EdBgRemove({
                   {magicMode ? 'Lápiz mágico activo' : 'Lápiz mágico'}
                 </button>
               </div>
-              <p className="ed-insp-hint">
-                {magicMode ? (
-                  <>
-                    Toca el objeto en el reproductor: se marca la selección con un
-                    borde animado. Añade toques para ampliarla o usa el
-                    <b> Borrador</b> (−) para quitar zonas.{magicBusy ? ' Analizando…' : ''}
-                  </>
-                ) : (
-                  <>
-                    Activa el <b>Lápiz mágico</b> y toca un objeto: el modelo lo
-                    detecta entero. Refínalo con toques + / − y confírmalo.
-                  </>
-                )}
-              </p>
+              {magicBusy && <JobProgress message="Analizando…" />}
             </>
-          )}
-          {!isSam && (
-            <p className="ed-insp-hint">
-              Corrige lo que la IA no acertó pintando sobre el reproductor.
-              <b> Conservar</b> devuelve zonas visibles; <b>Eliminar</b> las vuelve
-              transparentes.
-            </p>
           )}
           <div className="ed-bg-brush">
             <button
@@ -302,19 +282,18 @@ export default function EdBgRemove({
               </button>
             </div>
           )}
-          <p className="ed-insp-hint">
-            {strokes
-              ? (isSam ? `${strokes} marca(s) de prompt guardadas con el clip.`
-                       : `${strokes} corrección(es) guardadas con el clip.`)
-              : (isSam ? 'Sin marcas. Elige un pincel y toca el sujeto en el reproductor.'
-                       : 'Sin correcciones. Elige Conservar o Eliminar y arrastra en el reproductor.')}
-            {brush?.on ? ' El zoom y el desplazamiento del reproductor siguen funcionando.' : ''}
-          </p>
+          {strokes > 0 && (
+            <p className="ed-insp-meta">{strokes} {isSam ? 'marca(s)' : 'corrección(es)'}</p>
+          )}
         </InspSection>
       )}
 
       {/* --- 3. Chroma key --------------------------------------------- */}
-      <InspSection title="Chroma key" onReset={chroma.enabled ? onResetChroma : undefined}>
+      <InspSection
+        title="Chroma key"
+        onReset={chroma.enabled ? onResetChroma : undefined}
+        hint="Para pantallas verdes o azules y fondos de color uniforme. Se ve al instante y no genera archivos: es una propiedad del clip."
+      >
         <div className="ed-insp-tools">
           <label className={`ed-mode-toggle ${chroma.enabled ? 'on' : ''}`}
                  title="Convierte un color en transparencia (pantalla verde o azul)">
@@ -360,46 +339,93 @@ export default function EdBgRemove({
               label="Tolerancia" value={Math.round(chroma.similarity * 100)} min={1} max={100} step={1}
               format={pct} suffix="%" parse={parsePct}
               onChange={(v) => onChangeChroma?.({ similarity: v / 100 })} stepper
+              hint="Súbela hasta que el fondo desaparezca."
             />
             <InspSlider
               label="Suavizado" value={Math.round(chroma.blend * 100)} min={0} max={100} step={1}
               format={pct} suffix="%" parse={parsePct}
               onChange={(v) => onChangeChroma?.({ blend: v / 100 })} stepper
+              hint="Suaviza el borde del recorte."
             />
             <InspSlider
               label="Derrame" value={Math.round(chroma.spill * 100)} min={0} max={100} step={1}
               format={pct} suffix="%" parse={parsePct}
               onChange={(v) => onChangeChroma?.({ spill: v / 100 })} stepper
+              hint="Quita el tinte del color en la piel y el pelo."
             />
             <InspSlider
               label="Limpiar borde" value={Math.round((chroma.edge ?? 0) * 100)} min={0} max={100} step={1}
               format={pct} suffix="%" parse={parsePct}
               onChange={(v) => onChangeChroma?.({ edge: v / 100 })} stepper
+              hint="Come residuos finos del borde."
             />
             <InspSlider
               label="Expandir" value={Math.round((chroma.shrink ?? 0) * 100)} min={-100} max={100} step={1}
               format={pct} suffix="%" parse={parsePct}
               onChange={(v) => onChangeChroma?.({ shrink: v / 100 })} stepper
+              hint="Crece (+) o encoge (−) el recorte."
             />
-            <p className="ed-insp-hint">
-              El croma se ve al instante y no genera archivos: es una propiedad del
-              clip. Sube <b>Tolerancia</b> hasta que el fondo desaparezca y ajusta
-              <b> Suavizado</b> para el borde. <b>Derrame</b> quita el tinte del
-              color en la piel y el pelo. <b>Limpiar borde</b> come residuos finos;
-              <b> Expandir</b> crece (+) o encoge (−) el recorte.
-            </p>
           </>
-        ) : (
-          <p className="ed-insp-hint">
-            Para pantallas verdes o azules y fondos de color uniforme. Es un
-            efecto en vivo: no convierte el vídeo a otro archivo.
-          </p>
-        )}
+        ) : null}
       </InspSection>
+
+      {/* --- 3b. Contorno / halo del sujeto (#9) ------------------------ */}
+      {onChangeOutline && (
+        <InspSection
+          title="Contorno"
+          hint={<>Borde de color alrededor del sujeto recortado; sigue la silueta del recorte.
+            Con <b>Difuminado</b> se convierte en un halo.</>}
+        >
+          <div className="ed-insp-tools">
+            <label className={`ed-mode-toggle ${outline.enabled ? 'on' : ''}`}
+                   title="Borde de color alrededor del sujeto recortado">
+              <input type="checkbox" checked={!!outline.enabled}
+                     onChange={(e) => onChangeOutline({ enabled: e.target.checked })} />
+              <Icon name="border_outer" size={15} />
+              Activado
+            </label>
+          </div>
+          {outline.enabled && (
+            <>
+              <div className="ed-insp-row">
+                <div className="ed-insp-row-lab">Color</div>
+                <div className="ed-insp-row-ctrl ed-bg-color">
+                  <input type="color" value={outline.color} aria-label="Color del contorno"
+                         onChange={(e) => onChangeOutline({ color: e.target.value })} />
+                  <span className="ed-bg-hex">{outline.color}</span>
+                </div>
+              </div>
+              <InspSlider
+                label="Grosor" value={Math.round(outline.width * 100)} min={0} max={100} step={1}
+                format={pct} suffix="%" parse={parsePct}
+                onChange={(v) => onChangeOutline({ width: v / 100 })} stepper
+              />
+              <InspSlider
+                label="Difuminado" value={Math.round(outline.soft * 100)} min={0} max={100} step={1}
+                format={pct} suffix="%" parse={parsePct}
+                onChange={(v) => onChangeOutline({ soft: v / 100 })} stepper
+              />
+              <InspSlider
+                label="Opacidad" value={Math.round(outline.opacity * 100)} min={0} max={100} step={1}
+                format={pct} suffix="%" parse={parsePct}
+                onChange={(v) => onChangeOutline({ opacity: v / 100 })} stepper
+              />
+            </>
+          )}
+          {!hasCut && (
+            <p className="ed-insp-meta">Primero elimina el fondo (automático o chroma key).</p>
+          )}
+        </InspSection>
+      )}
 
       {/* --- 4. Fondo de vista previa (no afecta al export) ------------- */}
       {onBgPreview && (
-        <InspSection title="Fondo de vista previa">
+        <InspSection
+          title="Fondo de vista previa"
+          hint={<>Coloca un fondo temporal DETRÁS del sujeto para comprobar el recorte.
+            <b> Cuadros</b> revela dónde hay transparencia. Es solo vista previa:
+            no cambia el vídeo ni la exportación.</>}
+        >
           <div className="ed-bg-preview-modes">
             {[
               { id: 'normal', icon: 'crop_original', label: 'Normal' },
@@ -438,11 +464,6 @@ export default function EdBgRemove({
                      onChange={(e) => { if (e.target.files?.[0]) onBgPreview?.({ file: e.target.files[0] }); e.target.value = '' }} />
             </label>
           </div>
-          <p className="ed-insp-hint">
-            Coloca un fondo temporal DETRÁS del sujeto para comprobar el recorte.
-            <b> Cuadros</b> revela dónde hay transparencia. Es solo vista previa:
-            no cambia el vídeo ni la exportación.
-          </p>
         </InspSection>
       )}
     </>

@@ -10,9 +10,35 @@ export const KF_INTERPS = [
   { id: 'ease-in', label: 'Ease In' },
   { id: 'ease-out', label: 'Ease Out' },
   { id: 'ease-in-out', label: 'Ease In-Out' },
+  { id: 'cubic-in', label: 'Cúbica In' },
+  { id: 'cubic-out', label: 'Cúbica Out' },
+  { id: 'cubic-in-out', label: 'Cúbica In-Out' },
+  { id: 'back-out', label: 'Rebote' },
+  { id: 'bezier', label: 'Personalizada' },
   { id: 'hold', label: 'Hold' },
 ]
-export const AUDIO_FX_KEYS = ['eq', 'compressor', 'reverb', 'echo', 'denoise', 'distortion']
+const INTERP_IDS = new Set(KF_INTERPS.map((o) => o.id))
+
+// Curva por defecto de "Personalizada" (la ease-in-out de CSS) y la de "Rebote".
+// Espejo de BEZIER_DEFAULT / BACK_OUT en backend/app/clip_keyframes.py.
+export const BEZIER_DEFAULT = [0.42, 0, 0.58, 1]
+export const BACK_OUT = [0.34, 1.56, 0.64, 1]
+
+// Puntos de control con que arranca "Personalizada" al partir de un preset
+// (aproximaciones cubic-bezier estándar de cada curva).
+export const INTERP_BEZIER = {
+  linear: [0.25, 0.25, 0.75, 0.75],
+  'ease-in': [0.55, 0.085, 0.68, 0.53],
+  'ease-out': [0.25, 0.46, 0.45, 0.94],
+  'ease-in-out': [0.455, 0.03, 0.515, 0.955],
+  'cubic-in': [0.55, 0.055, 0.675, 0.19],
+  'cubic-out': [0.215, 0.61, 0.355, 1],
+  'cubic-in-out': [0.645, 0.045, 0.355, 1],
+  'back-out': BACK_OUT,
+}
+// Espejo de AUDIO_FX_IDS (lib/audioFx.js; #16: filtros de sonido al final).
+export const AUDIO_FX_KEYS = ['eq', 'compressor', 'reverb', 'echo', 'denoise', 'distortion',
+  'underwater', 'telephone', 'radio', 'megaphone', 'muffled']
 export const VOL_MIN = 0
 export const VOL_MAX = 2
 
@@ -20,6 +46,8 @@ export const VOL_MAX = 2
 // incluir la clave aquí y guardarla en cada snapshot; interpItems la interpolará.
 export const KF_PROP_KEYS = [
   'x', 'y', 'scale', 'rotation', 'opacity', 'cx', 'cy', 'zoom',
+  'rot_x', 'rot_y', // giro 3D (solo textos; ver lib/text3d.js)
+  'draw',           // trazo dibujado 0–1 (solo figuras; «dibujar trazo», #14)
   ...MASK_KF_KEYS,
   'volume', ...AUDIO_FX_KEYS,
 ]
@@ -73,30 +101,93 @@ export function keyframesEnabled(clip) {
 }
 
 export function normalizeInterp(v) {
-  if (v === 'ease-in' || v === 'ease-out' || v === 'ease-in-out' || v === 'hold') return v
+  if (v !== 'linear' && INTERP_IDS.has(v)) return v
   if (v === 'direct' || v === 'step') return 'hold'
-  if (v === 'smooth') return 'linear'
   return 'linear'
 }
 
-export function easeT(u, type) {
+/** [x1, y1, x2, y2] de una curva cúbica (como cubic-bezier de CSS) o null.
+ *  x se limita a 0–1 (la curva debe avanzar en el tiempo); y admite −1…2 para
+ *  curvas que se pasan y vuelven. Espejo de normalize_bezier. */
+export function normalizeBezier(v) {
+  if (!Array.isArray(v) || v.length !== 4) return null
+  const n = v.map((x) => Number(x))
+  if (!n.every(Number.isFinite)) return null
+  const c = (x, lo, hi) => Math.min(hi, Math.max(lo, x))
+  return [c(n[0], 0, 1), c(n[1], -1, 2), c(n[2], 0, 1), c(n[3], -1, 2)]
+}
+
+/** Progreso y de la curva en el instante u (0–1). Espejo de bezier_y. */
+export function bezierY(bez, u) {
+  const [x1, y1, x2, y2] = normalizeBezier(bez) || BEZIER_DEFAULT
+  if (u <= 0) return 0
+  if (u >= 1) return 1
+  const cx = 3 * x1
+  const bx = 3 * (x2 - x1) - cx
+  const ax = 1 - cx - bx
+  const cy = 3 * y1
+  const by = 3 * (y2 - y1) - cy
+  const ay = 1 - cy - by
+  const xAt = (s) => ((ax * s + bx) * s + cx) * s
+  let s = u
+  let ok = false
+  for (let i = 0; i < 8; i++) {
+    const err = xAt(s) - u
+    if (Math.abs(err) < 1e-7) { ok = true; break }
+    const d = (3 * ax * s + 2 * bx) * s + cx
+    if (Math.abs(d) < 1e-6) break
+    s -= err / d
+  }
+  if (!ok && !(s >= 0 && s <= 1 && Math.abs(xAt(s) - u) < 1e-5)) {
+    let lo = 0
+    let hi = 1
+    s = u
+    for (let i = 0; i < 40; i++) {
+      const x = xAt(s)
+      if (Math.abs(x - u) < 1e-7) break
+      if (x < u) lo = s
+      else hi = s
+      s = (lo + hi) / 2
+    }
+  }
+  return ((ay * s + by) * s + cy) * s
+}
+
+export function easeT(u, type, bezier) {
   const t = Math.min(1, Math.max(0, num(u, 0)))
   const kind = normalizeInterp(type)
   if (kind === 'hold') return 0
   if (kind === 'ease-in') return t * t
   if (kind === 'ease-out') return 1 - (1 - t) * (1 - t)
   if (kind === 'ease-in-out') return t < 0.5 ? 2 * t * t : 1 - 2 * (1 - t) * (1 - t)
+  if (kind === 'cubic-in') return t * t * t
+  if (kind === 'cubic-out') return 1 - (1 - t) ** 3
+  if (kind === 'cubic-in-out') return t < 0.5 ? 4 * t * t * t : 1 - ((-2 * t + 2) ** 3) / 2
+  if (kind === 'back-out') return bezierY(BACK_OUT, t)
+  if (kind === 'bezier') return bezierY(bezier, t)
   return t
+}
+
+/** Curva de un keyframe lista para dibujar/editar: sus puntos si es
+ *  "Personalizada" o la aproximación del preset. */
+export function interpBezier(item) {
+  const kind = normalizeInterp(item?.interpolation)
+  if (kind === 'bezier') return normalizeBezier(item?.bezier) || [...BEZIER_DEFAULT]
+  return [...(INTERP_BEZIER[kind] || INTERP_BEZIER.linear)]
 }
 
 export function normalizeItems(items) {
   return (items || [])
-    .map((k) => ({
-      id: k?.id || kfId(),
-      t: num(k?.t, NaN),
-      interpolation: normalizeInterp(k?.interpolation || k?.ease),
-      props: { ...(k?.props || {}) },
-    }))
+    .map((k) => {
+      const bez = normalizeBezier(k?.bezier)
+      return {
+        id: k?.id || kfId(),
+        t: num(k?.t, NaN),
+        interpolation: normalizeInterp(k?.interpolation || k?.ease),
+        ...(bez ? { bezier: bez } : {}),
+        props: { ...(k?.props || {}) },
+      }
+    })
     .filter((k) => Number.isFinite(k.t))
     .sort((a, b) => a.t - b.t)
 }
@@ -113,6 +204,9 @@ export function staticProps(clip) {
       cx: 0.5,
       cy: 0.5,
       zoom: 1,
+      rot_x: 0,
+      rot_y: 0,
+      draw: Math.min(1, Math.max(0, num(st.draw, 1))),
       ...maskStaticProps(clip),
       ...audioStatic(clip),
     }
@@ -128,6 +222,9 @@ export function staticProps(clip) {
       cx: 0.5,
       cy: 0.5,
       zoom: 1,
+      rot_x: num(st.rot_x, 0),
+      rot_y: num(st.rot_y, 0),
+      draw: 1,
       ...maskStaticProps(clip),
       ...audioStatic(clip),
     }
@@ -143,6 +240,9 @@ export function staticProps(clip) {
     cx: 0.5,
     cy: 0.5,
     zoom: num(rf.zoom, 1),
+    rot_x: 0,
+    rot_y: 0,
+    draw: 1,
     ...maskStaticProps(clip),
     ...audioStatic(clip),
   }
@@ -179,7 +279,7 @@ export function interpItems(items, t, fallback) {
       const pa = propsAt(a)
       const pb = propsAt(b)
       if (normalizeInterp(b.interpolation) === 'hold') return pa
-      const u = easeT((time - a.t) / ((b.t - a.t) || 1), b.interpolation)
+      const u = easeT((time - a.t) / ((b.t - a.t) || 1), b.interpolation, b.bezier)
       const out = {}
       for (const key of KF_PROP_KEYS) out[key] = pa[key] + (pb[key] - pa[key]) * u
       return out
@@ -234,10 +334,14 @@ export function upsertKeyframeAt(clip, localT, propPatch = {}, interpolation, fp
       interpolation: interpolation ? normalizeInterp(interpolation) : items[j].interpolation,
     }
   } else {
+    const prev = items[items.length - 1]
+    // Un keyframe nuevo hereda también la curva personalizada del anterior.
+    const bez = !interpolation && prev?.bezier ? { bezier: [...prev.bezier] } : {}
     items.push({
       id: kfId(),
       t,
-      interpolation: normalizeInterp(interpolation || items[items.length - 1]?.interpolation || 'linear'),
+      interpolation: normalizeInterp(interpolation || prev?.interpolation || 'linear'),
+      ...bez,
       props,
     })
   }
@@ -287,6 +391,7 @@ export function patchKeyframe(clip, kfIdOrT, patch, fps) {
       ...k,
       ...(patch.t != null ? { t: +snapToFrame(patch.t, fps).toFixed(6) } : {}),
       ...(patch.interpolation ? { interpolation: normalizeInterp(patch.interpolation) } : {}),
+      ...(normalizeBezier(patch.bezier) ? { bezier: normalizeBezier(patch.bezier) } : {}),
       props: mergeProps(k.props, patch.props),
     }
   }).sort((a, b) => a.t - b.t)
@@ -362,7 +467,7 @@ export function targetInterpItem(clip, selKfId, localT, fps) {
 // para poder llevarse solo la Transformación, solo el Audio, etc.
 
 export const KF_GROUPS = [
-  { id: 'transform', label: 'Transformación', keys: ['x', 'y', 'scale', 'rotation', 'opacity'] },
+  { id: 'transform', label: 'Transformación', keys: ['x', 'y', 'scale', 'rotation', 'opacity', 'rot_x', 'rot_y'] },
   { id: 'crop', label: 'Encuadre', keys: ['cx', 'cy', 'zoom'] },
   { id: 'mask', label: 'Máscara', keys: [...MASK_KF_KEYS] },
   { id: 'audio', label: 'Audio', keys: ['volume', ...AUDIO_FX_KEYS] },
@@ -394,6 +499,7 @@ export function copyKeyframeAt(clip, localT, fps) {
     type: 'keyframe',
     props: { ...clipPropsAt(clip, item.t) },
     interpolation: normalizeInterp(item.interpolation),
+    bezier: item.bezier || null,
     srcKind: clip?.kind || null,
   }
 }
@@ -403,7 +509,7 @@ export function pasteKeyframeAt(clip, localT, board, groupIds, fps) {
   if (!board || board.type !== 'keyframe') return clip
   const props = pickProps(board.props, groupIds)
   if (!Object.keys(props).length) return clip
-  return upsertKeyframeAt(clip, localT, props, board.interpolation, fps)
+  return withBezierAt(upsertKeyframeAt(clip, localT, props, board.interpolation, fps), localT, board.bezier, fps)
 }
 
 /** Copia un keyframe existente a otro instante conservando todos sus valores. */
@@ -411,5 +517,12 @@ export function duplicateKeyframeAt(clip, id, targetT, fps) {
   const item = normalizeItems(clip?.keyframes?.items).find((k) => k.id === id)
   if (!item) return clip
   const props = { ...clipPropsAt(clip, item.t) }
-  return upsertKeyframeAt(clip, targetT, props, item.interpolation, fps)
+  return withBezierAt(upsertKeyframeAt(clip, targetT, props, item.interpolation, fps), targetT, item.bezier, fps)
+}
+
+/** Lleva la curva personalizada al keyframe que hay en `localT` (pegar/duplicar). */
+function withBezierAt(clip, localT, bezier, fps) {
+  const bez = normalizeBezier(bezier)
+  const id = bez ? keyframeIdAt(clip, localT, fps) : null
+  return id ? patchKeyframe(clip, id, { bezier: bez }, fps) : clip
 }

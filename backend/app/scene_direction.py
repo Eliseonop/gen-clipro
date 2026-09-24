@@ -565,7 +565,7 @@ def material_catalog(proj) -> list[dict]:
                     "semantic": getattr(c, "semantic", None) or None})
     for im in proj.images or []:
         out.append({"kind": "images", "id": str(im.id), "scope": "project", "title": im.label or im.filename,
-                    "description": im.description or "", "duration": None, "url": im.url,
+                    "description": im.description or im.description_ai or "", "duration": None, "url": im.url,
                     "semantic": getattr(im, "semantic", None) or None})
     try:
         from . import library

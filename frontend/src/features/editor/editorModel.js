@@ -24,11 +24,11 @@ export function isVisualClip(c) {
 }
 
 export function isGeneratedDurationClip(c) {
-  return c?.kind === 'text' || c?.kind === 'image' || c?.kind === 'shape'
+  return c?.kind === 'text' || c?.kind === 'image' || c?.kind === 'shape' || c?.kind === 'adjustment'
 }
 
 export function trackKindForClip(kind) {
-  if (kind === 'image' || kind === 'video' || kind === 'shape') return 'video'
+  if (kind === 'image' || kind === 'video' || kind === 'shape' || kind === 'adjustment') return 'video'
   if (kind === 'audio') return 'audio'
   if (kind === 'text') return 'text'
   return kind
@@ -40,7 +40,7 @@ export function laneKindForAsset(assetKind) {
 }
 
 export function clipSpeed(c) {
-  if (!c || c.kind === 'text' || c.kind === 'image' || c.kind === 'shape') return 1
+  if (!c || c.kind === 'text' || c.kind === 'image' || c.kind === 'shape' || c.kind === 'adjustment') return 1
   const s = Number(c.speed)
   if (!Number.isFinite(s) || s <= 0) return 1
   return Math.min(SPEED_MAX, Math.max(SPEED_MIN, s))
@@ -88,19 +88,42 @@ export function sourceToTimeline(c, src) {
   return c.start + (src - c.in_point) / sp
 }
 
+// Keyframes de pose en tiempo LOCAL desplazados `offset` s hacia atrás (ids
+// nuevos): la parte derecha de un corte continúa la animación donde iba.
+export function shiftKeyframes(keyframes, offset) {
+  if (!keyframes?.items?.length || !offset) return keyframes
+  return {
+    ...keyframes,
+    items: keyframes.items.map((k) => ({ ...k, id: uid('k'), t: +(Number(k.t) - offset).toFixed(4) })),
+  }
+}
+
 export function splitClipAt(c, at, rightId) {
   const src = timelineToSource(c, at)
   if (src <= c.in_point + 0.1 || src >= c.out_point - 0.1) return null
   const cut = +src.toFixed(3)
+  // Invertido: la barra recorre la fuente de out_point hacia in_point, así que la
+  // parte izquierda se queda con el final de la fuente.
+  const right = c.reverse
+    ? { ...c, id: rightId, out_point: cut, start: +at.toFixed(3) }
+    : { ...c, id: rightId, in_point: cut, start: +at.toFixed(3) }
+  // Antes la parte derecha reiniciaba la animación de sus keyframes desde el principio.
+  if (c.keyframes?.items?.length) right.keyframes = shiftKeyframes(c.keyframes, at - c.start)
   return {
-    left: { ...c, out_point: cut },
-    right: { ...c, id: rightId, in_point: cut, start: +at.toFixed(3) },
+    left: c.reverse ? { ...c, in_point: cut } : { ...c, out_point: cut },
+    right,
   }
 }
 
 /** El clip no suena: silenciado él o su pista. */
 export function clipPlaybackMuted(clip, track) {
-  return !!(track?.muted || clip?.muted)
+  return !!(track?.muted || clip?.muted || clip?.disabled)
+}
+
+/** Clip desactivado (#10, tecla V): sigue en la timeline pero no se ve, no suena
+ *  ni se exporta (la duración del proyecto no cambia). */
+export function clipDisabled(clip) {
+  return !!clip?.disabled
 }
 
 /** Volumen del elemento <video>/<audio> en el editor. No se usa en el export. */
@@ -869,6 +892,19 @@ export function makeTextClip(trackId, start, dur, text, style, opts = {}) {
   }
 }
 
+// Capa de ajuste (#19): sin archivo; filtra lo que tiene debajo (lib/clipFilters.js).
+export function makeAdjustmentClip(trackId, start, dur) {
+  const span = +Math.max(0.3, dur || 5).toFixed(3)
+  return {
+    id: uid('c'), track_id: trackId, kind: 'adjustment', asset_kind: 'adjustment', asset_id: 'adjustment',
+    filename: '', name: 'Capa de ajuste', start: +Math.max(0, start).toFixed(3),
+    in_point: 0, out_point: span, source_duration: span,
+    volume: 1, muted: false, speed: 1, keep_pitch: true, reverse: false, speed_curve: null,
+    reframe: null, appear: 'none', exit: 'none', look: 'none', effects: {}, filters: [], opacity: 1,
+    audio_fx: {}, description: null, dup_of: null,
+  }
+}
+
 export function makeShapeClip(trackId, start, dur, preset = {}) {
   const type = preset.type || preset.shape?.type || preset.shape_type || 'rect'
   const st = { ...defaultShape(type), ...(preset.shape || {}) }
@@ -936,54 +972,6 @@ export function duplicateClipOntoTrack(clip, trackId, newId) {
     })
   }
   return copy
-}
-
-// --- Copiar / pegar propiedades visuales entre clips -----------------------
-// Propiedades de configuración visual / transformación / layout que se copian
-// con "Copiar propiedades". Deliberadamente NO incluye: id, pista, tiempos
-// (start/in_point/out_point/source_duration), contenido (filename/asset_*/text),
-// audio (volume/muted/speed) ni la duración. Así el clip destino conserva su
-// contenido y su posición temporal, y solo cambia su aspecto.
-export const CLIP_VISUAL_KEYS = [
-  'layout',    // 'overlay' (objeto libre); 'fill' solo llega de timelines antiguas
-  'frame',     // 'full' | slot ocupado
-  'transform', // { x, y, scale, rotation, opacity } → posición/escala/rotación
-  'reframe',   // encuadre (zoom, crop, keyframes de paneo, dual_crop, …)
-  'keyframes', // keyframes de pose (animación de transformación)
-  'effects',   // efectos visuales del clip
-  'appear', 'exit', 'look', // transiciones/estilo visual
-]
-
-/** Extrae (clonadas) las propiedades visuales de un clip para el portapapeles. */
-export function pickClipVisualProps(clip) {
-  const out = {}
-  for (const k of CLIP_VISUAL_KEYS) {
-    if (clip && clip[k] !== undefined) out[k] = clip[k]
-  }
-  return JSON.parse(JSON.stringify(out))
-}
-
-/** Devuelve un clip nuevo con las props visuales aplicadas; conserva todo lo demás
- *  (id, pista, tiempos, contenido). Regenera los ids de keyframes para que no
- *  colisionen con los del clip de origen. */
-export function applyClipVisualProps(clip, props) {
-  if (!clip || !props) return clip
-  const patch = JSON.parse(JSON.stringify(props))
-  if (patch.reframe) {
-    const strip = (arr) => (arr || []).map(({ id: _id, ...k }) => k)
-    patch.reframe = withKfIds({
-      ...patch.reframe,
-      keyframes: strip(patch.reframe.keyframes),
-      keyframes2: strip(patch.reframe.keyframes2),
-    })
-  }
-  if (patch.keyframes?.items) {
-    patch.keyframes = {
-      ...patch.keyframes,
-      items: patch.keyframes.items.map(({ id: _id, ...it }) => ({ ...it, id: uid('k') })),
-    }
-  }
-  return { ...clip, ...patch }
 }
 
 export function syncMaterialInstances(clips, patch) {

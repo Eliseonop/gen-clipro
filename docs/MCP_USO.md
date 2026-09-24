@@ -46,9 +46,9 @@ puente. En `claude_desktop_config.json`:
 
 Reinicia Claude Desktop tras editar el archivo.
 
-## 3. Qué puede hacer la IA — catálogo de tools (50)
+## 3. Qué puede hacer la IA — catálogo de tools (52)
 
-Total: **14 read / 33 write / 3 destructive**.
+Total: **14 read / 35 write / 3 destructive**.
 
 Toda tool declara un nivel de política (`read` / `write` / `destructive`) y queda
 **auditada** en `backend/data/mcp_audit.jsonl` (tool, nivel, proyecto, claves de
@@ -90,18 +90,41 @@ params —nunca valores—, estado y ms). Cada tool lleva además `meta.domain` 
 **Edición estructural**
 - `add_to_timeline` (clip/audio/imagen) · `move_clip` · `split_clip` ·
   `remove_clip` *(destructive)*
-- `reframe_clip` (center/manual) · `set_project_format` (9:16…)
+- `freeze_frame(clip_id, at_time, duration=3)` — congela el fotograma de un vídeo
+  (ver [CONGELAR_FOTOGRAMA.md](CONGELAR_FOTOGRAMA.md))
+- `detect_beats(clip_id, every=1)` · `set_timeline_markers(markers)` — beats de la
+  música y marcadores de la timeline (ver [BEATS_MARCADORES.md](BEATS_MARCADORES.md))
+- `apply_recipe(recipe, clip_ids?, params?)` — un truco completo en un paso (etalonaje,
+  reflejo, texto que atraviesas, franjas al ritmo, sujeto; ver [RECETAS.md](RECETAS.md))
+- `add_cinema_bars(ratio, start?, duration?, animate?)` — barras de cine encima de todo
+  (ver [BARRAS_CINE.md](BARRAS_CINE.md))
+- `add_adjustment_layer(start, duration, filters?, effects?, intensity?)` — capa de ajuste
+  sobre todo lo de debajo (ver [CAPA_AJUSTE.md](CAPA_AJUSTE.md))
+- `sound_design(clip_id, apply=True)` — sonoriza una escena con SFX de la biblioteca (job;
+  ver [SONORIZAR_IA.md](SONORIZAR_IA.md))
+- `track_object(clip_id, box, at_time, follower_clip_id?, mode?)` — sigue un objeto de un
+  vídeo y hace que otro clip lo acompañe (job; ver [SEGUIMIENTO_OBJETOS.md](SEGUIMIENTO_OBJETOS.md))
+- `paste_clip_attributes(source_clip_id, target_clip_ids, groups?)` — pega atributos
+  de un clip en otros eligiendo qué grupos (ver [PEGAR_ATRIBUTOS.md](PEGAR_ATRIBUTOS.md))
+- `reframe_clip` (center/manual) · `crop_clip` (recorte fijo o `reset`, por clips o pista; ver [RECORTAR.md](RECORTAR.md)) · `set_project_format` (9:16…)
 - `add_track` · `remove_track` *(destructive)* · `add_shape` · `duplicate_clip`
+  (`add_shape(points=[[x,y],…])` traza una ruta libre y `shape.dash` la hace discontinua
+  o punteada; ver [TRAZADO_PLUMA.md](TRAZADO_PLUMA.md))
 - `rename_track` (nombrar líneas: A1 / SFX / Voz)
 - `link_tracks` / `unlink_track`
-- `add_subtitles(source_clip_id, segments)`
+- `add_subtitles(source_clip_id, segments, style?)` — `style` admite la sombra completa
+  (`shadow_*`, ver [TEXTO_ESTILO.md](TEXTO_ESTILO.md))
 
 **Propiedades por-clip**
 - `update_clip(clip_id, patch)` — escalares en una operación (un solo undo):
   `patch` = opacity, speed/keep_pitch/reverse, appear/exit, position/start/duration,
-  role (caption/free)
-- `set_clip_effects` (blur/grayscale/sepia/brightness…) · `set_clip_audio_fx`
-  (eq/compressor/reverb)
+  role (caption/free), flip_h/flip_v (voltear; ver [VOLTEAR.md](VOLTEAR.md)),
+  blend_mode (modo de fusión; ver [MODOS_FUSION.md](MODOS_FUSION.md)), disabled
+  (desactivar sin borrar; ver [DESACTIVAR_CLIP.md](DESACTIVAR_CLIP.md))
+- `set_clip_effects` (blur/grayscale/sepia/brightness… + exposure/whites/temperature/hue; `filters`
+  = pila de filtros de color con intensidad, ver [FILTROS_COLOR.md](FILTROS_COLOR.md)) · `set_clip_masks` (máscaras: film, target adjust, texto; ver [MASCARAS.md](MASCARAS.md)) · `set_clip_audio_fx`
+  (eq/compressor/reverb… y filtros underwater/telephone/radio/megaphone/muffled; `ramp` anima
+  la intensidad; ver [FILTROS_SONIDO.md](FILTROS_SONIDO.md))
 - `set_clip_keyframes` (x/y/scale/rotation/opacity)
 - `set_clip_ai_description` — describe el material con IA (para búsqueda/orientación)
 
@@ -109,8 +132,13 @@ params —nunca valores—, estado y ms). Cada tool lleva además `meta.domain` 
 - `set_clip_volume` (0–2, mute, fade in/out) · `set_track_audio` (toda una pista)
 
 **Animación**
-- `animate_clip` (zoom / giro / slide / aparecer con un SFX) — vía recomendada;
-  **no** escribas keyframes a mano
+- `animate_clip` (zoom / giro / slide / aparecer con un SFX; `draw_in` dibuja el trazo de
+  una figura) — vía recomendada;
+  **no** escribas keyframes a mano. En **textos** la animación también sale en el
+  export ([TEXTO_ANIMADO.md](TEXTO_ANIMADO.md))
+- `set_clip_keyframes` (experto): cada item admite `interpolation` (cúbicas, `back-out`,
+  `bezier` + `bezier:[x1,y1,x2,y2]`…) — ver [CURVAS_ANIMACION.md](CURVAS_ANIMACION.md); en textos, `props.rot_x/rot_y`
+  giran en 3D ([TEXTO_ESTILO.md](TEXTO_ESTILO.md#texto-3d-4))
 
 **Transcripción / audio**
 - `transcribe(project_id, source|clip_index, model?)` · `generate_subtitles`

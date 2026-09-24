@@ -7,6 +7,7 @@ import { clampStartNoOverlap, clampTrimDelta, clipCopyText, clipDur, clipSourceD
 import { alignOthers, alignThresholdSec, asAlignClip, snapClipGroup, snapClipMove, snapClipTrim, timelineAlignHits } from './timelineAlign'
 import { keyframesEnabled, normalizeItems, clipVolumeAt, clampVolume, sampleVolumeCurve, VOL_MAX, hasVolumeControls } from '../../lib/clipKeyframes'
 import { snapToFrame } from '../../lib/projectFps'
+import { clipBeatTimes, snapTargets } from '../../lib/beats'
 import { stackViewForTrack } from './clipStack.js'
 import { stepRowHeight, trackRowHeight } from './trackRows'
 import { dropIntent } from './dropIntent'
@@ -127,7 +128,7 @@ function TrackName({ track, onRename }) {
 export default function EdTimeline({
   tracks, clips, pps, setPps, duration, playhead, rowH, setRowH, fps = 30, onMoveToNewTrack,
   selectedClipId, selectedClipIds, selectedTrackId, selKfId, dragInfo,
-  onSeek, onScrub, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onMoveGroup, onMatchDuration, onSplit, onDuplicate, onDeleteClip,
+  onSeek, onScrub, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onMoveGroup, onMatchDuration, onSplit, onDuplicate, onCrop, cropDisabled, onFreeze, freezeDisabled, freezeBusy, onDeleteClip,
   previewVol, onPreviewVol,
   onDropAsset, onTrackToggle, onTrackCompact, onAddTrack, onAddTextTrack, onRenameTrack, onMoveKeyframe, onSelectKf, onAddKf, onDeleteKf, onContextClip, onContextTrack,
   onFaceTrack, faceTrackBusy, faceTrackDisabled,
@@ -135,6 +136,7 @@ export default function EdTimeline({
   mcpBusyIds, onMarqueeSelect,
   markRange, onContextLane, onSceneDirection, onGenerateResource,
   onMarkChange, onCreateSegment, segmentBusy, segmentLabelText, markKeys = ['I', 'O'],
+  markers, onMarkerChange, onToggleMarker,
 }) {
   const lanesRef = useRef(null)
   const bodyRef = useRef(null)
@@ -331,7 +333,12 @@ export default function EdTimeline({
     const startX = e.clientX
     const waitDrag = !!(e.ctrlKey || e.metaKey || e.shiftKey)
     const movingIds = mode === 'move' && origs.length > 1 ? new Set(origs.map((c) => c.id)) : new Set([clip.id])
-    const others = alignOthers(clips, movingIds)
+    // Imán: bordes de otras pistas + marcadores y beats (#12). Al mover no cuentan
+    // los beats de los clips que se mueven; al recortar sí (no se desplazan).
+    const others = [
+      ...alignOthers(clips, movingIds),
+      ...snapTargets(markers, clips, mode === 'move' ? movingIds : []),
+    ]
     drag.current = { mode, startX, orig: { ...clip }, origs, waitDrag, others, trackId: clip.track_id }
     const thresh = () => alignThresholdSec(pps)
     const previewTrim = (rawDelta, doSnap) => {
@@ -422,6 +429,29 @@ export default function EdTimeline({
       document.body.classList.remove('ed-mark-dragging')
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
+  // Marcador (#12): arrastrar lo mueve; un clic sin arrastrar lleva el cursor ahí.
+  function startMarkerDrag(e, m) {
+    if (e.button != null && e.button !== 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    const startX = e.clientX
+    let moved = false
+    document.body.classList.add('ed-mark-dragging')
+    const move = (ev) => {
+      if (!moved && Math.abs(ev.clientX - startX) < 3) return
+      moved = true
+      onMarkerChange?.(m.id, { t: snapToFrame(Math.max(0, xToTime(ev.clientX)), fps) })
+    }
+    const up = () => {
+      document.body.classList.remove('ed-mark-dragging')
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      if (!moved) onSeek?.(m.t)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
@@ -547,14 +577,31 @@ export default function EdTimeline({
     <div className="ed-timeline-wrap" style={{ '--ed-row-h': `${rowH}px` }}>
       <div className="ed-tl-toolbar">
         <div className="ed-tl-tools-left">
-          <button className="ghost small" onClick={() => onSplit(selectedClipId, playhead)} disabled={!selectedIds.length} title="Dividir en el cursor (S)">
-            <Icon name="content_cut" size={15} /> Dividir
+          <button className="ghost small ed-tl-ico" onClick={() => onSplit(selectedClipId, playhead)} disabled={!selectedIds.length} title="Dividir en el cursor (S)">
+            <Icon name="content_cut" size={16} />
           </button>
-          <button className="ghost small" onClick={() => onDuplicate?.()} disabled={!selectedIds.length} title="Duplicar en una pista nueva">
-            <Icon name="content_copy" size={15} /> Duplicar
+          <button className="ghost small ed-tl-ico" onClick={() => onDuplicate?.()} disabled={!selectedIds.length} title="Duplicar en una pista nueva">
+            <Icon name="content_copy" size={16} />
           </button>
-          <button className="ghost small danger" onClick={() => onDeleteClip(selectedClipId)} disabled={!selectedIds.length} title="Eliminar clip (Supr)">
-            <Icon name="delete" size={15} /> Eliminar
+          {onCrop && (
+            <button className="ghost small ed-tl-ico" onClick={() => onCrop()} disabled={cropDisabled} title="Recortar el clip seleccionado">
+              <Icon name="crop" size={16} />
+            </button>
+          )}
+          {onToggleMarker && (
+            <button className="ghost small ed-tl-ico" onClick={() => onToggleMarker(playhead)}
+              title="Marcador en el cursor (M) · , y . saltan entre marcadores y beats">
+              <Icon name="bookmark_add" size={16} />
+            </button>
+          )}
+          {onFreeze && (
+            <button className="ghost small ed-tl-ico" onClick={() => onFreeze()} disabled={freezeDisabled || freezeBusy}
+              title="Congelar fotograma: inserta una imagen fija del fotograma del cursor (3 s)">
+              <Icon name={freezeBusy ? 'hourglass_top' : 'ac_unit'} size={16} />
+            </button>
+          )}
+          <button className="ghost small ed-tl-ico danger" onClick={() => onDeleteClip(selectedClipId)} disabled={!selectedIds.length} title="Eliminar clip (Supr)">
+            <Icon name="delete" size={16} />
           </button>
           {onFaceTrack && (
             <FaceTrackButton onPick={onFaceTrack} disabled={faceTrackDisabled} busy={faceTrackBusy} />
@@ -563,13 +610,12 @@ export default function EdTimeline({
             <>
               <span className="ed-tl-sep" />
               <button
-                className="ghost small accent ed-create-seg"
+                className="ghost small ed-tl-ico accent ed-create-seg"
                 onClick={() => onCreateSegment()}
                 disabled={markIn == null || markOut == null || markOut <= markIn || segmentBusy}
                 title="Revisa título y descripción del rango marcado (Z inicio · X fin) y confírmalo para añadirlo a Mis materiales (Enter)"
               >
-                <Icon name={segmentBusy ? 'hourglass_top' : 'add_to_photos'} size={15} />
-                {segmentBusy ? 'Creando…' : 'Crear clip'}
+                <Icon name={segmentBusy ? 'hourglass_top' : 'add_to_photos'} size={16} />
                 {markIn != null && markOut != null && markOut > markIn && (
                   <em className="ed-create-seg-dur">{fmt(markOut - markIn)}</em>
                 )}
@@ -582,33 +628,33 @@ export default function EdTimeline({
           {selKfId != null && (
             <>
               <span className="ed-tl-sep" />
-              <button className="ghost small" onClick={onDeleteKf} title="Eliminar keyframe seleccionado">
-                <Icon name="wrong_location" size={15} /> Quitar
+              <button className="ghost small ed-tl-ico" onClick={onDeleteKf} title="Eliminar keyframe seleccionado">
+                <Icon name="wrong_location" size={16} />
               </button>
             </>
           )}
         </div>
         <div className="ed-tl-tools-right">
           {onGenerateResource && (
-            <button className="ghost small accent" onClick={onGenerateResource}
+            <button className="ghost small ed-tl-ico accent" onClick={onGenerateResource}
               title="Genera un recurso visual para el tramo marcado (o 5 s desde el cursor): la IA lee el guion y propone qué dibujar">
-              <Icon name="auto_awesome" size={15} /> Generar recurso
+              <Icon name="auto_awesome" size={16} />
             </button>
           )}
           {onSceneDirection && (
-            <button className="ghost small" onClick={onSceneDirection}
+            <button className="ghost small ed-tl-ico" onClick={onSceneDirection}
               title="Dirección de escena: recorre el guion entero tramo a tramo y decide qué se ve en cada uno">
-              <Icon name="theaters" size={15} /> Dirección
+              <Icon name="theaters" size={16} />
             </button>
           )}
           {(onGenerateResource || onSceneDirection) && <span className="ed-tl-sep" />}
-          <button className="ghost small" onClick={() => onMatchDuration?.()} disabled={selectedIds.length < 2} title="Copiar el rango de tiempo del primer clip (mismo inicio y mismo fin). Cada uno se queda en su pista. Un vídeo o audio no se alarga más que su fuente.">
-            <Icon name="straighten" size={15} /> Igualar
+          <button className="ghost small ed-tl-ico" onClick={() => onMatchDuration?.()} disabled={selectedIds.length < 2} title="Copiar el rango de tiempo del primer clip (mismo inicio y mismo fin). Cada uno se queda en su pista. Un vídeo o audio no se alarga más que su fuente.">
+            <Icon name="straighten" size={16} />
           </button>
           <span className="ed-tl-sep" />
-          <button className="ghost small" onClick={() => onAddTrack('video')} title="Añadir pista de vídeo"><Icon name="add" size={14} /> V</button>
-          <button className="ghost small" onClick={() => onAddTrack('audio')} title="Añadir pista de audio"><Icon name="add" size={14} /> A</button>
-          <button className="ghost small" onClick={onAddTextTrack} title="Añadir pista de texto"><Icon name="add" size={14} /> Texto</button>
+          <button className="ghost small ed-tl-ico" onClick={() => onAddTrack('video')} title="Añadir pista de vídeo"><Icon name="video_call" size={17} /></button>
+          <button className="ghost small ed-tl-ico" onClick={() => onAddTrack('audio')} title="Añadir pista de audio"><Icon name="library_music" size={16} /></button>
+          <button className="ghost small ed-tl-ico" onClick={onAddTextTrack} title="Añadir pista de texto"><Icon name="text_fields" size={16} /></button>
           <span className="ed-zoom">
             <button className="icon-btn" onClick={() => setPps((p) => clampPps(p / 1.4, duration, viewW, fps))} title="Alejar"><Icon name="zoom_out" size={17} /></button>
             <button className="icon-btn" onClick={() => setPps((p) => clampPps(p * 1.4, duration, viewW, fps))} title="Acercar (o arrastra ↔ sobre la regla)"><Icon name="zoom_in" size={17} /></button>
@@ -683,6 +729,19 @@ export default function EdTimeline({
               )}
               {buildTicks(duration + 4, pps, { fps, dense: !!trimGuide, scrollX, viewW }).map((tk) => (
                 <span key={`${tk.minor ? 'm' : 'M'}-${tk.t}`} className={`ed-tick${tk.minor ? ' minor' : ''}`} style={{ left: tk.t * pps }}><i />{tk.major ? <em>{fmtRuler(tk.t, { step: tk.step, fps, long: rulerLong })}</em> : null}</span>
+              ))}
+              {(markers || []).map((m) => (
+                <span key={m.id} className="ed-marker-flag" style={{ left: m.t * pps, ...(m.color ? { '--mk': m.color } : {}) }}
+                  title={`${m.label ? `${m.label} · ` : ''}${fmtRuler(m.t, { step: rulerStep, fps, long: rulerLong })} · arrastra para mover · doble clic: nombre · clic derecho: quitar`}
+                  onPointerDown={(e) => startMarkerDrag(e, m)}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation()
+                    const label = window.prompt('Nombre del marcador', m.label || '')
+                    if (label != null) onMarkerChange?.(m.id, { label: label.trim() || undefined })
+                  }}
+                  onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onMarkerChange?.(m.id, null) }}>
+                  {m.label ? <em>{m.label}</em> : null}
+                </span>
               ))}
               {trimGuide && (
                 <span className="ed-trim-chip" style={{ left: trimGuide.t * pps }}>
@@ -780,6 +839,9 @@ export default function EdTimeline({
             {(alignTimes || []).map((t) => (
               <div key={t} className="ed-align-guide" style={{ left: t * pps }} aria-hidden="true" />
             ))}
+            {(markers || []).map((m) => (
+              <div key={m.id} className="ed-marker-line" style={{ left: m.t * pps, ...(m.color ? { '--mk': m.color } : {}) }} aria-hidden="true" />
+            ))}
             {marquee && (
               <div className="ed-marquee" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} aria-hidden="true" />
             )}
@@ -841,7 +903,7 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
   const audioDesc = clip.kind === 'audio' ? clipCopyText(clip, audioMaterials) : ''
 
   return (
-    <div className={`ed-clip ${clip.kind} ${layout.variant !== 'solo' ? layout.variant : ''} ${selected ? 'sel' : ''} ${clip.muted ? 'muted' : ''} ${mcpBusy ? 'mcp-busy' : ''}`}
+    <div className={`ed-clip ${clip.kind} ${layout.variant !== 'solo' ? layout.variant : ''} ${selected ? 'sel' : ''} ${clip.muted ? 'muted' : ''} ${clip.disabled ? 'disabled' : ''} ${mcpBusy ? 'mcp-busy' : ''}`}
       style={{ left, width: w, top: layout.top, height: layout.height, zIndex: layout.z }}
       title={clip.note ? `${clip.name}
 
@@ -854,10 +916,17 @@ ${clip.note}` : clip.name}
       <div className="ed-clip-handle right" onPointerDown={(e) => onDown(e, 'trim-right')} />
       {/* Indicador de nota de contexto: el texto va en el title del clip. */}
       {clip.note && <span className="ed-clip-note" aria-hidden="true"><Icon name="sticky_note_2" size={11} /></span>}
+      {/* Desactivado (#10, tecla V): no se ve, no suena ni se exporta. */}
+      {/* Beats (#12): un punto por golpe detectado (dentro del recorte). */}
+      {clipBeatTimes(clip).map((t) => (
+        <span key={t} className="ed-beat" style={{ left: (t - clip.start) * pps }} aria-hidden="true" />
+      ))}
+      {clip.disabled && <span className="ed-clip-off" title="Clip desactivado (V para activarlo)"><Icon name="visibility_off" size={11} /></span>}
 
       {isVideo && <div className="ed-clip-label"><Icon name={clip.kind === 'image' ? 'image' : (clip.muted ? 'volume_off' : 'movie')} size={12} /> {clip.name}{speedBadge}</div>}
       {isText && <div className="ed-clip-label"><Icon name="title" size={12} /> {clip.text || clip.name}</div>}
       {clip.kind === 'shape' && <div className="ed-clip-label"><Icon name="category" size={12} /> {clip.name}</div>}
+      {clip.kind === 'adjustment' && <div className="ed-clip-label"><Icon name="tune" size={12} /> {clip.name || 'Capa de ajuste'}</div>}
       {clip.kind === 'audio' && (
         <div className="ed-clip-wave">
           {bars.map((h, i) => <span key={i} style={{ height: `${Math.round(h * 100)}%` }} />)}

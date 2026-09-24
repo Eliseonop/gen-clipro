@@ -20,7 +20,9 @@
 // herramientas de píxeles (recorte, pincel, quitar fondo) son solo de la imagen.
 
 import { useRef, useState } from 'react'
+import JobProgress from '../../components/JobProgress'
 import Icon from '../../components/Icon'
+import Hint from '../../components/Hint'
 import FlipSelect from '../../components/FlipSelect'
 import { BG_PROVIDERS, isInteractiveProvider } from '../../lib/clipBg'
 import { InspSection, InspSlider } from '../editor/EdTransform'
@@ -152,7 +154,14 @@ function ImageTools({ paper }) {
       </div>
 
       <label className="ed-prop">
-        Modelo de fondo
+        <span>
+          Modelo de fondo
+          <Hint>
+            Quitar fondo usa el mismo motor que <b>Vídeo → Eliminar fondo</b> del editor
+            (se calcula una vez y queda en caché). Si la imagen no estaba en el
+            material, se sube al proyecto para poder procesarla.
+          </Hint>
+        </span>
         <FlipSelect
           value={st.edit.bgProvider}
           options={AUTO_PROVIDERS.map((pr) => ({ value: pr.id, label: pr.label }))}
@@ -162,11 +171,7 @@ function ImageTools({ paper }) {
       <div className="paper-actions">
         {running ? (
           <>
-            <span className="ed-bg-status run">
-              <Icon name="progress_activity" size={14} />
-              <span>{bgJob.message}</span>
-              <b>{Math.round((bgJob.progress || 0) * 100)}%</b>
-            </span>
+            <JobProgress job={bgJob} progress={bgJob.progress || 0} />
             <button type="button" className="ed-btn danger" onClick={cancelBackground}>Cancelar</button>
           </>
         ) : (
@@ -178,16 +183,10 @@ function ImageTools({ paper }) {
           <span className="ed-bg-status ok"><Icon name="check_circle" size={14} /><span>{bgJob.message}</span></span>
         )}
       </div>
-      <p className="ed-key-hint">
-        Quitar fondo usa el mismo motor que <b>Vídeo → Eliminar fondo</b> del editor
-        (se calcula una vez y queda en caché). Si la imagen no estaba en el
-        material, se sube al proyecto para poder procesarla.
-      </p>
       {(cropped || imageEdited(st)) && (
-        <p className="ed-key-hint">
+        <p className="ed-insp-meta" title="Ctrl+Z la devuelve al paso anterior">
           Imagen{cropped ? ' recortada' : ''}{cropped && imageEdited(st) ? ' ·' : ''}
-          {st.erased ? ' con borrados' : ''}{st.bgRemoved ? ' sin fondo' : ''}.
-          Ctrl+Z la devuelve al paso anterior.
+          {st.erased ? ' con borrados' : ''}{st.bgRemoved ? ' sin fondo' : ''}
         </p>
       )}
     </>
@@ -222,11 +221,12 @@ function TextObjectTools({ paper }) {
   if (raw.text.elements.length < 2) return null
   const advanced = paper.st.object.animation.mode === 'advanced'
   return (
-    <InspSection title="Todo el texto">
-      <p className="ed-key-hint">
-        Copia borde, sombra, color, movimiento, pliegue y animación de este elemento a
-        los demás. Cada uno mantiene su sitio en la frase.
-      </p>
+    <InspSection
+      title="Todo el texto"
+      hint={<>Copia borde, sombra, color, movimiento, pliegue y animación de este elemento a
+        los demás. Cada uno mantiene su sitio en la frase. En modo <b>Avanzado</b> puedes
+        escalonar los keyframes letra a letra.</>}
+    >
       <div className="paper-actions">
         <button type="button" className="ed-btn" onClick={() => applySelectedToAll(0)}>
           <Icon name="select_all" size={14} /> Aplicar a todos
@@ -242,9 +242,7 @@ function TextObjectTools({ paper }) {
             </button>
           </div>
         </>
-      ) : (
-        <p className="ed-key-hint">En modo <b>Avanzado</b> puedes escalonar los keyframes letra a letra.</p>
-      )}
+      ) : null}
     </InspSection>
   )
 }
@@ -261,11 +259,16 @@ function ObjectPanel({ paper }) {
   return (
     <>
       <SelectedLabel paper={paper} />
-      <InspSection title={isImage ? 'Imagen' : 'Transformación'} onReset={() => reset('object.image')}>
+      <InspSection
+        title={isImage ? 'Imagen' : 'Transformación'}
+        onReset={() => reset('object.image')}
+        hint={isImage
+          ? 'También puedes mover, escalar y girar la imagen arrastrándola en el lienzo.'
+          : 'La posición es relativa a su sitio en la frase (0, 0 = en su sitio). También se arrastra en el lienzo.'}
+      >
         {advanced ? (
-          <p className="ed-key-hint">
-            En modo avanzado la posición y la escala las mandan los keyframes.
-            Cámbialas en <b>Animación → Propiedades del keyframe</b>.
+          <p className="ed-insp-meta">
+            En modo avanzado la posición y la escala se cambian en <b>Animación → Propiedades del keyframe</b>.
           </p>
         ) : (
           <>
@@ -275,11 +278,6 @@ function ObjectPanel({ paper }) {
             <P paper={paper} path="object.image.rotation" label="Girar" min={-180} max={180} format={one} suffix="°" />
           </>
         )}
-        <p className="ed-key-hint">
-          {isImage
-            ? 'También puedes mover, escalar y girar la imagen arrastrándola en el lienzo.'
-            : 'La posición es relativa a su sitio en la frase (0, 0 = en su sitio). También se arrastra en el lienzo.'}
-        </p>
       </InspSection>
 
       {isImage ? (
@@ -388,12 +386,12 @@ function BackgroundPanel({ paper }) {
 
   return (
     <>
-      <InspSection title="Imagen y color">
+      <InspSection
+        title="Imagen y color"
+        hint={<>Verde puro (#00ff00) si vas a usarlo como croma en la timeline; o exporta
+          en WebM con fondo transparente desde <b>Salida</b>.</>}
+      >
         <ColorRow label="Color de fondo" value={bg.color} onChange={(v) => patch('background.color', v)} />
-        <p className="ed-key-hint">
-          Verde puro (#00ff00) si vas a usarlo como croma en la timeline; o exporta
-          en WebM con fondo transparente desde <b>Salida</b>.
-        </p>
         <div className="paper-actions">
           <input
             ref={fileRef}
@@ -413,15 +411,14 @@ function BackgroundPanel({ paper }) {
 
       {bg.hasImage && (
         <>
-          <InspSection title="Transformación" onReset={() => reset('background.transform')}>
+          <InspSection title="Transformación" onReset={() => reset('background.transform')}
+            hint="Estirar deforma la imagen al cuadro; no admite tamaño ni desplazamiento.">
             <Chips
               value={bg.transform.mode}
               options={[{ value: 'fill', label: 'Rellenar' }, { value: 'stretch', label: 'Estirar' }]}
               onChange={(v) => patch('background.transform.mode', v)}
             />
-            {stretch ? (
-              <p className="ed-key-hint">Estirar deforma la imagen al cuadro; no admite tamaño ni desplazamiento.</p>
-            ) : (
+            {stretch ? null : (
               <>
                 <P paper={paper} path="background.transform.size" label="Tamaño" min={LIMITS.bgSize.min} max={LIMITS.bgSize.max} suffix="%" />
                 <P paper={paper} path="background.transform.rotation" label="Girar" min={-180} max={180} format={one} suffix="°" />
@@ -565,10 +562,12 @@ function KeyframeProps({ paper }) {
         <FlipSelect value={selKf.easing} options={EASING_OPTIONS} onChange={(v) => set({ easing: v })} />
       </label>
       <div className="ed-insp-row">
-        <div className="ed-insp-row-lab">Animación de papel</div>
+        <div className="ed-insp-row-lab">
+          Animación de papel
+          <Hint>El papel se pliega o despliega durante el tramo hasta el siguiente keyframe.</Hint>
+        </div>
         <Chips value={selKf.paperAnim} options={animOptions} onChange={(v) => set({ paperAnim: v })} />
       </div>
-      <p className="ed-key-hint">El papel se pliega o despliega durante el tramo hasta el siguiente keyframe.</p>
     </>
   )
 }
@@ -581,17 +580,16 @@ function AnimationPanel({ paper }) {
   return (
     <>
       <SelectedLabel paper={paper} />
-      <InspSection title="Modo">
+      <InspSection
+        title="Modo"
+        hint={<><b>Simple</b>: el objeto se queda quieto; solo se anima la apertura o el cierre del
+          papel. <b>Avanzado</b>: la posición, la escala y el giro se animan con keyframes sobre la timeline.</>}
+      >
         <Chips
           value={anim.mode}
           options={[{ value: 'simple', label: 'Simple' }, { value: 'advanced', label: 'Avanzado' }]}
           onChange={(v) => patch('object.animation.mode', v)}
         />
-        <p className="ed-key-hint">
-          {advanced
-            ? 'La posición, la escala y el giro se animan con keyframes sobre la timeline.'
-            : 'El objeto se queda quieto; solo se anima la apertura o el cierre del papel.'}
-        </p>
       </InspSection>
 
       {advanced ? (
@@ -600,12 +598,12 @@ function AnimationPanel({ paper }) {
           <InspSection title="Propiedades del keyframe"><KeyframeProps paper={paper} /></InspSection>
         </>
       ) : (
-        <InspSection title="Animación simple">
+        <InspSection title="Animación simple"
+          hint={<>Cada una dura 1 s y se ve en la pista <b>Papel</b> de la timeline.</>}>
           <Toggle label="Abrir al empezar" icon="unfold_more" on={anim.simple.open}
             onChange={(v) => patch('object.animation.simple.open', v)} />
           <Toggle label="Cerrar al terminar" icon="unfold_less" on={anim.simple.close}
             onChange={(v) => patch('object.animation.simple.close', v)} />
-          <p className="ed-key-hint">Cada una dura 1 s y se ve en la pista <b>Papel</b> de la timeline.</p>
         </InspSection>
       )}
     </>
@@ -622,15 +620,14 @@ function OutputPanel({ paper, format }) {
 
   return (
     <>
-      <InspSection title="Formato">
+      <InspSection
+        title="Formato"
+        hint={`El tamaño lo pone el proyecto: ${format?.width || 1080}×${format?.height || 1920}. Solo WebM conserva la transparencia.`}
+      >
         <label className="ed-prop">
           Archivo
           <FlipSelect value={fmt} options={EXPORT_FORMATS} onChange={(v) => patch('export.format', v)} />
         </label>
-        <p className="ed-key-hint">
-          El tamaño lo pone el proyecto: {format?.width || 1080}×{format?.height || 1920}.
-          Solo WebM conserva la transparencia.
-        </p>
         <label className="ed-prop">
           Nombre
           <input
@@ -658,8 +655,7 @@ function OutputPanel({ paper, format }) {
       )}
 
       {!isVideo && (
-        <InspSection title="Imagen">
-          <p className="ed-key-hint">Se exporta el fotograma en el que esté el cabezal.</p>
+        <InspSection title="Imagen" hint="Se exporta el fotograma en el que esté el cabezal.">
           {fmt === 'jpg' && (
             <InspSlider label="Calidad" value={st.export.jpgQuality} min={40} max={100} step={1}
               format={int} parse={parseNum} suffix="%" onChange={(v) => patch('export.jpgQuality', Math.round(v))} stepper />
@@ -671,7 +667,7 @@ function OutputPanel({ paper, format }) {
         </InspSection>
       )}
 
-      <InspSection title="Preview">
+      <InspSection title="Preview" hint="Solo afecta a lo que ves. El export siempre sale a resolución completa.">
         <div className="ed-insp-row">
           <div className="ed-insp-row-lab">Resolución del lienzo</div>
           <Chips
@@ -680,17 +676,12 @@ function OutputPanel({ paper, format }) {
             onChange={(v) => patch('previewScale', v)}
           />
         </div>
-        <p className="ed-key-hint">Solo afecta a lo que ves. El export siempre sale a resolución completa.</p>
       </InspSection>
 
       <div className="paper-actions out">
         {running ? (
           <>
-            <span className="ed-bg-status run">
-              <Icon name="progress_activity" size={14} />
-              <span>{exportJob.message}</span>
-              <b>{Math.round((exportJob.progress || 0) * 100)}%</b>
-            </span>
+            <JobProgress job={exportJob} progress={exportJob.progress || 0} />
             <button type="button" className="ed-btn danger" onClick={cancelExport}>Cancelar</button>
           </>
         ) : (

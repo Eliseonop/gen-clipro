@@ -1,4 +1,68 @@
+import { useRef, useState } from 'react'
 import Icon from '../../components/Icon'
+import FlipPopover from '../../components/FlipPopover'
+import { WORKSPACE_PRESETS } from './panelLayout'
+
+// Miniatura de cada disposición: rectángulos en una caja 40×26
+// (m = materiales, v = Main, i = inspector, t = timeline).
+const PREVIEW = {
+  default: [['m', 0, 0, 11, 16], ['v', 12, 0, 16, 16], ['i', 29, 0, 11, 16], ['t', 0, 17, 40, 9]],
+  'main-right': [['m', 0, 0, 11, 16], ['i', 12, 0, 11, 16], ['v', 24, 0, 16, 16], ['t', 0, 17, 40, 9]],
+  'main-left': [['v', 0, 0, 16, 16], ['m', 17, 0, 11, 16], ['i', 29, 0, 11, 16], ['t', 0, 17, 40, 9]],
+  mirror: [['i', 0, 0, 11, 16], ['v', 12, 0, 16, 16], ['m', 29, 0, 11, 16], ['t', 0, 17, 40, 9]],
+  'tall-media': [['m', 0, 0, 11, 26], ['v', 12, 0, 16, 16], ['i', 29, 0, 11, 16], ['t', 12, 17, 28, 9]],
+  'tall-main': [['m', 0, 0, 11, 16], ['i', 12, 0, 11, 16], ['t', 0, 17, 23, 9], ['v', 24, 0, 16, 26]],
+}
+
+function LayoutThumb({ id }) {
+  return (
+    <svg className="ed-layout-thumb" viewBox="0 0 40 26" width="40" height="26" aria-hidden="true">
+      {(PREVIEW[id] || PREVIEW.default).map(([k, x, y, w, h]) => (
+        <rect key={k} className={`k-${k}`} x={x} y={y} width={w} height={h} rx="1.5" />
+      ))}
+    </svg>
+  )
+}
+
+function LayoutMenu({ value, onChange }) {
+  const [open, setOpen] = useState(false)
+  const btnRef = useRef(null)
+  return (
+    <>
+      <button
+        ref={btnRef}
+        className={`icon-btn${open ? ' on' : ''}`}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="Diseño de la ventana"
+        aria-label="Diseño de la ventana"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <Icon name="dashboard" size={18} />
+      </button>
+      <FlipPopover open={open} anchorRef={btnRef} onClose={() => setOpen(false)} className="ed-layout-menu">
+        <div className="ed-layout-menu-title">Diseño</div>
+        {WORKSPACE_PRESETS.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            role="menuitemradio"
+            aria-checked={value === p.id}
+            className={`ed-layout-opt${value === p.id ? ' on' : ''}`}
+            onClick={() => { onChange(p.id); setOpen(false) }}
+          >
+            <LayoutThumb id={p.id} />
+            <span>
+              <strong>{p.label}</strong>
+              <em>{p.desc}</em>
+            </span>
+          </button>
+        ))}
+      </FlipPopover>
+    </>
+  )
+}
 
 export default function EdTopBar({
   projectName,
@@ -27,6 +91,8 @@ export default function EdTopBar({
   clipSaveDisabled,
   onSaveClip,
   saveClipLabel,
+  layoutPreset,
+  onLayoutPreset,
 }) {
   return (
     <header className="ed-topbar">
@@ -53,6 +119,7 @@ export default function EdTopBar({
       </div>
 
       <div className="ed-topbar-right">
+        {onLayoutPreset && <LayoutMenu value={layoutPreset} onChange={onLayoutPreset} />}
         <button className="icon-btn" type="button" onClick={onChat} title="Chat IA" aria-label="Chat IA">
           <Icon name="forum" size={18} />
           {chatBusy ? <span className="ed-topbar-dot" /> : null}

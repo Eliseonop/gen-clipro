@@ -1,6 +1,9 @@
 import Icon from '../../components/Icon'
+import EdFilters from './EdFilters'
+import EdRecipes from './EdRecipes'
+import { CINEMA_RATIOS } from '../../lib/shapes'
 import {
-  APPEAR_OPTIONS, EXIT_OPTIONS, LOOK_OPTIONS, VIDEO_FX_TOGGLES, fxOn, fxNum,
+  APPEAR_OPTIONS, EXIT_OPTIONS, VIDEO_FX_TOGGLES, fxOn, fxNum,
 } from '../../lib/clipFx'
 import { SUBTITLE_THEMES } from '../../lib/subtitleThemes'
 import { themePreviewStyle } from '../../lib/textstyles'
@@ -22,6 +25,11 @@ export default function EdFxLibrary({
   onAddText,
   onApplyPreset,
   onNeedClip,
+  onAddAdjustment,
+  onAddCinemaBars,
+  onApplyRecipe,
+  recipeBusy,
+  selectedClips,
 }) {
   const visual = isVisualClip(clip)
   const effects = clip?.effects && typeof clip.effects === 'object' ? clip.effects : {}
@@ -109,25 +117,47 @@ export default function EdFxLibrary({
     )
   }
 
+  // Capa de ajuste (#19): no necesita un clip seleccionado.
+  const adjustBtn = onAddAdjustment && (
+    <button type="button" className="ed-shape-pen" onClick={onAddAdjustment}
+      title="Un clip que filtra todo lo que tiene debajo durante su tramo">
+      <Icon name="tune" size={18} />
+      <span>Capa de ajuste</span>
+      <em>filtros y color para todo lo de debajo</em>
+    </button>
+  )
+  // Barras de cine (#20): un clic por proporción.
+  const barsRow = onAddCinemaBars && (
+    <div className="ed-cinema-bars">
+      <span><Icon name="crop_7_5" size={16} /> Barras de cine</span>
+      {CINEMA_RATIOS.map((r) => (
+        <button key={r.id} type="button" className="ed-fx-chip" onClick={() => onAddCinemaBars(r.id)}
+          title={`Barras negras arriba y abajo: lo visible queda en ${r.label}`}>
+          {r.label}
+        </button>
+      ))}
+    </div>
+  )
+  const recipesBlock = onApplyRecipe && (
+    <EdRecipes selected={selectedClips || []} busy={recipeBusy} onApply={onApplyRecipe} />
+  )
   if (!visual) {
-    return <NeedClip text="Selecciona un vídeo o una imagen para aplicar efectos." />
+    return (
+      <div className="ed-mat-list ed-fx-lib">
+        {recipesBlock}
+        {adjustBtn}
+        {barsRow}
+        <NeedClip text="Selecciona un vídeo o una imagen para aplicar efectos." />
+      </div>
+    )
   }
 
   return (
     <div className="ed-mat-list ed-fx-lib">
-      <div className="ed-fx-label">Estilo</div>
-      <div className="ed-fx-chips">
-        {LOOK_OPTIONS.map((o) => (
-          <button
-            key={o.id}
-            type="button"
-            className={`ed-fx-chip ${(clip.look || 'none') === o.id ? 'on' : ''}`}
-            onClick={() => onChangeFx?.({ look: o.id })}
-          >
-            {o.label}
-          </button>
-        ))}
-      </div>
+      {recipesBlock}
+      {adjustBtn}
+      {barsRow}
+      <EdFilters clip={clip} onChangeFx={onChangeFx} />
       <div className="ed-fx-label">Efectos</div>
       <div className="ed-fx-grid">
         {VIDEO_FX_TOGGLES.map((item) => {

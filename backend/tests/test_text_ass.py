@@ -231,8 +231,13 @@ class TextAssTest(unittest.TestCase):
                    "inactive_opacity": 0.5, "active_opacity": 1},
         )
         lines = caption_dialogues(clip, 720, 1280)
-        self.assertEqual(len(lines), 3)
-        self.assertTrue(all("\\N" in ln for ln in lines))
+        # Cada línea va en su propio evento (a la altura del preview): 3 palabras
+        # (ventanas de karaoke) × 2 líneas; "Ricky" nunca comparte evento con "hola".
+        self.assertEqual(len(lines), 6)
+        self.assertFalse(any("\\N" in ln for ln in lines))
+        ricky = [ln for ln in lines if "Ricky" in ln]
+        self.assertEqual(len(ricky), 3)
+        self.assertFalse(any("hola" in ln for ln in ricky))
 
 
 if __name__ == "__main__":

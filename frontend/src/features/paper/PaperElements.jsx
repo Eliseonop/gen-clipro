@@ -7,6 +7,7 @@
 // el caso de uso real (el botón ✨ de la tarjeta de imagen abría el modal).
 
 import { useRef } from 'react'
+import JobProgress from '../../components/JobProgress'
 import Icon from '../../components/Icon'
 import { bustUrl } from '../editor/MaterialClipGrid'
 import PaperTextPanel from './PaperTextPanel'
@@ -71,7 +72,7 @@ export default function PaperElements({ project, paper, onGoPaper }) {
         </button>
         {hasContent(st) && (
           exportJob?.status === 'running'
-            ? <span className="ed-bg-status run"><Icon name="progress_activity" size={14} /><span>{exportJob.message}</span></span>
+            ? <JobProgress job={exportJob} progress={exportJob.progress ?? undefined} />
             : (
               <button type="button" className="ed-btn primary" onClick={exportToMaterial}>
                 <Icon name="save" size={14} /> Guardar en el material
@@ -80,7 +81,7 @@ export default function PaperElements({ project, paper, onGoPaper }) {
         )}
       </div>
 
-      {busy && <div className="ed-bg-status run"><Icon name="progress_activity" size={14} /><span>{busy}</span></div>}
+      {busy && <JobProgress message={busy} />}
       {error && (
         <div className="ed-bg-status err">
           <Icon name="error" size={14} />

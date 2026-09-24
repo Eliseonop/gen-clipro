@@ -306,7 +306,7 @@
 > **Menú de clip** — `VideoEditor.jsx` (`ctxMenu`). Además de lo de abajo, tiene extras propios: **orden de capas** (adelante/atrás/al frente/al fondo), **generar transcripción/subtítulos**, **aplicar plantilla global** (texto).
 
 - [~] 25.1 Copiar / Cortar / Pegar — por teclado (`Ctrl+C/X/V`) sí; en el **menú** hay Duplicar/Eliminar, no copiar/cortar/pegar clip
-- [~] 25.2 **Copiar / Pegar atributos** con selector — "Copiar propiedades" / "Pegar propiedades" (`copyClipProps`/`pasteClipProps`); **sin** selector de qué pegar
+- [x] 25.2 **Copiar / Pegar atributos** con selector — `Ctrl+Alt+C` / `Ctrl+Alt+V` (o menú), diálogo con 12 grupos y pegado en varios clips a la vez; ver [PEGAR_ATRIBUTOS.md](PEGAR_ATRIBUTOS.md)
 - [x] 25.3 Eliminar — sí
 - [ ] 25.4 **Dividir escena** (detección de tomas) — no
 - [ ] 25.5 **Crear clip combinado** (anidar) — no

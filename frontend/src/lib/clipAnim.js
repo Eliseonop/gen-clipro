@@ -72,6 +72,13 @@ export function clipPose(clip, localT, srcTime) {
   return { ...legacy, cx: p.cx, cy: p.cy, zoom: p.zoom }
 }
 
+// Voltear (#7): espejo del contenido en los ejes PROPIOS del clip, antes del giro
+// (como CapCut). La caja, la máscara y los tiradores no se voltean. Espejo de
+// clip_layout.clip_flip (export).
+export function clipFlip(clip) {
+  return { h: !!clip?.flip_h, v: !!clip?.flip_v }
+}
+
 export function posedTransform(clip, localT) {
   const p = clipPose(clip, localT)
   return { x: p.x, y: p.y, scale: p.scale, rotation: p.rotation }
@@ -91,8 +98,14 @@ export function applyShapePose(st, pose) {
 }
 
 /** Máscaras activas del clip en `localT` (la primera con sus keyframes aplicados). */
-export function clipMasksAt(clip, localT) {
-  const masks = clipMasks(clip).filter((m) => m.enabled)
-  if (!masks.length || !keyframesEnabled(clip)) return masks
-  return [maskFromProps(masks[0], clipPropsAt(clip, localT)), ...masks.slice(1)]
+// Máscaras activas en `localT` (la primera con sus keyframes). Por defecto solo
+// las que recortan el CLIP; las de ajuste (target 'adjust') se filtran DESPUÉS de
+// animar, para que los keyframes sigan cayendo en masks[0] aunque sea de ajuste.
+// `includeAdjust` las devuelve todas (el editor las necesita para editarlas).
+export function clipMasksAt(clip, localT, { includeAdjust = false } = {}) {
+  let masks = clipMasks(clip).filter((m) => m.enabled)
+  if (masks.length && keyframesEnabled(clip)) {
+    masks = [maskFromProps(masks[0], clipPropsAt(clip, localT)), ...masks.slice(1)]
+  }
+  return includeAdjust ? masks : masks.filter((m) => m.target !== 'adjust')
 }

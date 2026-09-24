@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import Icon from '../../components/Icon'
+import JobProgress from '../../components/JobProgress'
 import { deleteMotion, listMotion } from '../../services/api'
 import { newTextLayer, newCircleLayer, newLineLayer } from './motionModel'
 import MotionAIChat from './MotionAIChat'
@@ -186,11 +186,7 @@ export default function MotionElements({ pid, m, format, onReloadTimeline, onBac
               <div className="motion-panel-title">Motion actual</div>
               {addJob
                 ? (
-                  <span className="ed-bg-status run motion-addjob">
-                    <Icon name="progress_activity" size={14} />
-                    <span>{addJob.message}</span>
-                    <b>{Math.round((addJob.progress || 0) * 100)}%</b>
-                  </span>
+                  <JobProgress job={addJob} progress={addJob.progress || 0} className="motion-addjob" />
                 )
                 : <button type="button" className="motion-btn primary block" onClick={addToProject}>Agregar al proyecto</button>}
               {onBack && (

@@ -1,0 +1,14 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 360
+PlayResY: 640
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: st1,Arial,43,&H00FFFFFF&,&H00FFFFFF&,&H00000000&,&H80000000&,-1,0,0,0,100,100,0,0,1,0,0,5,22,22,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 1,0:00:00.00,0:00:02.00,st1,,-30000,-30000,0,,{\an5\pos(180,320)}{\c&H00FFFFFF&\3c&H00000000&\alpha&H00&\1a&H00&\3a&H00&\4a&H00&\fscx100\fscy100\blur0}HOLA

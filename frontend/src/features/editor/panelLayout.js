@@ -8,6 +8,7 @@ export const PANEL_DEFAULTS = {
   inspector: 340,
   bottom: 240,
   crops: 268,
+  main: 440,
 }
 
 export const PANEL_MIN = {
@@ -22,7 +23,7 @@ export const PANEL_MIN = {
 
 export const PANEL_SPLIT = 8
 
-const KEYS = ['materials', 'inspector', 'bottom', 'crops']
+const KEYS = ['materials', 'inspector', 'bottom', 'crops', 'main']
 
 function num(v, fallback) {
   const n = Number(v)
@@ -62,13 +63,55 @@ export function clampPanelLayout(layout, box = {}, defaults = PANEL_DEFAULTS) {
   const maxCrops = Math.max(PANEL_MIN.crops, bottomW - PANEL_MIN.timeline - PANEL_SPLIT)
   const crops = Math.min(Math.max(cur.crops, PANEL_MIN.crops), maxCrops)
 
-  return { materials, inspector, bottom, crops }
+  // Ancho del Main en "tall-main" (columna derecha de alto completo)
+  const maxMain = Math.max(PANEL_MIN.canvas, workW - materials - PANEL_MIN.inspector - colSplit)
+  const main = Math.min(Math.max(cur.main, PANEL_MIN.canvas), maxMain)
+
+  return { materials, inspector, bottom, crops, main }
 }
 
-export function applyPanelDrag(kind, origin, dx, dy, box) {
+// Disposiciones del workspace (estilo CapCut). `mat`/`insp` = signo del
+// arrastre horizontal: +1 si el panel queda a la IZQUIERDA de su separador
+// (arrastrar a la derecha lo ensancha), -1 si queda a la derecha. `inspKey`: qué
+// ancho mueve el separador del inspector (en "tall-main" se redimensiona el Main
+// y el inspector se estira).
+export const WORKSPACE_PRESET_KEY = 'vy:workspace-preset'
+
+export const WORKSPACE_PRESETS = [
+  { id: 'default', label: 'Predeterminado', desc: 'Materiales · Main · Inspector', mat: 1, insp: -1 },
+  { id: 'main-right', label: 'Main a la derecha', desc: 'Materiales · Inspector · Main', mat: 1, insp: 1 },
+  { id: 'main-left', label: 'Main a la izquierda', desc: 'Main · Materiales · Inspector', mat: -1, insp: -1 },
+  { id: 'mirror', label: 'Invertido', desc: 'Inspector · Main · Materiales', mat: -1, insp: 1 },
+  { id: 'tall-media', label: 'Materiales a toda altura', desc: 'Materiales junto a la timeline', mat: 1, insp: -1 },
+  { id: 'tall-main', label: 'Main a toda altura', desc: 'Main a la derecha, de arriba abajo', mat: 1, insp: -1, inspKey: 'main' },
+]
+
+export function workspacePreset(id) {
+  return WORKSPACE_PRESETS.find((p) => p.id === id) || WORKSPACE_PRESETS[0]
+}
+
+export function readWorkspacePreset(storage) {
+  try {
+    return workspacePreset(storage?.getItem?.(WORKSPACE_PRESET_KEY)).id
+  } catch {
+    return WORKSPACE_PRESETS[0].id
+  }
+}
+
+export function writeWorkspacePreset(storage, id) {
+  try {
+    storage?.setItem?.(WORKSPACE_PRESET_KEY, workspacePreset(id).id)
+  } catch { /* quota / modo privado */ }
+}
+
+export function applyPanelDrag(kind, origin, dx, dy, box, preset = 'default') {
+  const p = workspacePreset(preset)
   const next = { ...origin }
-  if (kind === 'materials') next.materials = origin.materials + dx
-  else if (kind === 'inspector') next.inspector = origin.inspector - dx
+  if (kind === 'materials') next.materials = origin.materials + p.mat * dx
+  else if (kind === 'inspector') {
+    const key = p.inspKey || 'inspector'
+    next[key] = origin[key] + p.insp * dx
+  }
   else if (kind === 'bottom') next.bottom = origin.bottom - dy
   else if (kind === 'crops') next.crops = origin.crops - dx
   return clampPanelLayout(next, box)

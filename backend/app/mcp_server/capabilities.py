@@ -11,6 +11,8 @@ una capacidad (mismo patrón de "catch-up" que ``dto.CAPABILITIES``).
 """
 from __future__ import annotations
 
+from ..audio_fx import AUDIO_FX_IDS
+from ..clip_filters import FILTER_IDS
 from ..schemas import CropMode
 from . import dto, help_content
 
@@ -18,15 +20,18 @@ from . import dto, help_content
 ASPECTS = ["9:16", "1:1", "16:9", "4:5", "4:3", "custom"]
 MOTIONS = [
     "zoom_in", "zoom_out", "spin", "spin_in", "slide_left", "slide_right",
-    "slide_up", "slide_down", "fade_in", "fade_out", "pop", "pulse",
+    "slide_up", "slide_down", "fade_in", "fade_out", "pop", "pulse", "draw_in",
 ]
+DASH_STYLES = ["solid", "dash", "dot"]
 TRANSITIONS = [
     "none", "fade", "dissolve", "wipe", "zoom",
     "slide_left", "slide_right", "slide_up", "slide_down", "pop",
 ]
-VISUAL_FX = ["blur", "grayscale", "sepia", "brightness", "contrast", "saturation"]
-AUDIO_FX = ["eq", "compressor", "reverb", "echo", "denoise", "distortion"]
-LOOKS = ["bw", "cinematic", "vintage", "contrast", "warm", "cool", "saturated"]
+VISUAL_FX = ["blur", "grayscale", "sepia", "brightness", "contrast", "saturation",
+             "exposure", "whites", "temperature", "hue"]
+MASK_TYPES = ["linear", "film", "circle", "rectangle", "star", "heart", "text", "brush"]
+AUDIO_FX = list(AUDIO_FX_IDS)
+LOOKS = list(FILTER_IDS)   # filtros de color (#18; los looks antiguos son filtros al 100 %)
 POSITIONS = ["full", "top", "bottom", "free"]
 REFRAME_MODES = ["center", "manual"]
 TEXT_ROLES = ["caption", "free"]
@@ -127,7 +132,10 @@ _DOMAIN_VALUES = {
         "motions": MOTIONS,
         "transitions": TRANSITIONS,
         "visual_fx": VISUAL_FX,
+        "mask_types": MASK_TYPES,
+        "shape_dash": DASH_STYLES,
         "looks": LOOKS,
+        "filters": LOOKS,
         "positions": POSITIONS,
         "reframe_modes": REFRAME_MODES,
         "speed": "0.1–10 (keep_pitch, reverse)",

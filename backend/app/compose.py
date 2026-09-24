@@ -24,20 +24,26 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import clipper, config, gpu, sfx, storage
-from .clip_fx import _scale_expr, audio_fx_chain, fx_windows, overlay_xy_for_fx, video_fx_chain
+from .audio_fx import audio_fx_graph
+from .clip_filters import adjustment_matrix, matrix_ffmpeg
+from .clip_fx import _scale_expr, fx_windows, overlay_xy_for_fx, video_fx_chain
 from .clip_keyframes import keyframes_enabled, volume_filter
-from .clip_bg import auto_active, bg_capable, chroma_active, chroma_filters, clip_bg
+from .clip_bg import (auto_active, bg_capable, chroma_active, chroma_filters, clip_bg,
+                      outline_ffmpeg_steps)
+from .clip_adjust import expand_adjust_passes
+from .clip_blend import blend_steps, clip_blend
 from .clip_mask import build_timeline_masks, has_mask, maskable
 from .schemas import Keyframe, Project, Reframe, Timeline, TimelineClip
-from .clip_layout import dest_rect_even, is_overlay, source_crop_px
+from .clip_layout import dest_rect_even, flip_filters, is_overlay, source_crop_px
 from .diagnostics import timed
 from .recipe_layout import contain_scale_filter, dual_slot_wh, join_dual_filters, split_orientation_for
 from .reframe_math import frame_at
 from .clip_audio import clip_mixes_audio
 from .clip_kind import ASSET_DISK_KIND, clip_fits_track, ffmpeg_input_args, ffmpeg_trim_window, is_still_clip
 from .clip_speed import audio_speed_filters, clip_source_duration, clip_timeline_duration, video_speed_filters
-from .text_ass import ass_filter_path, build_ass
-from .shapes import rasterize_timeline_shapes
+from .text_ass import ass_filter_path, build_ass, effective_text_style, text_is_3d, text_warp_spec
+from .font_metrics import BUNDLED_FONT_DIR, BUNDLED_FONTS, FONT_DIR, FONTS, FONTS_BOLD, resolve_font_path
+from .shapes import media_exists, rasterize_timeline_shapes
 
 ProgressCb = Callable[[float, str], None]
 
@@ -116,23 +122,14 @@ def _even(n: float) -> int:
 
 
 def _pose_prop_points(clip: TimelineClip, prop: str, dur: float) -> list[tuple[float, float]]:
-    """Muestras (t local, valor) de una propiedad de pose para expresiones FFmpeg."""
-    from .clip_keyframes import clip_props_at, keyframes_enabled
+    """Muestras (t local, valor) de una propiedad de pose para expresiones FFmpeg.
 
-    dur = max(0.0, float(dur))
-    times = {0.0, dur}
-    kf = clip.keyframes if isinstance(clip.keyframes, dict) else None
-    if keyframes_enabled(clip) and kf:
-        for it in kf.get("items") or []:
-            if not isinstance(it, dict):
-                continue
-            try:
-                times.add(max(0.0, min(dur, float(it.get("t", 0)))))
-            except (TypeError, ValueError):
-                pass
-    pts = []
-    for t in sorted(times):
-        pts.append((t, float(clip_props_at(clip, t).get(prop, 0))))
+    Los instantes salen de ``pose_sample_times``: en tramos con curva (ease,
+    cúbica, bézier, hold) hay puntos intermedios, porque la expresión que se
+    construye con ellos (``clipper._pw_expr``) interpola en línea recta."""
+    from .clip_keyframes import clip_props_at, pose_sample_times
+
+    pts = [(t, float(clip_props_at(clip, t).get(prop, 0))) for t in pose_sample_times(clip, dur)]
     return pts or [(0.0, float(clip_props_at(clip, 0).get(prop, 0)))]
 
 
@@ -155,17 +152,30 @@ def pose_transform_animates(clip: TimelineClip) -> bool:
     return False
 
 
+def _rotate_static(rot: float) -> str:
+    """Filtro rotate de un ángulo fijo (grados) con salida del tamaño justo.
+
+    ``rotw``/``roth`` reciben el ÁNGULO (radianes). Antes se les pasaba
+    ``iw``/``ih``: el tamaño salía de girar 300 rad en vez del ángulo real y la
+    imagen girada perdía las esquinas en el export (a 20° se perdía el 26 %)."""
+    a = f"{rot:.3f}*PI/180"
+    return f"rotate={a}:ow=rotw({a}):oh=roth({a}):c=0x00000000"
+
+
 def _rotate_chain(pose_rot: list[tuple[float, float]], local: bool = True) -> str:
-    """Filtro rotate: expresión si gira, constante si no, vacío si ~0."""
+    """Filtro rotate: expresión si gira, constante si no, vacío si ~0.
+
+    Con giro animado el tamaño de salida se fija una vez (al configurar): la
+    diagonal contiene la imagen a cualquier ángulo."""
     if not pose_rot:
         return ""
     spread = _pose_spread(pose_rot)
     rot = pose_rot[-1][1]
     if local and spread > 0.08:
         expr = clipper._pw_expr(pose_rot).replace(",", "\\,")
-        return f",rotate=a='({expr})*PI/180':ow=rotw(iw):oh=roth(ih):c=0x00000000"
+        return f",rotate=a='({expr})*PI/180':ow='hypot(iw,ih)':oh=ow:c=0x00000000"
     if abs(rot) > 0.05:
-        return f",rotate={rot:.3f}*PI/180:ow=rotw(iw):oh=roth(ih):c=0x00000000"
+        return "," + _rotate_static(rot)
     return ""
 
 
@@ -278,6 +288,12 @@ def _overlay_video_filter(path: Path, clip: TimelineClip, W: int, H: int, dur: f
         x_expr = clipper._pw_expr_direct(xs) if mode == "direct" else clipper._pw_expr(xs)
         y_expr = clipper._pw_expr_direct(ys) if mode == "direct" else clipper._pw_expr(ys)
         crop_f = f"crop=w={cw}:h={ch}:x='{x_expr}':y='{y_expr}'"
+    # Voltear (#7): justo tras el recorte (tamaño fijo), antes de escalar y girar →
+    # espejo en los ejes del clip, como el preview. Después de 'scale=eval=frame'
+    # no se puede: un filtro ahí congela el tamaño animado.
+    flip = flip_filters(clip)
+    if flip:
+        crop_f += f",{flip}"
 
     if animated:
         # ESCALA: se aplica en el chain del PIP (scale eval=frame), donde 't' es
@@ -311,7 +327,7 @@ def _overlay_video_filter(path: Path, clip: TimelineClip, W: int, H: int, dur: f
     else:
         chain = f"{crop_f},scale={dw}:{dh}"
         if abs(rot) > 0.05:
-            chain += f",format=gbrap,rotate={rot:.3f}*PI/180:ow=rotw(iw):oh=roth(ih):c=0x00000000"
+            chain += ",format=gbrap," + _rotate_static(rot)
             xy = f"x={ox}-(overlay_w-{dw})/2:y={oy}-(overlay_h-{dh})/2"
         else:
             xy = f"x={ox}:y={oy}"
@@ -445,6 +461,12 @@ def _pose_crop_keyframes(clip: TimelineClip) -> list[Keyframe]:
     return out
 
 
+def _flip_part(clip: TimelineClip) -> str:
+    """Voltear (#7) un clip fill: tras el crop+scale a WxH, antes de pose y efectos."""
+    flip = flip_filters(clip)
+    return f",{flip}" if flip else ""
+
+
 def _fill_base_cropscale(path: Path, clip: TimelineClip, W: int, H: int) -> str:
     """Crop+scale de un clip fill: cover como el preview, no letterbox.
 
@@ -465,39 +487,12 @@ def _fill_base_cropscale(path: Path, clip: TimelineClip, W: int, H: int) -> str:
     return clipper._single_reframe_filter(path, 1.0, [], "smooth", W, H)
 
 
-# Fuentes del sistema (Windows) + fuentes embebidas del proyecto.
-_FONT_DIR = Path("C:/Windows/Fonts")
-_BUNDLED_FONT_DIR = Path(__file__).resolve().parent / "fonts"
-_FONTS = {
-    "Arial": "arial.ttf", "Arial Black": "ariblk.ttf", "Impact": "impact.ttf",
-    "Georgia": "georgia.ttf", "Verdana": "verdana.ttf", "Times New Roman": "times.ttf",
-    "Courier New": "cour.ttf", "Comic Sans MS": "comic.ttf", "Trebuchet MS": "trebuc.ttf",
-    "Segoe UI": "segoeui.ttf", "Segoe UI Black": "seguibl.ttf", "Calibri": "calibri.ttf",
-    "Bahnschrift": "bahnschrift.ttf", "Tahoma": "tahoma.ttf", "Consolas": "consola.ttf",
-}
-_FONTS_BOLD = {
-    "Arial": "arialbd.ttf", "Georgia": "georgiab.ttf", "Verdana": "verdanab.ttf",
-    "Times New Roman": "timesbd.ttf", "Courier New": "courbd.ttf", "Trebuchet MS": "trebucbd.ttf",
-    "Segoe UI": "segoeuib.ttf", "Calibri": "calibrib.ttf", "Tahoma": "tahomabd.ttf",
-    "Consolas": "consolab.ttf",
-}
-_BUNDLED_FONTS = {
-    "Anton": "Anton-Regular.ttf",
-}
-
-
-def resolve_font_path(name: str, bold: bool = False) -> Path:
-    """Ruta al TTF: primero fuentes embebidas (Anton…), luego Windows/Fonts."""
-    bundled = _BUNDLED_FONTS.get(name)
-    if bundled:
-        p = _BUNDLED_FONT_DIR / bundled
-        if p.exists():
-            return p
-    fn = (_FONTS_BOLD.get(name) if bold else None) or _FONTS.get(name, "arial.ttf")
-    p = _FONT_DIR / fn
-    if not p.exists():
-        p = _FONT_DIR / "arial.ttf"
-    return p
+# Fuentes del sistema (Windows) + fuentes embebidas del proyecto: ver font_metrics.
+_FONT_DIR = FONT_DIR
+_BUNDLED_FONT_DIR = BUNDLED_FONT_DIR
+_FONTS = FONTS
+_FONTS_BOLD = FONTS_BOLD
+_BUNDLED_FONTS = BUNDLED_FONTS
 
 
 def _fontfile(name: str, bold: bool) -> str:
@@ -577,9 +572,13 @@ def _drawtext(clip: TimelineClip, W: int, H: int) -> str:
     return "drawtext=" + ":".join(parts)
 
 
-def _text_chain(timeline: Timeline, W: int, H: int, in_label: str) -> tuple[list[str], str]:
-    """Encadena los drawtext de los clips de texto sobre el vídeo compuesto."""
-    texts = [c for c in timeline.clips if c.kind == "text" and _clip_duration(c) > 0.02 and (c.text or "").strip()]
+def _text_chain(timeline: Timeline, W: int, H: int, in_label: str,
+                skip: Optional[set] = None) -> tuple[list[str], str]:
+    """Encadena los drawtext de los clips de texto sobre el vídeo compuesto.
+
+    ``skip``: textos que ya van en capa propia (máscara / 3D) y no deben repetirse."""
+    texts = [c for c in timeline.clips if c.kind == "text" and _clip_duration(c) > 0.02
+             and (c.text or "").strip() and c.id not in (skip or set()) and not c.disabled]
     if not texts:
         return [], in_label
     steps: list[str] = []
@@ -711,7 +710,8 @@ def _bg_source_chain(clip: TimelineClip, path: Path, spec: Optional[dict],
 def build_command(project: Project, timeline: Timeline, out_path: Path,
                   ass_path: Optional[Path] = None, shape_files: Optional[dict] = None,
                   mask_files: Optional[dict] = None,
-                  bg_files: Optional[dict] = None, frame_at: Optional[float] = None) -> list[str]:
+                  bg_files: Optional[dict] = None, frame_at: Optional[float] = None,
+                  text_layers: Optional[dict] = None) -> list[str]:
     """Construye la lista de argumentos de ffmpeg para renderizar la timeline.
 
     Con ``frame_at`` (segundos) NO codifica el vídeo: busca ese instante y escribe UN
@@ -733,13 +733,15 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
     aclips: list[tuple[TimelineClip, Path, object]] = []
     for c in timeline.clips:
         track = track_by_id.get(c.track_id)
-        if track is None:
+        if track is None or c.disabled:     # desactivado (#10): ni imagen ni sonido
+            continue
+        if c.kind == "adjustment":          # capa de ajuste (#19): sin archivo, va aparte
             continue
         dur = _clip_duration(c)
         if dur <= 0.02:
             continue
         path = _clip_path(project, c, shape_files)
-        if path is None or not path.exists():
+        if not media_exists(path):   # (secuencia PNG = «dibujar trazo» animado, #14)
             continue
         if track.kind == "video" and clip_fits_track(c.kind, "video"):
             if not track.hidden:
@@ -793,6 +795,16 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         bg_idx[c.id] = len(all_files) + len(mask_idx) + len(bg_idx)
         inputs += _bg_input_args(spec)
 
+    # Textos con máscara: cada uno va en su propio .ass (fuera del global) y su
+    # máscara es otro input, DESPUÉS de todos los anteriores.
+    text_mask_idx: dict[str, int] = {}
+    for cid in (text_layers or {}):
+        spec = (mask_files or {}).get(cid)
+        if not spec or cid in text_mask_idx:
+            continue
+        text_mask_idx[cid] = len(all_files) + len(mask_idx) + len(bg_idx) + len(text_mask_idx)
+        inputs += _mask_input_args(spec, fps, total)
+
     filt: list[str] = []
 
     # --- Vídeo: fondo negro + overlays por capa ---
@@ -805,14 +817,33 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
     # de PIPs posteriores (las imágenes que crecen se quedan estáticas en el
     # export). Ordenar por start también es lo correcto para la composición.
     clip_index = {c.id: i for i, c in enumerate(timeline.clips)}
+    # Capas de ajuste (#19): no tienen archivo; entran en la cadena en su capa y
+    # filtran lo compuesto hasta ahí (lo que tienen debajo) durante su tramo.
+    adjustments = [
+        (c, None, track_by_id.get(c.track_id)) for c in timeline.clips
+        if c.kind == "adjustment" and not c.disabled and track_by_id.get(c.track_id) is not None
+        and track_by_id[c.track_id].kind == "video" and not track_by_id[c.track_id].hidden
+        and _clip_duration(c) > 0.02
+    ]
     vclips_sorted = sorted(
-        vclips,
+        vclips + adjustments,
         key=lambda cp: (vlayer.get(cp[0].track_id, 0), max(0.0, cp[0].start),
                         clip_index.get(cp[0].id, 0)),
     )
     last_label = "base"
     n = 0
+    n_adj = 0
     for (c, path, _t) in vclips_sorted:
+        if c.kind == "adjustment":
+            m = adjustment_matrix(c)
+            if m is not None:
+                a0 = max(0.0, c.start)
+                a1 = a0 + _clip_duration(c)
+                filt.append(f"[{last_label}]{matrix_ffmpeg(m)}:enable='between(t,{a0:.3f},{a1:.3f})'"
+                            f"[adj{n_adj}]")
+                last_label = f"adj{n_adj}"
+                n_adj += 1
+            continue
         k = idx_of[c.id]
         dur = _clip_duration(c)
         start = max(0.0, c.start)
@@ -823,9 +854,18 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         # cadena tiene que transportar alfa (format=gbrap / overlay format=auto).
         bg_steps, bg_label = _bg_source_chain(
             c, path, (bg_files or {}).get(c.id), bg_idx.get(c.id), n, fps, f"bgin{n}")
+        if bg_steps:
+            # Contorno / halo del sujeto recortado (#9), en el espacio del material.
+            from . import detect
+            ol_steps, bg_label = outline_ffmpeg_steps(
+                clip_bg(c)["outline"], detect.dims(path)[1], bg_label, n)
+            bg_steps += ol_steps
         has_bg = bool(bg_steps)
         animated_ov = is_overlay(c) and keyframes_enabled(c)
-        fill_pose = (not is_overlay(c)) and pose_transform_animates(c)
+        # Una figura con keyframes se rasteriza neutra (shapes.export_pose): su
+        # pose se aplica aquí SIEMPRE, aunque sea constante.
+        fill_pose = (not is_overlay(c)) and (
+            pose_transform_animates(c) or (c.kind == "shape" and keyframes_enabled(c)))
         fx = video_fx_chain(
             c, dur, W, H,
             fit_canvas=not is_overlay(c),
@@ -840,11 +880,11 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
             cropscale, overlay_xy = _overlay_video_filter(
                 path, c, W, H, src_dur, start, fx=(fx if animated_ov else ""))
         elif fill_pose:
-            base_cs = _fill_base_cropscale(path, c, W, H)
+            base_cs = _fill_base_cropscale(path, c, W, H) + _flip_part(c)
             cropscale, overlay_xy = _fill_pose_filter(
                 c, W, H, start, base_cs, fx=(fx if fill_pose else ""))
         else:
-            cropscale = _fill_base_cropscale(path, c, W, H)
+            cropscale = _fill_base_cropscale(path, c, W, H) + _flip_part(c)
         # OJO: 'format' (como cualquier filtro que renegocia el enlace) colocado
         # DESPUÉS de 'scale=eval=frame' congela el tamaño dinámico en su valor
         # inicial → el PIP animado se queda pequeño y mal posicionado (marco negro).
@@ -852,6 +892,10 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         # ANTES del scale (dentro de cropscale), así que NO se vuelve a añadir.
         if not animated_ov and (is_still_clip(c) or is_overlay(c) or fill_pose or has_bg):
             cropscale = f"{cropscale},format=gbrap"
+        # Opacidad FIJA del clip (sin keyframes): antes solo se exportaba la animada
+        # y un clip al 60 % salía opaco. Las figuras la llevan horneada en su PNG.
+        if not (animated_ov or fill_pose) and c.kind != "shape":
+            cropscale += _alpha_chain(c, dur)
         fx_part = "" if (animated_ov or fill_pose) else (f",{fx}" if fx else "")
         spd = "" if is_still_clip(c) else video_speed_filters(c)
         spd_part = f",{spd}" if spd else ""
@@ -877,27 +921,77 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
             )
         out_label = f"ov{n}"
         ov_fmt = ":format=auto" if (fx or is_still_clip(c) or fill_pose or has_bg) else ""
+        enable = f"enable='between(t,{start:.3f},{end:.3f})'"
+        blend = clip_blend(c)
+
+        def composite(base: str, out: str, n=n, vlabel=vlabel, overlay_xy=overlay_xy,
+                      ov_fmt=ov_fmt, enable=enable, blend=blend, start=start, end=end) -> None:
+            if blend == "normal":
+                filt.append(f"[{base}][{vlabel}]overlay={overlay_xy}:eof_action=repeat"
+                            f"{ov_fmt}:{enable}[{out}]")
+                return
+            # Modo de fusión (#8): el clip se coloca en una capa transparente del
+            # tamaño del cuadro y esa capa se funde con lo de debajo (clip_blend).
+            filt.append(f"color=c=black@0:s={W}x{H}:r={fps}:d={total:.3f},format=gbrap[fz{n}]")
+            filt.append(f"[fz{n}][{vlabel}]overlay={overlay_xy}:eof_action=repeat"
+                        f":format=auto:{enable}[fl{n}]")
+            filt.extend(blend_steps(base, f"fl{n}", blend, str(n), out, start, end))
+
         mi = mask_idx.get(c.id)
         if mi is None:
-            filt.append(
-                f"[{last_label}][{vlabel}]overlay={overlay_xy}:eof_action=repeat"
-                f"{ov_fmt}:enable='between(t,{start:.3f},{end:.3f})'[{out_label}]"
-            )
+            composite(last_label, out_label)
         else:
             # La máscara se aplica DESPUÉS de componer el clip (recorte, pose,
             # efectos y opacidad ya aplicados), igual que el preview: se mezcla
             # el fondo sin el clip con el fondo CON el clip usando el alfa de la
             # máscara. Vale igual para fill y para PIP con posición animada.
             filt.append(f"[{last_label}]format=gbrp,split=2[mb{n}][mo{n}]")
-            filt.append(
-                f"[mo{n}][{vlabel}]overlay={overlay_xy}:eof_action=repeat"
-                f"{ov_fmt}:enable='between(t,{start:.3f},{end:.3f})',format=gbrp[mt{n}]"
-            )
+            composite(f"mo{n}", f"mc{n}")
+            filt.append(f"[mc{n}]format=gbrp[mt{n}]")
             filt.append(_mask_stream_filter(
                 mi, mask_files[c.id], f"mk{n}", fps, start, dur, total))
             filt.append(f"[mb{n}][mt{n}][mk{n}]maskedmerge[{out_label}]")
         last_label = out_label
         n += 1
+
+    # Textos en capa propia (con máscara, girados en 3D o con modo de fusión): el
+    # texto se dibuja SOLO (su .ass) sobre una capa transparente (`ass=…:alpha=1`);
+    # si es 3D, la capa se deforma con `perspective` (text3d); si tiene máscara, su
+    # alfa se multiplica por la máscara; con modo de fusión la capa se funde en vez
+    # de superponerse. Quedan por debajo de los textos normales.
+    by_id = {c.id: c for c in timeline.clips}
+    track_style = {t.id: (getattr(t, "style", None) or {}) for t in timeline.tracks}
+    for j, (cid, tpath) in enumerate(sorted((text_layers or {}).items(),
+                                            key=lambda kv: by_id[kv[0]].start if kv[0] in by_id else 0)):
+        mi = text_mask_idx.get(cid)
+        c = by_id.get(cid)
+        if c is None:
+            continue
+        warp = text_warp_spec(c, effective_text_style(track_style.get(c.track_id), c.style), W, H, fps)
+        if mi is None and warp is None and clip_blend(c) == "normal":
+            continue
+        start = max(0.0, c.start)
+        dur = _clip_duration(c)
+        filt.append(f"color=c=black@0:s={W}x{H}:r={fps}:d={total:.3f},format=rgba,"
+                    f"{ass_overlay_filter(tpath)}:alpha=1[tkr{j}]")
+        layer = f"tkr{j}"
+        if warp is not None:
+            steps, layer = _text_warp_filter(warp, layer, W, H, fps, total, j)
+            filt.extend(steps)
+        if mi is not None:
+            filt.append(f"[{layer}]split=2[tkc{j}][tka{j}]")
+            filt.append(f"[tka{j}]alphaextract[tkx{j}]")
+            filt.append(_mask_stream_filter(mi, mask_files[cid], f"tkm{j}", fps, start, dur, total))
+            filt.append(f"[tkm{j}]format=gray[tkg{j}]")
+            filt.append(f"[tkx{j}][tkg{j}]blend=all_mode=multiply[tkn{j}]")
+            filt.append(f"[tkc{j}][tkn{j}]alphamerge[tkl{j}]")
+            layer = f"tkl{j}"
+        blend = clip_blend(c)
+        if blend == "normal":
+            filt.append(f"[{last_label}][{layer}]overlay=0:0:format=auto[tko{j}]")
+        else:
+            filt.extend(blend_steps(last_label, layer, blend, f"t{j}", f"tko{j}", start, start + dur))
+        last_label = f"tko{j}"
 
     # Texto / subtítulos por encima de todo el vídeo compuesto.
     if ass_path is not None:
@@ -905,28 +999,34 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         filt.append(f"[{last_label}]{ass_overlay_filter(ass_path)}[{out}]")
         last_label = out
     else:
-        text_steps, last_label = _text_chain(timeline, W, H, last_label)
+        text_steps, last_label = _text_chain(timeline, W, H, last_label, skip=set(text_layers or {}))
         filt.extend(text_steps)
 
     filt.append(f"[{last_label}]{BT709_FINAL_FILTER}[vout]")
 
     # --- Audio: cada clip retrasado + volumen, mezclado con amix ---
+    # En modo fotograma no hay audio: un [aout] sin mapear deja una salida suelta
+    # en el grafo y FFmpeg 9 lo rechaza ("Error binding filtergraph inputs/outputs").
     alabels: list[str] = []
     m = 0
-    for (c, path, track) in aclips:
+    for (c, path, track) in (aclips if frame_at is None else []):
         k = idx_of[c.id]
         start_ms = int(round(max(0.0, c.start) * 1000))
         alabel = f"a{m}"
         asp = audio_speed_filters(c)
         asp_part = f",{asp}" if asp else ""
-        afx = audio_fx_chain(c)
-        afx_part = f",{afx}" if afx else ""
         vol_part = volume_filter(c)
-        chain = (
+        filt.append(
             f"[{k}:a]atrim={c.in_point:.3f}:{c.out_point:.3f},asetpts=PTS-STARTPTS,"
             f"aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"
-            f"{asp_part}{afx_part},"
-            f"aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,{vol_part}"
+            f"{asp_part}[ain{m}]"
+        )
+        # Efectos y filtros de sonido (#16): en serie, cada uno mezclado seco/efecto
+        # según su intensidad (animable), igual que el preview con Web Audio.
+        fx_steps, fx_out = audio_fx_graph(c, f"ain{m}", f"ax{m}")
+        filt.extend(fx_steps)
+        chain = (
+            f"[{fx_out}]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,{vol_part}"
         )
         if start_ms > 0:
             chain += f",adelay={start_ms}:all=1"
@@ -1061,6 +1161,72 @@ def _run_ffmpeg_export(cmd: list[str], total: float, on_progress: ProgressCb,
     return proc.returncode, err
 
 
+def _text_warp_filter(spec: dict, in_label: str, W: int, H: int, fps: int, total: float,
+                      j: int) -> tuple[list[str], str]:
+    """Deforma en 3D la capa de un texto (``text_ass.text_warp_spec``).
+
+    Recorta la región del texto (con margen transparente si se sale del cuadro), la
+    pasa por ``perspective`` (esquinas → su proyección; por fotograma si el texto
+    está animado) y la vuelve a colocar en una capa del tamaño del cuadro."""
+    x0, y0, x1, y1 = (int(v) for v in spec["region"])
+    rw, rh = x1 - x0, y1 - y0
+    m = max(0, -x0, -y0, x1 - W, y1 - H) + 2
+    corners = spec["corners"]
+    names = ("x0", "y0", "x1", "y1", "x2", "y2", "x3", "y3")
+    if all(c == corners[0] for c in corners):
+        vals = [clipper._fnum(v) for pt in corners[0] for v in pt]
+        ev = ""
+    else:
+        frames = spec["frames"]
+        vals = [_frame_expr(frames, [c[i][a] for c in corners]) for i in range(4) for a in range(2)]
+        ev = ":eval=frame"
+    persp = ":".join(f"{n}='{v}'" for n, v in zip(names, vals))
+    return [
+        f"[{in_label}]format=rgba,pad=w={W + 2 * m}:h={H + 2 * m}:x={m}:y={m}:color=black@0,"
+        f"crop=w={rw}:h={rh}:x={x0 + m}:y={y0 + m},format=gbrap,"
+        f"perspective={persp}:sense=destination{ev}[tkw{j}]",
+        f"color=c=black@0:s={W}x{H}:r={fps}:d={total:.3f},format=rgba[tkb{j}]",
+        f"[tkb{j}][tkw{j}]overlay=x={x0}:y={y0}:format=auto[tk3{j}]",
+    ], f"tk3{j}"
+
+
+def _frame_expr(frames: list[int], values: list[float]) -> str:
+    """Expresión de ``perspective`` (eval=frame) con un valor por fotograma: ``in``
+    es el nº de fotograma de la capa, que empieza con la composición."""
+    expr = clipper._fnum(values[-1])
+    for i in range(len(values) - 2, -1, -1):
+        if clipper._fnum(values[i]) == clipper._fnum(values[i + 1]):
+            continue
+        expr = f"if(lt(in\\,{frames[i] + 1})\\,{clipper._fnum(values[i])}\\,{expr})"
+    return expr
+
+
+def _prepare_texts(timeline: Timeline, out_path: Path, W: int, H: int) -> tuple[Optional[Path], dict]:
+    """Escribe el .ass global (textos normales) y uno por cada texto en capa propia.
+
+    Devuelve ``(ass_path | None, {clip_id: ass_path})``. Van aparte los textos con
+    máscara (la máscara recorta solo ese texto), los girados en 3D (su capa se
+    deforma con ``perspective``) y los que tienen modo de fusión (su capa se funde
+    con el vídeo); ver ``build_command``.
+    """
+    fps = timeline.fps or 30
+    texts = [c for c in timeline.clips if c.kind == "text" and (c.text or "").strip() and not c.disabled]
+    layered_ids = {c.id for c in texts
+                   if has_mask(c) or text_is_3d(c, fps) or clip_blend(c) != "normal"}
+    masked = [c for c in texts if c.id in layered_ids]
+    plain = [c for c in timeline.clips if c.id not in layered_ids]
+    ass_path = None
+    if len(masked) < len(texts):
+        ass_path = out_path.with_suffix(".ass")
+        ass_path.write_text(build_ass(plain, W, H, timeline.tracks, fps=timeline.fps), encoding="utf-8")
+    layers: dict[str, Path] = {}
+    for i, c in enumerate(masked):
+        p = out_path.with_name(f"{out_path.stem}.mt{i}.ass")
+        p.write_text(build_ass([c], W, H, timeline.tracks, fps=timeline.fps), encoding="utf-8")
+        layers[c.id] = p
+    return ass_path, layers
+
+
 def render(project: Project, timeline: Timeline, out_path: Path,
            on_progress: ProgressCb) -> Path:
     """Renderiza la timeline al archivo ``out_path`` y lo devuelve."""
@@ -1070,11 +1236,9 @@ def render(project: Project, timeline: Timeline, out_path: Path,
     H = int(timeline.height or config.OUTPUT_HEIGHT)
     W -= W % 2
     H -= H % 2
-    texts = [c for c in timeline.clips if c.kind == "text" and (c.text or "").strip()]
-    ass_path = None
-    if texts:
-        ass_path = out_path.with_suffix(".ass")
-        ass_path.write_text(build_ass(timeline.clips, W, H, timeline.tracks), encoding="utf-8")
+    # Máscara de ajuste: cada clip afectado se expande en base + fantasma.
+    timeline = expand_adjust_passes(timeline)
+    ass_path, text_layers = _prepare_texts(timeline, out_path, W, H)
     with tempfile.TemporaryDirectory(prefix="vy-shapes-") as td:
         shape_files = rasterize_timeline_shapes(timeline, Path(td), W, H)
         mask_files = build_timeline_masks(
@@ -1085,7 +1249,7 @@ def render(project: Project, timeline: Timeline, out_path: Path,
         bg_files = bg_service.build_timeline_bg_masks(timeline, int(timeline.fps or 30))
         cmd = build_command(project, timeline, out_path, ass_path=ass_path,
                             shape_files=shape_files, mask_files=mask_files,
-                            bg_files=bg_files)
+                            bg_files=bg_files, text_layers=text_layers)
         cmd = _filter_script_cmd(cmd, Path(td))
         on_progress(0.15, "Renderizando el vídeo final con FFmpeg…")
         log.info("Export: %d clip(s), encoder=%s crf=%s → %s",
@@ -1113,18 +1277,16 @@ def render_frame(project: Project, timeline: Timeline, out_path: Path, at_time: 
     H = int(timeline.height or config.OUTPUT_HEIGHT)
     W -= W % 2
     H -= H % 2
-    texts = [c for c in timeline.clips if c.kind == "text" and (c.text or "").strip()]
-    ass_path = None
-    if texts:
-        ass_path = out_path.with_suffix(".ass")
-        ass_path.write_text(build_ass(timeline.clips, W, H, timeline.tracks), encoding="utf-8")
+    timeline = expand_adjust_passes(timeline)
+    ass_path, text_layers = _prepare_texts(timeline, out_path, W, H)
     with tempfile.TemporaryDirectory(prefix="vy-frame-") as td:
         shape_files = rasterize_timeline_shapes(timeline, Path(td), W, H)
         mask_files = build_timeline_masks(timeline, Path(td) / "masks", W, H, int(timeline.fps or 30))
         from .bg import service as bg_service
         bg_files = bg_service.build_timeline_bg_masks(timeline, int(timeline.fps or 30))
         cmd = build_command(project, timeline, out_path, ass_path=ass_path, shape_files=shape_files,
-                            mask_files=mask_files, bg_files=bg_files, frame_at=at_time)
+                            mask_files=mask_files, bg_files=bg_files, frame_at=at_time,
+                            text_layers=text_layers)
         cmd = _filter_script_cmd(cmd, Path(td))
         cmd[1:1] = ["-nostdin"]
         with timed("render FFmpeg (frame)", log, clips=len(timeline.clips)):

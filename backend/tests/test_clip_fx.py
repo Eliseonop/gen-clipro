@@ -1,6 +1,7 @@
 import unittest
 
-from app.clip_fx import FX_DUR, audio_fx_chain, clip_fx_at, effects_ffmpeg, look_ffmpeg, overlay_xy_for_fx, video_fx_chain
+from app.clip_filters import filters_ffmpeg
+from app.clip_fx import FX_DUR, clip_fx_at, effects_ffmpeg, overlay_xy_for_fx, video_fx_chain
 from app.schemas import TimelineClip
 
 
@@ -57,8 +58,9 @@ class ClipFxFfmpegTest(unittest.TestCase):
         self.assertIn("alpha=1", chain)
 
     def test_bw_look_desaturates(self):
-        filt = look_ffmpeg("bw")
-        self.assertTrue("hue=s=0" in filt or "colorchannelmixer" in filt)
+        filt = filters_ffmpeg({"look": "bw"})       # look antiguo = filtro al 100 %
+        self.assertIn("colorchannelmixer=rr=0.21300", filt)
+        self.assertIn("colorchannelmixer", video_fx_chain({"look": "bw"}, 4, 720, 1280))
 
     def test_slide_offsets_overlay_x(self):
         xy = overlay_xy_for_fx("x=0:y=0", {"appear": "slide_left"}, 1.0, 4.0, 720, 1280)
@@ -85,18 +87,6 @@ class ClipEffectsTest(unittest.TestCase):
         chain = effects_ffmpeg({"effects": {"blur": 2, "grayscale": True}}, 720, 1280)
         self.assertIn("gblur", chain)
         self.assertIn("hue=s=0", chain)
-
-    def test_audio_echo_filter(self):
-        chain = audio_fx_chain({"audio_fx": {"echo": True}})
-        self.assertIn("aecho", chain)
-
-    def test_audio_fx_scales_with_intensity(self):
-        full = audio_fx_chain({"audio_fx": {"eq": 1}})
-        half = audio_fx_chain({"audio_fx": {"eq": 0.5}})
-        self.assertIn("equalizer", full)
-        self.assertIn("g=4.00", full)
-        self.assertIn("g=2.00", half)
-        self.assertEqual(audio_fx_chain({"audio_fx": {"eq": 0}}), "")
 
     def test_dissolve_uses_alpha_fade(self):
         chain = video_fx_chain({"appear": "dissolve"}, 4, 720, 1280)

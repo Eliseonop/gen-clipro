@@ -12,13 +12,20 @@ import EdClipNote from './EdClipNote'
 import EdMask from './EdMask'
 import EdShape from './EdShape'
 import EdText, { TextFxPanel } from './EdText'
-import EdTransform, { InspSection, InspSlider } from './EdTransform'
+import EdTransform, { BlendRow, InspSection, InspSlider } from './EdTransform'
+import { clipBeats } from '../../lib/beats'
+import { shapeDrawAt } from '../../lib/shapes'
+import { FOLLOW_MODES } from '../../lib/objectTrack'
+import EdFilters from './EdFilters'
 import { AudioFxGrid, KfTransitionSelect, VolumePanel } from './EdEffects'
 
 function navsFor(clip, textMode, audioMode) {
+  // Un clip de texto admite máscara ("revelar texto"); la pista de texto no.
+  if (clip?.kind === 'text' && textMode !== 'track') return ['texto', 'mascara', 'animacion']
   if (textMode || clip?.kind === 'text') return ['texto', 'animacion']
   if (audioMode === 'track' || clip?.kind === 'audio') return ['audio']
   if (clip?.kind === 'shape') return ['video', 'animacion']
+  if (clip?.kind === 'adjustment') return ['ajuste']
   if (isVisualClip(clip)) {
     if (clip.kind === 'video') return ['video', 'animacion', 'audio']
     return ['video', 'animacion']
@@ -29,7 +36,9 @@ function navsFor(clip, textMode, audioMode) {
 function navLabel(id) {
   if (id === 'animacion') return 'Animación'
   if (id === 'texto') return 'Texto'
+  if (id === 'mascara') return 'Máscara'
   if (id === 'audio') return 'Audio'
+  if (id === 'ajuste') return 'Capa de ajuste'
   return 'Video'
 }
 
@@ -39,12 +48,48 @@ function opacityOf(clip, playhead) {
   return Number.isFinite(n) ? n : 1
 }
 
+// Beats (#12): detectar, densidad (uno de cada N) y quitar.
+const BEAT_EVERY_OPTIONS = [
+  { value: '1', label: 'Todos los beats' },
+  { value: '2', label: 'Uno de cada 2' },
+  { value: '4', label: 'Uno de cada 4' },
+]
+function BeatsSection({ clip, busy, onDetect, onChange }) {
+  const b = clipBeats(clip)
+  return (
+    <InspSection
+      title="Beats"
+      hint={<>Detecta los golpes de la música para cortar y colocar clips al ritmo. Los puntos
+        amarillos del clip son imán al mover o recortar clips; <b>,</b> y <b>.</b> saltan entre ellos.</>}
+    >
+      <div className="ed-insp-tools">
+        <button type="button" className="ed-btn" disabled={busy} onClick={() => onDetect(clip.id)}>
+          <Icon name={busy ? 'hourglass_top' : 'graphic_eq'} size={15} /> {b ? 'Volver a detectar' : 'Detectar beats'}
+        </button>
+        {b && (
+          <button type="button" className="ed-btn" onClick={() => onChange(clip.id, null)}>
+            <Icon name="music_off" size={15} /> Quitar
+          </button>
+        )}
+      </div>
+      {b ? (
+        <>
+          <label className="ed-insp-select">
+            Marcas
+            <FlipSelect value={String(b.every)} options={BEAT_EVERY_OPTIONS}
+              onChange={(v) => onChange(clip.id, { every: Number(v) })} title="Densidad de beats" />
+          </label>
+          <p className="ed-insp-meta">{b.times.length} beats · {Math.round(b.bpm)} BPM</p>
+        </>
+      ) : null}
+    </InspSection>
+  )
+}
+
 export default function EdInspector({
   selectedClip,
   textMode,
   audioMode,
-  cropping,
-  onCropping,
   effectsProps,
   shapeProps,
   maskProps,
@@ -75,7 +120,7 @@ export default function EdInspector({
 
   // La manipulación de la máscara en el reproductor solo vive con su panel abierto.
   const onMaskOpen = maskProps?.onPanelOpen
-  const maskOpen = activeNav === 'video' && sub === 'mask' && canMask
+  const maskOpen = ((activeNav === 'video' && sub === 'mask') || activeNav === 'mascara') && canMask
   useEffect(() => { onMaskOpen?.(maskOpen) }, [maskOpen, onMaskOpen])
 
   // Igual el pincel de Eliminar fondo: al cerrar el panel se apaga, para que el
@@ -137,32 +182,43 @@ export default function EdInspector({
             onSuggest={noteProps.onSuggest} />
         )}
 
-        {hasTarget && activeNav === 'video' && sub === 'basic' && visual && onCropping && (
-          <div className="ed-insp-tools">
-            <label
-              className={`ed-mode-toggle ${cropping ? 'on' : ''}`}
-              title="Recortar: elige qué parte de la fuente se ve (arrastra el recuadro naranja). Luego muévela/escálala libre en el lienzo."
-            >
-              <input
-                type="checkbox"
-                checked={!!cropping}
-                onChange={(e) => onCropping(e.target.checked)}
-              />
-              <Icon name="crop" size={15} />
-              Recortar
-            </label>
-          </div>
-        )}
-
         {hasTarget && activeNav === 'video' && sub === 'basic' && (
           <>
             {isShape && shapeProps && <EdShape {...shapeProps} />}
+            {isShape && (
+              // «Dibujar trazo» (#14): cuánto del trazo se ve; animable con keyframes.
+              <InspSection title={clip.shape?.type === 'letterbox' ? 'Entrada de las barras' : 'Dibujar trazo'} kfSt={kfSt} onAddKf={p.onAddKf}>
+                <InspSlider
+                  label={clip.shape?.type === 'letterbox' ? 'Dentro' : 'Dibujado'}
+                  value={Math.round(shapeDrawAt(clip, localT) * 100)}
+                  min={0}
+                  max={100}
+                  step={1}
+                  format={(v) => `${Math.round(v)}`}
+                  suffix="%"
+                  parse={(raw) => parseFloat(String(raw).replace(/[^\d.-]/g, ''))}
+                  onChange={(pct) => p.onPose?.({ draw: pct / 100 })}
+                  onKf={p.onAddKf}
+                  kfSt={kfSt}
+                />
+                {shapeProps?.onDrawIn && (
+                  <div className="ed-insp-tools">
+                    <button type="button" className="ghost small" onClick={shapeProps.onDrawIn}
+                      title="Keyframes de 0 a 100 % en 1,5 s desde el inicio del clip">
+                      <Icon name="gesture" size={15} /> {clip.shape?.type === 'letterbox' ? 'Animar: las barras entran al aparecer' : 'Animar: se dibuja al aparecer'}
+                    </button>
+                  </div>
+                )}
+              </InspSection>
+            )}
             {!isShape && (
             <EdTransform
               clip={clip}
               playhead={p.playhead}
               onPose={p.onPose}
               onAddKf={p.onAddKf}
+              onTextStyle={clip?.kind === 'text' ? p.onChangeTextStyle : undefined}
+              onFlip={p.onFlip}
               fps={p.fps}
               heightScale={p.heightScale}
             />
@@ -182,6 +238,7 @@ export default function EdInspector({
                   onKf={p.onAddKf}
                   kfSt={kfSt}
                 />
+                {p.onBlend && <BlendRow clip={clip} onBlend={p.onBlend} />}
               </InspSection>
             )}
           </>
@@ -191,7 +248,7 @@ export default function EdInspector({
           <EdBgRemove clip={clip} {...bgProps} />
         )}
 
-        {hasTarget && activeNav === 'video' && sub === 'mask' && canMask && (
+        {hasTarget && ((activeNav === 'video' && sub === 'mask') || activeNav === 'mascara') && canMask && (
           <EdMask
             clip={clip}
             playhead={p.playhead}
@@ -202,22 +259,123 @@ export default function EdInspector({
 
         {hasTarget && activeNav === 'video' && sub === 'adjust' && visual && (
           <InspSection title="Color">
-            {COLOR_FX.map((item) => (
-              <InspSlider
-                key={item.id}
-                label={item.label}
-                value={Math.round(fxNum(effects, item.id) * 100)}
-                min={Math.round(item.min * 100)}
-                max={Math.round(item.max * 100)}
-                step={Math.max(1, Math.round((item.step || 0.05) * 100))}
-                format={(v) => `${Math.round(v)}`}
-                parse={(raw) => parseFloat(String(raw).replace(/[^\d.-]/g, ''))}
-                onChange={(pct) => patchEffects({ [item.id]: pct / 100 })}
-              />
-            ))}
+            {COLOR_FX.map((item) => {
+              const u = item.ui ?? 100
+              return (
+                <InspSlider
+                  key={item.id}
+                  label={item.label}
+                  value={Math.round(fxNum(effects, item.id) * u)}
+                  min={Math.round(item.min * u)}
+                  max={Math.round(item.max * u)}
+                  step={Math.max(1, Math.round((item.step || 0.05) * u))}
+                  format={(v) => `${Math.round(v)}${item.suffix || ''}`}
+                  parse={(raw) => parseFloat(String(raw).replace(/[^\d.-]/g, ''))}
+                  onChange={(v) => patchEffects({ [item.id]: v / u })}
+                />
+              )
+            })}
+            {canMask && maskProps && (
+              <div className="ed-insp-tools">
+                <button
+                  type="button"
+                  className="ghost small"
+                  title="Limita estos ajustes a una zona (círculo, pincel, rollo de película…)"
+                  onClick={() => { maskProps.onAddAdjustMask?.(); setSub('mask') }}
+                >
+                  <Icon name="filter_center_focus" size={15} /> Aplicar solo en una zona (máscara)
+                </button>
+              </div>
+            )}
           </InspSection>
         )}
 
+        {hasTarget && activeNav === 'animacion' && clip?.kind === 'text' && textMode !== 'track' && (
+          // Textos: escala, posición y giro 3D con sus keyframes (#4 texto 3D).
+          <EdTransform
+            clip={clip}
+            playhead={p.playhead}
+            onPose={p.onPose}
+            onAddKf={p.onAddKf}
+            onTextStyle={p.onChangeTextStyle}
+            onFlip={p.onFlip}
+            fps={p.fps}
+          />
+        )}
+        {hasTarget && activeNav === 'animacion' && clip?.kind === 'text' && textMode !== 'track' && p.onBlend && (
+          <InspSection title="Mezcla">
+            <BlendRow clip={clip} onBlend={p.onBlend} />
+          </InspSection>
+        )}
+        {hasTarget && activeNav === 'ajuste' && clip?.kind === 'adjustment' && (
+          // Capa de ajuste (#19): filtra todo lo de debajo (no los textos, que van encima).
+          <>
+            <InspSection title="Capa de ajuste" defaultOpen
+              hint="Afecta a los vídeos, imágenes y figuras de las pistas de debajo mientras dura.">
+              <InspSlider
+                label="Intensidad"
+                value={Math.round((clip.opacity ?? 1) * 100)}
+                min={0}
+                max={100}
+                step={1}
+                format={(v) => `${Math.round(v)}`}
+                suffix="%"
+                parse={(raw) => parseFloat(String(raw).replace(/[^\d.-]/g, ''))}
+                onChange={(pct) => p.onChangeFx?.({ opacity: Math.min(1, Math.max(0, pct / 100)) })}
+              />
+            </InspSection>
+            <InspSection title="Color">
+              {COLOR_FX.map((item) => {
+                const u = item.ui ?? 100
+                return (
+                  <InspSlider
+                    key={item.id}
+                    label={item.label}
+                    value={Math.round(fxNum(effects, item.id) * u)}
+                    min={Math.round(item.min * u)}
+                    max={Math.round(item.max * u)}
+                    step={Math.max(1, Math.round((item.step || 0.05) * u))}
+                    format={(v) => `${Math.round(v)}${item.suffix || ''}`}
+                    parse={(raw) => parseFloat(String(raw).replace(/[^\d.-]/g, ''))}
+                    onChange={(v) => patchEffects({ [item.id]: v / u })}
+                  />
+                )
+              })}
+            </InspSection>
+            <InspSection title="Filtros">
+              <EdFilters clip={clip} onChangeFx={p.onChangeFx} />
+            </InspSection>
+          </>
+        )}
+        {hasTarget && activeNav === 'animacion' && p.track && (
+          // Seguimiento (#15): el clip acompaña a un objeto del vídeo de debajo.
+          <InspSection title="Seguimiento"
+            hint="Marca con un recuadro un objeto del vídeo de debajo y este clip lo seguirá. Pon el cursor en un momento en que el objeto se vea.">
+            <label className="ed-insp-select">
+              Seguir
+              <FlipSelect
+                value={p.track.mode}
+                options={FOLLOW_MODES.map((m) => ({ value: m.id, label: m.label }))}
+                onChange={p.track.onMode}
+              />
+            </label>
+            <div className="ed-insp-tools">
+              {p.track.picking ? (
+                <button type="button" className="ghost small" onClick={p.track.onCancel}>
+                  <Icon name="close" size={15} /> Cancelar (dibuja el recuadro en el visor)
+                </button>
+              ) : (
+                <button type="button" className="ghost small" disabled={!p.track.hasVideo || !!p.track.run}
+                  onClick={p.track.onStart}
+                  title={p.track.hasVideo ? 'Marca con un recuadro el objeto del vídeo; este clip lo seguirá'
+                    : 'Pon el cursor sobre un vídeo con el objeto que quieres seguir'}>
+                  <Icon name="my_location" size={15} />
+                  {p.track.run ? ` Siguiendo… ${Math.round((p.track.run.progress || 0) * 100)}%` : ' Seguir un objeto del vídeo'}
+                </button>
+              )}
+            </div>
+          </InspSection>
+        )}
         {hasTarget && activeNav === 'animacion' && (
           <InspSection title="Entrada y salida">
             <KfTransitionSelect clip={clip} selKfId={p.selKfId} playhead={p.playhead} onInterp={p.onInterpKf} fps={p.fps} />
@@ -247,7 +405,7 @@ export default function EdInspector({
         {hasTarget && activeNav === 'audio' && (
           <InspSection title="Audio" defaultOpen>
             {p.trackEmpty ? (
-              <p className="ed-insp-hint">Esta pista no tiene clips. Añade un audio para editar volumen y efectos.</p>
+              <p className="ed-insp-meta">Esta pista no tiene clips.</p>
             ) : (
               <>
                 <VolumePanel
@@ -269,6 +427,9 @@ export default function EdInspector({
               </>
             )}
           </InspSection>
+        )}
+        {hasTarget && activeNav === 'audio' && audioMode !== 'track' && p.beats && clip?.id && (
+          <BeatsSection clip={clip} {...p.beats} />
         )}
 
         {hasTarget && activeNav === 'texto' && (

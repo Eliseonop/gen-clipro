@@ -3,7 +3,7 @@
 // no usa este módulo.
 import { clamp, clampCenter, frameAt, geomFor } from './panning.js'
 import { clipEnd, isVisualClip, timelineToSource } from '../features/editor/editorModel.js'
-import { clipPose, posedTransform } from './clipAnim.js'
+import { clipFlip, clipPose, posedTransform } from './clipAnim.js'
 import { keyframesOn } from './clipKeyframes.js'
 
 export const newTransform = () => ({ x: 0.5, y: 0.5, scale: 1, rotation: 0 })
@@ -38,6 +38,8 @@ export function slotAspectOf(clip, outAspect) {
 export function isOverlay(clip) {
   return clip?.layout === 'overlay'
 }
+
+export { clipFlip } from './clipAnim.js'
 
 // --- Main / workspace (estilo CapCut) ---
 // El canvas del editor conserva el aspecto de salida; el "Main" (área exportada)
@@ -200,6 +202,38 @@ export function resizeCropLocked(start, hx, hy, nx, ny, r, min = 0.1) {
   return { cx, cy, wf, hf }
 }
 
+// Proporciones del modal Recortar (como el desplegable de CapCut). `aspect` es el
+// ancho/alto en píxeles del recorte; 'src' = el del material, 'out' = el del proyecto.
+export const CROP_RATIOS = [
+  { id: 'free', label: 'Libre', aspect: null },
+  { id: 'original', label: 'Original', aspect: 'src' },
+  { id: 'output', label: 'Proyecto', aspect: 'out' },
+  { id: '16:9', label: '16:9', aspect: 16 / 9 },
+  { id: '9:16', label: '9:16', aspect: 9 / 16 },
+  { id: '1:1', label: '1:1', aspect: 1 },
+  { id: '4:3', label: '4:3', aspect: 4 / 3 },
+  { id: '3:4', label: '3:4', aspect: 3 / 4 },
+  { id: '4:5', label: '4:5', aspect: 4 / 5 },
+  { id: '2.35:1', label: '2.35:1', aspect: 2.35 },
+]
+
+/**
+ * Relación wf/hf (en fracciones de la fuente) que da un recorte con esa proporción
+ * de píxeles. null = libre.
+ */
+export function cropRatioNorm(ratioId, srcAspect, outAspect) {
+  const r = CROP_RATIOS.find((x) => x.id === ratioId)
+  if (!r || r.aspect == null || !(srcAspect > 0)) return null
+  const aspect = r.aspect === 'src' ? srcAspect : r.aspect === 'out' ? outAspect : r.aspect
+  return aspect > 0 ? aspect / srcAspect : null
+}
+
+/** El mayor recorte con relación `rn` (wf/hf) que cabe en la fuente, centrado en el actual. */
+export function fitCropRatio(crop, rn) {
+  const wide = rn >= 1
+  return clampCrop(crop.cx, crop.cy, wide ? 1 : rn, wide ? 1 / rn : 1)
+}
+
 /** Cursor CSS para un tirador de recorte. */
 export function cropCursor(hx, hy) {
   if (hx && hy) return hx === hy ? 'nwse-resize' : 'nesw-resize'
@@ -303,7 +337,8 @@ export function videosAt(head, clips, tracks) {
   return list
     .filter((c) => {
       // motion se dibuja (overlay con alfa) pero NO es "visual" editable (sin recorte/reframe).
-      if (!isVisualClip(c) && c.kind !== 'shape' && c.kind !== 'motion') return false
+      if (!isVisualClip(c) && c.kind !== 'shape' && c.kind !== 'motion' && c.kind !== 'adjustment') return false
+      if (c.disabled) return false   // desactivado (#10, tecla V)
       const track = (tracks || []).find((t) => t.id === c.track_id)
       if (!track || track.hidden) return false
       return head >= c.start - 0.02 && head < clipEnd(c)
@@ -343,4 +378,54 @@ export function hitTransformHandle(px, py, dest, pad = 12) {
   if (near(rx, ry)) return 'rotate'
   if (px >= dx && px <= dx + dw && py >= dy && py <= dy + dh) return 'move'
   return null
+}
+
+/**
+ * Punto de la FUENTE (nx, ny en 0-1) → posición en el lienzo de salida (0-1), con el
+ * recorte, la escala, la posición y el giro del objeto libre en `localT`. Lo usa
+ * "Seguir" de las máscaras para pegar la máscara a una cara que se mueve.
+ */
+export function sourcePointToOutput(clip, nx, ny, srcW, srcH, outW, outH, outAspect, srcT, localT) {
+  const crop = cropWindow(clip, srcW / srcH, outAspect, srcT, localT)
+  const px = sourceCropPx(crop, srcW, srcH)
+  const t = posedTransform(clip, localT)
+  const s = t.scale ?? 1
+  // Overlay: 1 px de fuente = `scale` px de salida. Fill: el recorte cubre la salida.
+  const dw = isOverlay(clip) ? px.sw * s : outW * s
+  const dh = isOverlay(clip) ? px.sh * s : outH * s
+  let rx = ((nx * srcW - px.sx) / (px.sw || 1) - 0.5) * dw
+  let ry = ((ny * srcH - px.sy) / (px.sh || 1) - 0.5) * dh
+  // Voltear (#7) refleja en los ejes del clip, antes del giro.
+  const flip = clipFlip(clip)
+  if (flip.h) rx = -rx
+  if (flip.v) ry = -ry
+  const a = (t.rotation || 0) * Math.PI / 180
+  const cos = Math.cos(a)
+  const sin = Math.sin(a)
+  return {
+    x: (t.x * outW + rx * cos - ry * sin) / outW,
+    y: (t.y * outH + rx * sin + ry * cos) / outH,
+  }
+}
+
+/**
+ * Keyframes de posición de máscara (mx/my) que siguen un tracking de caras.
+ * `track` = [{t (tiempo de ARCHIVO), cx, cy}] (seguimiento de caras del material).
+ * Devuelve [{t: tiempo local del clip, mx, my}], como mucho uno cada `minGap` s.
+ */
+export function followTrackMaskKeys(clip, track, dims, minGap = 0.2) {
+  const { srcW, srcH, outW, outH } = dims
+  const outAspect = outW / outH
+  const sp = Math.max(0.01, Number(clip.speed) || 1)
+  const out = []
+  const pts = [...(track || [])]
+    .filter((p) => Number.isFinite(p?.t) && p.t >= clip.in_point - 1e-6 && p.t <= clip.out_point + 1e-6)
+    .sort((a, b) => a.t - b.t)
+  for (const p of pts) {
+    const localT = clip.reverse ? (clip.out_point - p.t) / sp : (p.t - clip.in_point) / sp
+    if (out.length && localT - out[out.length - 1].t < minGap) continue
+    const o = sourcePointToOutput(clip, p.cx, p.cy ?? 0.5, srcW, srcH, outW, outH, outAspect, p.t, localT)
+    out.push({ t: +localT.toFixed(4), mx: +o.x.toFixed(4), my: +o.y.toFixed(4) })
+  }
+  return out
 }

@@ -17,14 +17,28 @@ CAPABILITIES = [
     "clip.position:top|bottom|full",
     "clip.reframe:center|manual|keyframes|auto",
     "clip.look:bw|cinematic|vintage|contrast|warm|cool|saturated",
+    "clip.filters:stack(id,amount)|bw|noir|sepia|vintage|faded|matte|cinematic|teal_orange|night|matrix|contrast|saturated|warm|golden|cool",
     "clip.speed:0.1-10|keep_pitch|reverse",
     "clip.transition:fade|dissolve|wipe|zoom|slide|pop",
     "clip.opacity:0-1",
+    "clip.flip:h|v",
+    "clip.disabled",
+    "clip.beats:detect|every(1|2|4)",
+    "timeline.markers",
+    "clip.attributes:paste(transform|flip|blend|animation|transitions|crop|effects|mask|chroma|style|speed|audio)",
+    "clip.blend:darken|multiply|color_burn|lighten|screen|color_dodge|overlay|soft_light|hard_light|difference|exclusion",
     "clip.volume:0-2|mute|fade_in|fade_out",
     "clip.effects:blur|grayscale|sepia|brightness|contrast|saturation",
-    "clip.audio_fx:eq|compressor|reverb|echo|denoise|distortion",
+    "clip.audio_fx:eq|compressor|reverb|echo|denoise|distortion|underwater|telephone|radio|megaphone|muffled|ramp",
     "clip.keyframes:x|y|scale|rotation|opacity|volume|audio_fx",
-    "clip.animate:zoom|spin|slide|fade|pop|pulse|follow_audio",
+    "clip.animate:zoom|spin|slide|fade|pop|pulse|draw_in|follow_audio",
+    "shape.path:points|closed|smooth",
+    "shape.dash:solid|dash|dot",
+    "clip.track_object:position|position_scale|position_scale_rotation",
+    "clip.sound_design:ai|apply",
+    "timeline.adjustment_layer:filters|effects|intensity",
+    "timeline.cinema_bars:2.39|2|1.85|16:9|animate",
+    "timeline.recipes:cinema_grade|text_reflection|pass_through_text|film_strips|subject_pop",
     "clip.duplicate",
     "subtitles.fragmentation:max_words",
     "text.role:caption|free",
@@ -164,6 +178,15 @@ def _clip_summary(c, dup_count: int = 0, track_kind: str | None = None) -> dict:
             "source_duration": c.source_duration,
         },
     }
+    if c.flip_h or c.flip_v:
+        d["flip"] = {"h": bool(c.flip_h), "v": bool(c.flip_v)}
+    if c.blend_mode:
+        d["blend_mode"] = c.blend_mode
+    if c.disabled:
+        d["disabled"] = True
+    if c.beats and c.beats.get("times"):
+        d["beats"] = {"bpm": c.beats.get("bpm"), "count": len(c.beats["times"]),
+                      "every": c.beats.get("every", 1)}
     if c.kind in ("video", "audio"):
         d["volume"] = round(c.volume if c.volume is not None else 1.0, 3)
         d["has_audio_fx"] = bool(c.audio_fx)
@@ -194,6 +217,7 @@ def timeline_detail(tl: Timeline | None) -> dict:
             for t in tl.tracks
         ],
         "clips": [_clip_summary(c, counts.get(c.id, 0), kinds_by_id.get(c.track_id)) for c in tl.clips],
+        "markers": list(tl.markers or []),
         "duration": round(end, 3),
     }
 
@@ -308,6 +332,8 @@ def job_dto(job) -> dict:
         result["audio_id"] = job.audio.id
     if job.reframe_prep is not None:
         result["reframe_prep"] = True
+    if getattr(job, "result", None):
+        result.update(job.result)
     if result:
         d["result"] = result
     return d

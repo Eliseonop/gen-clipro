@@ -1,10 +1,11 @@
 // Panel Video → Máscara. Edita masks[0] del clip; el resto de la lista queda
 // para cuando se expongan varias máscaras (el motor ya las compone todas).
 import Icon from '../../components/Icon'
+import Hint from '../../components/Hint'
 import FlipSelect from '../../components/FlipSelect'
 import { clipMasksAt } from '../../lib/clipAnim'
 import { kfState } from '../../lib/clipKeyframes'
-import { MASK_FEATHER_MAX, MASK_TYPES } from '../../lib/clipMask'
+import { MASK_FEATHER_MAX, MASK_TARGETS, MASK_TYPES } from '../../lib/clipMask'
 import { FONTS } from '../../lib/textstyles'
 import { InspSection, InspSlider, KfDia, NumberStepper } from './EdTransform'
 
@@ -30,15 +31,22 @@ function MaskXY({ label, value, onChange, onKf, kfSt }) {
 export default function EdMask({
   clip, playhead, fps = 30, maskMode, onMaskMode, drawMode, onDrawMode,
   onAddMask, onRemoveMask, onDuplicateMask, onChangeMask, onCommitMask, onAddKf,
+  onFollow, follow,
 }) {
   const localT = Math.max(0, (playhead ?? 0) - (clip?.start || 0))
-  const mask = clipMasksAt(clip, localT)[0] || null
+  const mask = clipMasksAt(clip, localT, { includeAdjust: true })[0] || null
   const stored = Array.isArray(clip?.masks) ? clip.masks : []
   const kfSt = kfState(clip, localT, fps)
 
   return (
     <>
-      <InspSection title="Máscara" onAddKf={mask ? onAddKf : undefined} kfSt={kfSt}>
+      <InspSection
+        title="Máscara" onAddKf={mask ? onAddKf : undefined} kfSt={kfSt}
+        hint={<>Elige una forma: solo se verá la parte del clip que quede dentro de ella;
+          el archivo original no se modifica.{stored.length > 1
+            ? <> Hay {stored.length} máscaras en este clip: se combinan por intersección y
+              aquí se edita la primera (es la que anima con keyframes).</> : null}</>}
+      >
         <div className="ed-insp-pos-lab">Tipo de máscara</div>
         <div className="ed-mask-grid">
           {MASK_TYPES.map((t) => (
@@ -55,15 +63,35 @@ export default function EdMask({
           ))}
         </div>
 
-        {!mask && (
-          <p className="ed-insp-hint">
-            Elige una forma para añadir una máscara. Solo se verá la parte del clip
-            que quede dentro de ella; el archivo original no se modifica.
-          </p>
-        )}
-
         {mask && (
           <>
+            {clip?.kind !== 'text' && (
+              <div className="ed-mask-target" role="radiogroup" aria-label="Aplicar la máscara a">
+                <span>
+                  Aplicar a
+                  <Hint>
+                    <b>Máscara de ajuste</b>: Exposición, Tono, Temperatura, Brillo… (pestaña
+                    Ajustar) solo cambian DENTRO de la forma. Sube la pluma para que no se
+                    note el borde.
+                  </Hint>
+                </span>
+                {MASK_TARGETS.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={mask.target === t.id}
+                    className={`ed-pos-btn${mask.target === t.id ? ' on' : ''}`}
+                    title={t.id === 'adjust'
+                      ? 'Los ajustes de color (Ajustar) solo actúan dentro de la máscara; el clip se ve entero'
+                      : 'Solo se ve la parte del clip que queda dentro de la máscara'}
+                    onClick={() => onChangeMask?.({ target: t.id })}
+                  >
+                    <em>{t.label}</em>
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="ed-insp-tools ed-mask-tools">
               <label className={`ed-mode-toggle ${maskMode ? 'on' : ''}`} title="Mostrar y manipular la máscara sobre el reproductor">
                 <input type="checkbox" checked={!!maskMode} onChange={(e) => onMaskMode?.(e.target.checked)} />
@@ -80,6 +108,18 @@ export default function EdMask({
                 <Icon name={mask.enabled ? 'visibility' : 'visibility_off'} size={15} />
                 Activa
               </label>
+              {onFollow && clip?.kind === 'video' && (
+                <button
+                  type="button"
+                  className={`ed-mode-toggle${follow ? ' on' : ''}`}
+                  disabled={!!follow}
+                  title="Seguir: la máscara se mueve con la cara del vídeo (crea keyframes de posición)"
+                  onClick={() => onFollow()}
+                >
+                  <Icon name={follow ? 'hourglass_top' : 'face_retouching_natural'} size={15} />
+                  {follow ? `Siguiendo… ${Math.round((follow.progress || 0) * 100)}%` : 'Seguir cara'}
+                </button>
+              )}
               <button type="button" className="ed-insp-ico" title="Duplicar máscara" onClick={() => onDuplicateMask?.()}>
                 <Icon name="content_copy" size={15} />
               </button>
@@ -87,12 +127,6 @@ export default function EdMask({
                 <Icon name="delete" size={15} />
               </button>
             </div>
-            {stored.length > 1 && (
-              <p className="ed-insp-hint">
-                {stored.length} máscaras en este clip: se combinan por intersección.
-                Aquí se edita la primera (es la que anima con keyframes).
-              </p>
-            )}
 
             <div className="ed-insp-pair">
               <div className="ed-insp-row-lab">Posición</div>
@@ -100,7 +134,7 @@ export default function EdMask({
               <MaskXY label="Y" value={mask.y * 100} onChange={(n) => onCommitMask?.({ my: n / 100 })} />
             </div>
 
-            {mask.type !== 'linear' && (
+            {mask.type !== 'linear' && mask.type !== 'film' && (
               <>
                 <InspSlider
                   label="Ancho" value={Math.round(mask.w * 100)} min={1} max={300} step={1}
@@ -115,6 +149,13 @@ export default function EdMask({
               </>
             )}
 
+            {mask.type === 'film' && (
+              <InspSlider
+                label="Alto de la banda" value={Math.round(mask.h * 100)} min={1} max={300} step={1}
+                format={pct} suffix="%" parse={parsePct}
+                onChange={(v) => onCommitMask?.({ mh: v / 100 })} onKf={onAddKf} kfSt={kfSt} stepper
+              />
+            )}
             <InspSlider
               label="Escala X" value={Math.round(mask.scale_x * 100)} min={5} max={400} step={1}
               format={pct} suffix="%" parse={parsePct}
@@ -198,7 +239,10 @@ export default function EdMask({
       )}
 
       {mask?.type === 'brush' && (
-        <InspSection title="Pincel">
+        <InspSection
+          title="Pincel"
+          hint="Activa «Dibujar» y arrastra sobre el reproductor; el trazo se guarda con el proyecto."
+        >
           <div className="ed-insp-tools ed-mask-tools">
             <label className={`ed-mode-toggle ${drawMode ? 'on' : ''}`} title="Arrastra sobre el reproductor para pintar la máscara">
               <input type="checkbox" checked={!!drawMode} onChange={(e) => onDrawMode?.(e.target.checked)} />
@@ -219,10 +263,7 @@ export default function EdMask({
             format={pct} suffix="%" parse={parsePct}
             onChange={(v) => onChangeMask?.({ brush: { ...mask.brush, size: v / 100 } })}
           />
-          <p className="ed-insp-hint">
-            {(mask.brush?.points || []).length} puntos. Activa “Dibujar” y arrastra sobre
-            el reproductor; el trazo se guarda con el proyecto.
-          </p>
+          <p className="ed-insp-meta">{(mask.brush?.points || []).length} puntos</p>
         </InspSection>
       )}
     </>

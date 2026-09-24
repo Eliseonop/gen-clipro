@@ -36,8 +36,8 @@ class OverlayExportTest(unittest.TestCase):
         })
         chain, xy = _overlay_video_filter(Path("a.png"), clip, 720, 1280, 0.913)
         self.assertIn("eval=frame", chain)
-        self.assertIn("0.300", chain)
-        self.assertIn("2.060", chain)
+        self.assertIn("(0.3+", chain)      # escala inicial (números compactos, 6 decimales)
+        self.assertIn("2.06", chain)
         # El PIP variable se coloca directamente con el overlay (que admite 't'),
         # sin 'pad' a lienzo fijo. Regresión de dos bugs que rompían el export:
         #  - 'pad' no admite 't' en x/y → "Could not open encoder before EOF".

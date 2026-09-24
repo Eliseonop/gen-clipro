@@ -136,15 +136,24 @@ def _pw_expr(points: list[tuple[float, float]], tvar: str = "t") -> str:
     """
     pts = sorted(points, key=lambda p: p[0])
     if len(pts) == 1:
-        return f"{pts[0][1]:.2f}"
-    expr = f"{pts[-1][1]:.2f}"                      # después del último keyframe
+        return _fnum(pts[0][1])
+    # Los valores van con 6 decimales: x/y normalizados (0–1) con 2 o 3 dejaban
+    # el objeto hasta 3-4 px fuera de su sitio en 720 px, y con curvas muestreadas
+    # (ver compose._pose_prop_points) ese redondeo se notaba como temblor.
+    expr = _fnum(pts[-1][1])                        # después del último keyframe
     for i in range(len(pts) - 2, -1, -1):
         t0, v0 = pts[i]
         t1, v1 = pts[i + 1]
         dt = (t1 - t0) or 1e-6
-        seg = f"({v0:.3f}+({v1 - v0:.3f})*({tvar}-{t0:.4f})/{dt:.6f})"
+        seg = f"({_fnum(v0)}+({_fnum(v1 - v0)})*({tvar}-{t0:.4f})/{dt:.6f})"
         expr = f"if(lt({tvar},{t1:.4f}),{seg},{expr})"
-    return f"if(lt({tvar},{pts[0][0]:.4f}),{pts[0][1]:.2f},{expr})"
+    return f"if(lt({tvar},{pts[0][0]:.4f}),{_fnum(pts[0][1])},{expr})"
+
+
+def _fnum(v: float) -> str:
+    """Número para expresiones FFmpeg: 6 decimales, sin ceros sobrantes."""
+    s = f"{v:.6f}".rstrip("0").rstrip(".")
+    return "0" if s in ("", "-0") else s
 
 
 def _pw_expr_direct(points: list[tuple[float, float]]) -> str:

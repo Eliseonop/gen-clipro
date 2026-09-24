@@ -24,6 +24,7 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
 export const MASK_TYPES = [
   { id: 'linear', label: 'División', icon: 'horizontal_split' },
+  { id: 'film', label: 'Rollo de película', icon: 'view_day' },
   { id: 'circle', label: 'Círculo', icon: 'circle' },
   { id: 'rectangle', label: 'Rectángulo', icon: 'crop_square' },
   { id: 'star', label: 'Estrella', icon: 'star' },
@@ -34,7 +35,13 @@ export const MASK_TYPES = [
 
 export const MASK_TYPE_IDS = MASK_TYPES.map((t) => t.id)
 export const MASK_FEATHER_MAX = 0.25
-export const MASK_KIND_OK = ['video', 'image', 'shape']
+export const MASK_KIND_OK = ['video', 'image', 'shape', 'text']
+// Qué recorta la máscara: 'clip' = qué parte del clip se ve; 'adjust' = dónde
+// actúan los ajustes de color del clip (CapCut: Ajustar → Máscara). Ver clipAdjust.js.
+export const MASK_TARGETS = [
+  { id: 'clip', label: 'Clip' },
+  { id: 'adjust', label: 'Ajustes' },
+]
 
 /** Claves animables de la máscara (se suman a KF_PROP_KEYS). Solo masks[0]. */
 export const MASK_KF_KEYS = ['mx', 'my', 'mw', 'mh', 'msx', 'msy', 'mrot', 'mfeather']
@@ -72,6 +79,7 @@ export function defaultMask(type = 'circle', outAspect = 0.5625) {
   if (base.type === 'circle') { base.w = 0.5; base.h = 0.5 }
   if (base.type === 'star' || base.type === 'heart') { base.w = 0.55; base.h = 0.55 }
   if (base.type === 'linear') { base.w = 2.4; base.h = 2.4 }
+  if (base.type === 'film') { base.w = 2.4; base.h = 0.3 }
   if (base.type === 'text') {
     base.w = wide
     base.h = 0.3
@@ -103,6 +111,7 @@ export function normalizeMask(raw) {
     invert: !!m.invert,
     opacity: clamp(num(m.opacity, 1), 0, 1),
     radius: clamp(num(m.radius, 0), 0, 0.5),
+    target: m.target === 'adjust' ? 'adjust' : 'clip',
   }
   if (type === 'text') {
     const t = m.text && typeof m.text === 'object' ? m.text : {}
@@ -209,6 +218,13 @@ function pathLinear(ctx, m, g) {
   ctx.rect(-big, -big, big * 2, big)
 }
 
+/** Rollo de película (CapCut): banda infinita de alto 2·hh centrada en la máscara. */
+function pathFilm(ctx, m, g) {
+  const big = Math.max(g.hw, g.hh) * 4 + g.ref * 4
+  ctx.beginPath()
+  ctx.rect(-big, -g.hh, big * 2, g.hh * 2)
+}
+
 export function starPoints(hw, hh, spikes = 5, inner = 0.42) {
   const n = Math.max(3, Math.round(spikes))
   const pts = []
@@ -255,6 +271,7 @@ function pathHeart(ctx, m, g) {
 /** Registro tipo → trazado. Punto de extensión para tipos futuros. */
 export const MASK_SHAPES = {
   linear: pathLinear,
+  film: pathFilm,
   circle: pathCircle,
   rectangle: pathRect,
   star: pathStar,
@@ -342,6 +359,12 @@ export function strokeMaskShape(ctx, mask, frame, opts = {}) {
     ctx.moveTo(-big, 0)
     ctx.lineTo(big, 0)
     ctx.stroke()
+  } else if (mask.type === 'film') {
+    const big = Math.max(g.hw, g.hh) * 4 + g.ref * 4
+    ctx.beginPath()
+    ctx.moveTo(-big, -g.hh); ctx.lineTo(big, -g.hh)
+    ctx.moveTo(-big, g.hh); ctx.lineTo(big, g.hh)
+    ctx.stroke()
   } else {
     const shape = MASK_SHAPES[mask.type] || MASK_SHAPES.circle
     shape(ctx, mask, g)
@@ -423,13 +446,14 @@ export function applyMasksToLayer(layerCtx, masks, frame, opts = {}) {
 }
 
 /** Vuelca la capa enmascarada sobre el canvas destino. */
+// `opts.op`: operación de composición de la capa (modo de fusión del clip, #8).
 export function endMaskLayer(ctx, layer, masks, frame, opts = {}) {
   applyMasksToLayer(layer.ctx, masks, frame, opts)
   ctx.save()
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.globalAlpha = 1
   ctx.filter = 'none'
-  ctx.globalCompositeOperation = 'source-over'
+  ctx.globalCompositeOperation = opts.op || 'source-over'
   ctx.drawImage(layer.canvas, 0, 0)
   ctx.restore()
 }
@@ -442,6 +466,8 @@ export function maskHandleBox(mask, frame) {
   if (mask.type === 'linear') {
     return { ...g, hw: frame.w * 0.3, hh: Math.max(18, frame.h * 0.035) }
   }
+  // Rollo de película: infinita a lo ancho (caja fija), el alto es el de la banda.
+  if (mask.type === 'film') return { ...g, hw: frame.w * 0.3 }
   return g
 }
 

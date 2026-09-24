@@ -22,9 +22,15 @@ from .schemas import (
     CreateProjectRequest,
     CreateSegmentsRequest,
     FaceTrackRequest,
+    TrackObjectRequest,
+    SoundDesignRequest,
+    RecipeRequest,
+    GroupNameRequest,
+    MoveProjectRequest,
     RenameProjectRequest,
     Job,
     Project,
+    ProjectGroup,
     ClipTranscribeRequest,
     ExportRequest,
     ImageFetchRequest,
@@ -108,7 +114,51 @@ def list_projects() -> list[Project]:
 
 @app.post("/api/projects", response_model=Project)
 def create_project(req: CreateProjectRequest) -> Project:
-    return projects.create_project(req.name)
+    return projects.create_project(req.name, req.group_id)
+
+
+# Carpetas del inicio: solo organizan la lista de proyectos (campo group_id).
+
+@app.get("/api/project-groups", response_model=list[ProjectGroup])
+def list_project_groups() -> list[ProjectGroup]:
+    return projects.list_groups()
+
+
+@app.post("/api/project-groups", response_model=ProjectGroup)
+def create_project_group(req: GroupNameRequest) -> ProjectGroup:
+    try:
+        return projects.create_group(req.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/api/project-groups/{group_id}", response_model=ProjectGroup)
+def rename_project_group(group_id: str, req: GroupNameRequest) -> ProjectGroup:
+    try:
+        group = projects.rename_group(group_id, req.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if group is None:
+        raise HTTPException(status_code=404, detail="Carpeta no encontrada.")
+    return group
+
+
+@app.delete("/api/project-groups/{group_id}")
+def delete_project_group(group_id: str) -> dict:
+    if not projects.delete_group(group_id):
+        raise HTTPException(status_code=404, detail="Carpeta no encontrada.")
+    return {"deleted": group_id}
+
+
+@app.post("/api/projects/{project_id}/group", response_model=Project)
+def move_project_to_group(project_id: str, req: MoveProjectRequest) -> Project:
+    try:
+        proj = projects.move_project(project_id, req.group_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    return proj
 
 
 @app.get("/api/projects/{project_id}", response_model=Project)
@@ -714,6 +764,88 @@ def get_export(project_id: str, filename: str) -> FileResponse:
     if base not in target.parents or not target.exists():
         raise HTTPException(status_code=404, detail="Exportación no encontrada.")
     return FileResponse(str(target), media_type="video/mp4")
+
+
+@app.post("/api/projects/{project_id}/freeze-frame")
+def freeze_frame(project_id: str, body: dict) -> dict:
+    """Congelar fotograma (#11): guarda como imagen del proyecto el fotograma
+    ``time`` (s del ARCHIVO) del clip de vídeo ``clip`` (el clip entero, tal cual
+    está en la timeline, para resolver su material aunque aún no se haya guardado)."""
+    from .freeze import freeze_frame_image
+    from .schemas import TimelineClip
+    proj = _project_or_404(project_id)
+    try:
+        clip = TimelineClip.model_validate(body.get("clip") or {})
+        info = freeze_frame_image(proj, clip, float(body.get("time") or 0.0))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"image": info.model_dump()}
+
+
+@app.post("/api/projects/{project_id}/beats")
+def detect_clip_beats(project_id: str, body: dict) -> dict:
+    """Beats automáticos (#12) del audio del clip ``clip`` (el clip entero, tal
+    cual está en la timeline): ``{times: [s del ARCHIVO], bpm}``."""
+    from . import compose
+    from .beats import detect_beats
+    from .schemas import TimelineClip
+    proj = _project_or_404(project_id)
+    try:
+        clip = TimelineClip.model_validate(body.get("clip") or {})
+        if clip.kind not in ("audio", "video"):
+            raise ValueError("Los beats solo se detectan en clips de audio o vídeo.")
+        path = compose._clip_path(proj, clip)
+        if path is None or not path.exists():
+            raise ValueError("No se encuentra el archivo del clip.")
+        return detect_beats(path)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/projects/{project_id}/track-object", response_model=Job)
+def track_object_endpoint(project_id: str, req: TrackObjectRequest) -> Job:
+    """Seguimiento de objetos (#15): job cuyo ``result`` es el recorrido del objeto."""
+    if projects.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    if (req.clip or {}).get("kind") != "video":
+        raise HTTPException(status_code=400, detail="Solo se siguen objetos de un clip de vídeo.")
+    job = jobs.create_job()
+    jobs.start_object_track_job(job, project_id, req.clip, req.box, float(req.at))
+    return job
+
+
+@app.get("/api/recipes")
+def list_recipes() -> dict:
+    """Recetas en un clic (#21): id, nombre, truco y qué necesitan seleccionado."""
+    from .recipes import RECIPES
+    return {"recipes": list(RECIPES)}
+
+
+@app.post("/api/projects/{project_id}/recipes/{recipe}")
+def apply_recipe_endpoint(project_id: str, recipe: str, req: RecipeRequest) -> dict:
+    """Aplica una receta sobre la timeline guardada (el editor guarda antes y recarga
+    después). Devuelve ``changed`` (pistas y clips nuevos o tocados) y ``warnings``."""
+    from . import timeline_store
+    if projects.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    try:
+        res = timeline_store.apply_op(project_id, "apply_recipe",
+                                      {"recipe": recipe, "clip_ids": req.clip_ids, "params": req.params})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return {"changed": res.get("changed", []), "warnings": res.get("warnings", [])}
+
+
+@app.post("/api/projects/{project_id}/sound-design", response_model=Job)
+def sound_design_endpoint(project_id: str, req: SoundDesignRequest) -> Job:
+    """Sonorizar con IA (#17): job cuyo ``result`` son los sonidos propuestos."""
+    if projects.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    if (req.clip or {}).get("kind") not in ("video", "image"):
+        raise HTTPException(status_code=400, detail="Sonorizar funciona con clips de vídeo o imagen.")
+    job = jobs.create_job()
+    jobs.start_sound_design_job(job, project_id, req.clip)
+    return job
 
 
 # --- Motion Studio (motion graphics editables) --------------------------
@@ -2004,6 +2136,29 @@ def ai_foundry_generate(body: dict = Body(...)) -> dict:
         raise HTTPException(status_code=_foundry_error_status(exc.code), detail=str(exc)) from exc
 
 
+@app.post("/api/projects/{project_id}/ai/analyze-materials", response_model=Job)
+def ai_analyze_materials(project_id: str, body: dict = Body(default={})) -> Job:
+    """Analiza clips e imágenes con la visión de Foundry y guarda descripción IA +
+    metadata semántica (+ descripción/título solo si estaban vacíos o eran genéricos).
+    Entrada: {only_missing=true, rename_generic=true, items?:[{kind,id}]}. Devuelve un job;
+    el resumen queda en ``job.result``."""
+    from . import foundry
+    if projects.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    reason = foundry.unavailable_reason()
+    if reason:
+        raise HTTPException(status_code=400, detail=reason)
+    body = body or {}
+    refs = body.get("items") if isinstance(body.get("items"), list) else None
+    job = jobs.create_job()
+    jobs.start_material_analysis_job(job, project_id, {
+        "only_missing": bool(body.get("only_missing", True)),
+        "rename_generic": bool(body.get("rename_generic", True)),
+        "refs": refs,
+    })
+    return job
+
+
 # --- Chat IA (agente que opera el MCP existente) -----------------------
 
 @app.get("/api/ai/config")
@@ -2020,9 +2175,14 @@ def ai_config() -> dict:
               "groq": "Groq (gratis)", "cerebras": "Cerebras (gratis)",
               "mistral": "Mistral (gratis)", "huggingface": "Hugging Face (gratis, limitado)",
               "lmstudio": "LM Studio (local)"}
+    from . import foundry
     providers = [{"id": "gemini", "label": "Google Gemini",
                   "has_key": bool(gemini_tts.api_key()), "local": False,
-                  "default_model": ai_providers.DEFAULT_MODEL}]
+                  "default_model": ai_providers.DEFAULT_MODEL},
+                 # Endpoint + clave + deployment salen del bloque Microsoft Foundry.
+                 {"id": ai_providers.FOUNDRY, "label": "Microsoft Foundry (Azure)",
+                  "has_key": foundry.available(), "local": False,
+                  "default_model": foundry.deployment()}]
     for pid, spec in ai_providers.OPENAI_COMPATIBLE.items():
         local = spec["key"] is None
         providers.append({"id": pid, "label": labels.get(pid, pid),

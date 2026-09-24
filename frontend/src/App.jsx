@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react'
-import { listProjects, createProject, deleteProject, renameProject, duplicateProject } from './services/api'
+import {
+  listProjects, createProject, deleteProject, renameProject, duplicateProject,
+  listProjectGroups, createProjectGroup, renameProjectGroup, deleteProjectGroup, moveProjectToGroup,
+} from './services/api'
 import Home from './features/projects/Home'
 import ProjectView from './features/projects/ProjectView'
 import ConfirmModal from './components/ConfirmModal'
@@ -14,8 +17,12 @@ function readHash() {
 
 export default function App() {
   const [projects, setProjects] = useState([])
+  const [groups, setGroups] = useState([])
+  // Carpeta abierta en el inicio (null = raíz). Vive aquí para conservarla al volver de un proyecto.
+  const [groupId, setGroupId] = useState(null)
   const [openId, setOpenId] = useState(readHash)
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [deleteGroupTarget, setDeleteGroupTarget] = useState(null)
 
   // Navegar = cambiar el hash; el estado se actualiza vía 'hashchange'.
   function navigate(id) {
@@ -23,7 +30,11 @@ export default function App() {
   }
 
   async function refresh() {
-    try { setProjects(await listProjects()) } catch { /* backend no listo */ }
+    try {
+      const [ps, gs] = await Promise.all([listProjects(), listProjectGroups()])
+      setProjects(ps)
+      setGroups(gs)
+    } catch { /* backend no listo */ }
   }
 
   useEffect(() => { refresh() }, [])
@@ -35,10 +46,38 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
 
-  async function onCreate(name) {
-    const p = await createProject(name)
+  async function onCreate(name, targetGroupId) {
+    const p = await createProject(name, targetGroupId)
     await refresh()
     return p
+  }
+
+  async function onCreateGroup(name) {
+    const g = await createProjectGroup(name)
+    await refresh()
+    return g
+  }
+
+  async function onRenameGroup(g, name) {
+    try { await renameProjectGroup(g.id, name) } catch { /* error silencioso */ }
+    await refresh()
+  }
+
+  // Arrastrar a una carpeta: se aplica al momento y luego se confirma con el backend.
+  async function onMove(pid, targetGroupId) {
+    setProjects((ps) => ps.map((p) => (p.id === pid ? { ...p, group_id: targetGroupId } : p)))
+    try { await moveProjectToGroup(pid, targetGroupId) } catch { /* se revierte con el refresh */ }
+    await refresh()
+  }
+
+  async function confirmDeleteGroup() {
+    if (!deleteGroupTarget) return
+    try {
+      await deleteProjectGroup(deleteGroupTarget.id)
+      if (groupId === deleteGroupTarget.id) setGroupId(null)
+      await refresh()
+    } catch { /* error silencioso */ }
+    setDeleteGroupTarget(null)
   }
 
   async function onRename(p, name) {
@@ -62,6 +101,7 @@ export default function App() {
   }
 
   const openProject = projects.find((p) => p.id === openId) || null
+  const currentGroupId = groups.some((g) => g.id === groupId) ? groupId : null
 
   return (
     <div className="app">
@@ -77,11 +117,18 @@ export default function App() {
       ) : (
         <Home
           projects={projects}
+          groups={groups}
+          groupId={currentGroupId}
+          onOpenGroup={setGroupId}
           onOpen={navigate}
           onCreate={onCreate}
           onDelete={(p) => setDeleteTarget(p)}
           onRename={onRename}
           onDuplicate={onDuplicate}
+          onMove={onMove}
+          onCreateGroup={onCreateGroup}
+          onRenameGroup={onRenameGroup}
+          onDeleteGroup={(g) => setDeleteGroupTarget(g)}
         />
       )}
 
@@ -94,6 +141,17 @@ export default function App() {
         danger
         onConfirm={confirmDeleteProject}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      <ConfirmModal
+        open={!!deleteGroupTarget}
+        title="¿Eliminar carpeta?"
+        message={deleteGroupTarget ? `Se eliminará la carpeta "${deleteGroupTarget.name}". Sus proyectos no se borran: pasan a "Sin carpeta".` : ''}
+        confirmText="Eliminar carpeta"
+        cancelText="Cancelar"
+        danger
+        onConfirm={confirmDeleteGroup}
+        onCancel={() => setDeleteGroupTarget(null)}
       />
     </div>
   )

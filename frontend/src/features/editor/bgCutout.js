@@ -20,7 +20,7 @@
 // El export hace exactamente lo mismo sobre los mismos PNG, de ahí la paridad.
 import {
   applyChromaKey, applyMatteLevels, autoActive, chromaActive, chromaMorphParams,
-  clipBg, matteIndexFor, MATTE_EXPAND_MAX,
+  clipBg, hexRgb, matteIndexFor, MATTE_EXPAND_MAX, outlineAlpha, outlineParams,
 } from '../../lib/clipBg'
 import { mediaSize } from '../../lib/clipLayout'
 
@@ -40,6 +40,9 @@ const alphaCache = new Map()  // clipId -> { sig, canvas }
 const cutCache = new Map()    // clipId -> { sig, canvas }
 const blurCache = new Map()   // clipId -> { sig, canvas } (auxiliar de la pluma)
 const grayCache = new Map()   // clipId -> { sig, canvas } (alfa como gris, croma)
+const outlineCache = new Map() // clipId -> { sig, canvas } (recorte + contorno, #9)
+const olGrayCache = new Map()  // clipId -> { sig, canvas } (alfa del recorte como gris)
+const olBlurCache = new Map()  // clipId -> { sig, canvas } (difuminados del contorno)
 
 function evict(map, max) {
   while (map.size > max) {
@@ -311,7 +314,7 @@ export function cutoutDrawable(clip, el, srcTime, loopDur = 0) {
   const sig = [`${w}x${h}`, chromaSig, alphaSig, wantChroma ? srcTime.toFixed(4) : ''].join('#')
   const entry = scratch(cutCache, clip.id, w, h)
   if (!entry) return null
-  if (entry.sig === sig) return entry.canvas
+  if (entry.sig === sig) return withOutline(clip, bg, entry.canvas, sig, w, h)
 
   const ctx = entry.canvas.getContext('2d', { willReadFrequently: wantChroma })
   ctx.setTransform(1, 0, 0, 1, 0, 0)
@@ -335,7 +338,72 @@ export function cutoutDrawable(clip, el, srcTime, loopDur = 0) {
     ctx.globalCompositeOperation = 'source-over'
   }
   entry.sig = sig
-  return entry.canvas
+  return withOutline(clip, bg, entry.canvas, sig, w, h)
+}
+
+function resetCtx(ctx) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.globalCompositeOperation = 'source-over'
+  ctx.globalAlpha = 1
+  ctx.filter = 'none'
+}
+
+/**
+ * Contorno / halo del sujeto (#9): se dibuja DETRÁS del recorte. Mismo cálculo que
+ * el export (clip_bg.outline_ffmpeg_steps): alfa → difuminado σ → tabla
+ * `outlineAlpha` → color → (halo: otro difuminado) → recorte encima.
+ */
+function withOutline(clip, bg, cut, cutSig, w, h) {
+  const p = outlineParams(bg.outline, h)
+  if (!p) return cut
+  const sig = [cutSig, p.width.toFixed(3), p.halo.toFixed(3), p.opacity, p.color].join('|')
+  const out = scratch(outlineCache, clip.id, w, h)
+  const gray = scratch(olGrayCache, clip.id, w, h)
+  const blur = scratch(olBlurCache, clip.id, w, h)
+  if (!out || !gray || !blur) return cut
+  if (out.sig === sig) return out.canvas
+  const o = out.canvas.getContext('2d', { willReadFrequently: true })
+  const g = gray.canvas.getContext('2d')
+  const b = blur.canvas.getContext('2d', { willReadFrequently: true })
+  for (const c of [o, g, b]) resetCtx(c)
+  // 1) Alfa del recorte como gris opaco: silueta blanca sobre negro.
+  o.clearRect(0, 0, w, h)
+  o.drawImage(cut, 0, 0)
+  o.globalCompositeOperation = 'source-in'
+  o.fillStyle = '#fff'
+  o.fillRect(0, 0, w, h)
+  o.globalCompositeOperation = 'source-over'
+  g.fillStyle = '#000'
+  g.fillRect(0, 0, w, h)
+  g.drawImage(out.canvas, 0, 0)
+  // 2) Difuminado σ y 3) tabla del umbral → alfa del contorno, en su color.
+  b.clearRect(0, 0, w, h)
+  b.filter = `blur(${p.sigma.toFixed(2)}px)`
+  b.drawImage(gray.canvas, 0, 0)
+  b.filter = 'none'
+  const src = b.getImageData(0, 0, w, h).data
+  const img = o.createImageData(w, h)
+  const d = img.data
+  const [r, gg, bb] = hexRgb(p.color)
+  for (let i = 0; i < d.length; i += 4) {
+    d[i] = r; d[i + 1] = gg; d[i + 2] = bb
+    d[i + 3] = outlineAlpha(src[i], p)
+  }
+  o.clearRect(0, 0, w, h)
+  o.putImageData(img, 0, 0)
+  // 4) Halo: difuminado del contorno.
+  if (p.halo > 0.3) {
+    b.clearRect(0, 0, w, h)
+    b.filter = `blur(${p.halo.toFixed(2)}px)`
+    b.drawImage(out.canvas, 0, 0)
+    b.filter = 'none'
+    o.clearRect(0, 0, w, h)
+    o.drawImage(blur.canvas, 0, 0)
+  }
+  // 5) El sujeto encima.
+  o.drawImage(cut, 0, 0)
+  out.sig = sig
+  return out.canvas
 }
 
 /** Olvida lo cacheado de un clip (al borrarlo, o al recalcular su matte). */
@@ -345,6 +413,9 @@ export function resetCutout(clipId) {
     cutCache.clear()
     blurCache.clear()
     grayCache.clear()
+    outlineCache.clear()
+    olGrayCache.clear()
+    olBlurCache.clear()
     matteImgs.clear()
     metas.clear()
     return
@@ -353,6 +424,9 @@ export function resetCutout(clipId) {
   cutCache.delete(clipId)
   blurCache.delete(clipId)
   grayCache.delete(clipId)
+  outlineCache.delete(clipId)
+  olGrayCache.delete(clipId)
+  olBlurCache.delete(clipId)
 }
 
 /** Invalida los metadatos de una base_key (tras ampliar el rango del matte). */

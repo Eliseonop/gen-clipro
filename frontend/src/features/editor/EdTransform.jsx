@@ -1,10 +1,18 @@
 import { useState } from 'react'
 import Icon from '../../components/Icon'
+import Hint from '../../components/Hint'
+import FlipSelect from '../../components/FlipSelect'
+import { BLEND_MODES, clipBlend } from '../../lib/clipBlend'
 import { clipPose } from '../../lib/clipAnim'
-import { canKeyframe, kfState } from '../../lib/clipKeyframes'
+import { canKeyframe, clipPropsAt, kfState } from '../../lib/clipKeyframes'
+import { PERSPECTIVE_DEFAULT, TEXT3D_MAX_ANGLE } from '../../lib/text3d'
 import { CLIP_POS_MAX, CLIP_POS_MIN, isOverlay } from '../../lib/clipLayout'
 import { clamp } from '../../lib/panning'
 import { isVisualClip } from './editorModel'
+
+// Escala máxima de un texto (×): libass lo dibuja como vector, así que no pierde
+// calidad ni pesa. Figuras e imágenes se exportan como imagen escalada: tope ×8.
+export const TEXT_SCALE_MAX = 100
 
 function zoomToScale(zoom) {
   const z = Number(zoom)
@@ -38,15 +46,18 @@ export function KfDia({ state = 'off', onClick, title }) {
   )
 }
 
-export function InspSection({ title, children, defaultOpen = true, onReset, kfSt, onAddKf }) {
+export function InspSection({ title, hint, children, defaultOpen = true, onReset, kfSt, onAddKf }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
     <section className={`ed-insp-sec${open ? ' open' : ''}`}>
       <div className="ed-insp-sec-h">
-        <button type="button" className="ed-insp-sec-tog" onClick={() => setOpen((v) => !v)}>
-          <Icon name={open ? 'expand_more' : 'chevron_right'} size={18} />
-          <span>{title}</span>
-        </button>
+        <span className="ed-insp-sec-title">
+          <button type="button" className="ed-insp-sec-tog" onClick={() => setOpen((v) => !v)}>
+            <Icon name={open ? 'expand_more' : 'chevron_right'} size={18} />
+            <span>{title}</span>
+          </button>
+          {hint && <Hint>{hint}</Hint>}
+        </span>
         <span className="ed-insp-sec-tools">
           {onReset && (
             <button type="button" className="ed-insp-ico" title="Restablecer" onClick={onReset}>
@@ -105,10 +116,12 @@ export function NumberStepper({ value, min, max, step = 1, format, parse, suffix
   )
 }
 
-export function InspSlider({ label, value, min, max, step, format, parse, suffix, onChange, onKf, kfSt, stepper }) {
+// `typeMax`: tope al ESCRIBIR el valor (puede superar el del deslizador: escala
+// extrema de textos, #5).
+export function InspSlider({ label, hint, value, min, max, typeMax, step, format, parse, suffix, onChange, onKf, kfSt, stepper }) {
   return (
     <div className="ed-insp-row">
-      <div className="ed-insp-row-lab">{label}</div>
+      <div className="ed-insp-row-lab">{label}{hint && <Hint>{hint}</Hint>}</div>
       <div className="ed-insp-row-ctrl">
         <input
           type="range"
@@ -123,7 +136,7 @@ export function InspSlider({ label, value, min, max, step, format, parse, suffix
           <NumberStepper
             value={value}
             min={min}
-            max={max}
+            max={typeMax ?? max}
             step={step}
             format={format}
             parse={parse}
@@ -170,8 +183,48 @@ function InspXY({ label, value, onChange, onKf, kfSt }) {
   )
 }
 
+// Modo de fusión (#8): cómo se mezcla el clip con lo que tiene debajo.
+const BLEND_OPTIONS = BLEND_MODES.map((m) => ({ value: m.id, label: m.label }))
+export function BlendRow({ clip, onBlend }) {
+  return (
+    <label className="ed-insp-select">
+      Modo de fusión
+      <FlipSelect value={clipBlend(clip)} options={BLEND_OPTIONS} onChange={onBlend} title="Modo de fusión" />
+    </label>
+  )
+}
+
+// Voltear (#7): espejo en los ejes del clip (no se anima, como en CapCut).
+export function FlipRow({ clip, onFlip }) {
+  return (
+    <div className="ed-insp-row">
+      <div className="ed-insp-row-lab">Voltear</div>
+      <div className="ed-insp-flip">
+        <button
+          type="button"
+          className={`ed-insp-ico${clip.flip_h ? ' on' : ''}`}
+          title="Voltear en horizontal (espejo)"
+          aria-pressed={!!clip.flip_h}
+          onClick={() => onFlip('h')}
+        >
+          <Icon name="flip" size={16} />
+        </button>
+        <button
+          type="button"
+          className={`ed-insp-ico ed-flip-v${clip.flip_v ? ' on' : ''}`}
+          title="Voltear en vertical (reflejo)"
+          aria-pressed={!!clip.flip_v}
+          onClick={() => onFlip('v')}
+        >
+          <Icon name="flip" size={16} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function EdTransform({
-  clip, playhead, onPose, onAddKf, fps = 30, heightScale = 1,
+  clip, playhead, onPose, onAddKf, onTextStyle, onFlip, fps = 30, heightScale = 1,
 }) {
   if (!canKeyframe(clip) || clip.kind === 'audio') return null
   const localT = Math.max(0, (playhead ?? 0) - (clip.start || 0))
@@ -205,9 +258,14 @@ export default function EdTransform({
   function reset() {
     onPose?.({
       x: 0.5, y: 0.5, scale: heightFit ? hs : 1, rotation: 0, opacity: 1,
-      cx: 0.5, cy: 0.5, zoom: 1,
+      cx: 0.5, cy: 0.5, zoom: 1, ...(text ? { rot_x: 0, rot_y: 0 } : {}),
     })
   }
+  // Texto 3D (#4): giro en X/Y con perspectiva, keyframeable (ver lib/text3d.js).
+  const props3d = text ? clipPropsAt(clip, localT) : null
+  const rotX = +(props3d?.rot_x || 0).toFixed(1)
+  const rotY = +(props3d?.rot_y || 0).toFixed(1)
+  const persp = Number.isFinite(Number(clip?.style?.perspective)) ? Number(clip.style.perspective) : PERSPECTIVE_DEFAULT
 
   return (
     <InspSection title="Transformación" onReset={reset} kfSt={kfSt} onAddKf={onAddKf}>
@@ -217,6 +275,8 @@ export default function EdTransform({
           value={scalePct}
           min={showZoomScale ? 100 : 5}
           max={showZoomScale ? 1000 : 400}
+          // Textos: hasta 10 000 % escribiendo el valor ("texto que atraviesas").
+          typeMax={text ? TEXT_SCALE_MAX * 100 : undefined}
           step={1}
           format={(v) => `${Math.round(v)}`}
           suffix="%"
@@ -225,7 +285,7 @@ export default function EdTransform({
             const s = pct / 100
             if (showZoomScale) onPose?.({ zoom: scaleToZoom(s) })
             else if (heightFit) onPose?.({ scale: +clamp(s * hs, 0.0005, 100).toFixed(5) })
-            else onPose?.({ scale: +clamp(s, 0.05, 8).toFixed(4) })
+            else onPose?.({ scale: +clamp(s, 0.05, text ? TEXT_SCALE_MAX : 8).toFixed(4) })
           }}
           onKf={onAddKf}
           kfSt={kfSt}
@@ -271,6 +331,52 @@ export default function EdTransform({
           stepper
         />
       )}
+      {text && (
+        <>
+          <InspSlider
+            label="Inclinar 3D"
+            value={rotX}
+            min={-TEXT3D_MAX_ANGLE}
+            max={TEXT3D_MAX_ANGLE}
+            step={1}
+            format={(v) => Number(v).toFixed(1)}
+            suffix="°"
+            parse={(raw) => parseFloat(String(raw).replace(/[^\d.-]/g, ''))}
+            onChange={(v) => onPose?.({ rot_x: clamp(v, -TEXT3D_MAX_ANGLE, TEXT3D_MAX_ANGLE) })}
+            onKf={onAddKf}
+            kfSt={kfSt}
+            stepper
+          />
+          <InspSlider
+            label="Girar 3D"
+            value={rotY}
+            min={-TEXT3D_MAX_ANGLE}
+            max={TEXT3D_MAX_ANGLE}
+            step={1}
+            format={(v) => Number(v).toFixed(1)}
+            suffix="°"
+            parse={(raw) => parseFloat(String(raw).replace(/[^\d.-]/g, ''))}
+            onChange={(v) => onPose?.({ rot_y: clamp(v, -TEXT3D_MAX_ANGLE, TEXT3D_MAX_ANGLE) })}
+            onKf={onAddKf}
+            kfSt={kfSt}
+            stepper
+          />
+          {(rotX || rotY) && onTextStyle ? (
+            <InspSlider
+              label="Perspectiva"
+              value={Math.round(persp * 100)}
+              min={0}
+              max={100}
+              step={1}
+              format={(v) => `${Math.round(v)}`}
+              suffix="%"
+              parse={(raw) => parseFloat(String(raw).replace(/[^\d.-]/g, ''))}
+              onChange={(v) => onTextStyle({ perspective: clamp(v, 0, 100) / 100 })}
+            />
+          ) : null}
+        </>
+      )}
+      {onFlip && <FlipRow clip={clip} onFlip={onFlip} />}
       {showXY && (
         <div className="ed-insp-align">
           <button type="button" className="ed-insp-ico" title="Izquierda" onClick={() => setPan(0, panY)}><Icon name="format_align_left" size={15} /></button>

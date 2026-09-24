@@ -518,6 +518,103 @@ def _run_face_track(job_id: str, pid: str, ident: str, start, end, samples: int,
         job.message = "Error en el seguimiento de caras."
 
 
+def _run_object_track(job_id: str, pid: str, clip: dict, box: dict, at: float,
+                      follow: dict | None) -> None:
+    """Seguimiento de objetos (#15): sigue el recuadro en el tramo del clip y deja el
+    recorrido en ``job.result``. Con ``follow`` ({follower_clip_id, anchor_t, mode})
+    —el MCP— además aplica los keyframes al clip que acompaña (deshacible)."""
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+    job.progress = 0.01
+    job.message = "Siguiendo el objeto…"
+
+    def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from . import compose, object_track, timeline_store
+        from .schemas import TimelineClip
+
+        project = projects.get_project(pid)
+        if project is None:
+            raise RuntimeError("Proyecto no encontrado.")
+        tclip = TimelineClip.model_validate(clip)
+        path = compose._clip_path(project, tclip)
+        if path is None or not path.exists():
+            raise RuntimeError("No se encuentra el archivo del vídeo.")
+        res = object_track.track_object(path, box, at, tclip.in_point, tclip.out_point, on_progress)
+        job.result = {**res, "box": box, "at": at, "clip_id": tclip.id}
+        n = len(res["track"])
+        lost = sum(1 for p in res["track"] if not p["ok"])
+        if follow:
+            tl = project.timeline
+            dims = {"srcW": res["width"], "srcH": res["height"],
+                    "outW": int(tl.width), "outH": int(tl.height)}
+            timeline_store.apply_op(pid, "follow_object", {
+                "follower_clip_id": follow["follower_clip_id"], "video_clip_id": tclip.id,
+                "track": res["track"], "box_w": float(box["w"]), "anchor_t": float(follow["anchor_t"]),
+                "dims": dims, "mode": follow.get("mode") or "position_scale"})
+        job.progress = 1.0
+        job.message = f"Objeto seguido en {n} fotogramas" + (f" ({lost} sin seguir)." if lost else ".")
+        job.status = JobStatus.done
+    except JobCancelled:
+        job.status = JobStatus.error
+        job.error = "Cancelado."
+    except Exception as exc:  # noqa: BLE001
+        job.status = JobStatus.error
+        job.error = str(exc)
+        job.message = "Error al seguir el objeto."
+
+
+def _run_sound_design(job_id: str, pid: str, clip: dict, apply: bool) -> None:
+    """Sonorizar con IA (#17): propuestas en ``job.result``; con ``apply`` (el MCP)
+    además coloca los sonidos emparejados en la timeline (deshacible)."""
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+    job.progress = 0.05
+    job.message = "Preparando la escena…"
+
+    def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from . import sound_design, timeline_store
+
+        res = sound_design.propose(pid, clip, on_progress)
+        job.result = res
+        n, miss = len(res["sounds"]), len(res["missing"])
+        if apply and n:
+            r = timeline_store.apply_op(pid, "add_sound_design", {"clip_id": clip["id"], "sounds": res["sounds"]})
+            job.result = {**res, "added": r.get("changed", [])}
+        job.progress = 1.0
+        job.message = (f"{n} sonidos propuestos" if n else "Ningún sonido de la biblioteca encaja") + (
+            f" · {miss} no están en tu biblioteca" if miss else "") + "."
+        job.status = JobStatus.done
+    except JobCancelled:
+        job.status = JobStatus.error
+        job.error = "Cancelado."
+    except Exception as exc:  # noqa: BLE001
+        job.status = JobStatus.error
+        job.error = str(exc)
+        job.message = "Error al sonorizar la escena."
+
+
+def start_sound_design_job(job: Job, pid: str, clip: dict, apply: bool = False) -> None:
+    threading.Thread(target=_run_sound_design, args=(job.id, pid, clip, apply), daemon=True).start()
+
+
+def start_object_track_job(job: Job, pid: str, clip: dict, box: dict, at: float,
+                           follow: dict | None = None) -> None:
+    threading.Thread(target=_run_object_track, args=(job.id, pid, clip, box, at, follow),
+                     daemon=True).start()
+
+
 def start_face_track_job(job: Job, pid: str, ident: str, start=None, end=None,
                          samples: int = 0, force: bool = False) -> None:
     thread = threading.Thread(
@@ -795,6 +892,44 @@ def start_short_library_job(job: Job, pid: str, params: dict) -> None:
         args=(job.id, "build_short_from_library", kwargs, "Short de biblioteca listo."),
         daemon=True,
     )
+    thread.start()
+
+
+def _run_material_analysis(job_id: str, pid: str, params: dict) -> None:
+    """Analizar material con visión de Foundry (``material_ai``). Resumen en ``job.result``."""
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+
+    def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from . import material_ai
+
+        summary = material_ai.run(pid, on_progress=on_progress, **params)
+        job.result = summary
+        n, bad = summary["analyzed"], len(summary["failed"])
+        if summary["total"] and not n:
+            raise RuntimeError(summary["failed"][0]["error"] if bad else "No se analizó nada.")
+        job.progress = 1.0
+        job.message = (f"{n} materiales analizados" + (f", {bad} con error" if bad else "") + "."
+                       if summary["total"] else "Todo el material ya estaba analizado.")
+        job.status = JobStatus.done
+    except JobCancelled:
+        job.status = JobStatus.error
+        job.message = "Cancelado."
+        job.error = "cancelado"
+    except Exception as exc:  # noqa: BLE001
+        job.status = JobStatus.error
+        job.error = str(exc)
+        job.message = "Error analizando el material."
+
+
+def start_material_analysis_job(job: Job, pid: str, params: dict) -> None:
+    thread = threading.Thread(target=_run_material_analysis, args=(job.id, pid, params), daemon=True)
     thread.start()
 
 

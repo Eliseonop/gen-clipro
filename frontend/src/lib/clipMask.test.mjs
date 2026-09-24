@@ -8,12 +8,12 @@ import { KF_PROP_KEYS } from './clipKeyframes.js'
 import { clipMasksAt } from './clipAnim.js'
 
 // --- Catálogo y modelo -----------------------------------------------------
-assert.equal(MASK_TYPES.length, 7)
+assert.equal(MASK_TYPES.length, 8)
 assert.deepEqual(MASK_TYPES.map((t) => t.id),
-  ['linear', 'circle', 'rectangle', 'star', 'heart', 'text', 'brush'])
+  ['linear', 'film', 'circle', 'rectangle', 'star', 'heart', 'text', 'brush'])
 assert.ok(MASK_TYPES.every((t) => t.label && t.icon))
 // Los tipos geométricos tienen su trazado registrado (punto de extensión).
-for (const id of ['linear', 'circle', 'rectangle', 'star', 'heart']) {
+for (const id of ['linear', 'film', 'circle', 'rectangle', 'star', 'heart']) {
   assert.equal(typeof MASK_SHAPES[id], 'function', id)
 }
 
@@ -35,7 +35,7 @@ assert.equal(brush.points[1].m, 1)
 assert.ok(maskable({ kind: 'video' }))
 assert.ok(maskable({ kind: 'image' }))
 assert.ok(maskable({ kind: 'shape' }))
-assert.ok(!maskable({ kind: 'text' }))
+assert.ok(maskable({ kind: 'text' }))   // "revelar texto" (antes: clip combinado)
 assert.ok(!maskable({ kind: 'audio' }))
 
 assert.deepEqual(clipMasks({ kind: 'video' }), [])

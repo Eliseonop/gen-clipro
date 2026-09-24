@@ -12,12 +12,13 @@ CLIP_TRACK_KIND = {
     "image": "video",
     "shape": "video",
     "motion": "video",   # motion graphic (Motion Studio): overlay con alfa en pista de vídeo
+    "adjustment": "video",   # capa de ajuste (#19): filtra lo que tiene debajo
     "audio": "audio",
     "text": "text",
 }
 
 VISUAL_CLIP_KINDS = frozenset({"video", "image"})
-GENERATED_DURATION_KINDS = frozenset({"text", "image", "shape"})
+GENERATED_DURATION_KINDS = frozenset({"text", "image", "shape", "adjustment"})
 STILL_KINDS = frozenset({"image", "shape"})
 
 ASSET_DISK_KIND = {
@@ -102,6 +103,10 @@ def ffmpeg_input_args(clip, path, fps: int) -> list[str]:
     # la zona transparente saldría negra al componer. Forzar libvpx-vp9 lo arregla.
     if kind == "motion" or p.lower().endswith(".webm"):
         return ["-c:v", "libvpx-vp9", "-i", p]
+    if "%0" in p:
+        # Secuencia PNG de una figura con «dibujar trazo» animado (#14): un
+        # fotograma por fotograma del proyecto, desde el tiempo local 0.
+        return ["-framerate", str(int(fps)), "-start_number", "0", "-i", p]
     if is_still_clip(clip):
         _, dur = ffmpeg_trim_window(clip)
         t = dur + 0.05

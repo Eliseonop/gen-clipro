@@ -236,7 +236,7 @@ export default function EdChat({ project, context, onReload, onBusy, clips, onMc
             {m.text && <div className="ed-chat-text">{m.text}</div>}
             {(m.tools || []).map((t, j) => (
               <div key={j} className={`ed-chat-tool ${t.status}`}>
-                <Icon name={t.status === 'ok' ? 'check_circle' : t.status === 'err' ? 'error' : 'progress_activity'} size={14} />
+                <Icon name={t.status === 'ok' ? 'check_circle' : t.status === 'err' ? 'error' : 'autorenew'} size={14} />
                 <span>{debug ? `${t.tool} · ${t.status}` : toolLabel(t.tool)}</span>
               </div>
             ))}
@@ -257,7 +257,7 @@ export default function EdChat({ project, context, onReload, onBusy, clips, onMc
             {m.status && !m.done && <div className="ed-chat-tool run"><Icon name="hourglass_top" size={14} /> <span>{m.status}</span></div>}
             {m.error && <div className="ed-chat-tool err"><Icon name="error" size={14} /> <span>{m.error}</span></div>}
             {m.role === 'assistant' && !m.done && !m.text && (m.tools || []).length === 0 && !m.status && (
-              <div className="ed-chat-tool run"><Icon name="progress_activity" size={14} /> <span>Pensando…</span></div>
+              <div className="ed-chat-tool run"><Icon name="autorenew" size={14} /> <span>Pensando…</span></div>
             )}
           </div>
         ))}
@@ -277,7 +277,7 @@ export default function EdChat({ project, context, onReload, onBusy, clips, onMc
           disabled={busy || unavailable}
         />
         <button type="submit" className="icon-btn" disabled={busy || unavailable || !input.trim()} title="Enviar">
-          <Icon name={busy ? 'progress_activity' : 'send'} size={18} />
+          <Icon name={busy ? 'autorenew' : 'send'} size={18} />
         </button>
       </form>
     </div>
@@ -293,7 +293,7 @@ function McpAuditLog({ entries, live, clips, cfg }) {
     <details className={`ed-mcp-log${running.length ? ' live' : ''}`} defaultOpen>
       <summary>
         {running.length
-          ? <span className="ed-mcp-spin"><Icon name="progress_activity" size={15} /></span>
+          ? <span className="ed-mcp-spin"><Icon name="autorenew" size={15} /></span>
           : <Icon name="terminal" size={15} />}
         <span>Actividad MCP</span>
         {llm && <span className="ed-mcp-cfg" title="Modelo del chat interno">{llm}</span>}
@@ -306,7 +306,7 @@ function McpAuditLog({ entries, live, clips, cfg }) {
           return (
             <div key={`live-${a.job_id || a.token || i}`} className="ed-mcp-row run">
               <div className="ed-mcp-row-main">
-                <span className="ed-mcp-spin"><Icon name="progress_activity" size={13} /></span>
+                <span className="ed-mcp-spin"><Icon name="autorenew" size={13} /></span>
                 <code>{a.tool}</code>
                 <span className="ed-mcp-st">en curso</span>
                 {pct != null && <span className="ed-mcp-ms">{pct}%</span>}

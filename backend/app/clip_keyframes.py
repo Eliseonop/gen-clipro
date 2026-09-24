@@ -4,17 +4,22 @@ Espejo de ``frontend/src/lib/clipKeyframes.js``. ``t`` es tiempo local del clip.
 """
 from __future__ import annotations
 
+import math
 import uuid
 from typing import Any, Optional
 
 from .clip_mask import MASK_KF_KEYS, mask_static_props
 
 KF_SNAP = 0.06
-AUDIO_FX_KEYS = ("eq", "compressor", "reverb", "echo", "denoise", "distortion")
+# Espejo de audio_fx.AUDIO_FX_IDS (#16: filtros de sonido al final).
+AUDIO_FX_KEYS = ("eq", "compressor", "reverb", "echo", "denoise", "distortion",
+                 "underwater", "telephone", "radio", "megaphone", "muffled")
 VOL_MIN = 0.0
 VOL_MAX = 2.0
 KF_PROP_KEYS = (
     "x", "y", "scale", "rotation", "opacity", "cx", "cy", "zoom",
+    "rot_x", "rot_y",                     # giro 3D (solo textos; ver text3d.py)
+    "draw",                               # trazo dibujado 0–1 (solo figuras, #14)
     *MASK_KF_KEYS,
     "volume", *AUDIO_FX_KEYS,
 )
@@ -30,15 +35,84 @@ def _num(v: Any, default: float) -> float:
     return n
 
 
+INTERPS = (
+    "linear", "ease-in", "ease-out", "ease-in-out",
+    "cubic-in", "cubic-out", "cubic-in-out", "back-out", "bezier", "hold",
+)
+# Curva por defecto de "Personalizada" (la ease-in-out de CSS) y la de "Rebote".
+BEZIER_DEFAULT = (0.42, 0.0, 0.58, 1.0)
+BACK_OUT = (0.34, 1.56, 0.64, 1.0)
+# Curvas sin fórmula cerrada en FFmpeg: el export las muestrea por tramos.
+SAMPLED_INTERPS = ("back-out", "bezier")
+
+
 def normalize_interp(v: Any) -> str:
-    if v in ("ease-in", "ease-out", "ease-in-out", "hold"):
+    if v in INTERPS:
         return v
     if v in ("direct", "step"):
         return "hold"
     return "linear"
 
 
-def ease_t(u: float, kind: str) -> float:
+def normalize_bezier(v: Any) -> Optional[tuple[float, float, float, float]]:
+    """``[x1, y1, x2, y2]`` de una curva cúbica (como ``cubic-bezier`` de CSS).
+
+    x se limita a 0–1 (la curva debe avanzar en el tiempo); y admite −1…2 para
+    curvas que se pasan y vuelven (rebote)."""
+    if not isinstance(v, (list, tuple)) or len(v) != 4:
+        return None
+    n = [_num(x, float("nan")) for x in v]
+    if any(x != x for x in n):
+        return None
+    return (
+        min(1.0, max(0.0, n[0])), min(2.0, max(-1.0, n[1])),
+        min(1.0, max(0.0, n[2])), min(2.0, max(-1.0, n[3])),
+    )
+
+
+def bezier_y(bez: Any, u: float) -> float:
+    """Progreso ``y`` de la curva en el instante ``u`` (0–1). Espejo de ``bezierY``."""
+    x1, y1, x2, y2 = normalize_bezier(bez) or BEZIER_DEFAULT
+    if u <= 0:
+        return 0.0
+    if u >= 1:
+        return 1.0
+    cx = 3 * x1
+    bx = 3 * (x2 - x1) - cx
+    ax = 1 - cx - bx
+    cy = 3 * y1
+    by = 3 * (y2 - y1) - cy
+    ay = 1 - cy - by
+
+    def x_at(s: float) -> float:
+        return ((ax * s + bx) * s + cx) * s
+
+    s = u
+    ok = False
+    for _ in range(8):
+        err = x_at(s) - u
+        if abs(err) < 1e-7:
+            ok = True
+            break
+        d = (3 * ax * s + 2 * bx) * s + cx
+        if abs(d) < 1e-6:
+            break
+        s -= err / d
+    if not ok and not (0 <= s <= 1 and abs(x_at(s) - u) < 1e-5):
+        lo, hi, s = 0.0, 1.0, u
+        for _ in range(40):
+            x = x_at(s)
+            if abs(x - u) < 1e-7:
+                break
+            if x < u:
+                lo = s
+            else:
+                hi = s
+            s = (lo + hi) / 2
+    return ((ay * s + by) * s + cy) * s
+
+
+def ease_t(u: float, kind: str, bezier: Any = None) -> float:
     t = min(1.0, max(0.0, _num(u, 0.0)))
     k = normalize_interp(kind)
     if k == "hold":
@@ -49,6 +123,16 @@ def ease_t(u: float, kind: str) -> float:
         return 1.0 - (1.0 - t) * (1.0 - t)
     if k == "ease-in-out":
         return 2 * t * t if t < 0.5 else 1.0 - 2 * (1.0 - t) * (1.0 - t)
+    if k == "cubic-in":
+        return t * t * t
+    if k == "cubic-out":
+        return 1.0 - (1.0 - t) ** 3
+    if k == "cubic-in-out":
+        return 4 * t * t * t if t < 0.5 else 1.0 - ((-2 * t + 2) ** 3) / 2
+    if k == "back-out":
+        return bezier_y(BACK_OUT, t)
+    if k == "bezier":
+        return bezier_y(bezier, t)
     return t
 
 
@@ -102,7 +186,8 @@ def static_props(clip: Any) -> dict:
             "x": _num(st.get("x"), 0.5), "y": _num(st.get("y"), 0.5),
             "scale": _num(st.get("scale"), 1.0), "rotation": _num(st.get("rotation"), 0.0),
             "opacity": _num(st.get("opacity"), 1.0),
-            "cx": 0.5, "cy": 0.5, "zoom": 1.0,
+            "cx": 0.5, "cy": 0.5, "zoom": 1.0, "rot_x": 0.0, "rot_y": 0.0,
+            "draw": max(0.0, min(1.0, _num(st.get("draw"), 1.0))),
             **mask_static_props(clip),
             **audio,
         }
@@ -115,6 +200,8 @@ def static_props(clip: Any) -> dict:
             "scale": _num(st.get("scale"), 1.0), "rotation": _num(st.get("rotation"), 0.0),
             "opacity": _num(st.get("opacity"), 1.0),
             "cx": 0.5, "cy": 0.5, "zoom": 1.0,
+            "rot_x": _num(st.get("rot_x"), 0.0), "rot_y": _num(st.get("rot_y"), 0.0),
+            "draw": 1.0,
             **mask_static_props(clip),
             **audio,
         }
@@ -128,7 +215,8 @@ def static_props(clip: Any) -> dict:
         "scale": _num(tr.get("scale"), 1.0),
         "rotation": _num(tr.get("rotation"), 0.0),
         "opacity": 1.0 if get(clip, "opacity") is None else _num(get(clip, "opacity"), 1.0),
-        "cx": 0.5, "cy": 0.5, "zoom": _num(zoom, 1.0),
+        "cx": 0.5, "cy": 0.5, "zoom": _num(zoom, 1.0), "rot_x": 0.0, "rot_y": 0.0,
+        "draw": 1.0,
         **mask_static_props(clip),
         **audio,
     }
@@ -167,7 +255,7 @@ def interp_items(items: Optional[list], t: float, fallback: dict) -> dict:
             pa, pb = props_at(a), props_at(b)
             if normalize_interp(b.get("interpolation")) == "hold":
                 return pa
-            u = ease_t((time - ta) / ((tb - ta) or 1.0), b.get("interpolation"))
+            u = ease_t((time - ta) / ((tb - ta) or 1.0), b.get("interpolation"), b.get("bezier"))
             return {key: pa[key] + (pb[key] - pa[key]) * u for key in KF_PROP_KEYS}
     return props_at(last)
 
@@ -186,6 +274,50 @@ def clip_volume_at(clip: Any, local_t: float) -> float:
     return clamp_volume(clip_props_at(clip, local_t).get("volume", 1.0))
 
 
+_SAMPLE_STEP = 1.0 / 30.0
+_MAX_SEGMENT_STEPS = 120
+
+
+def _segment_steps(span: float) -> int:
+    """Tramos rectos con que el export sigue una curva de ``span`` segundos:
+    uno por fotograma a 30 fps (exacto en esos instantes), con tope."""
+    return min(_MAX_SEGMENT_STEPS, max(2, int(math.ceil(max(0.0, span) / _SAMPLE_STEP))))
+
+
+def pose_sample_times(clip: Any, duration: float) -> list[float]:
+    """Instantes (tiempo local) donde muestrear la pose para el export.
+
+    FFmpeg interpola en línea recta entre los puntos que recibe; en tramos con
+    curva (ease, cúbica, bézier…) se añaden puntos intermedios para que siga la
+    misma curva que el preview, y en ``hold`` un punto justo antes del salto.
+    Solo dependen de los keyframes, así que todas las propiedades comparten
+    los mismos instantes.
+    """
+    dur = max(0.0, _num(duration, 0.0))
+    times = {0.0, dur}
+    if not keyframes_enabled(clip):
+        return sorted(times)
+    items = sorted((k for k in _items(clip) if isinstance(k, dict)), key=lambda k: _num(k.get("t"), 0.0))
+
+    def clamp(t: float) -> float:
+        return min(dur, max(0.0, t))
+
+    for k in items:
+        times.add(clamp(_num(k.get("t"), 0.0)))
+    for a, b in zip(items, items[1:]):
+        ta, tb = clamp(_num(a.get("t"), 0.0)), clamp(_num(b.get("t"), 0.0))
+        kind = normalize_interp(b.get("interpolation"))
+        if tb - ta <= 1e-6 or kind == "linear":
+            continue
+        if kind == "hold":
+            times.add(max(ta, tb - 1e-3))
+            continue
+        n = _segment_steps(tb - ta)
+        for j in range(1, n):
+            times.add(ta + (tb - ta) * j / n)
+    return sorted(times)
+
+
 def _u_expr(ta: float, tb: float) -> str:
     span = max(tb - ta, 1e-6)
     return f"min(1\\,max(0\\,(t-{ta:.6f})/{span:.6f}))"
@@ -201,6 +333,13 @@ def _eased_expr(u: str, kind: str) -> str:
         return f"(1-(1-({u}))*(1-({u})))"
     if k == "ease-in-out":
         return f"if(lt({u}\\,0.5)\\,2*({u})*({u})\\,1-2*(1-({u}))*(1-({u})))"
+    if k == "cubic-in":
+        return f"(({u})*({u})*({u}))"
+    if k == "cubic-out":
+        return f"(1-(1-({u}))*(1-({u}))*(1-({u})))"
+    if k == "cubic-in-out":
+        return (f"if(lt({u}\\,0.5)\\,4*({u})*({u})*({u})\\,"
+                f"1-(2-2*({u}))*(2-2*({u}))*(2-2*({u}))/2)")
     return f"({u})"
 
 
@@ -217,13 +356,23 @@ def ffmpeg_envelope(clip: Any, key: str, default: float) -> Optional[str]:
     raw.sort(key=lambda k: _num(k.get("t"), 0.0))
     if len(raw) < 2:
         return None
+    def value_at(t: float) -> float:
+        v = clip_props_at(clip, t).get(key, default)
+        return clamp_volume(v) if key == "volume" else max(0.0, _num(v, default))
+
     pts: list[tuple[float, float, dict]] = []
-    for k in raw:
+    for i, k in enumerate(raw):
         t = _num(k.get("t"), 0.0)
-        val = clamp_volume(clip_props_at(clip, t).get(key, default)) if key == "volume" else max(
-            0.0, _num(clip_props_at(clip, t).get(key, default), default)
-        )
-        pts.append((t, val, k))
+        if i and normalize_interp(k.get("interpolation")) in SAMPLED_INTERPS:
+            # Curva sin fórmula cerrada: tramos rectos cortos que la siguen.
+            ta = pts[-1][0]
+            n = _segment_steps(t - ta)
+            for j in range(1, n):
+                tj = ta + (t - ta) * j / n
+                pts.append((tj, value_at(tj), {"interpolation": "linear"}))
+            pts.append((t, value_at(t), {"interpolation": "linear"}))
+            continue
+        pts.append((t, value_at(t), k))
     values = [round(v, 4) for _, v, _ in pts]
     if len(set(values)) <= 1:
         return None
@@ -273,10 +422,15 @@ def upsert_keyframe_at(clip: Any, local_t: float, prop_patch: dict | None = None
         }
     else:
         last = normalize_interp(items[-1].get("interpolation")) if items else "linear"
-        items.append({
+        item = {
             "id": f"k{uuid.uuid4().hex[:8]}", "t": t,
             "interpolation": interp or last, "props": props,
-        })
+        }
+        # Un keyframe nuevo hereda también la curva personalizada del anterior.
+        prev_bez = normalize_bezier(items[-1].get("bezier")) if items else None
+        if prev_bez and not interp:
+            item["bezier"] = list(prev_bez)
+        items.append(item)
     items.sort(key=lambda k: _num(k.get("t"), 0.0))
     data["keyframes"] = {"enabled": True, "items": items}
     return data

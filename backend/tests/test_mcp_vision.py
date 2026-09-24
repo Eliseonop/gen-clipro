@@ -47,6 +47,27 @@ class VisionTest(unittest.TestCase):
         self.assertEqual(base64.b64decode(out["image_b64"]), b"\xff\xd8\xffJPEGDATA")
         self.assertEqual(out["at_time"], 5.0)   # centro por defecto
 
+    def test_get_frame_reference_segment_offsets_by_in_point(self):
+        # Segmento por referencia: el archivo es el original y el clip vive en [in, out].
+        projects.add_clips(self.pid, [ClipInfo(index=1, filename="a.mp4", url="/x", start=20.0, end=30.0,
+                                               in_point=20.0, out_point=30.0)])
+        seen = []
+
+        def fake_run(cmd, **kw):
+            seen.append(cmd[cmd.index("-ss") + 1])
+            Path(cmd[-1]).write_bytes(b"\xff\xd8\xff")
+
+            class R:
+                returncode = 0
+                stderr = ""
+            return R()
+
+        with patch("app.frame_grab.shutil.which", return_value="ffmpeg"), \
+             patch("app.frame_grab.subprocess.run", side_effect=fake_run):
+            out = tools_vision.get_frame(self.pid, "1", at_time=2.0)
+        self.assertEqual(out["at_time"], 2.0)
+        self.assertEqual(seen, ["22.000"])
+
     def test_get_frame_unknown_clip_raises(self):
         with self.assertRaises(ValueError):
             tools_vision.get_frame(self.pid, "99")

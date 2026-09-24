@@ -2,7 +2,7 @@
 // Las medidas son relativas al alto de salida: size = fracción de la altura.
 // x/y son el centro del texto en coordenadas normalizadas (0-1) de la salida.
 
-import { clipPose } from './clipAnim.js'
+import { clipFlip, clipPose } from './clipAnim.js'
 import { clipFxAt, typingReveal } from './clipFx.js'
 import { activeWordIndex, activeWordIndexFromWords, applyThemeToStyle, hasWordFx, karaokeOn, styleOpacity, wordOpacity } from './textKaraoke.js'
 import { themeById } from './subtitleThemes.js'
@@ -154,12 +154,102 @@ export function wrappedText(ctx, clip, outW, outH) {
   const st = clip.style || {}
   const size = Math.max(10, (st.size ?? 0.07) * outH)
   ctx.font = `${st.bold ? 'bold ' : ''}${size}px ${cssFont(st.font)}`
+  applyLetterSpacing(ctx, st, size)
   const maxW = clampN(st.w ?? 0.8, 0.1, 1) * outW - size * 0.4
   return wrapLines(ctx, clip.text || '', maxW).join('\n')
 }
 
 function reduceMotionOn() {
   try { return matchMedia('(prefers-reduced-motion: reduce)').matches } catch { return false }
+}
+
+// Espaciado entre letras (em) e interlineado (× tamaño de letra), #6. Espejo de
+// LETTER_SPACING_RANGE / LINE_HEIGHT_* en backend/app/text_ass.py.
+export const LETTER_SPACING_RANGE = [-0.5, 1]
+export const LINE_HEIGHT_DEFAULT = 1.22
+export const LINE_HEIGHT_RANGE = [0.6, 3]
+
+export function letterSpacingPx(st, size) {
+  const v = Number(st?.letter_spacing)
+  return clampN(Number.isFinite(v) ? v : 0, LETTER_SPACING_RANGE[0], LETTER_SPACING_RANGE[1]) * size
+}
+
+export function lineHeightOf(st) {
+  const v = Number(st?.line_height)
+  return clampN(Number.isFinite(v) ? v : LINE_HEIGHT_DEFAULT, LINE_HEIGHT_RANGE[0], LINE_HEIGHT_RANGE[1])
+}
+
+// `letterSpacing` del canvas (Chrome 99+): también cuenta en measureText, así que
+// el reparto en líneas lo tiene en cuenta (como el export).
+function applyLetterSpacing(ctx, st, size) {
+  if ('letterSpacing' in ctx) ctx.letterSpacing = `${letterSpacingPx(st, size)}px`
+}
+
+// Sombra paralela del texto (estilo CapCut). Distancia y desenfoque en "em"
+// (fracción del tamaño de letra), ángulo en grados: 0 = derecha, 90 = abajo.
+export const SHADOW_DEFAULTS = { opacity: 0.6, blur: 0.05, distance: 0.06, angle: 45 }
+
+/** Parámetros de la sombra para un tamaño de letra en px, o null si no hay.
+ *  El "Brillo" (glow) usa el mismo color y tiene su propio dibujo, así que con
+ *  glow no hay sombra paralela. Espejo de text_shadow (backend/app/text_ass.py). */
+export function textShadow(st, fontPx) {
+  if (!st?.shadow || st?.glow) return null
+  const n = (v, d) => (v != null && Number.isFinite(Number(v)) ? Number(v) : d)
+  const opacity = clampN(n(st.shadow_opacity, SHADOW_DEFAULTS.opacity), 0, 1)
+  if (opacity <= 0) return null
+  const dist = clampN(n(st.shadow_distance, SHADOW_DEFAULTS.distance), 0, 1) * fontPx
+  const ang = (n(st.shadow_angle, SHADOW_DEFAULTS.angle) * Math.PI) / 180
+  return {
+    color: st.shadow_color || '#000000',
+    opacity,
+    dx: Math.cos(ang) * dist,
+    dy: Math.sin(ang) * dist,
+    sigma: clampN(n(st.shadow_blur, SHADOW_DEFAULTS.blur), 0, 1) * fontPx,
+  }
+}
+
+let _shadowLayer = null
+function shadowLayer(w, h) {
+  if (typeof document === 'undefined' || !w || !h) return null
+  if (!_shadowLayer) _shadowLayer = document.createElement('canvas')
+  if (_shadowLayer.width !== w) _shadowLayer.width = w
+  if (_shadowLayer.height !== h) _shadowLayer.height = h
+  return _shadowLayer
+}
+
+// Silueta del texto (relleno + borde) en el color de la sombra, en una capa
+// aparte para que borde y relleno no se sumen, y luego desenfocada y desplazada.
+// Desplazamiento y desenfoque van en espacio de PANTALLA (como libass en el
+// export): pasan por la transformación de ENTRADA (encuadre/zoom del lienzo),
+// no por el giro del texto.
+function drawTextShadow(ctx, entry, placed, st, sh) {
+  const layer = shadowLayer(ctx.canvas?.width, ctx.canvas?.height)
+  if (!layer || !entry) return
+  const l = layer.getContext('2d')
+  l.setTransform(1, 0, 0, 1, 0, 0)
+  l.clearRect(0, 0, layer.width, layer.height)
+  l.setTransform(ctx.getTransform())
+  l.font = ctx.font
+  if ('letterSpacing' in ctx) l.letterSpacing = ctx.letterSpacing
+  l.textBaseline = 'middle'
+  l.textAlign = 'left'
+  l.fillStyle = sh.color
+  l.strokeStyle = sh.color
+  l.lineJoin = 'round'
+  const bw = st.border_width || 0
+  for (const p of placed) {
+    if (bw > 0) { l.lineWidth = bw * 2; l.strokeText(p.w, p.x, p.y) }
+    l.fillText(p.w, p.x, p.y)
+  }
+  const dx = entry.a * sh.dx + entry.c * sh.dy
+  const dy = entry.b * sh.dx + entry.d * sh.dy
+  const k = Math.sqrt(Math.abs(entry.a * entry.d - entry.b * entry.c)) || 1
+  ctx.save()
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.globalAlpha *= sh.opacity
+  ctx.filter = sh.sigma * k > 0.3 ? `blur(${(sh.sigma * k).toFixed(2)}px)` : 'none'
+  ctx.drawImage(layer, dx, dy)
+  ctx.restore()
 }
 
 function paintWord(ctx, word, x, y, size, st, active, motionOff) {
@@ -176,11 +266,12 @@ function paintWord(ctx, word, x, y, size, st, active, motionOff) {
   }
   const fill = (active && karaokeOn(st) && st.highlight_color) || st.color || '#fff'
   const glowWord = active && hasWordFx(st, 'glow')
-  if (st.shadow || st.glow || glowWord) {
+  // La sombra paralela va en su propia pasada (drawTextShadow); aquí solo el brillo.
+  if (st.glow || glowWord) {
     ctx.shadowColor = (active && st.highlight_color) || st.shadow_color || '#000000'
-    ctx.shadowBlur = (st.glow || glowWord) ? size * 0.7 : size * 0.14
-    ctx.shadowOffsetX = (st.glow || glowWord) ? 0 : 2
-    ctx.shadowOffsetY = (st.glow || glowWord) ? 0 : 2
+    ctx.shadowBlur = size * 0.7
+    ctx.shadowOffsetX = 0
+    ctx.shadowOffsetY = 0
   }
   if ((st.border_width || 0) > 0) {
     ctx.lineWidth = st.border_width * 2
@@ -200,6 +291,7 @@ export function drawTextClip(ctx, clip, cw, ch, opts = {}) {
   // Con opts.trackStyle, el estilo hereda de la pista (clip = override); si no,
   // usa el estilo del clip tal cual (retrocompatible).
   const st0 = opts.trackStyle ? effectiveTextStyle(opts.trackStyle, clip.style) : (clip.style || {})
+  const entry = typeof ctx.getTransform === 'function' ? ctx.getTransform() : null
   const localT = opts.time == null ? 0 : opts.time - (clip.start || 0)
   const pose = clipPose(clip, localT)
   const st = {
@@ -224,12 +316,15 @@ export function drawTextClip(ctx, clip, cw, ch, opts = {}) {
   ctx.save()
   ctx.globalAlpha *= styleOpacity(st)
   ctx.font = `${st.bold ? 'bold ' : ''}${size}px ${cssFont(st.font)}`
+  applyLetterSpacing(ctx, st, size)
   ctx.textBaseline = 'middle'
 
-  const boxW = clampN(st.w ?? 0.8, 0.1, 1) * cw
+  // La escala agranda el texto ENTERO, caja de ajuste incluida (como CapCut): al
+  // escalar no cambia el reparto en líneas. Espejo de text_ass._rows (export).
+  const boxW = clampN(st.w ?? 0.8, 0.1, 1) * cw * (pose.scale || 1)
   const maxW = boxW - size * 0.4
   const rows = wrapWordRows(ctx, shownText, maxW)
-  const lineH = size * 1.22
+  const lineH = size * lineHeightOf(st)
   const blockH = Math.max(lineH, rows.length * lineH)
   const cx = (st.x ?? 0.5) * cw
   const cy = (st.y ?? 0.5) * ch
@@ -246,14 +341,6 @@ export function drawTextClip(ctx, clip, cw, ch, opts = {}) {
   ctx.translate(blockFx.tx * size * 2.2, blockFx.ty * size * 2.6)
   ctx.translate(-cx, -cy)
 
-  if (st.bg && st.bg !== 'none') {
-    ctx.save()
-    ctx.globalAlpha *= st.bg_opacity ?? 0.55
-    ctx.fillStyle = st.bg
-    ctx.fillRect(boxLeft, boxTop - size * 0.15, boxW, blockH + size * 0.3)
-    ctx.restore()
-  }
-
   const words = rows.flat()
   // Con words[] reales alineadas al texto, el karaoke usa esas marcas (igual que
   // el export); si no, cae al reparto uniforme por posición.
@@ -265,17 +352,42 @@ export function drawTextClip(ctx, clip, cw, ch, opts = {}) {
   ctx.textAlign = 'left'
   let gi = 0
   const space = ctx.measureText(' ').width
+  const placed = []
   rows.forEach((row, i) => {
     const ly = boxTop + lineH * (i + 0.5)
     const total = row.reduce((acc, w, n) => acc + ctx.measureText(w).width + (n ? space : 0), 0)
     let x = align === 'left' ? boxLeft + size * 0.2 : align === 'right' ? boxLeft + boxW - size * 0.2 - total : cx - total / 2
     row.forEach((w) => {
-      const isA = karaoke && gi === active
-      const ww = paintWord(ctx, w, x, ly, size, st, isA, motionOff)
-      x += ww + space
+      placed.push({ w, x, y: ly, active: karaoke && gi === active })
+      x += ctx.measureText(w).width + space
       gi += 1
     })
   })
+  // Voltear (#7): espejo alrededor del centro del bloque, en sus ejes (después del
+  // giro). Solo el dibujo: la caja de selección y los tiradores no se voltean.
+  const flip = clipFlip(clip)
+  const flipped = flip.h || flip.v
+  if (flipped) {
+    ctx.save()
+    ctx.translate(cx, cy)
+    ctx.scale(flip.h ? -1 : 1, flip.v ? -1 : 1)
+    ctx.translate(-cx, -cy)
+  }
+  // Orden como en el export: sombra (evento de capa inferior), caja y texto.
+  // `selectionOnly`: solo la caja de selección (el texto va en una capa aparte).
+  if (!opts.selectionOnly) {
+    const shadow = textShadow(st, size)
+    if (shadow) drawTextShadow(ctx, entry, placed, st, shadow)
+    if (st.bg && st.bg !== 'none') {
+      ctx.save()
+      ctx.globalAlpha *= st.bg_opacity ?? 0.55
+      ctx.fillStyle = st.bg
+      ctx.fillRect(boxLeft, boxTop - size * 0.15, boxW, blockH + size * 0.3)
+      ctx.restore()
+    }
+    for (const p of placed) paintWord(ctx, p.w, p.x, p.y, size, st, p.active, motionOff)
+  }
+  if (flipped) ctx.restore()
 
   const box = { x: boxLeft, y: boxTop, w: boxW, h: blockH }
   if (opts.selected) {

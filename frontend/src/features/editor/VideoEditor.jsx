@@ -8,13 +8,16 @@ import { getTimeline, saveTimeline, prepareReframe, getJob, createClipJob, getSe
   createSegments, faceTrackMaterial, importExplore } from '../../services/api'
 import { dragMark, markToSourceRange, materialDuration, segmentDescription, segmentLabel, MIN_SEGMENT } from './clipExtract'
 import SegmentConfirmModal from './SegmentConfirmModal'
+import EdPasteAttrs from './EdPasteAttrs'
+import EdSoundDesign from './EdSoundDesign'
 import EdStickMenu from './EdStickMenu'
+import EdCropModal from './EdCropModal'
 import { clamp } from '../../lib/panning'
 import { defaultTextStyle, subtitleStyle, wrappedText, ensureEditorFonts, selectedSubtitleThemeId, clearTextTheme, effectiveTextStyle } from '../../lib/textstyles'
 import { applyThemeToStyle, wordsPerBoxOptions, activeWordsPerBox, splitCaptionWords } from '../../lib/textKaraoke'
 import {
   uid, mediaUrl, defaultTracks, newReframe, withKfIds,
-  makeClip, makeTextClip, makeShapeClip, clipDur, clipEnd, clipPlaybackMuted, clipSpeed, clipKeepPitch, timelineToSource, sourceToTimeline, splitClipAt,
+  makeClip, makeTextClip, makeShapeClip, makeAdjustmentClip, clipDur, clipEnd, clipPlaybackMuted, clipSpeed, clipKeepPitch, timelineToSource, sourceToTimeline, splitClipAt,
   canCaptionClip, removeTrack, shouldConfirmTrackDelete,
   extraClipsAfterSplit, extraClipsAfterOneSplit, splitTrackTextByMaxWords, splitOneTextClip,
   nextClipSelection, groupMoveFromOrig, patchClipsStyle, removeClipsByIds, freeStartOnTrack,
@@ -25,33 +28,40 @@ import {
   trackContextItems, linkTrackPair, unlinkTrackPair,
   applyAudioSpeedToLinkedText, matchClipsToFirstDuration,
   clipLayerInfo, moveClipLayer, canLayerClip,
-  pickClipVisualProps, applyClipVisualProps,
   trackTextContent, trackSrt, trackSrtWithReference, trackSource, clipCopyText,
   previewHead, safeMediaTime, mcpBusyClipIds,
   motionLayersToTimeline, motionClipTiming,
 } from './editorModel'
 import { textRole } from '../../lib/textRole'
-import { SHAPE_DEFAULT_DUR } from '../../lib/shapes'
+import { CINEMA_RATIOS, SHAPE_DEFAULT_DUR, cinemaBar, defaultShape, drawInKeyframes, pathShape, renormalizePath } from '../../lib/shapes'
+import { clipFlip } from '../../lib/clipAnim'
 import { readRowHeight, writeRowHeight } from './trackRows'
 import { newTrackIndex, resolveNewTrack } from './dropIntent'
 import { MASK_KF_KEYS, clipMasks, defaultMask, maskId, normalizeMask } from '../../lib/clipMask'
 import { autoActive, bgCapable, chromaBg, clipBg, defaultBg, isInteractiveProvider, normalizeBg } from '../../lib/clipBg'
 import { clearMagic, setMagicMask } from './bgMagic'
+import { copyClipAttrs, groupApplies, pasteClipAttrs, pasteableGroups } from '../../lib/clipAttrs'
 import { resetBgMeta, resetCutout } from './bgCutout'
-import { canvasPointer, cropCursor, cropHandleAt, cropWindow, freeFrameAt, isOverlay, mediaSize, newTransform, sourceCropPx, videosAt } from '../../lib/clipLayout'
+import { canvasPointer, cropWindow, followTrackMaskKeys, frameRectOf, freeFrameAt, isOverlay, mediaSize, newTransform, sourceCropPx, videosAt } from '../../lib/clipLayout'
 import {
   AUDIO_FX_KEYS, applyVolumeFade, canKeyframe, clipPropsAt, clipVolumeAt, clampVolume, deleteKeyframeItem,
   copyKeyframeAt, disableKeyframes, duplicateKeyframeAt, enableKeyframes, flattenPatch,
-  KF_GROUP_IDS, keyframeIdAt, kfState, normalizeItems, pasteKeyframeAt,
-  patchKeyframe, shouldKeyframe, upsertKeyframeAt,
+  KF_GROUP_IDS, keyframeIdAt, keyframesOn, kfState, normalizeItems, pasteKeyframeAt,
+  keyframesEnabled, patchKeyframe, shouldKeyframe, upsertKeyframeAt,
 } from '../../lib/clipKeyframes'
-import { drawMainView, drawResultView } from './render/canvas'
+import { drawMainView } from './render/canvas'
 import MotionCanvas from '../motion/MotionCanvas'
 import MotionProps from '../motion/MotionProps'
 import GenerateSceneModal from '../motion/GenerateSceneModal'
 import GenerateResourceModal from '../motion/GenerateResourceModal'
 import SceneDirectionWorkspace from '../direction/SceneDirectionWorkspace'
-import { patchDirectionSegment, suggestClipNotes } from '../../services/api'
+import { patchDirectionSegment, suggestClipNotes, freezeFrame as apiFreezeFrame, detectBeats as apiDetectBeats, trackObject as apiTrackObject, soundDesign as apiSoundDesign,
+  applyRecipe as apiApplyRecipe } from '../../services/api'
+import { placeSoundDesign } from '../../lib/soundDesign'
+import { applyFollowKeys, followObjectKeys } from '../../lib/objectTrack'
+import { resumeAudio, syncAudioFx } from './audioGraph'
+import { canFreeze, FREEZE_DUR, freezeSourceTime, frozenClipFrom, insertFreeze } from '../../lib/freezeFrame'
+import { clipBeats, nextSnapTime, normalizeMarkers, toggleMarkerAt } from '../../lib/beats'
 import { EMPTY_MARK, hasMarkRange, resolveGenerateTarget, setMark } from './motionTarget'
 import { useMotionComp } from '../motion/useMotionComp'
 import PaperCanvas from '../paper/PaperCanvas'
@@ -197,6 +207,8 @@ function bakedReframeForCut(clip, dur, src, out) {
 
 export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [tracks, setTracks] = useState(defaultTracks())
+  // Marcadores de la timeline (#12): [{ id, t, label?, color? }] en s de timeline.
+  const [markers, setMarkers] = useState([])
   const [clips, setClips] = useState([])
   const [loaded, setLoaded] = useState(false)
 
@@ -259,7 +271,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const directionWsRef = useRef(null); directionWsRef.current = directionWs
   const [genDirection, setGenDirection] = useState(null)
   const [directionReload, setDirectionReload] = useState(0)
-  const [propClipboard, setPropClipboard] = useState(null)  // props visuales copiadas
+  const [attrClipboard, setAttrClipboard] = useState(null)  // clip copiado con «Copiar atributos» (#13)
+  const attrClipboardRef = useRef(null); attrClipboardRef.current = attrClipboard
+  const [attrPaste, setAttrPaste] = useState(null)          // { ids }: diálogo «Pegar atributos» abierto
   const [trackMenu, setTrackMenu] = useState(null)  // { x, y, track }
   const [linkPick, setLinkPick] = useState(null)    // id de pista de audio al relacionar
   const [trackToDelete, setTrackToDelete] = useState(null)
@@ -288,7 +302,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   })
   const paperRef = useRef(paper); paperRef.current = paper
   const paperModeRef = useRef(false)
-  const [cropMode, setCropMode] = useState(false)
+  // Recortar (estilo CapCut): id del clip abierto en EdCropModal, o null.
+  const [cropClipId, setCropClipId] = useState(null)
   // Zoom SOLO visual del canvas (aleja/acerca la vista para ver alrededor del encuadre).
   // No toca el clip ni el export. Independiente por editor (Main vs Clip).
   const [mainZoom, setMainZoom] = useState(1)
@@ -335,7 +350,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [clipToast, setClipToast] = useState(null)
 
   const mainCanvasRef = useRef(null)
-  const resultCanvasRef = useRef(null)
   const mainStageRef = useRef(null)
   const hitListRef = useRef([])
   const mediaEls = useRef(new Map())
@@ -348,18 +362,37 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const durationRef = useRef(0)
   const fpsRef = useRef(30); fpsRef.current = fps
   const clipsRef = useRef(clips); clipsRef.current = clips
+  const markersRef = useRef(markers); markersRef.current = markers
   const tracksRef = useRef(tracks); tracksRef.current = tracks
   const selRef = useRef(selClipId); selRef.current = selClipId
   const selIdsRef = useRef(selClipIds); selIdsRef.current = selClipIds
   const selKfRef = useRef(selKfId); selKfRef.current = selKfId
   const kfBoardRef = useRef(kfBoard); kfBoardRef.current = kfBoard
   const kfOpsRef = useRef({})
+  // Pluma (#14): trazado que se está dibujando ({ points: [[x, y] en 0–1 del cuadro] })
+  // y edición de las anclas del trazado seleccionado. El puntero (hover) va en un
+  // ref: el preview se redibuja solo en cada fotograma.
+  const [pen, setPen] = useState(null)
+  const penRef = useRef(null); penRef.current = pen
+  const penHoverRef = useRef(null)
+  const [pathEdit, setPathEdit] = useState(false)
+  const pathEditRef = useRef(false); pathEditRef.current = pathEdit
+  const penOpsRef = useRef({})
+  // Seguimiento (#15): {followerId, videoId} mientras se dibuja el recuadro del
+  // objeto; el recuadro en curso (px del canvas) va en un ref.
+  const [trackPick, setTrackPick] = useState(null)
+  const trackPickRef = useRef(null); trackPickRef.current = trackPick
+  const trackBoxRef = useRef(null)
+  const [trackRun, setTrackRun] = useState(null)      // {progress, message} con el job en marcha
+  const [trackMode, setTrackMode] = useState('position_scale')
+  // Sonorizar con IA (#17): job en marcha y propuestas a revisar.
+  const [soundBusy, setSoundBusy] = useState(null)       // clipId mientras piensa la IA
+  const [soundResult, setSoundResult] = useState(null)   // {clipId, sounds, missing, mode}
   const kfGroupsRef = useRef(kfGroups); kfGroupsRef.current = kfGroups
   const pendingKfSel = useRef(null)
   const clipClipboardRef = useRef(null)   // [{ clip, offset }] copiados con Ctrl+C
   const outRef = useRef({ w: outW, h: outH }); outRef.current = { w: outW, h: outH }
   const framingModeRef = useRef(null); framingModeRef.current = framingMode
-  const cropModeRef = useRef(false); cropModeRef.current = cropMode
   const maskModeRef = useRef(false); maskModeRef.current = maskMode
   const maskDrawRef = useRef(false); maskDrawRef.current = maskDraw
   const bgBrushRef = useRef(bgBrush); bgBrushRef.current = bgBrush
@@ -371,7 +404,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const platformOverlayRef = useRef('none'); platformOverlayRef.current = platformOverlay
   const previewVolRef = useRef(previewVol); previewVolRef.current = previewVol
   const alignGuidesRef = useRef(null)
-  const croppingRef = useRef(false)
   const clipModeRef = useRef(false)
   const projectTlRef = useRef(null)
   const clipTlRef = useRef(null)
@@ -383,7 +415,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const duration = clips.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
   durationRef.current = duration
   const selectedClip = clips.find((c) => c.id === selClipId) || null
-  const histSnap = useMemo(() => ({ tracks, clips }), [tracks, clips])
+  const histSnap = useMemo(() => ({ tracks, clips, markers }), [tracks, clips, markers])
   const hist = useEditorHistory(histSnap, loaded)
   const histRef = useRef(hist)
   histRef.current = hist
@@ -438,6 +470,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           })))
           if (tl.tracks[0]) setSelTrackId(tl.tracks[0].id)
         }
+        setMarkers(normalizeMarkers(tl?.markers))
         if (tl?.width) setOutW(tl.width)
         if (tl?.height) setOutH(tl.height)
         if (tl?.audio_target_db != null) setAudioDb(tl.audio_target_db)
@@ -469,8 +502,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
 
   // --- Autoguardado ---
   const timelinePayload = useCallback(() => ({
-    version: 1, fps, width: outW, height: outH, audio_target_db: audioDb, tracks, clips,
-  }), [fps, outW, outH, audioDb, tracks, clips])
+    version: 1, fps, width: outW, height: outH, audio_target_db: audioDb, tracks, clips, markers,
+  }), [fps, outW, outH, audioDb, tracks, clips, markers])
 
   function setListenVolume(v) {
     const n = parsePreviewVolume(v)
@@ -509,7 +542,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
 
   // Al cambiar de clip seleccionado se sale del modo "Recortar" (evita quedar
   // recortando un clip distinto por error).
-  useEffect(() => { setCropMode(false) }, [selClipId])
 
   // Recarga el timeline desde el servidor (tras ediciones de la IA por el MCP).
   // Reutiliza el MISMO mapeo que la carga inicial → no hay segundo estado.
@@ -545,18 +577,22 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             ...prev,
             tracks: nextTracks,
             clips: nextClips,
+            markers: normalizeMarkers(tl.markers),
             outW: tl.width || prev.outW,
             outH: tl.height || prev.outH,
           }
         }
-        return
+        return nextClips
       }
       setTracks(nextTracks)
       setClips(nextClips)
+      setMarkers(normalizeMarkers(tl.markers))
       if (tl.width) setOutW(tl.width)
       if (tl.height) setOutH(tl.height)
       if (tl.fps) setFps(normalizeFps(tl.fps))
+      return nextClips
     } catch { /* si falla, deja el estado actual */ }
+    return null
   }, [project.id])
 
   // --- Selección de capa / clip superior ---
@@ -567,7 +603,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const topVideoAt = useCallback((head) => {
     let best = null, bestLayer = -1
     for (const c of clipsRef.current) {
-      if (!isVisualClip(c)) continue
+      if (!isVisualClip(c) || c.disabled) continue
       const track = tracksRef.current.find((t) => t.id === c.track_id)
       if (!track || track.hidden) continue
       if (head >= c.start - 0.02 && head < clipEnd(c)) {
@@ -582,10 +618,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   useEffect(() => {
     const env = {
       clipsRef, tracksRef, mediaEls, outRef, selRef, selIdsRef, selKfRef,
-      playingRef, framingModeRef, mainCanvasRef, mainStageRef, resultCanvasRef, mainTextBox, topVideoAt, alignGuidesRef,
-      clipModeRef, cropModeRef, croppingRef, fpsRef, hitListRef, viewZoomRef,
+      playingRef, framingModeRef, mainCanvasRef, mainStageRef, mainTextBox, topVideoAt, alignGuidesRef,
+      clipModeRef, fpsRef, hitListRef, viewZoomRef,
       maskModeRef, maskDrawRef, bgBrushRef, bgPreviewRef, bgPreviewElRef, magicRef,
-      platformOverlayRef,
+      platformOverlayRef, penRef, penHoverRef, pathEditRef, trackBoxRef,
     }
     const tick = () => {
       const total = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
@@ -613,6 +649,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         const holdLast = Number.isFinite(el.duration) && el.duration > 0
           && expected >= el.duration - 0.04 - 1e-4
         const mutedNow = !active || clipPlaybackMuted(c, track)
+        // Efectos y filtros de sonido (#16): Web Audio solo si el clip lleva alguno.
+        syncAudioFx(el, c, Math.max(0, drawHead - (c.start || 0)))
         syncPreviewMedia(el, {
           muted: mutedNow,
           volume: previewElementVolume(
@@ -661,7 +699,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       }
 
       drawMainView(drawHead, env)
-      drawResultView(drawHead, env)  // no-op si el canvas de resultado no está montado
       rafRef.current = requestAnimationFrame(tick)
     }
     rafRef.current = requestAnimationFrame(tick)
@@ -673,6 +710,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   function playPlayback() {
     const dur = durationRef.current
     if (dur <= 0) return
+    resumeAudio()   // gesto del usuario: el contexto de Web Audio puede arrancar
     let head = playheadRef.current
     if (head >= dur - 0.02) head = 0
     playRef.current = { perf: performance.now(), head }
@@ -718,7 +756,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
 
   function snapshotTl() {
     return {
-      tracks, clips, playhead, selClipId, selClipIds, selTrackId, selKfId, pps,
+      tracks, clips, markers, playhead, selClipId, selClipIds, selTrackId, selKfId, pps,
       outW, outH,  // formato de salida: independiente por editor (Main vs Clip)
     }
   }
@@ -726,6 +764,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (!s) return
     setTracks(s.tracks)
     setClips(s.clips)
+    setMarkers(s.markers || [])
     setPlayhead(s.playhead)
     playheadRef.current = s.playhead
     setSelClipId(s.selClipId)
@@ -739,6 +778,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   function applyEmptyClipTl() {
     setTracks(clipWorkspaceTracks())
     setClips([])
+    setMarkers([])
     setPlayhead(0)
     playheadRef.current = 0
     setSelTrackId('V1')
@@ -751,6 +791,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     const { tracks: mt, clips: mc } = c ? motionLayersToTimeline(c) : { tracks: [], clips: [] }
     setTracks(mt)
     setClips(mc)
+    setMarkers([])
     setPlayhead(0)
     playheadRef.current = 0
     setSelTrackId(mt[0]?.id || null)
@@ -774,7 +815,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     motionModeRef.current = false
     paperModeRef.current = false
     paper.setActive(false)
-    setCropMode(false)
     hist.reset()
     setLinkPick(null)
     setMainColTab('main')
@@ -788,7 +828,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     motionModeRef.current = false
     paperModeRef.current = false
     paper.setActive(false)
-    setCropMode(false)
     hist.reset()
     setLinkPick(null)
     setMainColTab('clip')
@@ -811,7 +850,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     motionModeRef.current = true
     paperModeRef.current = false
     paper.setActive(false)
-    setCropMode(false)
     hist.reset()
     setMainColTab('motion')
     setMatTab('motion')
@@ -955,7 +993,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     clipModeRef.current = false
     motionModeRef.current = false
     paperModeRef.current = true
-    setCropMode(false)
     hist.reset()
     setMainColTab('paper')
     setMatTab('paper')
@@ -1183,7 +1220,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (mainColTab === 'main') projectTlRef.current = snapshotTl()
     clipModeRef.current = true
     clipTlRef.current = null
-    setCropMode(false)
     hist.reset()
     setClipSaveJob(null)
     setFaceJob(null)
@@ -1517,17 +1553,49 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setClips((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)))
   }, [])
 
-  // Copiar/pegar propiedades visuales entre clips (encuadre, layout, escala,
-  // posición, efectos…) sin tocar contenido, tiempos ni id del clip destino.
-  function copyClipProps(clip) {
-    if (!isVisualClip(clip)) return
-    setPropClipboard(pickClipVisualProps(clip))
-    setClipToast({ type: 'success', message: 'Propiedades copiadas' })
+  // Copiar / pegar atributos (#13, Ctrl+Alt+C / Ctrl+Alt+V): se copia el clip
+  // entero y al pegar se elige qué grupos (posición, animación, audio…) van a
+  // los clips seleccionados, sin tocar su contenido ni sus tiempos.
+  function copyAttrs(clipId) {
+    const id = clipId || selIdsRef.current[0]
+    const clip = clipsRef.current.find((c) => c.id === id)
+    if (!clip) return false
+    setAttrClipboard(copyClipAttrs(clip))
+    setClipToast({ type: 'success', message: 'Atributos copiados · Ctrl+Alt+V para pegarlos' })
+    return true
   }
-  function pasteClipProps(clip) {
-    if (!propClipboard || !isVisualClip(clip)) return
-    setClips((prev) => prev.map((c) => (c.id === clip.id ? applyClipVisualProps(c, propClipboard) : c)))
-    setClipToast({ type: 'success', message: 'Propiedades pegadas' })
+  function openPasteAttrs(clipId) {
+    const src = attrClipboardRef.current
+    if (!src) return false
+    const sel = selIdsRef.current
+    const ids = clipId ? (sel.includes(clipId) ? sel : [clipId]) : sel
+    const targets = clipsRef.current.filter((c) => ids.includes(c.id) && c.id !== src.id)
+    if (!targets.length) return false
+    if (!pasteableGroups(src, targets).length) {
+      setClipToast({ type: 'error', message: 'Esos clips no admiten los atributos del clip copiado' })
+      return true
+    }
+    setAttrPaste({ ids: targets.map((c) => c.id) })
+    return true
+  }
+  function applyPasteAttrs(groups) {
+    const src = attrClipboardRef.current
+    const ids = new Set(attrPaste?.ids || [])
+    setAttrPaste(null)
+    if (!src || !ids.size) return
+    setClips((prev) => {
+      let next = prev
+      // Los subtítulos enlazados a un audio siguen su velocidad (igual que en el inspector).
+      if (groups.includes('speed')) {
+        for (const c of prev) {
+          if (ids.has(c.id) && c.kind === 'audio' && groupApplies('speed', src, c)) {
+            next = applyAudioSpeedToLinkedText(next, tracksRef.current, c, src.speed ?? 1)
+          }
+        }
+      }
+      return next.map((c) => (ids.has(c.id) ? pasteClipAttrs(c, src, groups) : c))
+    })
+    setClipToast({ type: 'success', message: ids.size === 1 ? 'Atributos pegados' : `Atributos pegados en ${ids.size} clips` })
   }
 
   function registerMediaMeta(clip, el) {
@@ -1689,6 +1757,235 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setSelClipId(clip.id)
     setSelClipIds([clip.id])
   }
+
+  // --- Pluma (#14) ---
+  function startPen() {
+    if (playingRef.current) stopPlayback()
+    setPathEdit(false)
+    penHoverRef.current = null
+    setPen({ points: [] })
+  }
+  function addPenPoint(pt) {
+    setPen((cur) => (cur ? { ...cur, points: [...cur.points, pt] } : cur))
+  }
+  function popPenPoint() {
+    setPen((cur) => (cur ? { ...cur, points: cur.points.slice(0, -1) } : cur))
+  }
+  function cancelPen() {
+    penHoverRef.current = null
+    setPen(null)
+  }
+  function finishPen(opts = {}) {
+    // Un doble clic deja dos anclas casi en el mismo sitio: sobra la última.
+    const pts = (penRef.current?.points || []).filter((p, i, arr) => (
+      i === 0 || Math.hypot(p[0] - arr[i - 1][0], p[1] - arr[i - 1][1]) > 0.004))
+    cancelPen()
+    if (pts.length < 2) return
+    const track = targetTrackFor('video')
+    if (!track) return
+    const closed = !!opts.closed && pts.length >= 3
+    const shape = pathShape(pts, { closed, ...(closed ? {} : { fill: 'none' }) })
+    const at = Math.max(0, playheadRef.current || 0)
+    const clip = makeShapeClip(track.id, at, SHAPE_DEFAULT_DUR, { type: 'path', label: 'Trazado', shape })
+    setClips((prev) => [...prev, clip])
+    setSelClipId(clip.id)
+    setSelClipIds([clip.id])
+  }
+  penOpsRef.current = { finish: finishPen, cancel: cancelPen, pop: popPenPoint }
+  // Anclas de un trazado: sin reajustar la caja mientras se arrastra; al soltar se
+  // reajusta (si no está animado: con keyframes la posición la mandan ellos).
+  function setPathShape(id, patch, renorm) {
+    setClips((prev) => prev.map((c) => {
+      if (c.id !== id || c.kind !== 'shape') return c
+      let shape = { ...(c.shape || {}), ...patch }
+      if (renorm && !keyframesEnabled(c)) shape = renormalizePath(shape, outAspect, clipFlip(c))
+      return { ...c, shape }
+    }))
+  }
+  function onCanvasPenMove(e) {
+    if (!penRef.current) return
+    const canvas = mainCanvasRef.current
+    if (!canvas) return
+    const frame = frameRectOf(canvas.width, canvas.height, viewZoomRef.current ?? 1, outAspect)
+    const p = canvasPointer(e, canvas)
+    penHoverRef.current = [(p.x - frame.x) / frame.w, (p.y - frame.y) / frame.h]
+  }
+  // --- Seguimiento de objetos (#15) ---
+  // El vídeo cuyo objeto se sigue: el de más arriba bajo el cursor (sin contar el
+  // propio clip que lo va a acompañar).
+  function videoUnder(follower) {
+    const vids = videosAt(playheadRef.current, clipsRef.current, tracksRef.current)
+      .filter((c) => c.kind === 'video' && c.id !== follower?.id)
+    return vids[vids.length - 1] || null
+  }
+  function startTrackPick() {
+    const follower = selectedClip
+    if (!follower || follower.kind === 'audio' || trackRun) return
+    const video = videoUnder(follower)
+    if (!video) {
+      setClipToast({ type: 'error', message: 'Pon el cursor sobre un vídeo con el objeto que quieres seguir.' })
+      return
+    }
+    if (playingRef.current) stopPlayback()
+    setPen(null)
+    setPathEdit(false)
+    trackBoxRef.current = null
+    setTrackPick({ followerId: follower.id, videoId: video.id })
+  }
+  function cancelTrackPick() {
+    trackBoxRef.current = null
+    setTrackPick(null)
+  }
+  async function runTrack(box) {
+    const pick = trackPickRef.current
+    cancelTrackPick()
+    const video = pick && clipsRef.current.find((c) => c.id === pick.videoId)
+    if (!video || !box) return
+    const anchorT = playheadRef.current
+    const at = clamp(timelineToSource(video, anchorT), video.in_point, video.out_point)
+    setTrackRun({ progress: 0.02, message: 'Siguiendo el objeto…' })
+    try {
+      let job = await apiTrackObject(project.id, video, box, at)
+      while (job.status !== 'done' && job.status !== 'error') {
+        await new Promise((r) => setTimeout(r, 400))
+        job = await getJob(job.id)
+        setTrackRun((m) => (m ? { progress: job.progress || m.progress, message: job.message || m.message } : m))
+      }
+      if (job.status === 'error') throw new Error(job.error || 'No se pudo seguir el objeto.')
+      const res = job.result || {}
+      const fresh = clipsRef.current.find((c) => c.id === pick.followerId)
+      const vNow = clipsRef.current.find((c) => c.id === video.id) || video
+      const keys = fresh ? followObjectKeys(vNow, fresh, res.track || [],
+        { srcW: res.width, srcH: res.height, outW, outH }, box.w, anchorT, trackMode) : []
+      if (!keys.length) throw new Error('El objeto no se ve mientras dura este clip.')
+      setClips((prev) => prev.map((c) => (c.id === pick.followerId ? applyFollowKeys(c, keys, fpsRef.current) : c)))
+      const lost = (res.track || []).filter((p) => !p.ok).length
+      setClipToast({
+        type: lost ? 'info' : 'success',
+        message: `Sigue al objeto (${keys.length} keyframes)` + (lost ? ` · ${lost} fotogramas sin seguir` : ''),
+      })
+    } catch (e) {
+      setClipToast({ type: 'error', message: e.message || 'No se pudo seguir el objeto.' })
+    } finally {
+      setTrackRun(null)
+    }
+  }
+
+  // --- Capa de ajuste (#19) ---
+  // En el cursor, en la pista de vídeo de arriba si está libre en ese tramo; si no,
+  // en una pista de vídeo nueva encima de todas.
+  function topFreeVideoTrack(at, dur) {
+    const vids = tracksRef.current.filter((t) => t.kind === 'video')
+    const top = vids[vids.length - 1]
+    const busy = !top || top.locked || clipsRef.current.some((c) => c.track_id === top.id
+      && c.start < at + dur - 1e-6 && clipEnd(c) > at + 1e-6)
+    return busy ? addTrack('video') : top.id
+  }
+  function addAdjustmentLayer() {
+    const at = Math.max(0, playheadRef.current || 0)
+    const dur = 5
+    const clip = makeAdjustmentClip(topFreeVideoTrack(at, dur), at, dur)
+    setClips((prev) => [...prev, clip])
+    setSelClipId(clip.id)
+    setSelClipIds([clip.id])
+    setClipToast({ type: 'success', message: 'Capa de ajuste añadida: elige filtros y color en el inspector' })
+  }
+
+  // --- Recetas en un clic (#21) ---
+  // Viven en el backend (una operación deshacible, la misma que usa el MCP): se
+  // guarda la timeline, se aplica la receta y se recarga. Si la receta pide el
+  // recorte IA de un clip (Sujeto que se adelanta), se lanza aquí.
+  const [recipeBusy, setRecipeBusy] = useState(null)
+  async function applyRecipeUI(recipe) {
+    if (recipeBusy) return
+    setRecipeBusy(recipe.id)
+    setClipToast({ type: 'info', message: `Aplicando «${recipe.label}»…` })
+    try {
+      await saveTimeline(project.id, timelinePayload())
+      const res = await apiApplyRecipe(project.id, recipe.id, selIdsRef.current, { at_time: playheadRef.current })
+      const next = (await reloadTimeline()) || []
+      const touched = next.filter((c) => (res.changed || []).includes(c.id))
+      for (const c of touched) {
+        const auto = c.bg_removal?.auto
+        if (bgCapable(c) && auto?.enabled && (auto.status || 'idle') === 'idle') startBgAutoFor(c)
+      }
+      const sel = touched.find((c) => c.kind !== 'audio') || touched[0]
+      if (sel) { setSelClipId(sel.id); setSelClipIds([sel.id]) }
+      const warn = (res.warnings || []).filter((w) => !/recorte IA/.test(w))
+      setClipToast({ type: warn.length ? 'info' : 'success', message: `«${recipe.label}» aplicada` + (warn.length ? ` · ${warn.join(' · ')}` : '') })
+    } catch (e) {
+      setClipToast({ type: 'error', message: e.message || 'No se pudo aplicar la receta.' })
+    } finally {
+      setRecipeBusy(null)
+    }
+  }
+
+  // --- Barras de cine (#20) ---
+  // De principio a fin de la timeline, encima de todo, con el grosor que deja lo
+  // visible en la proporción elegida (según el formato del proyecto).
+  function addCinemaBars(ratioId) {
+    const r = CINEMA_RATIOS.find((x) => x.id === ratioId) || CINEMA_RATIOS[0]
+    const bar = cinemaBar(outAspect, r.ratio)
+    if (bar <= 0) {
+      setClipToast({ type: 'error', message: `Con este formato ${r.label} no deja barras: el vídeo ya es más ancho.` })
+      return
+    }
+    const end = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
+    const dur = end > 0.05 ? end : SHAPE_DEFAULT_DUR
+    const clip = makeShapeClip(topFreeVideoTrack(0, dur), 0, dur,
+      { type: 'letterbox', label: 'Barras de cine', shape: { ...defaultShape('letterbox'), bar } })
+    setClips((prev) => [...prev, clip])
+    setSelClipId(clip.id)
+    setSelClipIds([clip.id])
+    setClipToast({ type: 'success', message: `Barras de cine ${r.label} · grosor y entrada animada en el inspector` })
+  }
+
+  // --- Sonorizar con IA (#17) ---
+  async function soundDesignFor(clipId) {
+    const clip = clipsRef.current.find((c) => c.id === clipId)
+    if (!clip || (clip.kind !== 'video' && clip.kind !== 'image') || soundBusy) return
+    setSoundBusy(clip.id)
+    setClipToast({ type: 'info', message: 'Sonorizando la escena…' })
+    try {
+      let job = await apiSoundDesign(project.id, clip)
+      while (job.status !== 'done' && job.status !== 'error') {
+        await new Promise((r) => setTimeout(r, 500))
+        job = await getJob(job.id)
+        if (job.message) setClipToast({ type: 'info', message: job.message })
+      }
+      if (job.status === 'error') throw new Error(job.error || 'No se pudo sonorizar la escena.')
+      const res = job.result || {}
+      if (!(res.sounds || []).length && !(res.missing || []).length) {
+        setClipToast({ type: 'info', message: 'La IA no propuso ningún sonido para esta escena.' })
+        return
+      }
+      setClipToast(null)
+      setSoundResult({ ...res, clipId: clip.id })
+    } catch (e) {
+      setClipToast({ type: 'error', message: e.message || 'No se pudo sonorizar la escena.' })
+    } finally {
+      setSoundBusy(null)
+    }
+  }
+  function applySoundDesign(sounds) {
+    const res = soundResult
+    setSoundResult(null)
+    const scene = res && clipsRef.current.find((c) => c.id === res.clipId)
+    if (!scene || !sounds.length) return
+    const out = placeSoundDesign(clipsRef.current, tracksRef.current, scene, sounds,
+      (p) => (p === 'c' ? uid('c') : `${p}-${uid('sfx')}`))
+    setTracks(out.tracks)
+    setClips(out.clips)
+    setClipToast({ type: 'success', message: `${out.added.length} sonidos añadidos en las pistas SFX` })
+  }
+
+  // «Dibujar trazo» de un clic: keyframes 0 → 100 % en 1,5 s desde el inicio.
+  function drawInShape(id) {
+    setClips((prev) => prev.map((c) => (c.id === id && c.kind === 'shape' ? drawInKeyframes(c, 1.5, fpsRef.current) : c)))
+  }
+  useEffect(() => {
+    if (pathEdit && !(selectedClip?.kind === 'shape' && selectedClip.shape?.type === 'path')) setPathEdit(false)
+  }, [pathEdit, selectedClip])
 
   // "Agregar Stick" desde la timeline: un recurso de colección (vídeo/imagen)
   // entra en la pista/instante del clic derecho, YA con fondo por croma activado
@@ -1971,8 +2268,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setSelClipIds([])
     setSelKfId(null)
     setFramingMode(null)
-    const t = tracksRef.current.find((x) => x.id === id)
-    if (t?.kind === 'text' || t?.kind === 'audio') setCropMode(false)
   }
   function renameTrack(id, name) {
     const n = String(name || '').trim().slice(0, 32)
@@ -2011,7 +2306,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (clip.track_id) setSelTrackId(clip.track_id)
     if (!keepGroup) {
       setFramingMode(null)
-      setCropMode(false)
     }
     return next
   }
@@ -2021,7 +2315,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     selIdsRef.current = []
     selRef.current = null
     setSelKfId(null)
-    setCropMode(false)
   }
   // Selección múltiple desde el rectángulo del timeline. Fija el conjunto de ids
   // (ya unido con la selección previa si fue aditiva) y usa el último como ancla,
@@ -2035,7 +2328,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     selIdsRef.current = arr
     selRef.current = anchor
     setSelKfId(null)
-    setCropMode(false)
     setFramingMode(null)
     const last = anchor ? clipsRef.current.find((c) => c.id === anchor) : null
     if (last?.track_id) setSelTrackId(last.track_id)
@@ -2077,6 +2369,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       if (patch.scale != null) shape.scale = patch.scale
       if (patch.rotation != null) shape.rotation = patch.rotation
       if (patch.opacity != null) shape.opacity = patch.opacity
+      if (patch.draw != null) shape.draw = Math.min(1, Math.max(0, Number(patch.draw)))
       return { ...c, shape }
     }
     if (c.kind === 'text') {
@@ -2086,6 +2379,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       if (patch.scale != null) style.scale = patch.scale
       if (patch.rotation != null) style.rotation = patch.rotation
       if (patch.opacity != null) style.opacity = patch.opacity
+      if (patch.rot_x != null) style.rot_x = patch.rot_x
+      if (patch.rot_y != null) style.rot_y = patch.rot_y
       return { ...c, style }
     }
     let next = { ...c }
@@ -2131,10 +2426,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       return next
     }))
   }
-  function interpAnimKf(k, mode) {
+  function interpAnimKf(k, mode, bezier) {
     const clip = selectedClip
     if (!clip || !k) return
-    setClips((prev) => prev.map((c) => (c.id === clip.id ? patchKeyframe(c, k.id, { interpolation: mode }) : c)))
+    const patch = { interpolation: mode, ...(bezier ? { bezier } : {}) }
+    setClips((prev) => prev.map((c) => (c.id === clip.id ? patchKeyframe(c, k.id, patch) : c)))
   }
   function deleteAnimKf(kf) {
     const clip = selectedClip
@@ -2205,6 +2501,45 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   }
   function srcTOf(c) {
     return clamp(timelineToSource(c, playheadRef.current), c.in_point, c.out_point)
+  }
+  // Recortar (botón del toolbar de la timeline → EdCropModal, como CapCut).
+  function canCropClip(c) {
+    return !!(c && isVisualClip(c) && isOverlay(c) && mediaEls.current.get(c.id))
+  }
+  function openCrop() {
+    const clip = clipsRef.current.find((c) => c.id === selRef.current)
+    if (!canCropClip(clip)) return
+    if (playingRef.current) stopPlayback()
+    const head = playheadRef.current
+    if (head < clip.start || head >= clipEnd(clip)) scrub(clip.start + 0.02)
+    setCropClipId(clip.id)
+  }
+  function confirmCrop({ crop, rotation }) {
+    const clip = clipsRef.current.find((c) => c.id === cropClipId)
+    setCropClipId(null)
+    if (!clip) return
+    const rf = clip.reframe || newReframe()
+    const cx = +crop.cx.toFixed(4)
+    const cy = +crop.cy.toFixed(4)
+    const size = { crop_w: +crop.wf.toFixed(4), crop_h: +crop.hf.toFixed(4) }
+    if (keyframesOn(clip) || (rf.keyframes || []).length > 1) {
+      // Clip animado (keyframes o seguimiento de cara): el recorte entra como keyframe
+      // en el cabezal, igual que antes, para no aplanar el movimiento.
+      changeReframe(clip.id, size)
+      upsertKeyframe(clip, srcTOf(clip), cx, cy)
+    } else {
+      // Clip estático: recorte fijo en todo el clip (lo que hace CapCut).
+      const k0 = (rf.keyframes || [])[0]
+      changeReframe(clip.id, {
+        ...size,
+        keyframes: [{
+          id: k0?.id || uid('k'), t: clip.in_point, cx, cy,
+          zoom: k0?.zoom ?? rf.zoom ?? 1, pan_mode: k0?.pan_mode || 'smooth',
+        }],
+      })
+    }
+    const rot = +(Number(rotation) || 0).toFixed(2)
+    if (Math.abs((clip.transform?.rotation || 0) - rot) > 0.009) changeTransform(clip.id, { rotation: rot })
   }
   // Rombo de tres estados: sin animar → activa la animación sembrando el primer
   // keyframe; animado sin KF aquí → lo crea; con KF aquí → lo quita.
@@ -2294,6 +2629,95 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   // El handler de teclado se registra una sola vez: alcanza las versiones
   // frescas por ref, como hace `histRef`.
   kfOpsRef.current = { copyKeyframe, pasteKeyframe, duplicateKeyframe }
+  // Voltear (#7) los clips seleccionados (vídeo, imagen, figura o texto). Con varios
+  // seleccionados todos quedan como el opuesto del clip principal.
+  function toggleFlip(axis, only) {
+    const key = axis === 'v' ? 'flip_v' : 'flip_h'
+    const ids = new Set(only ? [only] : selIdsRef.current)
+    setClips((prev) => {
+      const primary = prev.find((c) => c.id === (only || selRef.current)) || prev.find((c) => ids.has(c.id))
+      const next = !primary?.[key]
+      return prev.map((c) => (ids.has(c.id) && c.kind !== 'audio' ? { ...c, [key]: next } : c))
+    })
+  }
+  // --- Marcadores y beats (#12) ---
+  // M: marcador en el cursor (o lo quita si ya hay uno ahí).
+  function toggleMarker(t = playheadRef.current) {
+    setMarkers((prev) => toggleMarkerAt(prev, t, fpsRef.current))
+  }
+  function patchMarker(id, patch) {
+    setMarkers((prev) => normalizeMarkers(patch ? prev.map((m) => (m.id === id ? { ...m, ...patch } : m)) : prev.filter((m) => m.id !== id)))
+  }
+  // Salta al siguiente / anterior marcador o beat (, y . como en CapCut: ←/→ ya mueven el cursor).
+  function jumpSnap(dir) {
+    const t = nextSnapTime(markersRef.current, clipsRef.current, playheadRef.current, dir)
+    if (t != null) seek(t)
+  }
+  const [beatBusy, setBeatBusy] = useState(null)   // clipId mientras se detectan
+  async function detectClipBeats(clipId) {
+    const clip = clipsRef.current.find((c) => c.id === clipId)
+    if (!clip || (clip.kind !== 'audio' && clip.kind !== 'video') || beatBusy) return
+    setBeatBusy(clipId)
+    try {
+      const res = await apiDetectBeats(project.id, clip)
+      setClips((prev) => prev.map((c) => (c.id === clipId
+        ? { ...c, beats: { times: res.times || [], bpm: res.bpm || 0, every: clipBeats(c)?.every || 1 } } : c)))
+      setClipToast({ type: 'success', message: `${(res.times || []).length} beats · ${Math.round(res.bpm || 0)} BPM` })
+    } catch (e) {
+      setClipToast({ type: 'error', message: e.message || 'No se pudieron detectar los beats.' })
+    } finally {
+      setBeatBusy(null)
+    }
+  }
+  function setClipBeats(clipId, patch) {
+    setClips((prev) => prev.map((c) => {
+      if (c.id !== clipId) return c
+      if (!patch) return { ...c, beats: undefined }
+      return { ...c, beats: { ...(c.beats || {}), ...patch } }
+    }))
+  }
+
+  // Congelar fotograma (#11): el backend saca el fotograma del cabezal como imagen
+  // del proyecto y aquí se parte el vídeo y se inserta esa imagen (3 s) con la
+  // misma pose, recorte y efectos (lib/freezeFrame.js). Un solo paso de deshacer.
+  const [freezeBusy, setFreezeBusy] = useState(false)
+  async function freezeAtPlayhead(clipId) {
+    const clip = clipsRef.current.find((c) => c.id === (clipId || selRef.current))
+    const head = playheadRef.current
+    if (!canFreeze(clip, head) || freezeBusy) return
+    setFreezeBusy(true)
+    try {
+      const { image } = await apiFreezeFrame(project.id, clip, freezeSourceTime(clip, head))
+      const frozen = frozenClipFrom(clip, image, head, FREEZE_DUR)
+      setClips((prev) => insertFreeze(prev, clip.id, head, frozen, uid('c')))
+      setSelClipId(frozen.id)
+      setSelClipIds([frozen.id])
+      onChange?.()     // la imagen aparece en el material del proyecto
+      setClipToast({ type: 'success', message: 'Fotograma congelado (3 s)' })
+    } catch (e) {
+      setClipToast({ type: 'error', message: e.message || 'No se pudo congelar el fotograma.' })
+    } finally {
+      setFreezeBusy(false)
+    }
+  }
+  // Desactivar / activar (#10, tecla V) los clips seleccionados: siguen en la
+  // timeline pero no se ven, no suenan ni se exportan. Con varios, todos quedan al
+  // revés que el principal.
+  function toggleDisabled(only) {
+    const ids = new Set(only ? [only] : selIdsRef.current)
+    if (!ids.size) return
+    setClips((prev) => {
+      const primary = prev.find((c) => c.id === (only || selRef.current)) || prev.find((c) => ids.has(c.id))
+      const next = !primary?.disabled
+      return prev.map((c) => (ids.has(c.id) ? { ...c, disabled: next || undefined } : c))
+    })
+  }
+  // Modo de fusión (#8) de los clips seleccionados (no audio).
+  function setBlendMode(mode) {
+    const ids = new Set(selIdsRef.current)
+    const value = mode && mode !== 'normal' ? mode : undefined
+    setClips((prev) => prev.map((c) => (ids.has(c.id) && c.kind !== 'audio' ? { ...c, blend_mode: value } : c)))
+  }
   function applySelectedFade(side) {
     const ids = new Set(selIdsRef.current)
     setClips((prev) => prev.map((c) => {
@@ -2424,11 +2848,61 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       return next ? { ...c, masks: next } : c
     }))
   }
-  function addMask(type) {
+  function addMask(type, target = 'clip') {
     const clip = selectedClip
     if (!clip) return
-    patchFirstMask(clip.id, (masks) => [defaultMask(type, outAspect), ...masks])
+    patchFirstMask(clip.id, (masks) => [{ ...defaultMask(type, outAspect), target }, ...masks])
     setMaskMode(true)
+  }
+  // "Ajustar → Aplicar solo en una zona": máscara de ajuste (círculo difuminado)
+  // como masks[0], salvo que ya lo sea.
+  function addAdjustMask() {
+    const clip = selectedClip
+    if (!clip) return
+    if (clipMasks(clip)[0]?.target === 'adjust') { setMaskMode(true); return }
+    patchFirstMask(clip.id, (masks) => [
+      { ...defaultMask('circle', outAspect), target: 'adjust', feather: 0.06 }, ...masks,
+    ])
+    setMaskMode(true)
+  }
+  // "Seguir" (CapCut): la máscara sigue la cara. Usa el seguimiento de caras del
+  // material (cacheado) y lo convierte en keyframes de posición de la máscara.
+  const [maskFollow, setMaskFollow] = useState(null)   // {clipId, progress, message} | null
+  async function followMaskFace() {
+    const clip = clipsRef.current.find((c) => c.id === selRef.current)
+    if (!clip || clip.kind !== 'video' || !clipMasks(clip).length || maskFollow) return
+    if ((clip.asset_scope || 'project') !== 'project' || clip.asset_kind !== 'clips') {
+      setClipToast({ type: 'error', message: 'Seguir solo funciona con vídeos del material del proyecto.' })
+      return
+    }
+    const el = mediaEls.current.get(clip.id)
+    const sz = mediaSize(el)
+    if (!sz.w) return
+    setMaskFollow({ clipId: clip.id, progress: 0.02, message: 'Buscando la cara…' })
+    try {
+      let job = await faceTrackMaterial(project.id, clip.asset_id, { start: clip.in_point, end: clip.out_point })
+      while (job.status !== 'done' && job.status !== 'error') {
+        await new Promise((r) => setTimeout(r, 500))
+        job = await getJob(job.id)
+        setMaskFollow((m) => (m ? { ...m, progress: job.progress || m.progress, message: job.message || m.message } : m))
+      }
+      if (job.status === 'error') throw new Error(job.error || 'No se pudo seguir la cara.')
+      const fresh = clipsRef.current.find((c) => c.id === clip.id)
+      const keys = fresh ? followTrackMaskKeys(fresh, job.reframe_prep?.track || [],
+        { srcW: sz.w, srcH: sz.h, outW, outH }) : []
+      if (!keys.length) throw new Error('No se detectó ninguna cara en este tramo.')
+      setClips((prev) => prev.map((c) => {
+        if (c.id !== clip.id) return c
+        let next = keyframesOn(c) ? c : enableKeyframes(c, keys[0].t, srcTOf(c))
+        for (const k of keys) next = upsertKf(next, k.t, { mx: k.mx, my: k.my })
+        return next
+      }))
+      setClipToast({ type: 'success', message: `La máscara sigue la cara (${keys.length} keyframes).` })
+    } catch (e) {
+      setClipToast({ type: 'error', message: e.message || 'No se pudo seguir la cara.' })
+    } finally {
+      setMaskFollow(null)
+    }
   }
   function removeMask() {
     const clip = selectedClip
@@ -2459,6 +2933,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       feather: masks[0].feather,
       invert: masks[0].invert,
       opacity: masks[0].opacity,
+      target: masks[0].target,
     }
   }
   function dropMaskSizeKfs(clip) {
@@ -2533,6 +3008,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   function patchBgChroma(id, patch) {
     patchBg(id, (bg) => normalizeBg({ ...bg, chroma: { ...bg.chroma, ...patch } }))
   }
+  // Contorno / halo del sujeto recortado (#9).
+  function patchBgOutline(id, patch) {
+    patchBg(id, (bg) => normalizeBg({ ...bg, outline: { ...bg.outline, ...patch } }))
+  }
 
   const toggleBgAuto = (on) => {
     const clip = selectedClip
@@ -2545,7 +3024,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   // no su id: así no hay carrera con el autosave y funciona con clips recién
   // añadidos que todavía no están guardados en el servidor.
   function applyBgAuto() {
-    const clip = selectedClip
+    startBgAutoFor(selectedClip)
+  }
+  function startBgAutoFor(clip) {
     if (!clip || !bgCapable(clip)) return
     const bg = clipBg(clip) || defaultBg()
     patchBgAuto(clip.id, { enabled: true, status: 'running', error: null })
@@ -2754,25 +3235,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
 
   // Cursor del pincel sobre el lienzo (el círculo lo dibuja drawComposite).
   function onCanvasBgMove(e) {
-    // Cursor de recorte al pasar por los tiradores (modo Recortar, sin arrastre en curso).
-    if (cropModeRef.current && !croppingRef.current && selectedClip && isVisualClip(selectedClip)) {
-      const cv = mainCanvasRef.current
-      const el = mediaEls.current.get(selectedClip.id)
-      const sz = mediaSize(el)
-      if (cv && el && sz.w) {
-        const srcAspect = sz.w / sz.h
-        const srcT = clamp(timelineToSource(selectedClip, playhead), selectedClip.in_point, selectedClip.out_point)
-        const clipT = Math.max(0, playhead - selectedClip.start)
-        const crop = cropWindow(selectedClip, srcAspect, outAspect, srcT, clipT)
-        const p = canvasPointer(e, cv)
-        const nx = clamp(p.x / cv.width, 0, 1)
-        const ny = clamp(p.y / cv.height, 0, 1)
-        const h = cropHandleAt(nx, ny, crop, p.rect)
-        cv.style.cursor = h ? cropCursor(h.hx, h.hy) : 'move'
-      }
-    } else if (mainCanvasRef.current?.style.cursor) {
-      mainCanvasRef.current.style.cursor = '' // sin recorte: manda el cursor del stage
-    }
     if (!bgBrushRef.current.on) return
     const canvas = mainCanvasRef.current
     if (!canvas) return
@@ -3139,16 +3601,19 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (!s) return
     setTracks(s.tracks || [])
     setClips(s.clips || [])
+    setMarkers(s.markers || [])
   }
 
   // --- Arrastrar en el canvas: compuesto, o recorte en modo encuadre ---
   const onCanvasDown = createCanvasDownHandler({
     mainCanvasRef, framingModeRef, playingRef, stopPlayback, setFramingMode,
     selectedClip, mainTextBox, changeStyle, changeShape, mediaEls, playhead, upsertKeyframe, outAspect,
-    changeReframe, clipsRef, tracksRef, playheadRef, alignGuidesRef, seek: scrub, croppingRef,
-    clipModeRef, cropModeRef, hitListRef, viewZoomRef,
+    changeReframe, clipsRef, tracksRef, playheadRef, alignGuidesRef, seek: scrub,
+    clipModeRef, hitListRef, viewZoomRef,
     maskModeRef, maskDrawRef, changeMask, commitMask,
     bgBrushRef, addBgStroke, extendBgStroke, outRef,
+    penRef, addPenPoint, finishPen, pathEditRef, setPathShape,
+    trackPickRef, trackBoxRef, onTrackBox: runTrack, onTrackCancel: cancelTrackPick,
     onSelectClip: handleSelectClip,
     onClearSelection: clearCanvasSelection,
     changeTransform, commitPose, outW, outH,
@@ -3166,6 +3631,16 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       if (typingTarget(document.activeElement) || typingTarget(e.target)) return
       if (genMotionRef.current || genResourceRef.current || directionWsRef.current) return   // los modales de generar / Dirección de escena tienen el teclado
       if (segAskRef.current) return      // el modal de Crear clip tiene el teclado
+      // Pluma (#14) activa: Enter termina, Esc cancela, Supr/Retroceso quita el
+      // último punto. Mientras se dibuja no hay más atajos.
+      if (penRef.current) {
+        if (e.key === 'Enter') { e.preventDefault(); penOpsRef.current.finish() }
+        else if (e.key === 'Escape') { e.preventDefault(); penOpsRef.current.cancel() }
+        else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); penOpsRef.current.pop() }
+        return
+      }
+      if (pathEditRef.current && e.key === 'Escape') { e.preventDefault(); setPathEdit(false); return }
+      if (trackPickRef.current && e.key === 'Escape') { e.preventDefault(); trackBoxRef.current = null; setTrackPick(null); return }
       // Paper Animator tiene su propio estado y su propio historial: solo comparte
       // los atajos que significan lo mismo (deshacer, play, mover el cabezal).
       // Cortar/duplicar/pegar clips no aplican a un objeto único.
@@ -3254,6 +3729,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         } else if (k === 'y') {
           e.preventDefault()
           applyHistSnap(histRef.current.redo())
+        } else if (e.altKey && (k === 'c' || k === 'v')) {
+          // Ctrl+Alt+C / Ctrl+Alt+V: copiar / pegar atributos (#13).
+          if (k === 'c' ? copyAttrs() : openPasteAttrs()) e.preventDefault()
         } else if (k === 'c') {
           if (selIdsRef.current.length && copySelectedClips()) e.preventDefault()
         } else if (k === 'x') {
@@ -3287,6 +3765,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         if (selIdsRef.current.length) { e.preventDefault(); deleteClip(selIdsRef.current[0]) }
       } else if (e.key.toLowerCase() === 's') {
         if (selIdsRef.current.length) { e.preventDefault(); splitClip(selIdsRef.current[0], playheadRef.current) }
+      } else if (e.key.toLowerCase() === 'v') {
+        if (selIdsRef.current.length) { e.preventDefault(); toggleDisabled() }
+      } else if (e.key.toLowerCase() === 'm' && !clipModeRef.current) {
+        e.preventDefault()
+        toggleMarker()
+      } else if (e.key === ',' || e.key === '.') {
+        e.preventDefault()
+        jumpSnap(e.key === '.' ? 1 : -1)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -3309,7 +3795,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const hasVisualClip = clips.some((c) => isVisualClip(c))
 
   // Elementos multimedia ocultos (el texto no tiene medio)
-  const mediaPool = clips.filter((c) => c.kind !== 'text' && c.kind !== 'shape').map((c) => (
+  const mediaPool = clips.filter((c) => c.kind !== 'text' && c.kind !== 'shape' && c.kind !== 'adjustment').map((c) => (
     <HiddenMedia
       key={c.id}
       clip={c}
@@ -3321,9 +3807,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
 
   const canEditFrame = isVisualClip(selectedClip)
   const overlayOn = isOverlay(selectedClip)
-  // Con "Recortar" activo se muestra la vista de recorte de la fuente a la izquierda
-  // y la vista de RESULTADO en vivo a la derecha. Es el único modo que la abre.
-  const framingActive = canEditFrame && !framingMode && cropMode
   // Escala 100% = altura del clip = altura del cuadro: factor = outH / altura de la fuente.
   const selSrcH = selectedClip ? mediaSize(mediaEls.current.get(selectedClip.id)).h : 0
   const heightScale = selSrcH > 0 ? outH / selSrcH : 1
@@ -3376,7 +3859,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   return (
     <div
       ref={panels.editorRef}
-      className={`veditor${mainColTab === 'clip' ? ' clip-mode' : ''}${mainColTab === 'motion' ? ' motion-mode' : ''}${mainColTab === 'paper' ? ' paper-mode' : ''}${linkPick ? ' link-picking' : ''}${panels.dragging ? ` is-resizing is-rs-${panels.dragging}` : ''}`}
+      className={`veditor${mainColTab === 'clip' ? ' clip-mode' : ''}${mainColTab === 'motion' ? ' motion-mode' : ''}${mainColTab === 'paper' ? ' paper-mode' : ''}${linkPick ? ' link-picking' : ''} ws-${panels.preset}${panels.dragging ? ` is-resizing is-rs-${panels.dragging}` : ''}`}
       style={panels.vars}
     >
       <div className="ed-hidden-media">{mediaPool}</div>
@@ -3408,12 +3891,21 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         clipSaveDisabled={!clipMeta.url || !clips.length || clipMeta.preparing}
         onSaveClip={saveClip}
         saveClipLabel={editingExisting ? 'Editar clip' : 'Guardar clip'}
+        layoutPreset={panels.preset}
+        onLayoutPreset={panels.setPreset}
       />
 
       <div className="veditor-workspace" ref={panels.workRef}>
         <EdMaterial
           project={project}
           onAdd={addAsset}
+          onPen={() => (pen ? penOpsRef.current.finish() : startPen())}
+          onAddAdjustment={addAdjustmentLayer}
+          onAddCinemaBars={addCinemaBars}
+          onApplyRecipe={applyRecipeUI}
+          recipeBusy={recipeBusy}
+          selectedClips={clips.filter((c) => selClipIds.includes(c.id))}
+          penActive={!!pen}
           onDragInfo={setDragInfo}
           onRefresh={onChange}
           fav={fav}
@@ -3575,11 +4067,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             </div>
           )}
           <div
-            className={`ed-canvas-stage${framingActive ? ' split' : ''}`}
+            className="ed-canvas-stage"
             ref={mainStageRef}
             onPointerDown={(e) => { if (!pickChromaAt(e)) onCanvasDown(e) }}
-            onPointerMove={onCanvasBgMove}
-            onPointerLeave={onCanvasBgLeave}
+            onPointerMove={(e) => { onCanvasPenMove(e); onCanvasBgMove(e) }}
+            onPointerLeave={() => { penHoverRef.current = null; onCanvasBgLeave() }}
             onDragOver={(e) => {
               const types = [...e.dataTransfer.types]
               if (types.includes('application/x-material') || types.includes('application/x-explore')) e.preventDefault()
@@ -3604,18 +4096,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               } catch { /* noop */ }
             }}
             style={{
-              cursor: (bgBrush.on || chromaPick) ? 'crosshair'
+              cursor: (bgBrush.on || chromaPick || pen || trackPick) ? 'crosshair'
                 : ((framingMode || (canEditFrame && !overlayOn)) ? 'crosshair'
                   : ((canEditFrame || isTextSel || isShapeSel) ? 'move' : 'default')),
             }}
           >
             <canvas ref={mainCanvasRef} width={540} height={960} className="ed-main-canvas" />
-            {framingActive && (
-              <div className="ed-result-pane" onPointerDown={(e) => e.stopPropagation()}>
-                <span className="ed-result-label">Resultado</span>
-                <canvas ref={resultCanvasRef} className="ed-result-canvas" />
-              </div>
-            )}
             {mainColTab === 'clip' && clipMeta.preparing && (
               <div className="ed-stage-prep">
                 <JobStatusBar progress={clipMeta.prepProgress} message={clipMeta.prepMsg} />
@@ -3639,14 +4125,24 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               </div>
             )}
 
-            {isTextSel && !cropMode && (
+            {isTextSel && (
               <div className="ed-stage-hint">
                 {selClipIds.length > 1
                   ? `${selClipIds.length} textos · arrastra en el timeline para mover el grupo`
                   : 'Arrastra el texto · esquinas para tamaño'}
               </div>
             )}
-            {isShapeSel && !cropMode && (
+            {trackPick ? (
+              <div className="ed-stage-hint">Seguimiento: dibuja un recuadro sobre el objeto que quieres seguir · Esc cancela</div>
+            ) : trackRun ? (
+              <div className="ed-stage-hint">{trackRun.message} {Math.round((trackRun.progress || 0) * 100)}%</div>
+            ) : pen ? (
+              <div className="ed-stage-hint">
+                Pluma: clic para añadir puntos · doble clic o Enter termina · clic en el primero lo cierra · Supr quita el último · Esc cancela
+              </div>
+            ) : pathEdit ? (
+              <div className="ed-stage-hint">Arrastra los puntos · clic en la línea añade uno · Alt+clic lo quita</div>
+            ) : isShapeSel && (
               <div className="ed-stage-hint">Arrastra la figura · esquinas para tamaño · círculo para rotar</div>
             )}
             {framingMode && <div className="ed-stage-hint">Ajusta el recuadro amarillo y pulsa Guardar</div>}
@@ -3716,8 +4212,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           selectedClip={isAudioTrackSel ? (trackAudioClip || { kind: 'audio', volume: 1, muted: false, audio_fx: {}, start: 0 }) : selectedClip}
           textMode={isTextSel ? 'clip' : (isTextTrackSel ? 'track' : null)}
           audioMode={isAudioTrackSel ? 'track' : null}
-          cropping={cropMode}
-          onCropping={setCropMode}
           clipMode={mainColTab === 'clip'}
           noteProps={selectedClip && !isAudioTrackSel && !isTextTrackSel
             ? { onChange: setClipNote, onSuggest: suggestClipNoteFor } : null}
@@ -3745,6 +4239,18 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             trackEmpty: isAudioTrackSel && !trackAudioClip,
             onAddKf: isAudioTrackSel ? undefined : toggleKeyframeAtPlayhead,
             onFade: isAudioTrackSel ? (side) => fadeTrackAudio(selTrackObj.id, side) : applySelectedFade,
+            onFlip: isAudioTrackSel || isTextTrackSel ? undefined : toggleFlip,
+            onBlend: isAudioTrackSel || isTextTrackSel ? undefined : setBlendMode,
+            beats: isAudioTrackSel ? null : { busy: !!beatBusy, onDetect: detectClipBeats, onChange: setClipBeats },
+            track: (isAudioTrackSel || isTextTrackSel || !selectedClip || selectedClip.kind === 'audio') ? null : {
+              mode: trackMode,
+              onMode: setTrackMode,
+              picking: !!trackPick,
+              run: trackRun,
+              hasVideo: !!videoUnder(selectedClip),
+              onStart: startTrackPick,
+              onCancel: cancelTrackPick,
+            },
             textEditor: {
               clip: isTextSel ? selectedClip : null,
               selectionCount: selClipIds.length,
@@ -3794,6 +4300,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             onClearEdits: clearBgEdits,
             onToggleChroma: toggleBgChroma,
             onChangeChroma: changeBgChroma,
+            onChangeOutline: (patch) => selectedClip && patchBgOutline(selectedClip.id, patch),
             onResetChroma: resetBgChroma,
             onPickColor: onPickChroma,
             bgPreview,
@@ -3806,6 +4313,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             onDrawMode: setMaskDraw,
             onPanelOpen: onMaskPanel,
             onAddMask: addMask,
+            onAddAdjustMask: addAdjustMask,
+            onFollow: followMaskFace,
+            follow: maskFollow,
             onRemoveMask: removeMask,
             onDuplicateMask: duplicateMask,
             onChangeMask: (patch) => selectedClip && changeMask(selectedClip.id, patch),
@@ -3814,9 +4324,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           }}
           shapeProps={isShapeSel ? {
             clip: selectedClip,
+            onFlip: toggleFlip,
             layer: layerInfo,
             onMoveLayer: (action) => moveLayer(selectedClip.id, action),
             onChangeShape: (patch) => changeShape(selectedClip.id, patch),
+            pathEdit,
+            onPathEdit: () => setPathEdit((v) => !v),
+            onDrawIn: () => drawInShape(selectedClip.id),
             onChangeDur: (d) => {
               if (!Number.isFinite(d) || d <= 0) return
               const next = Math.max(0.15, d)
@@ -3867,6 +4381,14 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onMatchDuration={paperMode ? undefined : matchSelectedDurations}
           onSplit={paperMode ? undefined : splitClip}
           onDuplicate={paperMode ? undefined : duplicateSelected}
+          onCrop={paperMode || motionMode ? undefined : openCrop}
+          cropDisabled={selClipIds.length > 1 || !canCropClip(selectedClip)}
+          onFreeze={paperMode || motionMode ? undefined : () => freezeAtPlayhead()}
+          markers={mainColTab === 'main' ? markers : null}
+          onMarkerChange={mainColTab === 'main' ? patchMarker : undefined}
+          onToggleMarker={mainColTab === 'main' ? toggleMarker : undefined}
+          freezeDisabled={selClipIds.length > 1 || !canFreeze(selectedClip, playhead)}
+          freezeBusy={freezeBusy}
           onFaceTrack={mainColTab === 'clip' ? startFaceTrack : undefined}
           faceTrackBusy={!!faceBusy}
           faceTrackDisabled={!clipMeta.url || clipMeta.preparing}
@@ -4013,6 +4535,41 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                 </>
               )
             })()}
+            <button onClick={() => { toggleDisabled(ctxMenu.clip.id); setCtxMenu(null) }}>
+              <Icon name={ctxMenu.clip.disabled ? 'visibility' : 'visibility_off'} size={15} />
+              {ctxMenu.clip.disabled ? 'Activar clip' : 'Desactivar clip'} <kbd>V</kbd>
+            </button>
+            {(ctxMenu.clip.kind === 'audio' || ctxMenu.clip.kind === 'video') && (
+              clipBeats(ctxMenu.clip) ? (
+                <button onClick={() => { setClipBeats(ctxMenu.clip.id, null); setCtxMenu(null) }}>
+                  <Icon name="music_off" size={15} /> Quitar beats
+                </button>
+              ) : (
+                <button disabled={!!beatBusy} onClick={() => { detectClipBeats(ctxMenu.clip.id); setCtxMenu(null) }}>
+                  <Icon name="graphic_eq" size={15} /> Detectar beats
+                </button>
+              )
+            )}
+            {(ctxMenu.clip.kind === 'video' || ctxMenu.clip.kind === 'image') && (
+              <button disabled={!!soundBusy} onClick={() => { soundDesignFor(ctxMenu.clip.id); setCtxMenu(null) }}>
+                <Icon name="surround_sound" size={15} /> {soundBusy ? 'Sonorizando…' : 'Sonorizar con IA'}
+              </button>
+            )}
+            {canFreeze(ctxMenu.clip, playhead) && (
+              <button disabled={freezeBusy} onClick={() => { freezeAtPlayhead(ctxMenu.clip.id); setCtxMenu(null) }}>
+                <Icon name="ac_unit" size={15} /> Congelar fotograma
+              </button>
+            )}
+            {ctxMenu.clip.kind !== 'audio' && (
+              <>
+                <button onClick={() => { toggleFlip('h', ctxMenu.clip.id); setCtxMenu(null) }}>
+                  <Icon name="flip" size={15} /> Voltear horizontal
+                </button>
+                <button className="ed-flip-v" onClick={() => { toggleFlip('v', ctxMenu.clip.id); setCtxMenu(null) }}>
+                  <Icon name="flip" size={15} /> Voltear vertical
+                </button>
+              </>
+            )}
             {ctxMenu.clip.kind === 'audio' && (
               <button
                 disabled={!clipCopyText(ctxMenu.clip, project.audios)}
@@ -4021,16 +4578,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                 <Icon name="content_copy" size={15} /> Copiar descripción
               </button>
             )}
-            {isVisualClip(ctxMenu.clip) && (
-              <>
-                <button onClick={() => { copyClipProps(ctxMenu.clip); setCtxMenu(null) }}>
-                  <Icon name="content_copy" size={15} /> Copiar propiedades
-                </button>
-                <button disabled={!propClipboard} onClick={() => { pasteClipProps(ctxMenu.clip); setCtxMenu(null) }}>
-                  <Icon name="content_paste" size={15} /> Pegar propiedades
-                </button>
-              </>
-            )}
+            <button onClick={() => { copyAttrs(ctxMenu.clip.id); setCtxMenu(null) }}>
+              <Icon name="content_copy" size={15} /> Copiar atributos <kbd>Ctrl+Alt+C</kbd>
+            </button>
+            <button
+              disabled={!attrClipboard || attrClipboard.id === ctxMenu.clip.id}
+              onClick={() => { openPasteAttrs(ctxMenu.clip.id); setCtxMenu(null) }}
+            >
+              <Icon name="content_paste" size={15} /> Pegar atributos… <kbd>Ctrl+Alt+V</kbd>
+            </button>
             <button onClick={() => { splitClip(ctxMenu.clip.id, playhead); setCtxMenu(null) }}><Icon name="content_cut" size={15} /> Dividir aquí</button>
             <button onClick={() => { duplicateSelected(ctxMenu.clip); setCtxMenu(null) }}><Icon name="content_copy" size={15} /> Duplicar</button>
             <button className="danger" onClick={() => { deleteClip(ctxMenu.clip.id); setCtxMenu(null) }}><Icon name="delete" size={15} /> Eliminar</button>
@@ -4199,6 +4755,32 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         onConfirm={applyReplaceDrop}
         onCancel={() => setReplaceAsk(null)}
       />
+      {cropClipId && clips.some((c) => c.id === cropClipId) && (
+        <EdCropModal
+          clip={clips.find((c) => c.id === cropClipId)}
+          mediaEl={mediaEls.current.get(cropClipId)}
+          playhead={playhead}
+          playing={playing}
+          fps={fps}
+          outAspect={outAspect}
+          onSeek={scrub}
+          onConfirm={confirmCrop}
+          onCancel={() => setCropClipId(null)}
+        />
+      )}
+      {soundResult && (
+        <EdSoundDesign result={soundResult} onApply={applySoundDesign} onCancel={() => setSoundResult(null)} />
+      )}
+
+      {attrPaste && attrClipboard && (
+        <EdPasteAttrs
+          source={attrClipboard}
+          targets={clips.filter((c) => attrPaste.ids.includes(c.id))}
+          onPaste={applyPasteAttrs}
+          onCancel={() => setAttrPaste(null)}
+        />
+      )}
+
       <SegmentConfirmModal
         ask={segAsk}
         onChange={patchSegAsk}

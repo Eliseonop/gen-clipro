@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { getAiStatus, transcribeAudio, generateSubtitles, analyzeImage, ocrImage, getJob } from '../../services/api'
+import { getAiStatus, transcribeAudio, generateSubtitles, analyzeImage, ocrImage, getJob, analyzeMaterials } from '../../services/api'
 import Icon from '../../components/Icon'
 import JobStatusBar from '../../components/JobStatusBar'
 import Toast from '../../components/Toast'
@@ -9,6 +9,7 @@ import FoundryPanel from './FoundryPanel'
 //   Voz        → generar voz (narrador) + transcribir audio (Whisper / Azure)
 //   Subtítulos → generar subtítulos automáticamente desde un audio
 //   Imagen     → analizar imagen + extraer texto (OCR) con Azure Vision
+//   Material   → describir clips e imágenes con la visión de Foundry (para dirigir escenas)
 // No duplica el narrador ni el motor de subtítulos: reutiliza los endpoints y el
 // sistema de texto/karaoke que ya existen. La sub-pestaña "Foundry" añade la capa
 // de IA GENERATIVA (Microsoft Foundry), independiente de Speech/Vision.
@@ -30,6 +31,7 @@ export default function AiTab({ project, onChange, onGoAudio, onGoSettings, edit
         <button type="button" className={`ed-tab ${section === 'voice' ? 'on' : ''}`} onClick={() => setSection('voice')}>Voz</button>
         <button type="button" className={`ed-tab ${section === 'subs' ? 'on' : ''}`} onClick={() => setSection('subs')}>Subtítulos</button>
         <button type="button" className={`ed-tab ${section === 'image' ? 'on' : ''}`} onClick={() => setSection('image')}>Imagen</button>
+        <button type="button" className={`ed-tab ${section === 'material' ? 'on' : ''}`} onClick={() => setSection('material')}>Material</button>
         <button type="button" className={`ed-tab ${section === 'foundry' ? 'on' : ''}`} onClick={() => setSection('foundry')}>Foundry</button>
       </div>
 
@@ -44,6 +46,10 @@ export default function AiTab({ project, onChange, onGoAudio, onGoSettings, edit
       {section === 'image' && (
         <ImageSection images={images} visionOk={visionOk} visionReason={status?.vision?.reason}
           projectId={project?.id} onChange={onChange} setToast={setToast} />
+      )}
+      {section === 'material' && (
+        <MaterialSection project={project} foundry={status?.foundry} onGoSettings={onGoSettings}
+          onChange={onChange} setToast={setToast} />
       )}
       {section === 'foundry' && (
         <FoundryPanel project={project} editorContext={editorContext} foundry={status?.foundry}
@@ -193,6 +199,103 @@ function SubsSection({ audios, speech, projectId, onChange, setToast }) {
       </button>
       {busy && <JobStatusBar progress={job.progress || 0} message={job.message || 'Generando subtítulos…'} elapsed={elapsed} />}
       {job?.status === 'error' && <div className="ed-mat-err">{job.error}</div>}
+    </div>
+  )
+}
+
+// "Analizado" = ya tiene descripción IA + metadata semántica (igual que material_ai.is_analyzed).
+const isAnalyzed = (m) => !!(m?.description_ai && m?.semantic && Object.keys(m.semantic).length)
+
+function MaterialSection({ project, foundry, onGoSettings, onChange, setToast }) {
+  const [onlyMissing, setOnlyMissing] = useState(true)
+  const [renameGeneric, setRenameGeneric] = useState(true)
+  const { job, setJob, busy, elapsed } = useJobRunner()
+  const doneRef = useRef(null)
+
+  const configured = !!foundry?.available
+  const clips = project?.clips || []
+  const images = project?.images || []
+  const total = clips.length + images.length
+  const pending = clips.filter((c) => !isAnalyzed(c)).length + images.filter((im) => !isAnalyzed(im)).length
+  const willAnalyze = onlyMissing ? pending : total
+  const summary = job?.status === 'done' ? job.result : null
+
+  useEffect(() => {
+    if ((job?.status === 'done' || job?.status === 'error') && doneRef.current !== job.id) {
+      doneRef.current = job.id
+      onChange?.()   // recarga el material: títulos/descripciones nuevos
+      if (job.status === 'done') setToast({ type: 'success', message: job.message || 'Material analizado.' })
+    }
+  }, [job?.status])
+
+  async function run() {
+    try {
+      setJob(await analyzeMaterials(project.id, { only_missing: onlyMissing, rename_generic: renameGeneric }))
+    } catch (e) { setToast({ type: 'error', message: e.message }) }
+  }
+
+  return (
+    <div className="ai-block">
+      <div className="ai-block-head"><Icon name="visibility" size={16} /> Analizar material (visión de Foundry)</div>
+      <p className="ed-caja-hint">
+        La IA mira 3 fotogramas de cada clip (1 por imagen) junto con tu guion y guarda qué se ve
+        y para qué frase sirve. Así Dirección de escena y Generar escena eligen mejor el material.
+        Nunca pisa lo que escribiste: rellena la descripción solo si estaba vacía.
+      </p>
+      {!configured && (
+        <div className="warn">
+          {foundry?.reason || 'Configura el endpoint, el deployment y la clave de Foundry.'}
+          {onGoSettings && (
+            <button type="button" className="ghost small" onClick={onGoSettings} style={{ marginLeft: 8 }}>
+              Ir a Configuración
+            </button>
+          )}
+        </div>
+      )}
+      <div className="ai-result-meta">{total} materiales · {total - pending} analizados · {pending} pendientes</div>
+      <div className="ai-btn-row">
+        <label className={`ed-mode-toggle ${onlyMissing ? 'on' : ''}`} title="Desmarcado: vuelve a analizar también lo ya analizado">
+          <input type="checkbox" checked={onlyMissing} onChange={(e) => setOnlyMissing(e.target.checked)} disabled={busy} />
+          Solo pendientes
+        </label>
+        <label className={`ed-mode-toggle ${renameGeneric ? 'on' : ''}`}
+          title="Cambia títulos vacíos, nombres de archivo, «image» o el mismo título repetido (p. ej. el del tráiler). Los títulos que pusiste tú no se tocan.">
+          <input type="checkbox" checked={renameGeneric} onChange={(e) => setRenameGeneric(e.target.checked)} disabled={busy} />
+          Renombrar títulos genéricos
+        </label>
+      </div>
+      <button className="primary" type="button" onClick={run} disabled={busy || !configured || !willAnalyze}>
+        {busy ? 'Analizando…' : willAnalyze ? `Analizar ${willAnalyze} materiales` : 'Nada pendiente'}
+      </button>
+      {busy && <JobStatusBar progress={job.progress || 0} message={job.message || 'Analizando…'} elapsed={elapsed} />}
+      {job?.status === 'error' && <div className="ed-mat-err">{job.error}</div>}
+
+      {summary && (
+        <div className="ai-result">
+          <div className="ai-result-meta">
+            {summary.analyzed} analizados{summary.failed?.length ? ` · ${summary.failed.length} con error` : ''}
+            {summary.tokens ? ` · ${summary.tokens.toLocaleString()} tokens` : ''}
+          </div>
+          <ul className="foundry-list">
+            {(summary.items || []).map((it) => (
+              <li key={`${it.kind}-${it.id}`} className="foundry-list-item ai-mat-item">
+                <Icon name={it.kind === 'clips' ? 'movie' : 'image'} size={15} />
+                <span>
+                  <b>{it.label || '—'}</b>
+                  {it.renamed && it.old_label && <span className="ai-mat-old"> (antes: {it.old_label})</span>}
+                  <br />{it.description_ai}
+                </span>
+              </li>
+            ))}
+            {(summary.failed || []).map((it) => (
+              <li key={`err-${it.kind}-${it.id}`} className="foundry-list-item ai-mat-item">
+                <Icon name="error_outline" size={15} />
+                <span><b>{it.label || it.id}</b><br /><span className="ed-mat-err">{it.error}</span></span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }

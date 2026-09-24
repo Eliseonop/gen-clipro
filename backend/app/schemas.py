@@ -200,6 +200,24 @@ class CreateSegmentsRequest(BaseModel):
     segments: list[dict]        # [{start, end, label?, description?}] en segundos del archivo
 
 
+class RecipeRequest(BaseModel):
+    """Receta en un clic (#21)."""
+    clip_ids: list[str] = []
+    params: dict = {}
+
+
+class SoundDesignRequest(BaseModel):
+    """Sonorizar con IA (#17)."""
+    clip: dict                 # el clip de vídeo o imagen tal como está en el editor
+
+
+class TrackObjectRequest(BaseModel):
+    """Seguimiento de objetos (#15)."""
+    clip: dict                 # el clip de vídeo tal como está en el editor
+    box: dict                  # {cx, cy, w, h} en 0–1 de la fuente
+    at: float                  # s de ARCHIVO del fotograma en que se marcó
+
+
 class FaceTrackRequest(BaseModel):
     start: Optional[float] = None   # ausente → rango del propio material
     end: Optional[float] = None
@@ -210,10 +228,26 @@ class FaceTrackRequest(BaseModel):
 class CreateProjectRequest(BaseModel):
     name: str
     folder: Optional[str] = None
+    group_id: Optional[str] = None     # carpeta del inicio; None = sin carpeta
 
 
 class RenameProjectRequest(BaseModel):
     name: str
+
+
+class ProjectGroup(BaseModel):
+    """Carpeta del inicio: agrupa proyectos en la lista (no toca los archivos en disco)."""
+    id: str
+    name: str
+    created_at: str
+
+
+class GroupNameRequest(BaseModel):
+    name: str
+
+
+class MoveProjectRequest(BaseModel):
+    group_id: Optional[str] = None     # None = sacarlo de la carpeta
 
 
 class SetFolderRequest(BaseModel):
@@ -320,6 +354,7 @@ class ImageInfo(BaseModel):
     created_at: Optional[str] = None
     label: Optional[str] = None
     description: Optional[str] = None
+    description_ai: Optional[str] = None      # descripción generada por la IA (no pisa la tuya)
     semantic: Optional[dict] = None           # metadata semántica para dirigir escenas (ver scene_direction.normalize_semantic)
     analysis: Optional[dict] = None           # análisis de Azure Vision (caption, tags, objects, ocr_text…); base para búsqueda semántica futura
     origin: Optional[str] = "upload"
@@ -448,6 +483,7 @@ class TimelineClip(BaseModel):
     exit: str = "none"                    # none | fade | dissolve | wipe | zoom | slide_down | slide_right | pop
     look: str = "none"                    # none | bw | cinematic | vintage | contrast | warm | cool | saturated
     effects: Optional[dict] = None        # blur, grayscale, sepia, brightness… (efectos de imagen)
+    filters: Optional[list] = None        # filtros de color apilados [{id, amount}] (#18; ver clip_filters.py)
     audio_fx: Optional[dict] = None       # eq, compressor, reverb… (efectos de audio)
     muted: bool = False                 # silencia este clip (la pista puede seguir sonando)
     speed: float = 1.0                  # 0.1–10; timeline = fuente / speed
@@ -455,6 +491,11 @@ class TimelineClip(BaseModel):
     reverse: bool = False
     speed_curve: Optional[dict] = None  # reserva; sin motor en esta entrega
     opacity: Optional[float] = None     # opacidad estática del clip (1 = opaco); los keyframes la animan
+    flip_h: bool = False                # voltear en horizontal (espejo en los ejes del clip, antes del giro)
+    flip_v: bool = False                # voltear en vertical
+    blend_mode: Optional[str] = None    # modo de fusión (clip_blend.BLEND_MODES); None = normal
+    disabled: bool = False              # desactivado (tecla V): no se ve, no suena ni se exporta
+    beats: Optional[dict] = None        # beats del audio: {times: [s del archivo], bpm, every: 1|2|4}
     loop: Optional[bool] = None         # GIF animado: repetir la animación hasta cubrir la duración del clip
     words: list[Word] = []                # (texto) timing real por palabra, RELATIVO al inicio del clip
     origin: Optional[dict] = None         # (texto) procedencia: {transcript_id, segment_index, fragment_index, word_range, source_range}
@@ -485,6 +526,7 @@ class Timeline(BaseModel):
     audio_target_db: float = -14.0  # nivel objetivo LUFS para el render final
     tracks: list[TimelineTrack] = []
     clips: list[TimelineClip] = []
+    markers: list[dict] = []       # marcadores de la timeline: [{id, t, label?, color?}]
 
 
 class ExportRequest(BaseModel):
@@ -496,6 +538,7 @@ class Project(BaseModel):
     name: str
     created_at: str
     folder: Optional[str] = None      # carpeta base en disco; None = por defecto
+    group_id: Optional[str] = None    # carpeta del inicio (ProjectGroup); None = sin carpeta
     clips: list[ClipInfo] = []
     transcripts: list[Transcript] = []
     audios: list[AudioInfo] = []
@@ -532,5 +575,7 @@ class Job(BaseModel):
     # "Exportar recorte" (bg-cutout): asset de vídeo transparente creado en el
     # material ({asset_id, filename, label, media_version}) para reusarlo.
     asset: Optional[dict] = None
+    # Resultado estructurado de jobs sin campo propio (p. ej. "Analizar material").
+    result: Optional[dict] = None
     error: Optional[str] = None
     cancel_requested: bool = False        # cancelación cooperativa (best-effort)

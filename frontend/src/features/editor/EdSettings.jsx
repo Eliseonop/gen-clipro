@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import Icon from '../../components/Icon'
+import Hint from '../../components/Hint'
 import Toast from '../../components/Toast'
 import { FPS_CHOICES, normalizeFps } from '../../lib/projectFps'
 import { getSettings, putSettings, getAiConfig, getLmStudioModels, testApiKeys, addApiKey, setApiKeyAt, deleteApiKeyAt } from '../../services/api'
@@ -185,6 +186,7 @@ export default function EdSettings({ audioDb, onAudioDb }) {
       await putSettings(patch)
       setAzFoundryKey('')
       await reload()
+      reloadAi().catch(() => {})   // Foundry también es proveedor del Chat IA
       setAzFoundryEdit(false)
       setToast({ type: 'success', message: 'Credenciales de Foundry guardadas.' })
     } catch (e) {
@@ -435,7 +437,7 @@ export default function EdSettings({ audioDb, onAudioDb }) {
             </div>
             <div className="ed-key-form">
               <label className="field">
-                <span>Modelo Whisper</span>
+                <span>Modelo Whisper{txInfo.hint ? <Hint>{txInfo.hint}</Hint> : null}</span>
                 <select
                   className="select"
                   value={txShown}
@@ -447,7 +449,6 @@ export default function EdSettings({ audioDb, onAudioDb }) {
                   ))}
                 </select>
               </label>
-              {txInfo.hint ? <p className="ed-key-hint">{txInfo.hint}</p> : null}
               {txEdit && (
                 <div className="ed-key-actions">
                   <button type="button" className="ghost small" onClick={cancelTxEdit} disabled={busy}>
@@ -500,7 +501,18 @@ export default function EdSettings({ audioDb, onAudioDb }) {
                 </select>
               </label>
               <label className="field">
-                <span>Modelo</span>
+                <span>
+                  Modelo
+                  {aiProv === 'foundry' && (
+                    <Hint>Usa el endpoint y la clave del bloque <b>Microsoft Foundry</b> (abajo). El modelo es el nombre de tu <b>deployment</b> (p. ej. <b>gpt-5-mini</b>). Mueve también Generar escena, Sticks y Generar recurso.</Hint>
+                  )}
+                  {aiProv === 'openrouter' && (
+                    <Hint>Con <b>openrouter/free</b> elige solo un modelo gratis disponible (recomendado). O escribe uno concreto, p. ej. <b>nvidia/nemotron-3-super-120b-a12b:free</b>.</Hint>
+                  )}
+                  {aiProv === 'lmstudio' && (
+                    <Hint>Elige un modelo con <b>tools</b> si quieres que el chat use herramientas. Los marcados como <b>cargado</b> ya están en memoria.</Hint>
+                  )}
+                </span>
                 {aiProv === 'lmstudio' ? (
                   <select
                     className="select"
@@ -545,9 +557,6 @@ export default function EdSettings({ audioDb, onAudioDb }) {
                 </label>
               )}
               {!aiEdit && aiCfg && !aiCfg.available && <p className="ed-key-hint">{aiCfg.reason}</p>}
-              {aiProv === 'openrouter' && aiEdit && (
-                <p className="ed-key-hint">Con <b>openrouter/free</b> elige solo un modelo gratis disponible (recomendado). O escribe uno concreto, p. ej. <b>nvidia/nemotron-3-super-120b-a12b:free</b>.</p>
-              )}
               {aiProv === 'lmstudio' && lmStatus === 'loading' && (
                 <p className="ed-key-hint">Consultando modelos en LM Studio…</p>
               )}
@@ -567,9 +576,6 @@ export default function EdSettings({ audioDb, onAudioDb }) {
                   </button>
                 </div>
               )}
-              {aiProv === 'lmstudio' && lmStatus === 'ok' && lmModels.length > 0 && aiEdit && (
-                <p className="ed-key-hint">Elige un modelo con <b>tools</b> si quieres que el chat use herramientas. Los marcados como <b>cargado</b> ya están en memoria.</p>
-              )}
               {aiEdit && (
                 <div className="ed-key-actions">
                   <button type="button" className="ghost small" onClick={() => { setAiEdit(false); if (aiCfg) { setAiProv(aiCfg.provider); setAiModel(aiCfg.model); setAiBaseUrl(aiCfg.base_url || '') } }} disabled={busy}>Cancelar</button>
@@ -581,7 +587,10 @@ export default function EdSettings({ audioDb, onAudioDb }) {
 
           <div className="ed-key-row">
             <div className="ed-key-row-head">
-              <span className="ed-key-name">Azure Vision</span>
+              <span className="ed-key-name">
+                Azure Vision
+                <Hint>OCR y análisis de imagen. Recurso propio de Azure Vision (distinto de Azure Speech).</Hint>
+              </span>
               {!azVisionEdit && (
                 <span className={`ed-key-set ${setKeys.azure_vision && azVisionEndpoint ? '' : 'off'}`}>
                   {setKeys.azure_vision && azVisionEndpoint ? 'Configurado' : 'Sin configurar'}
@@ -594,7 +603,6 @@ export default function EdSettings({ audioDb, onAudioDb }) {
               )}
             </div>
             <div className="ed-key-form">
-              <p className="ed-key-hint">OCR y análisis de imagen. Recurso propio de Azure Vision (distinto de Azure Speech).</p>
               <label className="field">
                 <span>Endpoint</span>
                 <input
@@ -629,7 +637,10 @@ export default function EdSettings({ audioDb, onAudioDb }) {
 
           <div className="ed-key-row">
             <div className="ed-key-row-head">
-              <span className="ed-key-name">Microsoft Foundry</span>
+              <span className="ed-key-name">
+                Microsoft Foundry
+                <Hint>IA generativa (guiones, hooks, títulos, prompts visuales). Recurso propio de Azure AI Foundry / Azure OpenAI. Complementa a Speech y Vision.</Hint>
+              </span>
               {!azFoundryEdit && (
                 <span className={`ed-key-set ${setKeys.azure_foundry && azFoundryEndpoint && azFoundryDeployment ? '' : 'off'}`}>
                   {setKeys.azure_foundry && azFoundryEndpoint && azFoundryDeployment ? 'Configurado' : 'Sin configurar'}
@@ -642,7 +653,6 @@ export default function EdSettings({ audioDb, onAudioDb }) {
               )}
             </div>
             <div className="ed-key-form">
-              <p className="ed-key-hint">IA generativa (guiones, hooks, títulos, prompts visuales). Recurso propio de Azure AI Foundry / Azure OpenAI. Complementa a Speech y Vision.</p>
               <label className="field">
                 <span>Endpoint</span>
                 <input
@@ -867,7 +877,13 @@ export default function EdSettings({ audioDb, onAudioDb }) {
             </select>
           </label>
           <label className="field">
-            <span>Calidad</span>
+            <span>
+              Calidad
+              <Hint>
+                {QUALITY_OPTS.find((q) => q.id === exportCfg.quality)?.hint}.
+                El preview usa el canvas; el MP4 usa esta calidad. El FPS de cada proyecto se cambia en la barra del reproductor.
+              </Hint>
+            </span>
             <select
               className="select"
               value={exportCfg.quality}
@@ -879,13 +895,12 @@ export default function EdSettings({ audioDb, onAudioDb }) {
               ))}
             </select>
           </label>
-          <p className="ed-key-hint">
-            {QUALITY_OPTS.find((q) => q.id === exportCfg.quality)?.hint}.
-            El preview usa el canvas; el MP4 usa esta calidad. El FPS de cada proyecto se cambia en la barra del reproductor.
-          </p>
           {onAudioDb && (
             <label className="field">
-              <span>Nivel de audio (dB)</span>
+              <span>
+                Nivel de audio (dB)
+                <Hint>Nivel de audio objetivo del render (LUFS). No cambia la vista previa.</Hint>
+              </span>
               <select
                 className="select"
                 value={audioDb}
@@ -898,9 +913,6 @@ export default function EdSettings({ audioDb, onAudioDb }) {
                   <option key={db} value={db}>{db} dB</option>
                 ))}
               </select>
-              <p className="ed-key-hint">
-                Nivel de audio objetivo del render (LUFS). No cambia la vista previa.
-              </p>
             </label>
           )}
           {err && <div className="ed-mat-err">{err}</div>}
@@ -930,7 +942,7 @@ function KeyForm({
   return (
     <div className="ed-key-form">
       <label className="field">
-        <span>Plataforma</span>
+        <span>Plataforma{hint ? <Hint>{hint}</Hint> : null}</span>
         <select
           className="select"
           value={selectId}
@@ -942,7 +954,6 @@ function KeyForm({
           ))}
         </select>
       </label>
-      {hint ? <p className="ed-key-hint">{hint}</p> : null}
       <div className="field">
         <span>API key</span>
         <div className="ed-key-input-row">

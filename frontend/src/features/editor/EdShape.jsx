@@ -1,16 +1,20 @@
+import Icon from '../../components/Icon'
 import { fmt } from '../../lib/utils'
 import FlipSelect from '../../components/FlipSelect'
 import EdLayer from './EdLayer'
+import { FlipRow } from './EdTransform'
 import {
-  normalizeShape, shapeNeedsFill, shapeNeedsRadius, shapeNeedsSides, shapeNeedsArrow,
+  DASH_STYLES, normalizeShape, shapeNeedsFill, shapeNeedsRadius, shapeNeedsSides, shapeNeedsArrow,
 } from '../../lib/shapes'
 
-export default function EdShape({ clip, onChangeShape, onChangeDur, layer, onMoveLayer }) {
+export default function EdShape({ clip, onChangeShape, onChangeDur, layer, onMoveLayer, onFlip, pathEdit, onPathEdit }) {
   const st = normalizeShape(clip?.shape)
   const set = (patch) => onChangeShape?.(patch)
   const dur = clip ? clip.out_point - clip.in_point : 0
   const fillOn = st.fill && st.fill !== 'none'
   const type = st.type
+  // Un trazado abierto no tiene interior que rellenar.
+  const canFill = shapeNeedsFill(type) && !(type === 'path' && !st.closed)
 
   return (
     <div className="ed-text-panel">
@@ -49,8 +53,9 @@ export default function EdShape({ clip, onChangeShape, onChangeDur, layer, onMov
               onChange={(e) => onChangeDur?.(Number(e.target.value))} />
           </label>
         </div>
+        {onFlip && <FlipRow clip={clip} onFlip={onFlip} />}
         <div className="ed-text-dense four">
-          {shapeNeedsFill(type) && (
+          {canFill && (
             <label className="ed-mini ed-swatch" title="Relleno">
               <span>Relleno</span>
               <input type="color" value={fillOn ? st.fill : '#e53935'}
@@ -72,7 +77,7 @@ export default function EdShape({ clip, onChangeShape, onChangeDur, layer, onMov
               onChange={(e) => set({ opacity: Number(e.target.value) / 100 })} />
           </label>
         </div>
-        {shapeNeedsFill(type) && (
+        {canFill && (
           <label className="ed-chip">
             <input type="checkbox" checked={fillOn} onChange={(e) => set({ fill: e.target.checked ? (fillOn ? st.fill : '#e53935') : 'none' })} />
             Relleno
@@ -91,6 +96,41 @@ export default function EdShape({ clip, onChangeShape, onChangeDur, layer, onMov
             <input type="range" min="3" max="12" step="1" value={st.sides}
               onChange={(e) => set({ sides: Number(e.target.value) })} />
           </label>
+        )}
+        {type === 'letterbox' && (
+          <label className="ed-mini" title="Alto de cada barra">
+            <span>Grosor {Math.round(st.bar * 100)} %</span>
+            <input type="range" min="0" max="0.45" step="0.005" value={st.bar}
+              onChange={(e) => set({ bar: Number(e.target.value) })} />
+          </label>
+        )}
+        {type !== 'letterbox' && (
+        <label className="ed-prop">
+          Trazo
+          <FlipSelect
+            value={st.dash}
+            options={DASH_STYLES.map((d) => ({ value: d.id, label: d.label }))}
+            onChange={(v) => set({ dash: v })}
+          />
+        </label>
+        )}
+        {type === 'path' && (
+          <div className="ed-shape-path">
+            <label className="ed-chip">
+              <input type="checkbox" checked={st.closed} onChange={(e) => set({ closed: e.target.checked })} />
+              Cerrado
+            </label>
+            <label className="ed-chip">
+              <input type="checkbox" checked={st.smooth} onChange={(e) => set({ smooth: e.target.checked })} />
+              Curvo
+            </label>
+            {onPathEdit && (
+              <button type="button" className={`ghost small${pathEdit ? ' on' : ''}`} onClick={onPathEdit}
+                title="Arrastra los puntos en el visor · clic en la línea añade uno · Alt+clic lo quita">
+                <Icon name={pathEdit ? 'check' : 'edit'} size={15} /> {pathEdit ? 'Listo' : 'Editar puntos'}
+              </button>
+            )}
+          </div>
         )}
         {shapeNeedsArrow(type) && (
           <label className="ed-prop">

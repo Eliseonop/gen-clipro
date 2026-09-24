@@ -1,10 +1,25 @@
 import Icon from '../../components/Icon'
 import { SHAPE_CATALOG, SHAPE_DEFAULT_DUR, dragShapePayload, svgPreview } from '../../lib/shapes'
 
-export default function EdShapes({ onAdd, onDragInfo }) {
+export default function EdShapes({ onAdd, onDragInfo, onPen, penActive }) {
   const di = onDragInfo || (() => {})
   return (
     <div className="ed-mat-list ed-shape-lib">
+      {onPen && (
+        <section className="ed-shape-cat">
+          <div className="ed-fx-label">Dibujar</div>
+          <button
+            type="button"
+            className={`ed-shape-pen${penActive ? ' on' : ''}`}
+            onClick={onPen}
+            title="Traza una línea o una ruta haciendo clic en el visor; doble clic o Enter para terminar"
+          >
+            <Icon name="draw" size={18} />
+            <span>{penActive ? 'Terminar trazado' : 'Pluma'}</span>
+            <em>{penActive ? 'Enter · Esc cancela' : 'clic a clic en el visor'}</em>
+          </button>
+        </section>
+      )}
       {SHAPE_CATALOG.map((cat) => (
         <section key={cat.id} className="ed-shape-cat">
           <div className="ed-fx-label">{cat.label}</div>

@@ -3,15 +3,17 @@
 ``get_frame`` extrae un fotograma de un clip para que un modelo multimodal
 lo VEA (el agente adjunta la imagen al modelo). ``set_clip_ai_description``
 guarda la descripción que genera la IA en un campo aparte (``description_ai``),
-sin pisar la descripción manual del usuario.
+sin pisar la descripción manual del usuario. ``analyze_materials`` hace lo mismo
+en lote con la visión de Foundry (``material_ai``), sin pasar por el agente.
 """
 from __future__ import annotations
 
 import base64
 from pathlib import Path
 
-from .. import frame_grab, projects, storage
-from .registry import tool
+from .. import frame_grab, jobs, material_ai, projects, storage
+from . import dto
+from .registry import MCPError, tool
 
 MAX_FRAME_PX = frame_grab.MAX_FRAME_PX
 
@@ -44,10 +46,10 @@ def get_frame(project_id: str, clip_index: str, at_time: float | None = None) ->
     proj = _project_or_raise(project_id)
     clip = _clip_or_raise(proj, clip_index)
     path = _clip_file(proj, clip)
-    dur = max(0.0, (clip.end or 0.0) - (clip.start or 0.0))
+    offset, dur = material_ai.clip_span(clip)   # un segmento por referencia empieza en in_point
     t = dur / 2 if at_time is None else max(0.0, min(float(at_time), max(0.0, dur - 0.05)))
 
-    data = frame_grab.extract_frame(path, t, max_px=MAX_FRAME_PX)
+    data = frame_grab.extract_frame(path, offset + t, max_px=MAX_FRAME_PX)
     return {
         "clip_index": clip.index,
         "at_time": round(t, 2),
@@ -69,6 +71,20 @@ def set_clip_ai_description(project_id: str, clip_index: str, description: str) 
             "description_ai": item.get("description_ai")}
 
 
+def analyze_materials(project_id: str, only_missing: bool = True, rename_generic: bool = True) -> dict:
+    """Analiza clips e imágenes con visión de Foundry: descripción IA + metadata semántica (no pisa lo del usuario). Devuelve job."""
+    _project_or_raise(project_id)
+    from .. import foundry
+    reason = foundry.unavailable_reason()
+    if reason:
+        raise MCPError("configuration_error", reason)
+    job = jobs.create_job()
+    jobs.start_material_analysis_job(job, project_id, {"only_missing": bool(only_missing),
+                                                       "rename_generic": bool(rename_generic)})
+    return dto.job_dto(job)
+
+
 def register(mcp) -> None:
     tool(mcp, access="read")(get_frame)
     tool(mcp, access="write")(set_clip_ai_description)
+    tool(mcp, access="write")(analyze_materials)

@@ -162,6 +162,114 @@ class ProviderSelectionTest(unittest.TestCase):
         self.assertIn("token", out["reason"].lower())
 
 
+class _Status400(Exception):
+    status_code = 400
+
+
+class FoundryProviderTest(unittest.TestCase):
+    """Microsoft Foundry como proveedor del Chat IA / Generar escena (API v1 OpenAI-compatible)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self._old = (config.DATA_DIR, settings._FILE)
+        config.DATA_DIR = self.tmp
+        settings._FILE = self.tmp / "settings.json"
+        self.env = patch.dict("os.environ", {}, clear=False)
+        self.env.start()
+        import os
+        for k in ("AZURE_FOUNDRY_KEY", "AZURE_OPENAI_API_KEY", "AZURE_FOUNDRY_ENDPOINT", "AZURE_OPENAI_ENDPOINT",
+                  "AZURE_FOUNDRY_DEPLOYMENT", "AZURE_FOUNDRY_MODEL", "AZURE_OPENAI_DEPLOYMENT"):
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        self.env.stop()
+        config.DATA_DIR, settings._FILE = self._old
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _configure(self, endpoint="https://edu.services.ai.azure.com", deployment="gpt-5-mini"):
+        settings.save({"api_keys": {"azure_foundry": "az-key"}, "azure_foundry_endpoint": endpoint,
+                       "azure_foundry_deployment": deployment, "ai": {"provider": "foundry"}})
+
+    def test_get_provider_uses_foundry_config(self):
+        self._configure()
+        p = providers.get_provider()
+        self.assertIsInstance(p, providers.FoundryProvider)
+        self.assertIsNone(p.unavailable_reason())
+        self.assertEqual(providers.ai_config()["model"], "gpt-5-mini")   # modelo = deployment
+        self.assertEqual(p._base_url, "https://edu.services.ai.azure.com/openai/v1")
+        self.assertEqual(p._keys(), ["az-key"])
+
+    def test_classic_endpoint_goes_through_v1(self):
+        self._configure(endpoint="https://edu.openai.azure.com/")
+        self.assertEqual(providers.get_provider()._base_url, "https://edu.openai.azure.com/openai/v1")
+
+    def test_unconfigured_reports_reason(self):
+        settings.save({"ai": {"provider": "foundry"}})
+        self.assertIn("Foundry", providers.get_provider().unavailable_reason())
+
+    def test_reasoning_models_skip_temperature(self):
+        self._configure()
+        self.assertEqual(providers.FoundryProvider()._sampling_kwargs(), {"reasoning_effort": "low"})
+        self._configure(deployment="gpt-4o")
+        self.assertEqual(providers.FoundryProvider()._sampling_kwargs(), {"temperature": 0.3})
+
+    def test_drop_rejected_param(self):
+        sampling = {"temperature": 0.3}
+        self.assertFalse(providers._drop_rejected_param(Exception("temperature"), sampling))
+        self.assertTrue(providers._drop_rejected_param(
+            _Status400("Unsupported parameter: 'temperature' is not supported with this model."), sampling))
+        self.assertEqual(sampling, {})
+        self.assertFalse(providers._drop_rejected_param(_Status400("otra cosa"), sampling))
+
+    def test_run_retries_without_rejected_param(self):
+        """Un deployment con nombre propio (no se detecta como razonamiento) que rechaza
+        ``temperature``: el loop lo quita y reintenta en vez de fallar."""
+        import asyncio
+        from types import SimpleNamespace
+
+        self._configure(deployment="mi-modelo")
+        calls = []
+
+        async def create(**kw):
+            calls.append(kw)
+            if "temperature" in kw:
+                raise _Status400("Unsupported value: 'temperature' does not support 0.3")
+
+            async def stream():
+                delta = SimpleNamespace(content="hola", tool_calls=None)
+                yield SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+            return stream()
+
+        class FakeClient:
+            def __init__(self, **kw):
+                self.kw = kw
+                self.chat = SimpleNamespace(completions=SimpleNamespace(create=create))
+
+        events = []
+
+        async def emit(ev):
+            events.append(ev)
+
+        with patch("openai.AsyncOpenAI", FakeClient):
+            out = asyncio.run(providers.get_provider().run(
+                system="s", history=[], user_message="u", tools=[], call_tool=None, emit=emit, max_iters=2))
+        self.assertEqual(out, "hola")
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("temperature", calls[1])
+        self.assertEqual(calls[1]["model"], "mi-modelo")
+        self.assertFalse([e for e in events if e["type"] == "error"])
+
+    def test_config_endpoint_lists_foundry(self):
+        from fastapi.testclient import TestClient
+        from app.main import app
+
+        self._configure()
+        res = TestClient(app).get("/api/ai/config")
+        foundry_row = next(p for p in res.json()["providers"] if p["id"] == "foundry")
+        self.assertTrue(foundry_row["has_key"])
+        self.assertEqual(foundry_row["default_model"], "gpt-5-mini")
+
+
 class LmStudioModelsApiTest(unittest.TestCase):
     def test_endpoint_lista_o_indica_apagado(self):
         from unittest.mock import patch

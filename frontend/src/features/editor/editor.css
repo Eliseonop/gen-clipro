@@ -115,6 +115,100 @@
 .veditor.is-rs-crops { cursor: col-resize; }
 .veditor.is-rs-bottom { cursor: row-resize; }
 
+/* ===== Disposiciones del workspace (menú Diseño de la barra superior) =====
+   Las horizontales solo reordenan con `order`; el signo del arrastre de cada
+   separador lo ajusta WORKSPACE_PRESETS (panelLayout.js). */
+.veditor.ws-main-right .veditor-workspace > .ed-material { order: 1; }
+.veditor.ws-main-right .veditor-workspace > .ed-split[data-kind='materials'] { order: 2; }
+.veditor.ws-main-right .veditor-workspace > .ed-inspector { order: 3; }
+.veditor.ws-main-right .veditor-workspace > .ed-split[data-kind='inspector'] { order: 4; }
+.veditor.ws-main-right .veditor-workspace > .ed-canvas-col { order: 5; }
+
+.veditor.ws-main-left .veditor-workspace > .ed-canvas-col { order: 1; }
+.veditor.ws-main-left .veditor-workspace > .ed-split[data-kind='materials'] { order: 2; }
+.veditor.ws-main-left .veditor-workspace > .ed-material { order: 3; }
+.veditor.ws-main-left .veditor-workspace > .ed-split[data-kind='inspector'] { order: 4; }
+.veditor.ws-main-left .veditor-workspace > .ed-inspector { order: 5; }
+
+.veditor.ws-mirror .veditor-workspace > .ed-inspector { order: 1; }
+.veditor.ws-mirror .veditor-workspace > .ed-split[data-kind='inspector'] { order: 2; }
+.veditor.ws-mirror .veditor-workspace > .ed-canvas-col { order: 3; }
+.veditor.ws-mirror .veditor-workspace > .ed-split[data-kind='materials'] { order: 4; }
+.veditor.ws-mirror .veditor-workspace > .ed-material { order: 5; }
+
+/* Materiales a toda altura: la timeline queda a la derecha de los materiales.
+   El workspace se "aplana" (display: contents) para que sus hijos entren en la
+   rejilla del editor sin re-montarse. */
+.veditor.ws-tall-media {
+  display: grid;
+  grid-template-columns: var(--ed-mat-w) var(--ed-gap) minmax(0, 1fr) var(--ed-gap) var(--ed-insp-w);
+  grid-template-rows: auto minmax(0, 1fr) var(--ed-gap) var(--ed-bottom-h);
+  grid-template-areas:
+    'top top top top top'
+    'mat ms canvas is insp'
+    'mat ms ys ys ys'
+    'mat ms bot bot bot';
+}
+.veditor.ws-tall-media > .ed-topbar { grid-area: top; }
+.veditor.ws-tall-media > .veditor-workspace { display: contents; }
+.veditor.ws-tall-media .ed-material { grid-area: mat; width: auto; }
+.veditor.ws-tall-media .ed-split[data-kind='materials'] { grid-area: ms; }
+.veditor.ws-tall-media .ed-canvas-col { grid-area: canvas; }
+.veditor.ws-tall-media .ed-split[data-kind='inspector'] { grid-area: is; }
+.veditor.ws-tall-media .veditor-workspace > .ed-inspector { grid-area: insp; width: auto; }
+.veditor.ws-tall-media > .ed-split[data-kind='bottom'] { grid-area: ys; }
+.veditor.ws-tall-media > .veditor-bottom { grid-area: bot; height: auto; min-width: 0; }
+
+/* Main a toda altura: el Main ocupa la columna derecha de arriba abajo y la
+   timeline queda debajo de Materiales + Inspector. El separador del inspector
+   redimensiona el Main (--ed-main-w); el inspector se estira. */
+.veditor.ws-tall-main {
+  display: grid;
+  grid-template-columns: var(--ed-mat-w) var(--ed-gap) minmax(0, 1fr) var(--ed-gap) var(--ed-main-w);
+  grid-template-rows: auto minmax(0, 1fr) var(--ed-gap) var(--ed-bottom-h);
+  grid-template-areas:
+    'top top top top top'
+    'mat ms insp is canvas'
+    'ys ys ys is canvas'
+    'bot bot bot is canvas';
+}
+.veditor.ws-tall-main > .ed-topbar { grid-area: top; }
+.veditor.ws-tall-main > .veditor-workspace { display: contents; }
+.veditor.ws-tall-main .ed-material { grid-area: mat; width: auto; }
+.veditor.ws-tall-main .ed-split[data-kind='materials'] { grid-area: ms; }
+.veditor.ws-tall-main .ed-canvas-col { grid-area: canvas; }
+.veditor.ws-tall-main .ed-split[data-kind='inspector'] { grid-area: is; }
+.veditor.ws-tall-main .veditor-workspace > .ed-inspector { grid-area: insp; width: auto; }
+.veditor.ws-tall-main > .ed-split[data-kind='bottom'] { grid-area: ys; }
+.veditor.ws-tall-main > .veditor-bottom { grid-area: bot; height: auto; min-width: 0; }
+
+/* Menú Diseño */
+.ed-topbar-right .icon-btn.on { color: var(--accent); background: rgba(255, 255, 255, 0.06); }
+.ed-layout-menu {
+  z-index: 120; min-width: 250px; padding: 6px;
+  background: #151925; border: 1px solid var(--line-bright); border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.ed-layout-menu-title {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted); padding: 4px 8px 6px;
+}
+.ed-layout-opt {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 6px 8px; border: 1px solid transparent; border-radius: 6px;
+  background: none; color: var(--text); text-align: left; cursor: pointer;
+}
+.ed-layout-opt:hover { background: rgba(255, 255, 255, 0.05); }
+.ed-layout-opt.on { border-color: var(--accent); background: rgba(255, 255, 255, 0.04); }
+.ed-layout-opt span { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.ed-layout-opt strong { font-size: 12.5px; font-weight: 650; }
+.ed-layout-opt em { font-style: normal; font-size: 10.5px; color: var(--muted); }
+.ed-layout-thumb { flex-shrink: 0; }
+.ed-layout-thumb rect { fill: rgba(255, 255, 255, 0.14); }
+.ed-layout-thumb rect.k-v { fill: #ea580c; }
+.ed-layout-thumb rect.k-t { fill: rgba(255, 255, 255, 0.28); }
+
 .ed-canvas-col {
   flex: 1; min-width: 0; min-height: 0;
   display: flex; flex-direction: column;
@@ -216,6 +310,7 @@
 }
 .ed-insp-empty p { margin: 0; font-size: 12.5px; line-height: 1.45; }
 .ed-insp-hint { margin: 0; padding: 8px 2px 4px; font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+.ed-insp-meta { margin: 0; font-size: 10.5px; color: var(--muted); line-height: 1.3; }
 .ed-insp-nav, .ed-insp-sub {
   display: flex; flex-wrap: wrap; gap: 2px; flex-shrink: 0;
   padding: 6px 8px 4px; border-bottom: 1px solid var(--line);
@@ -240,6 +335,7 @@
   padding: 0; cursor: pointer;
 }
 .ed-insp-sec-tog .material-icons { color: var(--muted); }
+.ed-insp-sec-title { display: flex; align-items: center; min-width: 0; }
 .ed-insp-sec-tools { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .ed-insp-sec-b { padding: 2px 10px 10px; display: flex; flex-direction: column; gap: 8px; }
 .ed-insp-row { display: flex; flex-direction: column; gap: 4px; }
@@ -309,6 +405,8 @@
 .ed-insp-xy span { width: 14px; font-size: 11px; color: var(--muted); font-weight: 700; }
 .ed-insp-xy .ed-insp-num { width: 64px; text-align: left; }
 .ed-insp-align { display: flex; flex-wrap: wrap; gap: 4px; }
+.ed-insp-flip { display: flex; gap: 4px; }
+.ed-flip-v .material-icons { transform: rotate(90deg); }
 .ed-insp-select {
   display: flex; flex-direction: column; gap: 4px;
   font-size: 11px; color: var(--text-secondary);
@@ -352,29 +450,7 @@
 }
 .ed-mask-text:focus { outline: none; border-color: var(--accent); }
 
-/* Vista dividida: recorte/edición (izq) + resultado en vivo (der), MITAD y MITAD.
-   Cada lado ocupa el 50% del stage y su lienzo se ajusta dentro con object-fit
-   (respetando su aspecto: el del resultado = formato de salida → 9:16/16:9/1:1).
-   Ambos se achican a la vez con el resize HORIZONTAL (ancho = 50% cada uno) y
-   VERTICAL (alto = 100% del stage). */
-.ed-canvas-stage.split {
-  flex-direction: row; gap: 12px; padding: 8px 12px;
-  align-items: center; justify-content: center;
-}
-.ed-canvas-stage.split .ed-main-canvas {
-  flex: 1 1 0; min-width: 0;
-  width: auto; height: auto;
-  max-width: calc(50% - 6px); max-height: 100%; object-fit: contain;
-}
-.ed-result-pane {
-  position: relative; flex: 1 1 0; min-width: 0;
-  max-width: calc(50% - 6px); height: 100%;
-  display: flex; align-items: center; justify-content: center;
-}
-.ed-result-canvas {
-  width: auto; height: auto; max-width: 100%; max-height: 100%; object-fit: contain;
-  background: #000; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); border-radius: 2px;
-}
+/* Etiqueta "Resultado" sobre una vista en vivo (la usa el Paper Animator). */
 .ed-result-label {
   position: absolute; top: 4px; left: 50%; transform: translateX(-50%); z-index: 2;
   font-size: 9px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
@@ -397,7 +473,7 @@
   font-size: 11px; font-variant-numeric: tabular-nums; color: var(--accent-2);
   font-weight: 700; min-width: 2.4em; text-align: right;
 }
-.ed-main-canvas, .ed-result-canvas { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 3px; }
+.ed-main-canvas { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 3px; }
 .ed-stage-empty { position: absolute; color: var(--muted); font-size: 12.5px; }
 .ed-stage-hint {
   position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
@@ -512,6 +588,35 @@
 .ed-key-form .select { width: 100%; box-sizing: border-box; }
 .ed-key-hint { margin: 0; font-size: 11px; color: var(--muted); line-height: 1.35; }
 .ed-key-hint.warn { color: #f59e0b; }
+
+/* Curva de velocidad del keyframe (EdCurve.jsx) */
+.ed-curve { display: flex; flex-direction: column; gap: 6px; }
+.ed-curve-presets { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
+.ed-curve-chip {
+  display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0;
+  padding: 4px 2px 3px; border-radius: 6px; border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03); color: var(--muted); cursor: pointer;
+  font-size: 8.5px; line-height: 1.1;
+}
+.ed-curve-chip span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-curve-chip:hover { border-color: var(--line-bright); color: var(--text-secondary); }
+.ed-curve-chip.on { border-color: var(--accent); color: var(--text); background: rgba(255, 59, 92, 0.1); }
+.ed-curve-thumb { width: 30px; height: 22px; }
+.ed-curve-thumb path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.ed-curve-editor {
+  width: 100%; max-width: 260px; align-self: center; aspect-ratio: 220 / 170;
+  background: rgba(0, 0, 0, 0.25); border: 1px solid var(--line); border-radius: 8px;
+  touch-action: none; user-select: none;
+}
+.ed-curve-box { fill: rgba(255, 255, 255, 0.025); stroke: var(--line-bright); stroke-width: 1; }
+.ed-curve-diag { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 3; }
+.ed-curve-path { fill: none; stroke: var(--accent); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.ed-curve-arm { stroke: var(--muted); stroke-width: 1; opacity: 0.7; }
+.ed-curve-end { fill: var(--muted); }
+.ed-curve-handle { fill: var(--card); stroke: var(--text-secondary); stroke-width: 1.6; cursor: grab; }
+.ed-curve-handle:hover, .ed-curve-editor.custom .ed-curve-handle { stroke: var(--accent); }
+.ed-curve-handle:active { cursor: grabbing; }
+.ed-curve-values { font-size: 10px; color: var(--muted); text-align: center; }
 .ed-lm-status { display: flex; align-items: flex-start; gap: 8px; }
 .ed-lm-status .ed-key-hint { flex: 1; }
 .ed-key-actions { display: flex; align-items: center; gap: 6px; justify-content: flex-end; flex-shrink: 0; }
@@ -751,6 +856,7 @@
   display: flex; flex-direction: column; overflow: hidden;
 }
 .ed-tl-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.ed-tl-toolbar .ed-tl-ico { padding: 4px 6px; min-width: 28px; justify-content: center; gap: 2px; }
 .ed-tl-tools-left, .ed-tl-tools-right { display: flex; align-items: center; gap: 5px; }
 .ed-tl-sep { width: 1px; height: 18px; background: var(--line-bright); margin: 0 3px; }
 .ed-preview-vol { position: relative; display: inline-flex; }
@@ -870,6 +976,9 @@ body.ed-zooming, body.ed-zooming * { cursor: ew-resize !important; user-select: 
 .ed-clip.video { background: linear-gradient(135deg, #3a2740, #26203a); }
 .ed-clip.image { background: linear-gradient(135deg, #1f3d42, #1a3038); }
 .ed-clip.shape { background: linear-gradient(135deg, #3a2a18, #2a2214); }
+/* Capa de ajuste (#19). */
+.ed-clip.adjustment { background: repeating-linear-gradient(135deg, #1f2d3a 0 8px, #243646 8px 16px); }
+.ed-clip.adjustment.sel { border-color: #38bdf8; box-shadow: 0 0 0 1px #38bdf8, 0 6px 16px rgba(0,0,0,0.4); }
 .ed-clip.shape.sel { border-color: #f5b942; box-shadow: 0 0 0 1px #f5b942, 0 6px 16px rgba(0,0,0,0.4); }
 .ed-clip.audio { background: linear-gradient(135deg, #1e2a4d, #182138); }
 .ed-clip.sel {
@@ -900,6 +1009,16 @@ body.ed-zooming, body.ed-zooming * { cursor: ew-resize !important; user-select: 
 .ed-mcp-row.run { color: #9dff55; }
 .ed-mcp-row.run .ed-mcp-st { color: #9dff55; opacity: 1; }
 .ed-clip.muted { opacity: 0.72; }
+/* Desactivado (#10): atenuado y rayado, como CapCut. */
+.ed-clip.disabled { opacity: 0.45; filter: grayscale(0.85); }
+.ed-clip.disabled::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+  background: repeating-linear-gradient(135deg, rgba(0,0,0,0.35) 0 4px, transparent 4px 9px);
+}
+.ed-clip-off {
+  position: absolute; top: 2px; right: 12px; z-index: 5; display: inline-flex;
+  padding: 1px; border-radius: 3px; background: rgba(0,0,0,0.6); color: #fff;
+}
 .ed-clip.muted.audio .ed-clip-wave > span { opacity: 0.28; }
 .ed-clip:active { cursor: grabbing; }
 .ed-clip-handle { position: absolute; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 4; }
@@ -960,6 +1079,93 @@ body.ed-zooming, body.ed-zooming * { cursor: ew-resize !important; user-select: 
 }
 /* Tiradores de la marca de rango (Z inicio / X fin): se arrastran. El hover los
    ilumina para anunciar qué extremo se va a mover. */
+/* Marcadores (#12): bandera en la regla y línea fina sobre las pistas. */
+.ed-marker-flag {
+  --mk: #38bdf8;
+  position: absolute; top: 1px; width: 10px; height: 12px; margin-left: -5px; z-index: 6;
+  background: var(--mk); clip-path: polygon(0 0, 100% 0, 100% 70%, 50% 100%, 0 70%);
+  cursor: ew-resize; touch-action: none;
+}
+.ed-marker-flag:hover { filter: brightness(1.25); }
+.ed-marker-flag em {
+  position: absolute; left: 12px; top: -1px; font-style: normal; font-size: 10px; white-space: nowrap;
+  color: var(--mk); pointer-events: none;
+}
+.ed-marker-line {
+  --mk: #38bdf8;
+  position: absolute; top: var(--ed-ruler-h, 24px); bottom: 0; width: 1px; margin-left: -0.5px;
+  background: var(--mk); opacity: 0.45; pointer-events: none; z-index: 5;
+}
+/* Beats (#12): puntos amarillos al pie del clip. */
+.ed-beat {
+  position: absolute; bottom: 2px; width: 4px; height: 4px; margin-left: -2px; border-radius: 50%;
+  background: #facc15; box-shadow: 0 0 0 1px rgba(0,0,0,0.45); pointer-events: none; z-index: 3;
+}
+/* Recetas en un clic (#21). */
+.ed-recipes { display: grid; gap: 6px; margin-bottom: 10px; }
+.ed-recipe {
+  display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 8px;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card-2);
+}
+.ed-recipe b { font-size: 13px; }
+.ed-recipe b small { font-weight: 400; color: var(--muted); margin-left: 6px; }
+.ed-recipe p { grid-column: 1 / -1; margin: 0; font-size: 11px; color: var(--muted); }
+.ed-recipe.off { opacity: 0.6; }
+
+/* Barras de cine (#20). */
+.ed-cinema-bars { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0 4px; }
+.ed-cinema-bars > span { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; margin-right: 4px; }
+
+/* Filtros de color (#18). */
+.ed-filter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 6px; margin-bottom: 8px; }
+.ed-filter-card {
+  position: relative; display: grid; gap: 4px; padding: 6px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card-2); color: var(--text-secondary); font-size: 11px; cursor: pointer; text-align: left;
+}
+.ed-filter-card:hover { border-color: var(--line-bright); color: #fff; }
+.ed-filter-card.on { border-color: var(--accent-2); color: #fff; }
+.ed-filter-swatch { display: grid; grid-template-columns: repeat(4, 1fr); height: 18px; border-radius: 4px; overflow: hidden; }
+.ed-filter-order {
+  position: absolute; top: 3px; right: 3px; min-width: 16px; height: 16px; border-radius: 999px;
+  background: var(--accent-2); color: #fff; font-size: 10px; display: grid; place-items: center;
+}
+.ed-filter-row { display: grid; grid-template-columns: 44px 1fr 90px 34px repeat(3, auto); align-items: center; gap: 6px; margin: 4px 0; }
+.ed-filter-row .ed-filter-swatch { height: 14px; }
+.ed-filter-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-filter-row em { font-style: normal; font-size: 11px; color: var(--muted); text-align: right; }
+
+/* Sonorizar con IA (#17). */
+.ed-sound-design { max-width: 560px; }
+.ed-sound-mode { margin: -6px 0 10px; font-size: 12px; color: var(--muted); }
+.ed-sound-list { display: grid; gap: 4px; }
+.ed-sound-list label {
+  display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; column-gap: 8px;
+  padding: 6px 8px; border-radius: 8px; color: var(--muted); cursor: pointer;
+}
+.ed-sound-list label.on { color: var(--text); background: rgba(255, 255, 255, 0.03); }
+.ed-sound-list input { margin: 0; accent-color: var(--accent-2); }
+.ed-sound-what { display: grid; min-width: 0; }
+.ed-sound-what b { font-size: 13px; }
+.ed-sound-what em { font-style: normal; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-sound-kind { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: rgba(56, 189, 248, 0.14); color: #7dd3fc; }
+.ed-sound-kind.spot { background: rgba(250, 204, 21, 0.14); color: #fde68a; }
+.ed-sound-time { grid-column: 3 / 5; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ed-sound-missing { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; color: var(--muted); margin-top: 10px; }
+
+/* Pegar atributos (#13). */
+.ed-paste-attrs { max-width: 400px; }
+.ed-paste-attrs-from { margin: -6px 0 10px; font-size: 13px; color: var(--muted); }
+.ed-paste-attrs-from b { color: var(--text); font-weight: 700; }
+.ed-paste-attrs-bulk { display: flex; gap: 6px; margin-bottom: 8px; }
+.ed-paste-attrs-list { display: grid; gap: 2px; }
+.ed-paste-attrs-list label {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px;
+  font-size: 13px; color: var(--muted); cursor: pointer;
+}
+.ed-paste-attrs-list label:hover { background: rgba(255, 255, 255, 0.04); }
+.ed-paste-attrs-list label.on { color: var(--text); }
+.ed-paste-attrs-list input { margin: 0; accent-color: var(--accent-2); }
+.ed-paste-attrs-list em { margin-left: auto; font-style: normal; font-size: 11px; color: var(--muted); }
 .ed-mark-handle {
   position: absolute; top: 0; bottom: 0; width: 9px; margin-left: -4.5px;
   z-index: 7; cursor: ew-resize; touch-action: none;
@@ -1935,6 +2141,19 @@ body.ed-mark-dragging, body.ed-mark-dragging * { cursor: ew-resize !important; }
   background: var(--card-2); color: var(--text-secondary); cursor: grab;
 }
 .ed-shape-card:hover { border-color: var(--line-bright); color: #fff; }
+/* Pluma (#14) y opciones del trazado. */
+.ed-shape-pen {
+  display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 8px;
+  width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card-2); color: var(--text-secondary); text-align: left; cursor: pointer;
+}
+.ed-shape-pen:hover { border-color: var(--line-bright); color: #fff; }
+.ed-shape-pen.on { border-color: #38bdf8; color: #fff; background: rgba(56, 189, 248, 0.12); }
+.ed-shape-pen .material-icons { grid-row: span 2; }
+.ed-shape-pen span { font-weight: 700; font-size: 13px; }
+.ed-shape-pen em { font-style: normal; font-size: 11px; color: var(--muted); }
+.ed-shape-path { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.ed-shape-path .ghost.on { border-color: #38bdf8; color: #fff; }
 .ed-shape-thumb {
   display: flex; align-items: center; justify-content: center;
   height: 56px; border-radius: 6px; background: #0c0e14;
@@ -2072,7 +2291,6 @@ body.ed-mark-dragging, body.ed-mark-dragging * { cursor: ew-resize !important; }
 .motion-name { background: var(--card-2); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 6px 10px; font-size: 14px; font-weight: 600; min-width: 160px; }
 .motion-dur { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 .motion-dur input { width: 64px; background: var(--card-2); border: 1px solid var(--line); border-radius: 6px; color: var(--text); padding: 5px 7px; }
-.motion-addjob { margin: 0; font-size: 11px; }
 
 .motion-btn { background: var(--card-2); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 7px 12px; font-size: 13px; cursor: pointer; transition: var(--transition); }
 .motion-btn:hover { background: var(--card-3); }
@@ -2265,16 +2483,29 @@ body.ed-mark-dragging, body.ed-mark-dragging * { cursor: ew-resize !important; }
   border: 1px solid var(--line); background: var(--card-2); color: var(--text-secondary);
 }
 .ed-bg-status b { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 700; }
-.ed-bg-status.run { border-color: rgba(251, 146, 60, 0.5); color: #fdba74; background: rgba(234, 88, 12, 0.12); }
-.ed-bg-status.run .material-icons { animation: ed-bg-spin 1s linear infinite; }
-.ed-bg-status.run::after {
-  content: ''; position: absolute; left: 0; bottom: 0; height: 2px; width: 40%;
-  background: var(--accent-gradient); border-radius: 2px;
-  animation: ed-bg-loading 1.35s ease-in-out infinite;
-}
 .ed-bg-status.ok { border-color: rgba(52, 211, 153, 0.5); color: #6ee7b7; background: rgba(16, 185, 129, 0.1); }
 .ed-bg-status.err { border-color: #f87171; color: #fca5a5; background: rgba(220, 38, 38, 0.12); }
 @keyframes ed-bg-spin { to { transform: rotate(360deg); } }
+
+/* Progreso de un job (eliminar fondo, exportar recorte): una línea compacta
+   + barra fina determinada. Sin caja: no compite con los botones. */
+.ed-job { margin: 6px 10px 2px; min-width: 0; }
+.ed-job-row {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  font-size: 11px; line-height: 1.3; color: var(--text-secondary);
+}
+.ed-job-row b { color: #fdba74; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ed-job-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-job-spin {
+  flex: none; width: 10px; height: 10px; border-radius: 50%;
+  border: 1.5px solid rgba(251, 146, 60, 0.3); border-top-color: #fb923c;
+  animation: ed-bg-spin 0.8s linear infinite;
+}
+.ed-job-bar { margin-top: 5px; height: 3px; border-radius: 2px; background: var(--card-2); overflow: hidden; }
+.ed-job-bar i { display: block; height: 100%; background: #fb923c; border-radius: 2px; transition: width 0.3s ease; }
+.ed-job-bar.indeterminate i { width: 40%; animation: ed-bg-loading 1.35s ease-in-out infinite; }
+/* Dentro de filas de acciones (Paper, Motion): ocupa el hueco junto a los botones. */
+.paper-actions .ed-job, .ed-job.motion-addjob { margin: 0; flex: 1; min-width: 0; }
 @keyframes ed-bg-loading {
   0% { transform: translateX(-110%); }
   50% { transform: translateX(160%); }
@@ -2501,9 +2732,8 @@ body.ed-mark-dragging, body.ed-mark-dragging * { cursor: ew-resize !important; }
 }
 
 /* Herramientas de imagen (recorte · pincel · por color): el stage se parte en
-   dos igual que "Recortar" en el editor (.ed-canvas-stage.split) — la imagen
-   entera a la izquierda y el resultado en vivo a la derecha, con las mismas
-   `.ed-result-label` y `.ed-stage-hint`. Sin barras sobre el lienzo: los
+   dos — la imagen entera a la izquierda y el resultado en vivo a la derecha,
+   con `.ed-result-label` y `.ed-stage-hint`. Sin barras sobre el lienzo: los
    controles están en el panel derecho. */
 .paper-stage.split { gap: 12px; }
 .paper-stage.split .paper-stage-wrap { max-width: calc(50% - 6px); }
@@ -2880,6 +3110,9 @@ body.ed-mark-dragging, body.ed-mark-dragging * { cursor: ew-resize !important; }
 .ai-caption { margin: 0; font-size: 13.5px; font-style: italic; color: var(--text); }
 .ai-tags { display: flex; flex-wrap: wrap; gap: 5px; }
 .ai-chip { font-size: 11.5px; color: var(--text); background: rgba(255, 122, 26, 0.1); border: 1px solid rgba(255, 122, 26, 0.4); border-radius: 999px; padding: 1px 8px; }
+.ai-mat-item { align-items: flex-start; font-size: 12.5px; line-height: 1.4; }
+.ai-mat-item > .material-icons { margin-top: 2px; flex: none; }
+.ai-mat-old { color: var(--muted); font-size: 11.5px; }
 
 /* Panel Foundry (IA generativa) */
 .foundry-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 2px; }
@@ -2893,3 +3126,50 @@ body.ed-mark-dragging, body.ed-mark-dragging * { cursor: ew-resize !important; }
 .foundry-analysis { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
 .foundry-analysis p { margin: 0; }
 .foundry-analysis-list { display: flex; flex-direction: column; gap: 4px; }
+
+/* Recortar (EdCropModal): modal estilo CapCut — fuente completa + recuadro blanco,
+   scrub del clip y barra inferior (Rotación · Recorte · Restablecer · Confirmar).
+   .modal.crop-modal: App.css fija .modal{max-width:500px;padding:24px} y carga después. */
+.crop-overlay { background: rgba(4, 6, 12, 0.72); backdrop-filter: none; }
+.modal.crop-modal {
+  max-width: min(980px, 94vw); width: min(980px, 94vw); max-height: 94vh;
+  padding: 0; overflow: hidden; display: flex; flex-direction: column;
+  background: #1b1d22; border-color: #2c2f36; border-radius: 10px; outline: none;
+}
+.crop-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 8px 6px 14px; font-size: 12.5px; font-weight: 600; color: #d8dbe2;
+}
+.crop-stage {
+  position: relative; height: min(58vh, 540px); min-height: 220px;
+  margin: 0 14px; background: #0f1013; border-radius: 4px;
+}
+.crop-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+.crop-scrub {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  padding: 10px 14px 4px;
+}
+.crop-scrub input[type='range'] { width: min(300px, 40%); accent-color: #fff; }
+.crop-tc { font-size: 11px; font-variant-numeric: tabular-nums; color: #8a8f99; white-space: nowrap; }
+.crop-tc b { color: #22d3ee; font-weight: 600; }
+.crop-foot {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 10px 14px 12px; margin-top: 6px; border-top: 1px solid #2c2f36;
+}
+.crop-field { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: #b4b8c2; }
+.crop-field input[type='range'] { width: 120px; accent-color: #fff; }
+.crop-field select {
+  background: #2a2d34; color: #e5e7eb; border: 1px solid #383c45; border-radius: 5px;
+  padding: 3px 6px; font-size: 12px; min-width: 96px;
+}
+.crop-deg { display: inline-flex; align-items: center; gap: 2px; }
+.crop-deg input {
+  width: 52px; background: #2a2d34; color: #e5e7eb; border: 1px solid #383c45;
+  border-radius: 5px; padding: 3px 5px; font-size: 12px; text-align: right;
+}
+.crop-spacer { flex: 1; }
+
+/* Máscara: "Aplicar a" Clip | Ajustes (máscara de ajuste, como CapCut Ajustar → Máscara). */
+.ed-mask-target { display: flex; align-items: center; gap: 6px; margin: 8px 0 4px; font-size: 11.5px; color: var(--muted); }
+.ed-mask-target .ed-pos-btn { flex: 1; padding: 4px 6px; min-height: 0; }
+.ed-mask-target .ed-pos-btn em { font-style: normal; }

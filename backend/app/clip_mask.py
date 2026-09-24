@@ -13,6 +13,12 @@ Coordenadas (independientes de la resolución):
   rotation  → grados (sentido horario, como el canvas).
 
 Para añadir un tipo nuevo: entrada en ``MASK_SHAPES`` + mismo id en el JS.
+
+``target`` decide QUÉ recorta la máscara (como CapCut, que tiene máscara en Básico
+y en Ajustar): ``"clip"`` (defecto) = qué parte del clip se ve; ``"adjust"`` = dónde
+se aplican los ajustes de color del clip (ver ``clip_adjust.py``). Las de ajuste
+NUNCA recortan el clip: ``clip_masks_at`` las filtra DESPUÉS de animar, para que
+los keyframes sigan cayendo en la primera máscara aunque sea de ajuste.
 """
 from __future__ import annotations
 
@@ -23,9 +29,10 @@ from typing import Any, Callable, Optional
 import cv2
 import numpy as np
 
-MASK_TYPE_IDS = ("linear", "circle", "rectangle", "star", "heart", "text", "brush")
+MASK_TYPE_IDS = ("linear", "film", "circle", "rectangle", "star", "heart", "text", "brush")
+MASK_TARGETS = ("clip", "adjust")
 MASK_FEATHER_MAX = 0.25
-MASK_KIND_OK = frozenset({"video", "image", "shape"})
+MASK_KIND_OK = frozenset({"video", "image", "shape", "text"})
 
 # Claves animables de la máscara dentro de los keyframes del clip (solo masks[0]).
 MASK_KF_KEYS = ("mx", "my", "mw", "mh", "msx", "msy", "mrot", "mfeather")
@@ -78,6 +85,7 @@ def normalize_mask(raw: Optional[dict]) -> dict:
         "invert": bool(m.get("invert")),
         "opacity": _clamp(_num(m.get("opacity"), 1.0), 0.0, 1.0),
         "radius": _clamp(_num(m.get("radius"), 0.0), 0.0, 0.5),
+        "target": m.get("target") if m.get("target") in MASK_TARGETS else "clip",
     }
     if type_ == "text":
         t = m.get("text") if isinstance(m.get("text"), dict) else {}
@@ -118,7 +126,12 @@ def maskable(clip: Any) -> bool:
 
 
 def has_mask(clip: Any) -> bool:
-    return any(m["enabled"] for m in clip_masks(clip))
+    """¿Tiene alguna máscara que recorte el CLIP? (las de ajuste no cuentan)."""
+    return any(m["enabled"] and m["target"] == "clip" for m in clip_masks(clip))
+
+
+def has_adjust_mask(clip: Any) -> bool:
+    return any(m["enabled"] and m["target"] == "adjust" for m in clip_masks(clip))
 
 
 def mask_static_props(clip: Any) -> dict:
@@ -139,17 +152,23 @@ def mask_from_props(mask: dict, props: Optional[dict]) -> dict:
     return normalize_mask(patched)
 
 
-def clip_masks_at(clip: Any, local_t: float) -> list[dict]:
-    """Máscaras del clip en ``local_t``: la primera con sus keyframes aplicados."""
+def clip_masks_at(clip: Any, local_t: float, include_adjust: bool = False) -> list[dict]:
+    """Máscaras del clip en ``local_t``: la primera con sus keyframes aplicados.
+
+    Por defecto solo las que recortan el clip (``target == "clip"``); con
+    ``include_adjust`` también las de ajuste (el editor las necesita para editarlas).
+    """
     masks = [m for m in clip_masks(clip) if m["enabled"]]
     if not masks:
         return []
     from .clip_keyframes import clip_props_at, keyframes_enabled
 
-    if not keyframes_enabled(clip):
+    if keyframes_enabled(clip):
+        props = clip_props_at(clip, local_t)
+        masks = [mask_from_props(masks[0], props), *masks[1:]]
+    if include_adjust:
         return masks
-    props = clip_props_at(clip, local_t)
-    return [mask_from_props(masks[0], props), *masks[1:]]
+    return [m for m in masks if m["target"] == "clip"]
 
 
 def mask_animates(clip: Any, duration: float, eps: float = 1e-3) -> bool:
@@ -220,6 +239,12 @@ def _linear_points(mask: dict, g) -> list[tuple[float, float]]:
     return [(-big, -big), (big, -big), (big, 0.0), (-big, 0.0)]
 
 
+def _film_points(mask: dict, g) -> list[tuple[float, float]]:
+    """Rollo de película (CapCut): banda infinita de alto 2·hh centrada en la máscara."""
+    big = max(g["hw"], g["hh"]) * 4.0 + g["ref"] * 4.0
+    return [(-big, -g["hh"]), (big, -g["hh"]), (big, g["hh"]), (-big, g["hh"])]
+
+
 def star_points(hw: float, hh: float, spikes: int = 5, inner: float = 0.42):
     n = max(3, int(round(spikes)))
     pts = []
@@ -260,6 +285,7 @@ def _heart_points(mask: dict, g):
 # Registro tipo → polígono local. Punto de extensión para tipos futuros.
 MASK_SHAPES: dict[str, Callable[[dict, dict], list]] = {
     "linear": _linear_points,
+    "film": _film_points,
     "rectangle": _rect_points,
     "star": _star_points,
     "heart": _heart_points,

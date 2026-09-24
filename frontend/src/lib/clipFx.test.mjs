@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { clipFxAt, effectsCss, FX_DUR, lookCss, typingReveal } from './clipFx.js'
+import { clipFxAt, effectsCss, FX_DUR, typingReveal } from './clipFx.js'
+import { clipFilters, stackMatrix } from './clipFilters.js'
 
 const dur = 4
 const mid = { appear: 'none', exit: 'none', look: 'none' }
@@ -74,10 +75,10 @@ assert.match(effectsCss({ look: 'none', effects: { grayscale: true, blur: 2 } })
 assert.match(effectsCss({ look: 'none', effects: { grayscale: true, blur: 2 } }), /blur\(2px\)/)
 assert.equal(effectsCss({ look: 'none', effects: {} }), 'none')
 
-// Filtro visual constante en todo el clip
-assert.match(lookCss('bw'), /grayscale/)
-assert.equal(lookCss('none'), 'none')
-assert.match(clipFxAt({ look: 'bw' }, 1, dur).cssFilter, /grayscale/)
+// Filtro visual constante en todo el clip: el `look` antiguo es un filtro al 100 %
+// (su matriz va al feColorMatrix; sin DOM no hay url, ver clipFilters.test.mjs).
+assert.deepEqual(clipFilters({ look: 'bw' }), [{ id: 'bw', amount: 1 }])
+assert.equal(stackMatrix(clipFilters({ look: 'none' })), null)
 
 // Typing: revela caracteres de izquierda a derecha; no muta el original.
 assert.equal(typingReveal('Hola mundo', 0), '')

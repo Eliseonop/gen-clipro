@@ -132,6 +132,46 @@ export function normalizeChroma(raw) {
   }
 }
 
+// --- Contorno / halo del sujeto recortado (#9) ---------------------------------
+// El alfa del recorte se difumina (σ) y se umbraliza en Φ(−1,5): en un borde recto
+// el cruce cae a 1,5·σ del sujeto → el contorno crece exactamente «grosor». Espejo
+// de outline_params (backend/app/clip_bg.py) y del gblur+lut del export.
+export const OUTLINE_WIDTH_MAX = 0.05   // grosor máximo (unidades de ALTO de la fuente)
+export const OUTLINE_LEVEL = 17         // Φ(−1,5)·255: umbral del alfa difuminado (0–255)
+export const OUTLINE_SPREAD = 1.5       // grosor = OUTLINE_SPREAD · σ
+export const OUTLINE_EDGE_PX = 1.5      // ancho de la rampa antialias del borde exterior
+
+export function normalizeOutline(raw) {
+  const o = raw && typeof raw === 'object' ? raw : {}
+  return {
+    enabled: !!o.enabled,
+    color: normalizeHex(o.color, '#FFFFFF'),
+    width: clamp(num(o.width, 0.3), 0, 1),      // × OUTLINE_WIDTH_MAX
+    soft: clamp(num(o.soft, 0), 0, 1),          // halo: difuminado
+    opacity: clamp(num(o.opacity, 1), 0, 1),
+  }
+}
+
+/** Parámetros en px para una fuente de `height` px, o null si no hay contorno. */
+export function outlineParams(outline, height) {
+  const widthPx = outline.width * OUTLINE_WIDTH_MAX * height
+  if (!outline.enabled || widthPx < 0.5 || outline.opacity <= 0) return null
+  const sigma = widthPx / OUTLINE_SPREAD
+  // Pendiente del alfa difuminado en el cruce: φ(1,5)/σ ≈ 0,1295/σ por px.
+  const gain = Math.max(1, 1 / (OUTLINE_EDGE_PX * 0.1295 / sigma))
+  return {
+    width: widthPx, sigma, gain, halo: outline.soft * widthPx,
+    opacity: outline.opacity, color: outline.color,
+  }
+}
+
+/** Alfa del contorno (0–255) a partir del alfa difuminado `v` (0–255): misma LUT
+ *  que el `lut` del export. */
+export function outlineAlpha(v, p) {
+  const a = Math.min(255, Math.max(0, (v - OUTLINE_LEVEL) * p.gain))
+  return a * p.opacity
+}
+
 export function normalizeBg(raw) {
   if (!raw || typeof raw !== 'object' || !Object.keys(raw).length) return null
   return {
@@ -139,6 +179,7 @@ export function normalizeBg(raw) {
     mode: BG_MODES.includes(raw.mode) ? raw.mode : 'auto',
     auto: normalizeAuto(raw.auto),
     chroma: normalizeChroma(raw.chroma),
+    outline: normalizeOutline(raw.outline),
   }
 }
 

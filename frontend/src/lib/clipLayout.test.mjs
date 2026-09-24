@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import {
   clampCrop,
+  cropRatioNorm,
+  fitCropRatio,
   cropCursor,
   cropHandleAt,
   cropHandleNorms,
@@ -254,5 +256,19 @@ assert.equal(cropCursor(-1, -1), 'nwse-resize')
 assert.equal(cropCursor(1, -1), 'nesw-resize')
 assert.equal(cropCursor(1, 0), 'ew-resize')
 assert.equal(cropCursor(0, 1), 'ns-resize')
+
+// Proporciones del modal Recortar.
+assert.equal(cropRatioNorm('free', 16 / 9, 9 / 16), null)
+assert.equal(cropRatioNorm('original', 16 / 9, 9 / 16), 1)
+assert.ok(Math.abs(cropRatioNorm('output', 16 / 9, 9 / 16) - (9 / 16) / (16 / 9)) < 1e-12)
+assert.ok(Math.abs(cropRatioNorm('1:1', 16 / 9, 9 / 16) - 9 / 16) < 1e-12)
+// 1:1 sobre 16:9: toda la altura, 9/16 del ancho, centrado.
+const sq = fitCropRatio({ cx: 0.5, cy: 0.5, wf: 1, hf: 1 }, 9 / 16)
+assert.ok(Math.abs(sq.hf - 1) < 1e-12 && Math.abs(sq.wf - 9 / 16) < 1e-12)
+// 2.35:1 sobre 16:9 (rn > 1): todo el ancho, alto recortado; el centro se acota dentro.
+const wide = fitCropRatio({ cx: 0.9, cy: 0.95, wf: 0.3, hf: 0.3 }, 2.35 / (16 / 9))
+assert.equal(wide.wf, 1)
+assert.ok(Math.abs(wide.wf / wide.hf - 2.35 / (16 / 9)) < 1e-9)
+assert.ok(wide.cy + wide.hf / 2 <= 1 + 1e-12, 'no se sale por abajo')
 
 console.log('clipLayout overlay crop/transform ok')

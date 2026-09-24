@@ -59,6 +59,19 @@ def _retryable(exc: Exception) -> bool:
     return any(k in s for k in ("overloaded", "high demand", "try again later", "temporarily unavailable"))
 
 
+def _drop_rejected_param(exc: Exception, sampling: dict) -> bool:
+    """400 por un parámetro que el modelo no admite (p. ej. ``temperature`` en los de
+    razonamiento gpt-5/o-series): lo quita de ``sampling`` para reintentar. True si quitó algo."""
+    if _status_code(exc) != 400:
+        return False
+    low = str(exc).lower()
+    for k in list(sampling):
+        if k in low:
+            sampling.pop(k)
+            return True
+    return False
+
+
 def _is_auth_or_quota(exc: Exception) -> bool:
     """¿Fallo de la CLAVE (auth/cuota) que justifica probar otra key?"""
     code = _status_code(exc)
@@ -114,6 +127,11 @@ OPENAI_COMPATIBLE = {
                  "default_model": "qwen2.5-7b-instruct"},
 }
 
+# Microsoft Foundry (Azure): también OpenAI-compatible (API v1), pero endpoint, clave y
+# deployment salen de SU config (``app.foundry``: env o Configuración → Foundry), no de
+# esta tabla. Ver ``FoundryProvider``.
+FOUNDRY = "foundry"
+
 
 def _api_keys() -> dict:
     keys = (settings.load() or {}).get("api_keys")
@@ -139,6 +157,9 @@ def _auto_provider() -> str:
 def _default_model(provider: str) -> str:
     if provider == "gemini":
         return DEFAULT_MODEL
+    if provider == FOUNDRY:
+        from .. import foundry
+        return foundry.deployment()
     spec = OPENAI_COMPATIBLE.get(provider)
     return spec["default_model"] if spec else DEFAULT_MODEL
 
@@ -389,11 +410,17 @@ class OpenAICompatibleProvider(AIProvider):
             return "Falta el paquete openai (pip install openai)."
         return None
 
+    def _sampling_kwargs(self) -> dict:
+        """Parámetros de muestreo de cada petición. Si el modelo rechaza alguno (400),
+        ``run`` lo quita y reintenta."""
+        return {"temperature": 0.3}
+
     async def run(self, *, system, history, user_message, tools, call_tool, emit, max_iters):
         import json as _json
 
         from openai import AsyncOpenAI
 
+        sampling = self._sampling_kwargs()
         keys = self._keys() or [self._key()]
         key_idx = 0
         client = AsyncOpenAI(api_key=keys[key_idx], base_url=self._base_url)
@@ -420,7 +447,7 @@ class OpenAICompatibleProvider(AIProvider):
                 try:
                     stream = await client.chat.completions.create(
                         model=self._model, messages=messages,
-                        tools=oai_tools or None, stream=True, temperature=0.3)
+                        tools=oai_tools or None, stream=True, **sampling)
                     async for chunk in stream:
                         choice = (chunk.choices or [None])[0]
                         delta = choice.delta if choice else None
@@ -441,6 +468,8 @@ class OpenAICompatibleProvider(AIProvider):
                     got = True
                     break
                 except Exception as exc:  # noqa: BLE001
+                    if not turn_text and _drop_rejected_param(exc, sampling):
+                        continue
                     # Fallback: si la clave falla por auth/cuota y hay otra, prueba la siguiente.
                     if _is_auth_or_quota(exc) and not turn_text and key_idx + 1 < len(keys):
                         key_idx += 1
@@ -498,6 +527,38 @@ class OpenAICompatibleProvider(AIProvider):
         return final_text
 
 
+class FoundryProvider(OpenAICompatibleProvider):
+    """Microsoft Foundry (Azure) por su API v1 OpenAI-compatible. Reusa el loop de
+    streaming + tool-calling; solo cambia de dónde salen endpoint, clave y modelo (la
+    config de ``app.foundry``) y el muestreo de los modelos de razonamiento."""
+
+    def __init__(self, model: str | None = None):
+        from .. import foundry
+        self.name = FOUNDRY
+        self._model = model or foundry.deployment()
+        ep = foundry.endpoint()
+        # El SDK de OpenAI habla la API v1: vale para ``*.services.ai.azure.com`` y
+        # también para el recurso clásico ``*.openai.azure.com/openai/v1``.
+        self._base_url = foundry._v1_base(ep) if ep else None
+        self._key_name = "azure_foundry"
+
+    def _keys(self) -> list[str]:
+        from .. import foundry
+        key = foundry.api_key()   # env o settings (misma que la pestaña Foundry)
+        return [key] if key else []
+
+    def unavailable_reason(self) -> str | None:
+        from .. import foundry
+        return foundry.unavailable_reason() or super().unavailable_reason()
+
+    def _sampling_kwargs(self) -> dict:
+        from .. import foundry
+        if foundry._is_reasoning_model(self._model):
+            # gpt-5*/o-series: sin temperature; esfuerzo bajo = respuestas rápidas.
+            return {"reasoning_effort": "low"}
+        return {"temperature": 0.3}
+
+
 def _tool_image(result: dict) -> tuple[str, str] | None:
     """(base64, mime) si el resultado de una tool trae una imagen para VER."""
     data = result.get("data")
@@ -529,6 +590,8 @@ def get_provider() -> AIProvider:
     provider = cfg["provider"]
     if provider == "gemini":
         return GeminiProvider(cfg["model"])
+    if provider == FOUNDRY:
+        return FoundryProvider(cfg["model"])
     if provider in OPENAI_COMPATIBLE:
         return OpenAICompatibleProvider(provider, cfg["model"], cfg.get("base_url"))
     raise ValueError(f"Proveedor de IA no soportado: {provider}")

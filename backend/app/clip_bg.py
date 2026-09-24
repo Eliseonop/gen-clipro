@@ -182,6 +182,64 @@ def normalize_chroma(raw: Any) -> dict:
     }
 
 
+# --- Contorno / halo del sujeto recortado (#9) --------------------------------
+# El alfa del recorte se difumina (σ) y se umbraliza en Φ(−1,5): en un borde recto
+# el cruce cae a 1,5·σ del sujeto → el contorno crece exactamente «grosor». Espejo
+# de outlineParams (frontend/src/lib/clipBg.js) y del gblur+lut del export.
+OUTLINE_WIDTH_MAX = 0.05        # grosor máximo (unidades de ALTO de la fuente)
+OUTLINE_LEVEL = 17              # Φ(−1,5)·255: umbral del alfa difuminado (0–255)
+OUTLINE_SPREAD = 1.5            # grosor = OUTLINE_SPREAD · σ
+OUTLINE_EDGE_PX = 1.5           # ancho de la rampa antialias del borde exterior
+
+
+def normalize_outline(raw: Any) -> dict:
+    o = raw if isinstance(raw, dict) else {}
+    return {
+        "enabled": bool(o.get("enabled")),
+        "color": normalize_hex(o.get("color"), "#FFFFFF"),
+        "width": _clamp(_num(o.get("width"), 0.3), 0.0, 1.0),       # × OUTLINE_WIDTH_MAX
+        "soft": _clamp(_num(o.get("soft"), 0.0), 0.0, 1.0),         # halo: difuminado
+        "opacity": _clamp(_num(o.get("opacity"), 1.0), 0.0, 1.0),
+    }
+
+
+def outline_params(outline: dict, height: int) -> Optional[dict]:
+    """Parámetros en px para una fuente de ``height`` px de alto, o None si no hay
+    contorno visible. ``gain`` convierte el alfa difuminado (0–1) en el del
+    contorno: ``clamp((v − LEVEL/255) · gain)``; la rampa exterior mide
+    ~OUTLINE_EDGE_PX. ``halo`` es la σ del difuminado final (0 = borde nítido)."""
+    width_px = outline["width"] * OUTLINE_WIDTH_MAX * float(height)
+    if not outline["enabled"] or width_px < 0.5 or outline["opacity"] <= 0:
+        return None
+    sigma = width_px / OUTLINE_SPREAD
+    # Pendiente del alfa difuminado en el cruce: φ(1,5)/σ ≈ 0,1295/σ por px.
+    gain = max(1.0, 1.0 / (OUTLINE_EDGE_PX * 0.1295 / sigma))
+    return {"width": width_px, "sigma": sigma, "gain": gain,
+            "halo": outline["soft"] * width_px, "opacity": outline["opacity"],
+            "color": outline["color"]}
+
+
+def outline_ffmpeg_steps(outline: dict, height: int, in_label: str, n: int) -> tuple[list[str], str]:
+    """Pasos que dibujan el contorno DETRÁS del sujeto (``in_label``: la fuente ya con
+    su alfa, a su resolución). Sin contorno devuelve ``([], in_label)``."""
+    p = outline_params(outline, height)
+    if p is None:
+        return [], in_label
+    r, g, b = hex_rgb(p["color"])
+    alpha = (f"alphaextract,gblur=sigma={p['sigma']:.4f}:steps=3,"
+             f"lut=y='clip((val-{OUTLINE_LEVEL})*{p['gain']:.4f}\\,0\\,255)*{p['opacity']:.4f}'")
+    if p["halo"] > 0.3:
+        alpha += f",gblur=sigma={p['halo']:.4f}:steps=3"
+    out = f"olo{n}"
+    return [
+        f"[{in_label}]format=gbrap,split=3[olc{n}][ols{n}][olf{n}]",
+        f"[olc{n}]{alpha}[ola{n}]",
+        f"[olf{n}]lutrgb=r={r}:g={g}:b={b}[olk{n}]",
+        f"[olk{n}][ola{n}]alphamerge[oll{n}]",
+        f"[oll{n}][ols{n}]overlay=0:0:format=auto,format=gbrap[{out}]",
+    ], out
+
+
 def normalize_bg(raw: Any) -> Optional[dict]:
     """Normaliza ``clip.bg_removal``. ``None`` (o nada activo) → ``None``."""
     if not isinstance(raw, dict) or not raw:
@@ -192,6 +250,7 @@ def normalize_bg(raw: Any) -> Optional[dict]:
         "mode": mode,
         "auto": normalize_auto(raw.get("auto")),
         "chroma": normalize_chroma(raw.get("chroma")),
+        "outline": normalize_outline(raw.get("outline")),
     }
     return out
 
