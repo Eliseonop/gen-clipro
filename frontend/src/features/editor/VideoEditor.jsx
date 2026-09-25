@@ -38,6 +38,7 @@ import { CINEMA_RATIOS, SHAPE_DEFAULT_DUR, cinemaBar, defaultShape, drawInKeyfra
 import { clipFlip } from '../../lib/clipAnim'
 import { readRowHeight, writeRowHeight } from './trackRows'
 import { newTrackIndex, resolveNewTrack } from './dropIntent'
+import { TIMELINE_SCHEMA_VERSION, insertTrack, reorderTrack, stepTrack, trackNeighbor } from './trackStack'
 import { MASK_KF_KEYS, clipMasks, defaultMask, maskId, normalizeMask } from '../../lib/clipMask'
 import {
   DEFAULT_PROVIDER, autoActive, bgCapable, chromaBg, clipBg, defaultBg, editsAtFrame,
@@ -516,7 +517,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
 
   // --- Autoguardado ---
   const timelinePayload = useCallback(() => ({
-    version: 1, fps, width: outW, height: outH, audio_target_db: audioDb, tracks, clips, markers,
+    version: 1, schema_version: TIMELINE_SCHEMA_VERSION, fps, width: outW, height: outH, audio_target_db: audioDb, tracks, clips, markers,
   }), [fps, outW, outH, audioDb, tracks, clips, markers])
 
   function setListenVolume(v) {
@@ -2033,7 +2034,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (intent.action === 'newTrack') {
       const spot = resolveNewTrack(clipsRef.current, tracksRef.current, trackId, startTime, dur)
       // Si la de encima está ocupada se crea una: es lo que anuncia la línea verde.
-      return { trackId: spot.create ? addTrack(laneKindForAsset(payload.asset_kind)) : spot.trackId, start: startTime }
+      return { trackId: spot.create ? addTrack(laneKindForAsset(payload.asset_kind), undefined, spot.index) : spot.trackId, start: startTime }
     }
     if (intent.action === 'replace') {
       setReplaceAsk({ payload, trackId, start: startTime, targetId: intent.targetId })
@@ -2180,26 +2181,21 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     })
   }
 
-  function addTrack(kind, style, side) {
+  // `where`: 'above' | 'below' al sacar un clip fuera del bloque de pistas, un
+  // índice del array para colocarla justo encima de otra, o nada = el sitio de
+  // siempre (ver defaultTrackIndex).
+  function addTrack(kind, style, where) {
     const prefix = kind === 'video' ? 'V' : kind === 'audio' ? 'A' : 'T'
     const nums = tracksRef.current.filter((t) => t.kind === kind).map((t) => parseInt(String(t.name).replace(/\D/g, ''), 10) || 0)
     const n = (nums.length ? Math.max(...nums) : 0) + 1
     const id = `${prefix}${n}-${uid('')}`
     const nt = { id, kind, name: `${prefix}${n}`, hidden: false, muted: false, locked: false, linked_track_id: null }
     if (kind === 'text') nt.style = style || subtitleStyle()
-    setTracks((prev) => {
-      // `side` ('above' | 'below') llega al arrastrar un clip fuera del bloque
-      // de pistas; sin él se mantiene el sitio de siempre.
-      if (side) {
-        const copy = [...prev]; copy.splice(newTrackIndex(prev, kind, side), 0, nt); return copy
-      }
-      if (kind === 'video') {
-        const lastVid = prev.map((t, i) => (t.kind === 'video' ? i : -1)).reduce((a, b) => Math.max(a, b), -1)
-        const copy = [...prev]; copy.splice(lastVid + 1, 0, nt); return copy
-      }
-      return [...prev, nt]
-    })
+    setTracks((prev) => insertTrack(prev, nt, typeof where === 'string' ? newTrackIndex(prev, kind, where) : where))
     return id
+  }
+  function reorderTracks(next) {
+    if (next !== tracksRef.current) setTracks(next)
   }
   function addTextTrack() {
     const id = addTrack('text')
@@ -3601,7 +3597,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       const style = effectiveTextStyle(track?.style, c.style)
       return { ...c, style, text: wrappedText(octx, { ...c, style }, outW, outH) }
     })
-    return { version: 1, fps, width: outW, height: outH, audio_target_db: audioDb, tracks, clips: outClips }
+    return { version: 1, schema_version: TIMELINE_SCHEMA_VERSION, fps, width: outW, height: outH, audio_target_db: audioDb, tracks, clips: outClips }
   }
   const { exportJob, setExportJob, doExport, exporting } = useExportJob(project.id, { timelinePayload, exportPayload })
   const clipSaving = clipSaveJob && (clipSaveJob.status === 'pending' || clipSaveJob.status === 'running')
@@ -3639,7 +3635,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       })
       projectTlRef.current = { ...snap, clips: nextClips }
       saveTimeline(project.id, {
-        version: 1, fps, width: outW, height: outH, audio_target_db: audioDb,
+        version: 1, schema_version: TIMELINE_SCHEMA_VERSION, fps, width: outW, height: outH, audio_target_db: audioDb,
         tracks: snap.tracks, clips: nextClips,
       }).catch(() => {})
     }
@@ -4513,6 +4509,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onAddTrack={paperMode ? undefined : addTrack}
           onAddTextTrack={paperMode ? undefined : addTextTrack}
           onRenameTrack={paperMode ? undefined : renameTrack}
+          onReorderTrack={paperMode || motionMode ? undefined : (id, targetId, place) => reorderTracks(reorderTrack(tracksRef.current, id, targetId, place))}
           onMoveKeyframe={paperMode ? paperMoveKeyframe : moveKeyframe}
           onSelectKf={paperMode ? paper.selectKeyframe : selectTimelineKf}
           onAddKf={paperMode ? paperAddKf : toggleKeyframeAtPlayhead}
@@ -4799,6 +4796,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               canLink: tracks.some((t) => t.kind === 'text'),
               hasText: !!trackTextContent(clips, trackMenu.track.id),
               hasSource: !!trackSource(clips, trackMenu.track.id),
+              canUp: !motionMode && !!trackNeighbor(tracks, trackMenu.track.id, -1),
+              canDown: !motionMode && !!trackNeighbor(tracks, trackMenu.track.id, 1),
             }).map((item) => (
               <button
                 key={item.id}
@@ -4810,6 +4809,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                     const name = window.prompt('Nombre de la pista', t.name || '')
                     if (name != null) renameTrack(t.id, name)
                     setTrackMenu(null)
+                  } else if (item.id === 'track-up' || item.id === 'track-down') {
+                    reorderTracks(stepTrack(tracksRef.current, trackMenu.track.id, item.id === 'track-up' ? -1 : 1))
+                    setTrackMenu(null)
                   } else if (item.id === 'link') startLinkPick(trackMenu.track)
                   else if (item.id === 'unlink') unlinkTrack(trackMenu.track)
                   else if (item.id === 'copy-text') copyTrackText(trackMenu.track)
@@ -4818,7 +4820,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                   else if (item.id === 'delete') requestDeleteTrack(trackMenu.track)
                 }}
               >
-                <Icon name={item.id === 'rename' ? 'edit' : item.id === 'link' ? 'link' : item.id === 'unlink' ? 'link_off' : item.id === 'copy-text' ? 'content_copy' : item.id === 'copy-srt' ? 'subtitles' : item.id === 'copy-srt-ref' ? 'description' : 'delete'} size={15} />
+                <Icon name={item.id === 'rename' ? 'edit' : item.id === 'track-up' ? 'arrow_upward' : item.id === 'track-down' ? 'arrow_downward' : item.id === 'link' ? 'link' : item.id === 'unlink' ? 'link_off' : item.id === 'copy-text' ? 'content_copy' : item.id === 'copy-srt' ? 'subtitles' : item.id === 'copy-srt-ref' ? 'description' : 'delete'} size={15} />
                 {item.label}
               </button>
             ))}

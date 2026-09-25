@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from .text_role import resolve_text_role
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 
 def _v1_to_v2(tl: dict) -> dict:
@@ -62,8 +62,29 @@ def _v3_to_v4(tl: dict) -> dict:
     return out
 
 
+def _v4_to_v5(tl: dict) -> dict:
+    """v4 → v5: las pistas de vídeo y texto pasan a ser UNA pila ordenada por el
+    array (ver ``track_stack``). Hasta v4 el texto iba siempre encima de todo el
+    vídeo, estuviera donde estuviera su pista: se reordenan las pistas de la pila
+    (vídeos primero, textos detrás, cada grupo en su orden) en los mismos huecos
+    del array, así el proyecto se ve igual. El audio no se mueve.
+    """
+    tracks = tl.get("tracks")
+    if not isinstance(tracks, list):
+        return tl
+    slots = [i for i, t in enumerate(tracks) if isinstance(t, dict) and t.get("kind") in ("video", "text")]
+    stack = [tracks[i] for i in slots]
+    ordered = [t for t in stack if t.get("kind") == "video"] + [t for t in stack if t.get("kind") == "text"]
+    out_tracks = list(tracks)
+    for i, t in zip(slots, ordered):
+        out_tracks[i] = t
+    out = dict(tl)
+    out["tracks"] = out_tracks
+    return out
+
+
 # from_version -> paso que lleva a from_version + 1
-MIGRATIONS = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4}
+MIGRATIONS = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4, 4: _v4_to_v5}
 
 
 def timeline_version(tl: dict | None) -> int:

@@ -88,7 +88,7 @@ class Text3dExportTest(unittest.TestCase):
     def _cmd(self, clip, frame_at=0.5):
         tl = Timeline(fps=30, width=W, height=H, tracks=[TimelineTrack(id="T1", kind="text", name="T1")],
                       clips=[clip])
-        ass_path, layers = compose._prepare_texts(tl, Path("x.mp4"), W, H)
+        ass_path, layers, _tracks = compose._prepare_texts(tl, Path("x.mp4"), W, H)
         self.assertIn(clip.id, layers)          # el 3D va en capa propia
         cmd = compose.build_command(Project(id="p", name="p", created_at="n", timeline=tl), tl,
                                     Path("x.mp4"), ass_path=ass_path, text_layers=layers, frame_at=frame_at)

@@ -522,8 +522,11 @@ console.log('duplicate + sync + face-track ok')
 
 assert.deepEqual(
   trackContextItems({ kind: 'text' }, { linked: false, canLink: true, hasText: true, hasSource: true }).map((i) => i.id),
-  ['rename', 'copy-text', 'copy-srt', 'copy-srt-ref', 'delete'],
+  ['rename', 'track-up', 'track-down', 'copy-text', 'copy-srt', 'copy-srt-ref', 'delete'],
 )
+// Subir/Bajar se apagan sin vecina en su grupo.
+assert.equal(trackContextItems({ kind: 'text' }, { canUp: false, canDown: true }).find((i) => i.id === 'track-up').disabled, true)
+assert.equal(trackContextItems({ kind: 'text' }, { canUp: false, canDown: true }).find((i) => i.id === 'track-down').disabled, false)
 assert.equal(trackContextItems({ kind: 'text' }, { hasText: false }).find((i) => i.id === 'copy-text').disabled, true)
 assert.equal(trackContextItems({ kind: 'text' }, { hasText: true, hasSource: true }).find((i) => i.id === 'copy-srt').disabled, false)
 // SRT + referencia se deshabilita sin fuente aunque haya texto.
@@ -572,7 +575,7 @@ assert.equal(ttsClip.description, 'hola mundo')
 assert.equal(clipCopyText(ttsClip), 'hola mundo')
 assert.deepEqual(
   trackContextItems({ kind: 'audio' }, { linked: false, canLink: true }).map((i) => i.label),
-  ['Renombrar', 'Relacionar', 'Eliminar'],
+  ['Renombrar', 'Subir pista', 'Bajar pista', 'Relacionar', 'Eliminar'],
 )
 assert.equal(trackContextItems({ kind: 'audio' }, { linked: true }).find((i) => i.id === 'unlink').label, 'Desrelacionar')
 assert.equal(trackContextItems({ kind: 'audio' }, { linked: false, canLink: false }).find((i) => i.id === 'link').disabled, true)

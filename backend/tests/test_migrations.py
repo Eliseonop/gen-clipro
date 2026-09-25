@@ -106,7 +106,7 @@ class KeepPitchMigrationTest(unittest.TestCase):
             ],
         }
         out = migrations.migrate_timeline(tl)
-        self.assertEqual(out["schema_version"], 4)
+        self.assertEqual(out["schema_version"], migrations.CURRENT_SCHEMA_VERSION)
         by_id = {c["id"]: c for c in out["clips"]}
         self.assertTrue(by_id["a"]["keep_pitch"])
         self.assertTrue(by_id["b"]["keep_pitch"])
@@ -125,6 +125,36 @@ class KeepPitchMigrationTest(unittest.TestCase):
         out = migrations.migrate_timeline(tl)
         self.assertTrue(out["clips"][0]["keep_pitch"])
         self.assertEqual(out["schema_version"], migrations.CURRENT_SCHEMA_VERSION)
+
+
+class LayerStackMigrationTest(unittest.TestCase):
+    """v4 → v5: el texto iba siempre encima del vídeo; ahora manda el orden de pistas."""
+
+    def _ids(self, tracks):
+        return [t["id"] for t in tracks]
+
+    def test_v4_sube_los_textos_encima_del_video(self):
+        tl = {"schema_version": 4, "tracks": [
+            {"id": "T1", "kind": "text"}, {"id": "V1", "kind": "video"},
+            {"id": "A1", "kind": "audio"}, {"id": "V2", "kind": "video"}, {"id": "T2", "kind": "text"}]}
+        out = migrations.migrate_timeline(tl)
+        # Mismos huecos del array (el audio no se mueve): vídeos primero, textos después.
+        self.assertEqual(self._ids(out["tracks"]), ["V1", "V2", "A1", "T1", "T2"])
+        self.assertEqual(out["schema_version"], migrations.CURRENT_SCHEMA_VERSION)
+
+    def test_v4_ya_en_orden_no_cambia(self):
+        tracks = [{"id": "V1", "kind": "video"}, {"id": "T1", "kind": "text"}, {"id": "A1", "kind": "audio"}]
+        out = migrations.migrate_timeline({"schema_version": 4, "tracks": tracks})
+        self.assertEqual(out["tracks"], tracks)
+
+    def test_v5_respeta_el_texto_detras_del_video(self):
+        tracks = [{"id": "V1", "kind": "video"}, {"id": "T1", "kind": "text"}, {"id": "V2", "kind": "video"}]
+        out = migrations.migrate_timeline({"schema_version": 5, "tracks": tracks})
+        self.assertEqual(self._ids(out["tracks"]), ["V1", "T1", "V2"])
+
+    def test_sin_pistas_no_rompe(self):
+        out = migrations.migrate_timeline({"schema_version": 4, "clips": []})
+        self.assertNotIn("tracks", out)
 
 
 if __name__ == "__main__":

@@ -56,6 +56,7 @@ OPS = {
     "link_tracks": timeline_ops.link_tracks,
     "unlink_track": timeline_ops.unlink_track,
     "rename_track": timeline_ops.rename_track,
+    "reorder_track": timeline_ops.reorder_track,
 }
 
 

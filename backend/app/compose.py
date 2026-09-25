@@ -44,6 +44,7 @@ from .clip_speed import audio_speed_filters, clip_source_duration, clip_timeline
 from .text_ass import ass_filter_path, build_ass, effective_text_style, text_is_3d, text_warp_spec
 from .font_metrics import BUNDLED_FONT_DIR, BUNDLED_FONTS, FONT_DIR, FONTS, FONTS_BOLD, resolve_font_path
 from .shapes import media_exists, rasterize_timeline_shapes
+from .track_stack import buried_text_track_ids, stack_layers
 
 ProgressCb = Callable[[float, str], None]
 
@@ -711,7 +712,8 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
                   ass_path: Optional[Path] = None, shape_files: Optional[dict] = None,
                   mask_files: Optional[dict] = None,
                   bg_files: Optional[dict] = None, frame_at: Optional[float] = None,
-                  text_layers: Optional[dict] = None) -> list[str]:
+                  text_layers: Optional[dict] = None,
+                  track_text_layers: Optional[dict] = None) -> list[str]:
     """Construye la lista de argumentos de ffmpeg para renderizar la timeline.
 
     Con ``frame_at`` (segundos) NO codifica el vídeo: busca ese instante y escribe UN
@@ -722,10 +724,11 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
     H -= H % 2
     fps = int(timeline.fps or 30)   # por proyecto; el global solo es el predeterminado
 
-    # Orden de capas de vídeo: primero las pistas de vídeo inferiores (fondo),
-    # las superiores encima. Índice de capa = posición de la pista de vídeo.
-    video_tracks = [t for t in timeline.tracks if t.kind == "video"]
-    vlayer = {t.id: i for i, t in enumerate(video_tracks)}
+    # Orden de capas: la pila vídeo+texto (``track_stack``), fondo primero. Los
+    # textos con vídeo por encima entran en la cadena en su capa; el resto de los
+    # textos va encima de todo al final.
+    vlayer = stack_layers(timeline.tracks)
+    buried_tracks = buried_text_track_ids(timeline.tracks)
     track_by_id = {t.id: t for t in timeline.tracks}
 
     # Recolectar clips válidos con su archivo y duración.
@@ -825,15 +828,74 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         and track_by_id[c.track_id].kind == "video" and not track_by_id[c.track_id].hidden
         and _clip_duration(c) > 0.02
     ]
+    by_id = {c.id: c for c in timeline.clips}
+    track_style = {t.id: (getattr(t, "style", None) or {}) for t in timeline.tracks}
+
+    def text_warp(c):
+        return text_warp_spec(c, effective_text_style(track_style.get(c.track_id), c.style), W, H, fps)
+
+    n_txt = 0
+
+    def text_layer(c: Optional[TimelineClip], tpath: Path, base: str) -> str:
+        """Compone un .ass sobre ``base`` en una capa transparente
+        (``ass=…:alpha=1``) y devuelve la etiqueta nueva. Con ``c`` es un texto en
+        capa propia: si es 3D la capa se deforma con ``perspective`` (text3d), si
+        tiene máscara su alfa se multiplica por la máscara y con modo de fusión se
+        funde en vez de superponerse. ``None`` = capa con los textos de una pista."""
+        nonlocal n_txt
+        j = n_txt
+        n_txt += 1
+        filt.append(f"color=c=black@0:s={W}x{H}:r={fps}:d={total:.3f},format=rgba,"
+                    f"{ass_overlay_filter(tpath)}:alpha=1[tkr{j}]")
+        layer = f"tkr{j}"
+        if c is None:
+            filt.append(f"[{base}][{layer}]overlay=0:0:format=auto[tko{j}]")
+            return f"tko{j}"
+        start = max(0.0, c.start)
+        dur = _clip_duration(c)
+        warp = text_warp(c)
+        if warp is not None:
+            steps, layer = _text_warp_filter(warp, layer, W, H, fps, total, j)
+            filt.extend(steps)
+        mi = text_mask_idx.get(c.id)
+        if mi is not None:
+            filt.append(f"[{layer}]split=2[tkc{j}][tka{j}]")
+            filt.append(f"[tka{j}]alphaextract[tkx{j}]")
+            filt.append(_mask_stream_filter(mi, mask_files[c.id], f"tkm{j}", fps, start, dur, total))
+            filt.append(f"[tkm{j}]format=gray[tkg{j}]")
+            filt.append(f"[tkx{j}][tkg{j}]blend=all_mode=multiply[tkn{j}]")
+            filt.append(f"[tkc{j}][tkn{j}]alphamerge[tkl{j}]")
+            layer = f"tkl{j}"
+        blend = clip_blend(c)
+        if blend == "normal":
+            filt.append(f"[{base}][{layer}]overlay=0:0:format=auto[tko{j}]")
+        else:
+            filt.extend(blend_steps(base, layer, blend, f"t{j}", f"tko{j}", start, start + dur))
+        return f"tko{j}"
+
+    # Textos con vídeo por encima (pista "enterrada" en la pila): entran en la
+    # cadena en su capa, detrás de ese vídeo. Los de capa propia van uno a uno; los
+    # normales, en una capa por pista (su clip más temprano la sitúa en el orden y
+    # el tercer campo lleva el id de la pista).
+    chain = [(c, path, None) for (c, path, _t) in vclips + adjustments]
+    chain += [(by_id[cid], tpath, None) for cid, tpath in (text_layers or {}).items()
+              if cid in by_id and by_id[cid].track_id in buried_tracks]
+    for tid, tpath in (track_text_layers or {}).items():
+        first = min((c for c in timeline.clips if c.track_id == tid), key=lambda c: c.start, default=None)
+        if first is not None:
+            chain.append((first, tpath, tid))
     vclips_sorted = sorted(
-        vclips + adjustments,
+        chain,
         key=lambda cp: (vlayer.get(cp[0].track_id, 0), max(0.0, cp[0].start),
                         clip_index.get(cp[0].id, 0)),
     )
     last_label = "base"
     n = 0
     n_adj = 0
-    for (c, path, _t) in vclips_sorted:
+    for (c, path, text_track) in vclips_sorted:
+        if c.kind == "text":
+            last_label = text_layer(None if text_track else c, path, last_label)
+            continue
         if c.kind == "adjustment":
             m = adjustment_matrix(c)
             if m is not None:
@@ -954,44 +1016,15 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         last_label = out_label
         n += 1
 
-    # Textos en capa propia (con máscara, girados en 3D o con modo de fusión): el
-    # texto se dibuja SOLO (su .ass) sobre una capa transparente (`ass=…:alpha=1`);
-    # si es 3D, la capa se deforma con `perspective` (text3d); si tiene máscara, su
-    # alfa se multiplica por la máscara; con modo de fusión la capa se funde en vez
-    # de superponerse. Quedan por debajo de los textos normales.
-    by_id = {c.id: c for c in timeline.clips}
-    track_style = {t.id: (getattr(t, "style", None) or {}) for t in timeline.tracks}
-    for j, (cid, tpath) in enumerate(sorted((text_layers or {}).items(),
-                                            key=lambda kv: by_id[kv[0]].start if kv[0] in by_id else 0)):
-        mi = text_mask_idx.get(cid)
-        c = by_id.get(cid)
-        if c is None:
+    # Textos en capa propia (con máscara, girados en 3D o con modo de fusión) sin
+    # vídeo por encima: sobre todo el vídeo, por debajo de los textos normales.
+    top_layers = [(cid, p) for cid, p in (text_layers or {}).items()
+                  if cid in by_id and by_id[cid].track_id not in buried_tracks]
+    for cid, tpath in sorted(top_layers, key=lambda kv: by_id[kv[0]].start):
+        c = by_id[cid]
+        if text_mask_idx.get(cid) is None and text_warp(c) is None and clip_blend(c) == "normal":
             continue
-        warp = text_warp_spec(c, effective_text_style(track_style.get(c.track_id), c.style), W, H, fps)
-        if mi is None and warp is None and clip_blend(c) == "normal":
-            continue
-        start = max(0.0, c.start)
-        dur = _clip_duration(c)
-        filt.append(f"color=c=black@0:s={W}x{H}:r={fps}:d={total:.3f},format=rgba,"
-                    f"{ass_overlay_filter(tpath)}:alpha=1[tkr{j}]")
-        layer = f"tkr{j}"
-        if warp is not None:
-            steps, layer = _text_warp_filter(warp, layer, W, H, fps, total, j)
-            filt.extend(steps)
-        if mi is not None:
-            filt.append(f"[{layer}]split=2[tkc{j}][tka{j}]")
-            filt.append(f"[tka{j}]alphaextract[tkx{j}]")
-            filt.append(_mask_stream_filter(mi, mask_files[cid], f"tkm{j}", fps, start, dur, total))
-            filt.append(f"[tkm{j}]format=gray[tkg{j}]")
-            filt.append(f"[tkx{j}][tkg{j}]blend=all_mode=multiply[tkn{j}]")
-            filt.append(f"[tkc{j}][tkn{j}]alphamerge[tkl{j}]")
-            layer = f"tkl{j}"
-        blend = clip_blend(c)
-        if blend == "normal":
-            filt.append(f"[{last_label}][{layer}]overlay=0:0:format=auto[tko{j}]")
-        else:
-            filt.extend(blend_steps(last_label, layer, blend, f"t{j}", f"tko{j}", start, start + dur))
-        last_label = f"tko{j}"
+        last_label = text_layer(c, tpath, last_label)
 
     # Texto / subtítulos por encima de todo el vídeo compuesto.
     if ass_path is not None:
@@ -999,7 +1032,12 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         filt.append(f"[{last_label}]{ass_overlay_filter(ass_path)}[{out}]")
         last_label = out
     else:
-        text_steps, last_label = _text_chain(timeline, W, H, last_label, skip=set(text_layers or {}))
+        # Sin .ass global: drawtext, saltando lo que ya va en capa propia o de
+        # pista y los textos de pistas ocultas.
+        skip = set(text_layers or {}) | {
+            c.id for c in timeline.clips if c.kind == "text"
+            and (c.track_id in (track_text_layers or {}) or getattr(track_by_id.get(c.track_id), "hidden", False))}
+        text_steps, last_label = _text_chain(timeline, W, H, last_label, skip=skip)
         filt.extend(text_steps)
 
     filt.append(f"[{last_label}]{BT709_FINAL_FILTER}[vout]")
@@ -1201,22 +1239,38 @@ def _frame_expr(frames: list[int], values: list[float]) -> str:
     return expr
 
 
-def _prepare_texts(timeline: Timeline, out_path: Path, W: int, H: int) -> tuple[Optional[Path], dict]:
-    """Escribe el .ass global (textos normales) y uno por cada texto en capa propia.
+def _prepare_texts(timeline: Timeline, out_path: Path, W: int, H: int) -> tuple[Optional[Path], dict, dict]:
+    """Escribe el .ass global (textos normales) y los de los textos en capa propia.
 
-    Devuelve ``(ass_path | None, {clip_id: ass_path})``. Van aparte los textos con
-    máscara (la máscara recorta solo ese texto), los girados en 3D (su capa se
-    deforma con ``perspective``) y los que tienen modo de fusión (su capa se funde
-    con el vídeo); ver ``build_command``.
+    Devuelve ``(ass_path | None, {clip_id: ass_path}, {track_id: ass_path})``:
+
+    * por clip: textos con máscara (la máscara recorta solo ese texto), girados en
+      3D (su capa se deforma con ``perspective``) o con modo de fusión (su capa se
+      funde con el vídeo);
+    * por pista: pistas de texto con vídeo por encima en la pila de capas
+      (``track_stack``). Sus textos normales van en UNA capa por pista que se
+      compone en su sitio de la pila, no encima de todo como el .ass global.
+
+    Ver ``build_command``. Los textos de pistas ocultas no se exportan (como en el
+    preview).
     """
     fps = timeline.fps or 30
-    texts = [c for c in timeline.clips if c.kind == "text" and (c.text or "").strip() and not c.disabled]
+    hidden = {t.id for t in timeline.tracks if t.hidden}
+    buried = buried_text_track_ids(timeline.tracks)
+    texts = [c for c in timeline.clips if c.kind == "text" and (c.text or "").strip()
+             and not c.disabled and c.track_id not in hidden]
     layered_ids = {c.id for c in texts
                    if has_mask(c) or text_is_3d(c, fps) or clip_blend(c) != "normal"}
     masked = [c for c in texts if c.id in layered_ids]
-    plain = [c for c in timeline.clips if c.id not in layered_ids]
+    by_track: dict[str, list] = {}
+    for c in texts:
+        if c.id not in layered_ids and c.track_id in buried:
+            by_track.setdefault(c.track_id, []).append(c)
+    skip = layered_ids | {c.id for cs in by_track.values() for c in cs} | {
+        c.id for c in timeline.clips if c.kind == "text" and c.track_id in hidden}
+    plain = [c for c in timeline.clips if c.id not in skip]
     ass_path = None
-    if len(masked) < len(texts):
+    if len(masked) + sum(len(cs) for cs in by_track.values()) < len(texts):
         ass_path = out_path.with_suffix(".ass")
         ass_path.write_text(build_ass(plain, W, H, timeline.tracks, fps=timeline.fps), encoding="utf-8")
     layers: dict[str, Path] = {}
@@ -1224,7 +1278,12 @@ def _prepare_texts(timeline: Timeline, out_path: Path, W: int, H: int) -> tuple[
         p = out_path.with_name(f"{out_path.stem}.mt{i}.ass")
         p.write_text(build_ass([c], W, H, timeline.tracks, fps=timeline.fps), encoding="utf-8")
         layers[c.id] = p
-    return ass_path, layers
+    track_layers: dict[str, Path] = {}
+    for i, (tid, cs) in enumerate(by_track.items()):
+        p = out_path.with_name(f"{out_path.stem}.tt{i}.ass")
+        p.write_text(build_ass(cs, W, H, timeline.tracks, fps=timeline.fps), encoding="utf-8")
+        track_layers[tid] = p
+    return ass_path, layers, track_layers
 
 
 def render(project: Project, timeline: Timeline, out_path: Path,
@@ -1238,7 +1297,7 @@ def render(project: Project, timeline: Timeline, out_path: Path,
     H -= H % 2
     # Máscara de ajuste: cada clip afectado se expande en base + fantasma.
     timeline = expand_adjust_passes(timeline)
-    ass_path, text_layers = _prepare_texts(timeline, out_path, W, H)
+    ass_path, text_layers, track_text_layers = _prepare_texts(timeline, out_path, W, H)
     with tempfile.TemporaryDirectory(prefix="vy-shapes-") as td:
         shape_files = rasterize_timeline_shapes(timeline, Path(td), W, H)
         mask_files = build_timeline_masks(
@@ -1249,7 +1308,8 @@ def render(project: Project, timeline: Timeline, out_path: Path,
         bg_files = bg_service.build_timeline_bg_masks(timeline, int(timeline.fps or 30))
         cmd = build_command(project, timeline, out_path, ass_path=ass_path,
                             shape_files=shape_files, mask_files=mask_files,
-                            bg_files=bg_files, text_layers=text_layers)
+                            bg_files=bg_files, text_layers=text_layers,
+                            track_text_layers=track_text_layers)
         cmd = _filter_script_cmd(cmd, Path(td))
         on_progress(0.15, "Renderizando el vídeo final con FFmpeg…")
         log.info("Export: %d clip(s), encoder=%s crf=%s → %s",
@@ -1278,7 +1338,7 @@ def render_frame(project: Project, timeline: Timeline, out_path: Path, at_time: 
     W -= W % 2
     H -= H % 2
     timeline = expand_adjust_passes(timeline)
-    ass_path, text_layers = _prepare_texts(timeline, out_path, W, H)
+    ass_path, text_layers, track_text_layers = _prepare_texts(timeline, out_path, W, H)
     with tempfile.TemporaryDirectory(prefix="vy-frame-") as td:
         shape_files = rasterize_timeline_shapes(timeline, Path(td), W, H)
         mask_files = build_timeline_masks(timeline, Path(td) / "masks", W, H, int(timeline.fps or 30))
@@ -1286,7 +1346,7 @@ def render_frame(project: Project, timeline: Timeline, out_path: Path, at_time: 
         bg_files = bg_service.build_timeline_bg_masks(timeline, int(timeline.fps or 30))
         cmd = build_command(project, timeline, out_path, ass_path=ass_path, shape_files=shape_files,
                             mask_files=mask_files, bg_files=bg_files, frame_at=at_time,
-                            text_layers=text_layers)
+                            text_layers=text_layers, track_text_layers=track_text_layers)
         cmd = _filter_script_cmd(cmd, Path(td))
         cmd[1:1] = ["-nostdin"]
         with timed("render FFmpeg (frame)", log, clips=len(timeline.clips)):

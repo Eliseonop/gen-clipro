@@ -460,6 +460,14 @@ def rename_track(project_id: str, track_id: str, name: str) -> dict:
     return _apply(project_id, "rename_track", {"track_id": track_id, "name": name})
 
 
+def reorder_track(project_id: str, track_id: str, target_track_id: str, place: str = "above") -> dict:
+    """Cambia el orden de capas: pone la pista justo encima (place=above) o debajo
+    (below) de target_track_id, como se ve en la timeline. Vídeo y texto comparten
+    pila: un texto debajo de un vídeo queda DETRÁS (texto detrás de una persona:
+    vídeo completo abajo, texto encima y el vídeo con el fondo eliminado arriba)."""
+    return _apply(project_id, "reorder_track", {"track_id": track_id, "target_track_id": target_track_id, "place": place})
+
+
 def remove_track(project_id: str, track_id: str) -> dict:
     """Elimina una pista y todos sus clips (deshacible con undo)."""
     return _apply(project_id, "remove_track", {"track_id": track_id})
@@ -528,6 +536,7 @@ def register(mcp) -> None:
     tool(mcp, access="write")(add_shape)
     tool(mcp, access="write")(add_track)
     tool(mcp, access="write")(rename_track)
+    tool(mcp, access="write")(reorder_track)
     tool(mcp, access="destructive")(remove_track)
     tool(mcp, access="write")(link_tracks)
     tool(mcp, access="write")(unlink_track)

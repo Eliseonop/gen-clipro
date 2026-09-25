@@ -13,6 +13,7 @@ import { stepRowHeight, trackRowHeight } from './trackRows'
 import { dropIntent } from './dropIntent'
 import { headerScrollPad, timelineWheelAction } from './timelineWheel'
 import { anchorScroll, buildTicks, clampPps, fmtRuler, tickStep, zoomByDrag } from './timelineScale'
+import { isStackTrack } from './trackStack'
 
 function PreviewVolButton({ value = 1, onChange }) {
   const [open, setOpen] = useState(false)
@@ -130,7 +131,7 @@ export default function EdTimeline({
   selectedClipId, selectedClipIds, selectedTrackId, selKfId, dragInfo,
   onSeek, onScrub, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onMoveGroup, onMatchDuration, onSplit, onDuplicate, onCrop, cropDisabled, onFreeze, freezeDisabled, freezeBusy, onDeleteClip,
   previewVol, onPreviewVol,
-  onDropAsset, onTrackToggle, onTrackCompact, onAddTrack, onAddTextTrack, onRenameTrack, onMoveKeyframe, onSelectKf, onAddKf, onDeleteKf, onContextClip, onContextTrack,
+  onDropAsset, onTrackToggle, onTrackCompact, onAddTrack, onAddTextTrack, onRenameTrack, onReorderTrack, onMoveKeyframe, onSelectKf, onAddKf, onDeleteKf, onContextClip, onContextTrack,
   onFaceTrack, faceTrackBusy, faceTrackDisabled,
   linkPick, onPickLinkTrack, onCancelLinkPick, onCopyDesc, audioMaterials,
   mcpBusyIds, onMarqueeSelect,
@@ -150,6 +151,8 @@ export default function EdTimeline({
   const [scrollX, setScrollX] = useState(0)
   const [viewW, setViewW] = useState(900)
   const [marquee, setMarquee] = useState(null)   // { x, y, w, h } en coords del contenido
+  const [trackDrop, setTrackDrop] = useState(null) // { id, targetId, place } al arrastrar una cabecera
+  const trackDragged = useRef(false)
   const rulerStep = tickStep(pps, fps, !!trimGuide)
   const rulerLong = duration >= 3600
 
@@ -194,7 +197,8 @@ export default function EdTimeline({
   function laneEdgeUnderPointer(clientY, kind) {
     const scroll = lanesRef.current
     if (!scroll) return null
-    const lanes = [...scroll.querySelectorAll(`.ed-lane.${kind}`)]
+    // Vídeo y texto son un solo bloque (la pila de capas); el audio va aparte.
+    const lanes = [...scroll.querySelectorAll(kind === 'audio' ? '.ed-lane.audio' : '.ed-lane.video, .ed-lane.text')]
     if (!lanes.length) return null
     const top = lanes[0].getBoundingClientRect()
     const bottom = lanes[lanes.length - 1].getBoundingClientRect()
@@ -411,6 +415,44 @@ export default function EdTimeline({
       window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up)
     }
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+  }
+
+  // Arrastrar una cabecera arriba/abajo cambia el orden de las capas (como CapCut):
+  // una pista de texto puede quedar debajo de una de vídeo. Solo dentro de su
+  // grupo (pila vídeo+texto o audio); la línea marca dónde caerá.
+  function startTrackDrag(e, track) {
+    if (!onReorderTrack || linkPick || e.button !== 0 || e.target.closest?.('button, input')) return
+    const startY = e.clientY
+    let drop = null
+    trackDragged.current = false
+    const move = (ev) => {
+      if (!trackDragged.current && Math.abs(ev.clientY - startY) < 4) return
+      if (!trackDragged.current) {
+        trackDragged.current = true
+        document.body.classList.add('ed-track-dragging')
+      }
+      const heads = [...(headersRef.current?.querySelectorAll('.ed-track-head') || [])]
+      const head = heads.find((h) => {
+        const r = h.getBoundingClientRect()
+        return ev.clientY >= r.top && ev.clientY < r.bottom
+      })
+      const target = head && tracks.find((t) => t.id === head.getAttribute('data-track'))
+      drop = null
+      if (target && target.id !== track.id && isStackTrack(target) === isStackTrack(track)) {
+        const r = head.getBoundingClientRect()
+        drop = { id: track.id, targetId: target.id, place: ev.clientY < r.top + r.height / 2 ? 'above' : 'below' }
+      }
+      setTrackDrop((p) => (p?.targetId === drop?.targetId && p?.place === drop?.place ? p : drop))
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      document.body.classList.remove('ed-track-dragging')
+      setTrackDrop(null)
+      if (drop) onReorderTrack(drop.id, drop.targetId, drop.place)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
   }
 
   // Arrastrar la marca de inicio/fin del rango (Z / X). El cabezal la sigue para
@@ -674,14 +716,17 @@ export default function EdTimeline({
             const isSource = picking && t.id === linkPick
             return (
               <div key={t.id}
-                className={`ed-track-head ${t.kind} ${selectedTrackId === t.id ? 'sel' : ''} ${dragKind && laneKindFor(dragKind) === t.kind ? 'drop-ok' : ''} ${vh > rowH ? 'stack-open' : ''}${isTarget ? ' link-target' : ''}${isSource ? ' link-source' : ''}`}
+                data-track={t.id}
+                className={`ed-track-head ${t.kind} ${selectedTrackId === t.id ? 'sel' : ''} ${dragKind && laneKindFor(dragKind) === t.kind ? 'drop-ok' : ''} ${vh > rowH ? 'stack-open' : ''}${isTarget ? ' link-target' : ''}${isSource ? ' link-source' : ''}${trackDrop?.id === t.id ? ' track-moving' : ''}${trackDrop?.targetId === t.id ? ` drop-${trackDrop.place}` : ''}`}
                 style={{ height: vh, minHeight: vh, maxHeight: vh }}
-                onPointerDown={() => {
-                  if (!picking) return
+                title={onReorderTrack ? 'Arrastra arriba/abajo para cambiar el orden de las capas' : undefined}
+                onPointerDown={(e) => {
+                  if (!picking) { startTrackDrag(e, t); return }
                   if (t.kind === 'text') onPickLinkTrack?.(t)
                   else onCancelLinkPick?.()
                 }}
                 onClick={() => {
+                  if (trackDragged.current) { trackDragged.current = false; return }
                   if (picking) return
                   onSelectTrack(t.id)
                 }}
@@ -754,9 +799,9 @@ export default function EdTimeline({
             {rows.map((t) => {
               const view = viewsByTrack.get(t.id)
               const vh = view.height
-              // Bordes del bloque de su tipo: ahí se dibuja la línea de "pista nueva".
-              const sameKind = rows.filter((r) => r.kind === t.kind)
-              const edgeHint = newTrackHint?.kind === t.kind
+              // Bordes de su bloque (pila vídeo+texto o audio): ahí va la línea de "pista nueva".
+              const sameKind = rows.filter((r) => isStackTrack(r) === isStackTrack(t))
+              const edgeHint = newTrackHint && isStackTrack({ kind: newTrackHint.kind }) === isStackTrack(t)
                 && ((newTrackHint.side === 'above' && sameKind[0]?.id === t.id)
                   || (newTrackHint.side === 'below' && sameKind[sameKind.length - 1]?.id === t.id))
                 ? newTrackHint.side

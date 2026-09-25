@@ -29,6 +29,7 @@ from .clip_kind import (
 )
 from .clip_speed import SPEED_MAX, SPEED_MIN
 from .schemas import Keyframe, Reframe, Timeline, TimelineClip, TimelineTrack, Word
+from .track_stack import insert_track, reorder_track as _reorder_tracks
 
 TRACK_KINDS = ("video", "audio", "text")
 FRAME_POSITIONS = ("full", "top", "bottom", "free")
@@ -208,8 +209,17 @@ def add_track(tl: Timeline, kind: str, name: str | None = None, track_id: str | 
     if any(t.id == tid for t in out.tracks):
         raise ValueError(f"Ya existe una pista con id {tid}")
     prefix = {"video": "V", "audio": "A", "text": "T"}[kind]
-    out.tracks.append(TimelineTrack(id=tid, kind=kind, name=name or f"{prefix}{len(out.tracks) + 1}"))
+    insert_track(out.tracks, TimelineTrack(id=tid, kind=kind, name=name or f"{prefix}{len(out.tracks) + 1}"))
     return EditResult(out, changed=[tid])
+
+
+def reorder_track(tl: Timeline, track_id: str, target_track_id: str, place: str = "above") -> EditResult:
+    """Coloca la pista justo encima (``above``) o debajo (``below``) de otra, tal
+    como se ven en la timeline. Vídeo y texto comparten pila (``track_stack``): un
+    texto debajo de un vídeo queda DETRÁS de él. El audio solo se ordena entre audio."""
+    out = _copy(tl)
+    out.tracks = _reorder_tracks(out.tracks, track_id, target_track_id, place)
+    return EditResult(out, changed=[track_id])
 
 
 def rename_track(tl: Timeline, track_id: str, name: str) -> EditResult:
@@ -360,8 +370,8 @@ def add_subtitles(tl: Timeline, source_clip_id: str, segments, style: dict | Non
         existing = next((t for t in out.tracks if t.kind == "text"), None)
         if existing is None:
             tid = _uid("T")
-            out.tracks.append(TimelineTrack(id=tid, kind="text", name="Subtítulos"))
-            track = out.tracks[-1]
+            track = TimelineTrack(id=tid, kind="text", name="Subtítulos")
+            insert_track(out.tracks, track)
             created = [tid]
         else:
             tid, track = existing.id, existing
@@ -986,8 +996,7 @@ def _top_free_video_track(out: Timeline, start: float, dur: float, created: list
     if top is not None and not busy and not top.locked:
         return top
     track = TimelineTrack(id=_uid("K"), kind="video", name=f"V{len(vids) + 1}")
-    last = max((i for i, t in enumerate(out.tracks) if t.kind == "video"), default=len(out.tracks) - 1)
-    out.tracks.insert(last + 1, track)
+    insert_track(out.tracks, track)
     created.append(track.id)
     return track
 
@@ -1312,7 +1321,7 @@ def add_shape(tl: Timeline, shape: dict | None = None, track_id: str | None = No
         existing = next((t for t in out.tracks if t.kind == "video"), None)
         if existing is None:
             tid = _uid("K")
-            out.tracks.append(TimelineTrack(id=tid, kind="video", name=f"V{len(out.tracks) + 1}"))
+            insert_track(out.tracks, TimelineTrack(id=tid, kind="video", name=f"V{len(out.tracks) + 1}"))
             created = [tid]
         else:
             tid = existing.id

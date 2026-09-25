@@ -13,6 +13,7 @@
 // confirmación si es 'replace').
 
 import { clipEnd, clipDur, freeStartOnTrack } from './editorModel.js'
+import { isStackTrack } from './trackStack.js'
 
 /** Fracción superior de la pista que significa "crear pista nueva encima". */
 export const NEW_TRACK_BAND = 0.25
@@ -81,39 +82,47 @@ export function dropIntent(clips, trackId, time, dur, yRatio, excludeIds) {
 }
 
 /**
- * Índice del array `tracks` donde insertar una pista nueva de `kind`.
+ * Índice del array `tracks` donde insertar una pista nueva de `kind` al sacar
+ * un clip por encima ('above') o por debajo ('below') de su grupo.
  *
- * En pantalla el vídeo va invertido (la última del array se pinta arriba), así
- * que 'above' = detrás del grupo y 'below' = delante. Para audio y texto el
- * orden de pantalla es el del array, así que se invierte la correspondencia.
+ * Vídeo y texto comparten grupo (la pila, ver trackStack.js) y en pantalla va
+ * invertida (la última del array arriba): 'above' = detrás de la pila y 'below'
+ * = delante. El audio se pinta en el orden del array: se invierte.
  */
 export function newTrackIndex(tracks, kind, side) {
   const list = tracks || []
-  const idx = list.map((t, i) => (t.kind === kind ? i : -1)).filter((i) => i >= 0)
+  const stack = kind === 'video' || kind === 'text'
+  const idx = list.map((t, i) => ((stack ? isStackTrack(t) : t.kind === kind) ? i : -1)).filter((i) => i >= 0)
   if (!idx.length) return list.length
   const first = idx[0]
   const last = idx[idx.length - 1]
-  const toEnd = kind === 'video' ? side !== 'below' : side === 'below'
+  const toEnd = stack ? side !== 'below' : side === 'below'
   return toEnd ? last + 1 : first
 }
 
-/** Pista de vídeo/audio inmediatamente superior a `trackId`, si la hay. */
+/** Pista inmediatamente superior a `trackId`: en la pila, la capa siguiente
+ *  (sea del tipo que sea); en audio, la siguiente de audio. */
 export function trackAbove(tracks, trackId) {
-  const t = (tracks || []).find((x) => x.id === trackId)
+  const list = tracks || []
+  const t = list.find((x) => x.id === trackId)
   if (!t) return null
-  const same = (tracks || []).filter((x) => x.kind === t.kind)
+  const same = list.filter(isStackTrack(t) ? isStackTrack : (x) => x.kind === t.kind)
   const i = same.findIndex((x) => x.id === trackId)
   return i >= 0 && i < same.length - 1 ? same[i + 1] : null
 }
 
 /**
- * A dónde va un 'newTrack': si la pista de encima tiene el hueco libre se
- * reutiliza (no llenamos el timeline de pistas), y si no, hay que crear una.
+ * A dónde va un 'newTrack': si la pista de encima es del mismo tipo y tiene el
+ * hueco libre se reutiliza (no llenamos el timeline de pistas); si no, hay que
+ * crear una. En la pila la nueva va JUSTO encima de la pista destino (`index`),
+ * no arriba del todo: así no salta por delante de lo que hubiera más arriba.
  */
 export function resolveNewTrack(clips, tracks, trackId, start, dur) {
-  const up = trackAbove(tracks, trackId)
-  if (up && !up.locked && !clipCollidingWith(clips, up.id, start, dur)) {
+  const list = tracks || []
+  const t = list.find((x) => x.id === trackId)
+  const up = trackAbove(list, trackId)
+  if (up && up.kind === t.kind && !up.locked && !clipCollidingWith(clips, up.id, start, dur)) {
     return { trackId: up.id, create: false }
   }
-  return { trackId: null, create: true }
+  return { trackId: null, create: true, index: t && isStackTrack(t) ? list.indexOf(t) + 1 : null }
 }

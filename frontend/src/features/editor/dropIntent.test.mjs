@@ -76,15 +76,22 @@ assert.equal(trackAbove(tracks, 'V2'), null)      // no hay V3
 assert.equal(trackAbove(tracks, 'A1'), null)
 assert.equal(trackAbove(tracks, 'nope'), null)
 
-// V2 está ocupada en 0-4 → hay que crear pista.
-assert.deepEqual(resolveNewTrack(clips, tracks, 'V1', 0, 3), { trackId: null, create: true })
+// V2 está ocupada en 0-4 → hay que crear pista, justo encima de V1.
+assert.deepEqual(resolveNewTrack(clips, tracks, 'V1', 0, 3), { trackId: null, create: true, index: 1 })
 // En 10 sí cabe en V2 → se reutiliza en vez de crear otra.
 assert.deepEqual(resolveNewTrack(clips, tracks, 'V1', 10, 3), { trackId: 'V2', create: false })
 // Pista de encima bloqueada → crear.
 const locked = [{ id: 'V1', kind: 'video' }, { id: 'V2', kind: 'video', locked: true }]
-assert.deepEqual(resolveNewTrack(clips, locked, 'V1', 10, 3), { trackId: null, create: true })
+assert.deepEqual(resolveNewTrack(clips, locked, 'V1', 10, 3), { trackId: null, create: true, index: 1 })
 // Sin pista encima → crear.
-assert.deepEqual(resolveNewTrack(clips, tracks, 'V2', 10, 3), { trackId: null, create: true })
+assert.deepEqual(resolveNewTrack(clips, tracks, 'V2', 10, 3), { trackId: null, create: true, index: 2 })
+// Pila con un texto entre dos vídeos: la de encima de V1 es T1 (otro tipo), así
+// que la nueva va entre V1 y T1 y no por delante del texto.
+const mixed = [{ id: 'V1', kind: 'video' }, { id: 'T1', kind: 'text' }, { id: 'V2', kind: 'video' }]
+assert.equal(trackAbove(mixed, 'V1')?.id, 'T1')
+assert.deepEqual(resolveNewTrack(clips, mixed, 'V1', 10, 3), { trackId: null, create: true, index: 1 })
+// En audio no hay pila: se deja el sitio de siempre.
+assert.deepEqual(resolveNewTrack(clips, tracks, 'A1', 10, 3), { trackId: null, create: true, index: null })
 
 assert.equal(REPLACE_TOL, 0.2)
 console.log('dropIntent ok')
@@ -112,7 +119,10 @@ assert.equal(newTrackIndex(tracks, 'video', 'below'), 0)   // delante de V1 = ab
 // El audio NO se invierte: 'below' va al final del grupo.
 assert.equal(newTrackIndex(tracks, 'audio', 'below'), 3)
 assert.equal(newTrackIndex(tracks, 'audio', 'above'), 2)
-// Sin pistas de ese tipo, al final.
-assert.equal(newTrackIndex(tracks, 'text', 'above'), 3)
+// El texto comparte pila con el vídeo: 'above' = arriba del todo de la pila.
+assert.equal(newTrackIndex(tracks, 'text', 'above'), 2)
+assert.equal(newTrackIndex(tracks, 'text', 'below'), 0)
+// Sin pistas de ese grupo, al final.
+assert.equal(newTrackIndex([{ id: 'A1', kind: 'audio' }], 'text', 'above'), 1)
 assert.equal(newTrackIndex([], 'video', 'above'), 0)
 console.log('dropIntent move ok')

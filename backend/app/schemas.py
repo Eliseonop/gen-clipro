@@ -519,7 +519,7 @@ class TimelineClip(BaseModel):
 
 class Timeline(BaseModel):
     version: int = 1
-    schema_version: int = 4   # formato del JSON; migrado al cargar (ver migrations.py)
+    schema_version: int = 5   # formato del JSON; migrado al cargar (ver migrations.py)
     fps: int = 30
     width: int = 720               # tamaño de salida (formato configurable)
     height: int = 1280

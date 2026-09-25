@@ -53,6 +53,7 @@ El orden de las columnas se cambia desde el botón **Diseño** (icono de cuadrí
 - **Cortar/dividir**, **duplicar**, **eliminar**, mover y recortar clips.
 - Múltiples **pistas** de vídeo/audio/texto; crear, renombrar, ocultar, silenciar, bloquear, compactar y **relacionar** pista de audio con su texto.
 - Ordenar **capas** (adelante/atrás) de clips superpuestos.
+- **Orden de pistas = orden de capas**: vídeo y texto forman una sola pila (arrastra la cabecera o *Subir/Bajar pista*); un texto puede ir detrás de un vídeo: [CAPAS_TIMELINE.md](CAPAS_TIMELINE.md).
 - Igualar duraciones entre clips seleccionados.
 - Selección múltiple y edición en grupo.
 

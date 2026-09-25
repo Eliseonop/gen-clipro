@@ -3,6 +3,7 @@
 // no usa este módulo.
 import { clamp, clampCenter, frameAt, geomFor } from './panning.js'
 import { clipEnd, isVisualClip, timelineToSource } from '../features/editor/editorModel.js'
+import { stackLayers } from '../features/editor/trackStack.js'
 import { clipFlip, clipPose, posedTransform } from './clipAnim.js'
 import { keyframesOn } from './clipKeyframes.js'
 
@@ -328,26 +329,32 @@ export function freeFrameAt(clip, t, srcW, srcH, outW, outH) {
   return { ...clampCenter(cx, cy, zoom, srcAspect, outAspect), zoom }
 }
 
-/** Clips de vídeo visibles en `head`, de fondo a frente (pista, luego orden en la lista). */
-export function videosAt(head, clips, tracks) {
+/**
+ * Todo lo que se pinta en `head` (vídeo, imagen, figura, motion, capa de ajuste
+ * y TEXTO), de fondo a frente: capa de su pista en la pila vídeo+texto (ver
+ * trackStack.js) y, dentro de la pista, orden en la lista.
+ */
+export function layersAt(head, clips, tracks) {
   const list = clips || []
-  const vids = (tracks || []).filter((t) => t.kind === 'video')
-  const layer = (id) => vids.findIndex((t) => t.id === id)
+  const layers = stackLayers(tracks)
+  const byId = new Map((tracks || []).map((t) => [t.id, t]))
   const index = new Map(list.map((c, i) => [c.id, i]))
+  const layer = (c) => layers.get(c.track_id) ?? -1
   return list
     .filter((c) => {
       // motion se dibuja (overlay con alfa) pero NO es "visual" editable (sin recorte/reframe).
-      if (!isVisualClip(c) && c.kind !== 'shape' && c.kind !== 'motion' && c.kind !== 'adjustment') return false
+      if (!isVisualClip(c) && !['shape', 'motion', 'adjustment', 'text'].includes(c.kind)) return false
       if (c.disabled) return false   // desactivado (#10, tecla V)
-      const track = (tracks || []).find((t) => t.id === c.track_id)
+      const track = byId.get(c.track_id)
       if (!track || track.hidden) return false
       return head >= c.start - 0.02 && head < clipEnd(c)
     })
-    .sort((a, b) => {
-      const dl = layer(a.track_id) - layer(b.track_id)
-      if (dl) return dl
-      return (index.get(a.id) ?? 0) - (index.get(b.id) ?? 0)
-    })
+    .sort((a, b) => (layer(a) - layer(b)) || ((index.get(a.id) ?? 0) - (index.get(b.id) ?? 0)))
+}
+
+/** Clips visuales (sin textos) visibles en `head`, de fondo a frente. */
+export function videosAt(head, clips, tracks) {
+  return layersAt(head, clips, tracks).filter((c) => c.kind !== 'text')
 }
 
 /** Puntero → píxeles del bitmap, respetando object-fit: contain. */

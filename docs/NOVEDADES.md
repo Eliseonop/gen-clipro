@@ -6,6 +6,20 @@ Toda funcionalidad nueva se documenta aquí y en su `.md` propio.
 
 ---
 
+## 2026-09-24 — Orden de capas: el texto puede ir detrás de un vídeo (como CapCut)
+
+Detalle: [CAPAS_TIMELINE.md](CAPAS_TIMELINE.md).
+
+- Las pistas de **vídeo y texto forman una sola pila**: la pista de arriba se ve
+  delante. Antes el texto se pintaba siempre encima de todo el vídeo.
+- **Reordenar pistas**: arrastra la cabecera arriba/abajo o clic derecho →
+  *Subir pista* / *Bajar pista*. Preview y export respetan el orden.
+- Permite el **texto detrás de una persona**: vídeo completo, encima la pista de
+  texto y encima el mismo vídeo con el fondo eliminado.
+- Los proyectos existentes se migran (schema v5) sin cambiar cómo se ven.
+- Corregido: el export incluía los textos de pistas **ocultas**.
+- MCP: `reorder_track(track_id, target_track_id, place=above|below)`.
+
 ## 2026-09-24 — El pincel de la Eliminación personalizada, como en CapCut
 
 Detalle: [ELIMINAR_FONDO_PERSONALIZADO.md](ELIMINAR_FONDO_PERSONALIZADO.md#qué-se-ve-mientras-marcas-como-capcut).

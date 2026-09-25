@@ -706,13 +706,8 @@ export function moveClipLayer(clips, clipId, action) {
   return out
 }
 
-// Orden en pantalla: texto (arriba), luego vídeo (capa superior arriba), luego audio.
-export function displayTracks(tracks) {
-  const txt = tracks.filter((t) => t.kind === 'text')
-  const vids = tracks.filter((t) => t.kind === 'video')
-  const auds = tracks.filter((t) => t.kind === 'audio')
-  return [...txt.slice().reverse(), ...vids.slice().reverse(), ...auds]
-}
+// Orden en pantalla: la pila vídeo+texto (la capa de delante arriba) y luego el audio.
+export { displayTracks } from './trackStack.js'
 
 // --- Motion Studio: capas de una composición ↔ pistas/clips del timeline real ---
 // Cada capa se representa como un clip de duración generada (text o shape), una
@@ -1090,8 +1085,12 @@ export function trackSrtWithReference(clips, trackId) {
   return `${head.join('\n\n')}\n\n---\n\n${srt}`
 }
 
-export function trackContextItems(track, { linked = false, canLink = false, hasText = false, hasSource = false } = {}) {
-  const items = [{ id: 'rename', label: 'Renombrar' }]
+export function trackContextItems(track, { linked = false, canLink = false, hasText = false, hasSource = false, canUp = false, canDown = false } = {}) {
+  const items = [
+    { id: 'rename', label: 'Renombrar' },
+    { id: 'track-up', label: 'Subir pista', disabled: !canUp },
+    { id: 'track-down', label: 'Bajar pista', disabled: !canDown },
+  ]
   if (track?.kind === 'audio') {
     items.push({
       id: linked ? 'unlink' : 'link',

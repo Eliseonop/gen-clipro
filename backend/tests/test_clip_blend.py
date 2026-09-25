@@ -84,7 +84,7 @@ class BlendExportTest(unittest.TestCase):
 
     def _fc(self, clips):
         tl = Timeline(fps=30, width=W, height=H, tracks=TRACKS, clips=clips)
-        ass, layers = compose._prepare_texts(tl, Path("x.mp4"), W, H)
+        ass, layers, _tracks = compose._prepare_texts(tl, Path("x.mp4"), W, H)
         cmd = compose.build_command(Project(id="p", name="p", created_at="n", timeline=tl), tl, Path("x.mp4"),
                                     ass_path=ass, text_layers=layers)
         return cmd[cmd.index("-filter_complex") + 1], layers

@@ -38,7 +38,7 @@ class DisabledTest(unittest.TestCase):
 
     def _cmd(self, clips):
         tl = Timeline(fps=30, width=W, height=H, tracks=TRACKS, clips=clips)
-        ass, layers = compose._prepare_texts(tl, Path("x.mp4"), W, H)
+        ass, layers, _tracks = compose._prepare_texts(tl, Path("x.mp4"), W, H)
         return compose.build_command(Project(id="p", name="p", created_at="n", timeline=tl), tl, Path("x.mp4"),
                                      ass_path=ass, text_layers=layers)
 

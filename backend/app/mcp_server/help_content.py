@@ -72,6 +72,7 @@ TOOL_DOMAINS: dict[str, str] = {
     # timeline (tracks / proyecto)
     "add_track": "timeline",
     "rename_track": "timeline",
+    "reorder_track": "timeline",
     "remove_track": "timeline",
     "link_tracks": "timeline",
     "unlink_track": "timeline",
@@ -342,6 +343,10 @@ HELP: dict[str, str] = {
         "- add_track(kind, name?): kind video|audio|text; name opcional (SFX, Voz…); "
         "si se omite, A1/A2/V1…\n"
         "- rename_track(track_id, name): el id no cambia; el nombre es lo que se ve.\n"
+        "- reorder_track(track_id, target_track_id, place=above|below): orden de capas. "
+        "Vídeo y texto forman UNA pila (la pista de arriba se ve delante): un texto "
+        "debajo de un vídeo queda detrás de él. Texto detrás de una persona = vídeo "
+        "completo, encima el texto y encima el mismo vídeo con el fondo eliminado.\n"
         "- remove_track(track_id): elimina la pista y TODOS sus clips (deshacible).\n"
         "- link_tracks(track_id, to_track_id) / unlink_track(track_id): liga "
         "audio↔texto (al cambiar velocidad, la ligada se escala).\n"

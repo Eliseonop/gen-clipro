@@ -25,7 +25,7 @@ import { focalOf, planeProject, text3dAngles } from '../../../lib/text3d'
 import { warpLayer } from './warp3d'
 import {
   clipFlip, cropWindow, destRectOnFrame, frameRectOf, isOverlay, mediaSize, slotAspectOf,
-  sourceCropPx, srcRectOn, videosAt,
+  sourceCropPx, srcRectOn, layersAt,
 } from '../../../lib/clipLayout'
 import { drawPlatformChrome } from './platformChrome'
 
@@ -523,11 +523,51 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
   let overlayDestSel = null
   let selRender = null
   const hits = []
+
+  function drawTextLayer(c) {
+    const track = tracksRef.current.find((t) => t.id === c.track_id)
+    const isSel = selected.has(c.id)
+    // Máscara en texto ("revelar texto") y modo de fusión: misma capa que los visuales.
+    const tMasks = clipMasksAt(c, Math.max(0, head - (c.start || 0)))
+    const tOp = blendOp(c)
+    const tLayer = (tMasks.length || tOp) ? beginMaskLayer(ctx) : null
+    const tg = tLayer ? tLayer.ctx : ctx
+    const tLocal = Math.max(0, head - (c.start || 0))
+    const ang3d = text3dAngles(clipPropsAt(c, tLocal))
+    let r
+    if (ang3d) {
+      r = drawText3d(tg, c, ang3d, { cw, ch, ox, oy, head, track, localT: tLocal, selected: isSel && !tLayer })
+    } else {
+      tg.save(); tg.translate(ox, oy)
+      r = drawTextClip(tg, c, cw, ch, { selected: isSel && !tLayer, time: head, trackStyle: track?.style })
+      tg.restore()
+    }
+    if (tLayer) endMaskLayer(ctx, tLayer, tMasks, fr, { cssFontOf: cssFont, op: tOp })
+    // En capa, la caja de selección se pinta aparte (si no, la máscara la recortaría
+    // y el modo de fusión la teñiría).
+    if (tLayer && isSel && !ang3d) {
+      ctx.save(); ctx.translate(ox, oy)
+      drawTextClip(ctx, c, cw, ch, { selected: true, selectionOnly: true, time: head, trackStyle: track?.style })
+      ctx.restore()
+    }
+    if (isSel) selRender = offsetRender(r, ox, oy)
+    if (r?.box) hits.push({ id: c.id, kind: 'text', dest: boxToDest(offsetBox(r.box, ox, oy)), handles: offsetHandles(r.handles, ox, oy) })
+  }
+
+  // Una sola pila de fondo a frente (vídeo, imagen, figura… y TEXTO en su capa):
+  // un texto en una pista por debajo de un vídeo queda detrás de él.
   // Máscara de ajuste: un clip puede pintarse en dos pasadas (base sin ajustes de
   // color + fantasma con ajustes recortado por esas máscaras). Solo la base da hit.
   const passes = []
-  for (const c of videosAt(head, clipsRef.current, tracksRef.current)) passes.push(...adjustPasses(c))
-  for (const { clip, ghost } of passes) {
+  for (const c of layersAt(head, clipsRef.current, tracksRef.current)) {
+    if (c.kind === 'text') passes.push({ clip: c, text: true })
+    else passes.push(...adjustPasses(c))
+  }
+  for (const { clip, ghost, text } of passes) {
+    if (text) {
+      drawTextLayer(clip)
+      continue
+    }
     // Capa de ajuste (#19): filtra lo ya compuesto dentro del cuadro (lo de debajo).
     if (clip.kind === 'adjustment') {
       applyAdjustmentLayer(ctx, clip, fr)
@@ -604,39 +644,6 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
     }
   }
 
-  for (const c of clipsRef.current) {
-    if (c.kind !== 'text' || c.disabled) continue
-    const track = tracksRef.current.find((t) => t.id === c.track_id)
-    if (track?.hidden) continue
-    const activeText = head >= c.start - 0.02 && head < c.start + clipDur(c)
-    if (!activeText) continue
-    const isSel = selected.has(c.id)
-    // Máscara en texto ("revelar texto") y modo de fusión: misma capa que los visuales.
-    const tMasks = clipMasksAt(c, Math.max(0, head - (c.start || 0)))
-    const tOp = blendOp(c)
-    const tLayer = (tMasks.length || tOp) ? beginMaskLayer(ctx) : null
-    const tg = tLayer ? tLayer.ctx : ctx
-    const tLocal = Math.max(0, head - (c.start || 0))
-    const ang3d = text3dAngles(clipPropsAt(c, tLocal))
-    let r
-    if (ang3d) {
-      r = drawText3d(tg, c, ang3d, { cw, ch, ox, oy, head, track, localT: tLocal, selected: isSel && !tLayer })
-    } else {
-      tg.save(); tg.translate(ox, oy)
-      r = drawTextClip(tg, c, cw, ch, { selected: isSel && !tLayer, time: head, trackStyle: track?.style })
-      tg.restore()
-    }
-    if (tLayer) endMaskLayer(ctx, tLayer, tMasks, fr, { cssFontOf: cssFont, op: tOp })
-    // En capa, la caja de selección se pinta aparte (si no, la máscara la recortaría
-    // y el modo de fusión la teñiría).
-    if (tLayer && isSel && !ang3d) {
-      ctx.save(); ctx.translate(ox, oy)
-      drawTextClip(ctx, c, cw, ch, { selected: true, selectionOnly: true, time: head, trackStyle: track?.style })
-      ctx.restore()
-    }
-    if (isSel) selRender = offsetRender(r, ox, oy)
-    if (r?.box) hits.push({ id: c.id, kind: 'text', dest: boxToDest(offsetBox(r.box, ox, oy)), handles: offsetHandles(r.handles, ox, oy) })
-  }
   if (overlayDestSel) drawTransformHandles(ctx, overlayDestSel)
   const bgBrush = env.bgBrushRef?.current
   if (bgBrush?.on) {
