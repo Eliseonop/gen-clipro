@@ -1,9 +1,13 @@
 // Panel Video → Eliminar fondo. Edita `clip.bg_removal` (ver lib/clipBg.js).
 //
-// Tres bloques independientes y combinables:
-//   1. Eliminación automática  → matte de IA (job + caché en el backend)
-//   2. Eliminación personalizada → pincel que corrige el matte de la IA
-//   3. Chroma key              → filtro puro, sin job ni archivos
+// Organizado como CapCut:
+//   1. Eliminación automática     → U²-Net detecta el sujeto solo (job + caché)
+//   2. Eliminación personalizada  → SAM: el usuario marca el objeto en un
+//      fotograma (pincel/borrador INTELIGENTE o normal) y, al aplicar, la
+//      selección se SIGUE por todo el clip (backend: bg/sam_track.py)
+//   3. Chroma key                 → filtro puro, sin job ni archivos
+// 1 y 2 comparten `bg_removal.auto` y se excluyen: la familia del modelo
+// (U²-Net / SAM) decide cuál está activa.
 //
 // Nada de esto toca el archivo original: todo son propiedades del clip, así que
 // entra por el undo/redo del editor y viaja con el proyecto.
@@ -13,12 +17,31 @@ import Icon from '../../components/Icon'
 import FlipSelect from '../../components/FlipSelect'
 import {
   BG_PROVIDERS, CHROMA_PRESETS, MATTE_FEATHER_MAX, autoActive, clipBg,
-  isInteractiveProvider, normalizeOutline,
+  isInteractiveProvider, normalizeOutline, samMarkFrames,
 } from '../../lib/clipBg'
+import { sourceToTimeline } from './editorModel'
 import { InspSection, InspSlider } from './EdTransform'
 
 const pct = (v) => `${Math.round(v)}`
 const parsePct = (raw) => parseFloat(String(raw).replace(/[^\d.-]/g, ''))
+// m:ss.d — los fotogramas marcados están a décimas de segundo unos de otros.
+const fmtMark = (t) => {
+  const v = Math.max(0, Number(t) || 0)
+  const m = Math.floor(v / 60)
+  return `${m}:${(v - m * 60).toFixed(1).padStart(4, '0')}`
+}
+
+// Herramientas de la Eliminación personalizada, en el orden de CapCut.
+const CUSTOM_TOOLS = [
+  { tool: 'smart', op: 'keep', icon: 'auto_fix_high', label: 'Pincel inteligente',
+    title: 'Pinta una parte del objeto: la IA lo selecciona entero' },
+  { tool: 'smart', op: 'erase', icon: 'auto_fix_off', label: 'Borrador inteligente',
+    title: 'Toca lo que sobra: la IA lo quita entero' },
+  { tool: 'manual', op: 'keep', icon: 'brush', label: 'Pincel',
+    title: 'Añade exactamente lo que pintas' },
+  { tool: 'manual', op: 'erase', icon: 'cleaning_services', label: 'Borrador',
+    title: 'Quita exactamente lo que pintas (bordes)' },
+]
 
 function StatusLine({ auto, job }) {
   if (job && (job.status === 'pending' || job.status === 'running')) {
@@ -46,8 +69,8 @@ function StatusLine({ auto, job }) {
 export default function EdBgRemove({
   clip, job, cutoutJob, providers, device,
   onToggleAuto, onApplyAuto, onCancelAuto, onChangeAuto,
+  onToggleCustom, onApplyCustom, onSeekMark, magicBusy, curFrame, analyzeJob, onStopAnalyze,
   onExportCutout, onCancelCutout,
-  magicMode, magicBusy, onToggleMagic, onConfirmMagic,
   brush, onBrush, onClearEdits, onUndoEdit,
   onToggleChroma, onChangeChroma, onResetChroma, onPickColor, picking,
   onChangeOutline,
@@ -61,73 +84,90 @@ export default function EdBgRemove({
   const running = job && (job.status === 'pending' || job.status === 'running')
   const ready = autoActive(bg)
   const isSam = isInteractiveProvider(auto.provider)
+  const autoOn = !!auto.enabled && !isSam
+  const customOn = !!auto.enabled && isSam
   const strokes = auto.edits?.length || 0
   const provList = (providers?.length ? providers : BG_PROVIDERS.map((p) => ({ ...p, available: true })))
+  const autoModels = provList.filter((p) => !isInteractiveProvider(p.id))
+  const samModels = provList.filter((p) => isInteractiveProvider(p.id))
+  const samInfo = samModels.find((p) => p.id === auto.provider)
+  const marks = customOn ? samMarkFrames(auto.edits, auto.mask_fps) : []
+  const isVideo = clip?.kind === 'video'
   // "Exportar recorte" solo tiene sentido en material ANIMADO (vídeo o GIF): en
   // una imagen fija el resultado sería un único fotograma. Disponible en cuanto
   // hay algo que hornear (matte listo o chroma activo).
-  const isAnimated = clip?.kind === 'video' || /\.gif(\?|#|$)/i.test(clip?.filename || '')
+  const isAnimated = isVideo || /\.gif(\?|#|$)/i.test(clip?.filename || '')
   const canExportCutout = isAnimated && (ready || chroma.enabled)
   const cutoutRunning = cutoutJob && (cutoutJob.status === 'pending' || cutoutJob.status === 'running')
+  const toolOn = (t) => !!(brush?.on && brush.tool === t.tool && brush.op === t.op)
+
+  const stabilizeSlider = isVideo && (
+    <InspSlider
+      label="Estabilizar" value={Math.round((auto.stabilize ?? 0) * 100)}
+      min={0} max={100} step={1} format={pct} suffix="%" parse={parsePct}
+      onChange={(v) => onChangeAuto?.({ stabilize: v / 100 })} stepper
+      hint={<>Suaviza la máscara entre fotogramas para evitar parpadeo del
+        borde. Cambia el cálculo: pulsa <b>{ready ? 'Recalcular' : 'Aplicar'}</b> tras ajustarlo.</>}
+    />
+  )
+  const undoClear = (
+    <div className="ed-bg-actions">
+      <button type="button" className="ed-btn" disabled={!strokes}
+              onClick={() => onUndoEdit?.()} title="Deshacer el último trazo">
+        <Icon name="undo" size={15} /> Último trazo
+      </button>
+      <button type="button" className="ed-btn" disabled={!strokes}
+              onClick={() => onClearEdits?.()} title="Quitar todas las marcas">
+        <Icon name="restart_alt" size={15} /> Limpiar
+      </button>
+    </div>
+  )
+  const sizeSlider = (
+    <InspSlider
+      label="Tamaño" value={Math.round((brush?.size ?? 0.08) * 100)} min={1} max={50} step={1}
+      format={pct} suffix="%" parse={parsePct}
+      onChange={(v) => onBrush?.({ size: v / 100 })} stepper
+    />
+  )
 
   return (
     <>
       {/* --- 1. Eliminación automática ---------------------------------- */}
       <InspSection
         title="Eliminación automática"
-        hint={<>Detecta el sujeto y lo separa del fondo con IA. El archivo original no se
-          modifica: se guarda una máscara reutilizable en el proyecto.</>}
+        hint={<>Detecta el sujeto y lo separa del fondo con IA, sin marcar nada. El archivo
+          original no se modifica: se guarda una máscara reutilizable en el proyecto.</>}
       >
         <div className="ed-insp-tools">
-          <label className={`ed-mode-toggle ${auto.enabled ? 'on' : ''}`}
+          <label className={`ed-mode-toggle ${autoOn ? 'on' : ''}`}
                  title="Detecta el sujeto principal y separa el fondo con IA">
-            <input type="checkbox" checked={!!auto.enabled}
+            <input type="checkbox" checked={autoOn}
                    onChange={(e) => onToggleAuto?.(e.target.checked)} />
-            <Icon name="auto_fix_high" size={15} />
+            <Icon name="auto_awesome" size={15} />
             Activada
           </label>
-          {ready && (
-            <label className={`ed-mode-toggle ${auto.invert ? 'on' : ''}`}
-                   title="Invertir: se conserva el fondo y desaparece el sujeto">
-              <input type="checkbox" checked={!!auto.invert}
-                     onChange={(e) => onChangeAuto?.({ invert: e.target.checked })} />
-              <Icon name="flip" size={15} />
-              Invertir
-            </label>
-          )}
         </div>
 
-        {auto.enabled && (
+        {autoOn && (
           <>
             <label className="ed-insp-select">
               <span>
                 Modelo
                 <Hint>
-                  {provList.find((p) => p.id === auto.provider)?.hint || ''}
+                  {autoModels.find((p) => p.id === auto.provider)?.hint || ''}
                   {device ? ` Se ejecuta en ${device}.` : ''}
                 </Hint>
               </span>
               <FlipSelect
                 value={auto.provider}
-                options={provList.map((p) => ({
+                options={autoModels.map((p) => ({
                   value: p.id,
                   label: p.available === false ? `${p.label} (se descarga)` : p.label,
                 }))}
                 onChange={(v) => onChangeAuto?.({ provider: v })}
               />
             </label>
-            {clip?.kind === 'video' && (
-              <>
-                <InspSlider
-                  label="Estabilizar" value={Math.round((auto.stabilize ?? 0) * 100)}
-                  min={0} max={100} step={1} format={pct} suffix="%" parse={parsePct}
-                  onChange={(v) => onChangeAuto?.({ stabilize: v / 100 })} stepper
-                  hint={<>Suaviza la máscara entre fotogramas para evitar parpadeo del
-                    borde. Cambia el cálculo: pulsa <b>{ready ? 'Recalcular' : 'Aplicar'}</b> tras ajustarlo.</>}
-                />
-              </>
-            )}
-
+            {stabilizeSlider}
             <div className="ed-bg-actions">
               {running ? (
                 <button type="button" className="ed-btn danger" onClick={() => onCancelAuto?.()}>
@@ -135,47 +175,197 @@ export default function EdBgRemove({
                 </button>
               ) : (
                 <button type="button" className="ed-btn primary" onClick={() => onApplyAuto?.()}>
-                  <Icon name="auto_fix_high" size={15} />
+                  <Icon name="auto_awesome" size={15} />
                   {ready ? 'Recalcular' : 'Aplicar'}
                 </button>
               )}
             </div>
             <StatusLine auto={auto} job={job} />
-
-            {ready && (
-              <>
-                <InspSlider
-                  label="Umbral" value={Math.round(auto.threshold * 100)} min={0} max={100} step={1}
-                  format={pct} suffix="%" parse={parsePct}
-                  onChange={(v) => onChangeAuto?.({ threshold: v / 100 })} stepper
-                  hint="Se aplica al instante: no vuelve a ejecutar el modelo."
-                />
-                <InspSlider
-                  label="Suavizado" value={Math.round(auto.softness * 100)} min={0} max={100} step={1}
-                  format={pct} suffix="%" parse={parsePct}
-                  onChange={(v) => onChangeAuto?.({ softness: v / 100 })} stepper
-                />
-                <InspSlider
-                  label="Pluma" value={Math.round((auto.feather / MATTE_FEATHER_MAX) * 100)}
-                  min={0} max={100} step={1} format={pct} suffix="%" parse={parsePct}
-                  onChange={(v) => onChangeAuto?.({ feather: (v / 100) * MATTE_FEATHER_MAX })} stepper
-                />
-                <InspSlider
-                  label="Expandir" value={Math.round((auto.expansion ?? 0) * 100)}
-                  min={-100} max={100} step={1} format={pct} suffix="%" parse={parsePct}
-                  onChange={(v) => onChangeAuto?.({ expansion: v / 100 })} stepper
-                  hint="Crece (+) o encoge (−) el borde del sujeto."
-                />
-                <InspSlider
-                  label="Opacidad" value={Math.round((auto.opacity ?? 1) * 100)}
-                  min={0} max={100} step={1} format={pct} suffix="%" parse={parsePct}
-                  onChange={(v) => onChangeAuto?.({ opacity: v / 100 })} stepper
-                />
-              </>
-            )}
           </>
         )}
       </InspSection>
+
+      {/* --- 2. Eliminación personalizada (SAM + seguimiento) ----------- */}
+      <InspSection
+        title="Eliminación personalizada"
+        hint={<>Marca el objeto en el reproductor. Con el <b>Pincel inteligente</b> basta
+          con pintar una parte: al soltar, la IA lo detecta entero. Mientras sigues
+          marcando se analiza el resto del clip; al <b>Aplicar</b>, la selección se sigue
+          en todo el clip. Si en algún momento se desvía, ve a ese fotograma, corrígelo
+          y vuelve a aplicar.</>}
+      >
+        <div className="ed-insp-tools">
+          <label className={`ed-mode-toggle ${customOn ? 'on' : ''}`}
+                 title="Selecciona tú el objeto a conservar; la IA lo sigue por el clip">
+            <input type="checkbox" checked={customOn}
+                   onChange={(e) => onToggleCustom?.(e.target.checked)} />
+            <Icon name="gesture" size={15} />
+            Activada
+          </label>
+        </div>
+
+        {customOn && (
+          <>
+            <div className="ed-bg-brush">
+              {CUSTOM_TOOLS.map((t) => (
+                <button
+                  key={`${t.tool}-${t.op}`}
+                  type="button"
+                  title={t.title}
+                  className={`ed-bg-op ${t.op}${t.tool === 'smart' ? ' smart' : ''}${toolOn(t) ? ' on' : ''}`}
+                  onClick={() => onBrush?.({ on: !toolOn(t), tool: t.tool, op: t.op })}
+                >
+                  <Icon name={t.icon} size={16} /> {t.label}
+                </button>
+              ))}
+            </div>
+            {sizeSlider}
+            {magicBusy && <JobProgress message="Detectando el objeto…" />}
+            {analyzeJob && !running && (
+              <div className="ed-bg-analyze">
+                <JobProgress job={analyzeJob} progress={analyzeJob.progress || 0}
+                             message={analyzeJob.message || 'Analizando el clip…'} />
+                <button type="button" className="ed-btn" onClick={() => onStopAnalyze?.()}
+                        title="Detener el análisis previo (Aplicar analizará lo que falte)">
+                  <Icon name="stop_circle" size={15} />
+                </button>
+              </div>
+            )}
+
+            <div className="ed-insp-row">
+              <div className="ed-insp-row-lab">Marcado en</div>
+              <div className="ed-insp-row-ctrl ed-bg-marks">
+                {marks.length ? marks.map((m) => (
+                  <button
+                    key={m.idx}
+                    type="button"
+                    className={`ed-bg-mark${m.idx === curFrame ? ' on' : ''}`}
+                    title={`Ir a este fotograma (${m.count} marca${m.count === 1 ? '' : 's'})`}
+                    onClick={() => onSeekMark?.(m.t)}
+                  >
+                    {fmtMark(clip ? sourceToTimeline(clip, m.t) : m.t)}
+                  </button>
+                )) : (
+                  <span className="ed-insp-meta">
+                    {strokes ? 'Marcas de una versión anterior' : 'Elige una herramienta y pinta sobre el objeto'}
+                  </span>
+                )}
+              </div>
+            </div>
+            {undoClear}
+
+            <label className="ed-insp-select">
+              <span>
+                Calidad
+                <Hint>
+                  {samInfo?.hint || ''}
+                  {samInfo && samInfo.downloaded === false ? ' Se descarga al aplicar por primera vez.' : ''}
+                  {device ? ` Se ejecuta en ${device}. El primer análisis de cada fotograma es lento; después se reutiliza.` : ''}
+                </Hint>
+              </span>
+              <FlipSelect
+                value={auto.provider}
+                options={samModels.map((p) => ({
+                  value: p.id,
+                  label: p.downloaded === false ? `${p.label} (se descarga)` : p.label,
+                }))}
+                onChange={(v) => onChangeAuto?.({ provider: v })}
+              />
+            </label>
+            {stabilizeSlider}
+            <div className="ed-bg-actions">
+              {running ? (
+                <button type="button" className="ed-btn danger" onClick={() => onCancelAuto?.()}>
+                  <Icon name="stop_circle" size={15} /> Cancelar
+                </button>
+              ) : (
+                <button type="button" className="ed-btn primary" disabled={!strokes}
+                        onClick={() => onApplyCustom?.()}
+                        title={isAnimated ? 'Sigue la selección en todo el clip' : 'Aplica la selección'}>
+                  <Icon name="auto_fix_high" size={15} />
+                  {ready ? 'Recalcular' : (isAnimated ? 'Aplicar a todo el clip' : 'Aplicar')}
+                </button>
+              )}
+            </div>
+            <StatusLine auto={auto} job={job} />
+          </>
+        )}
+      </InspSection>
+
+      {/* --- Ajustes del recorte (automático o personalizado) ------------ */}
+      {ready && (
+        <InspSection
+          title="Ajustar recorte"
+          hint="Se aplica al instante: no vuelve a ejecutar el modelo."
+        >
+          <div className="ed-insp-tools">
+            <label className={`ed-mode-toggle ${auto.invert ? 'on' : ''}`}
+                   title="Invertir: se conserva el fondo y desaparece el sujeto">
+              <input type="checkbox" checked={!!auto.invert}
+                     onChange={(e) => onChangeAuto?.({ invert: e.target.checked })} />
+              <Icon name="flip" size={15} />
+              Invertir
+            </label>
+          </div>
+          <InspSlider
+            label="Umbral" value={Math.round(auto.threshold * 100)} min={0} max={100} step={1}
+            format={pct} suffix="%" parse={parsePct}
+            onChange={(v) => onChangeAuto?.({ threshold: v / 100 })} stepper
+          />
+          <InspSlider
+            label="Suavizado" value={Math.round(auto.softness * 100)} min={0} max={100} step={1}
+            format={pct} suffix="%" parse={parsePct}
+            onChange={(v) => onChangeAuto?.({ softness: v / 100 })} stepper
+          />
+          <InspSlider
+            label="Pluma" value={Math.round((auto.feather / MATTE_FEATHER_MAX) * 100)}
+            min={0} max={100} step={1} format={pct} suffix="%" parse={parsePct}
+            onChange={(v) => onChangeAuto?.({ feather: (v / 100) * MATTE_FEATHER_MAX })} stepper
+          />
+          <InspSlider
+            label="Expandir" value={Math.round((auto.expansion ?? 0) * 100)}
+            min={-100} max={100} step={1} format={pct} suffix="%" parse={parsePct}
+            onChange={(v) => onChangeAuto?.({ expansion: v / 100 })} stepper
+            hint="Crece (+) o encoge (−) el borde del sujeto."
+          />
+          <InspSlider
+            label="Opacidad" value={Math.round((auto.opacity ?? 1) * 100)}
+            min={0} max={100} step={1} format={pct} suffix="%" parse={parsePct}
+            onChange={(v) => onChangeAuto?.({ opacity: v / 100 })} stepper
+          />
+        </InspSection>
+      )}
+
+      {/* --- Retocar la máscara automática (pincel fijo sobre el matte) ---- */}
+      {ready && autoOn && (
+        <InspSection
+          title="Retocar máscara"
+          hint={<>Corrige lo que la IA no acertó pintando sobre el reproductor.
+            <b> Conservar</b> devuelve zonas visibles; <b>Eliminar</b> las vuelve
+            transparentes, en todo el clip. El zoom y el desplazamiento del reproductor
+            siguen funcionando.</>}
+        >
+          <div className="ed-bg-brush">
+            <button
+              type="button"
+              className={`ed-bg-op keep${brush?.on && brush.op === 'keep' ? ' on' : ''}`}
+              onClick={() => onBrush?.({ on: !(brush?.on && brush.op === 'keep'), op: 'keep', tool: 'manual' })}
+            >
+              <Icon name="add_circle" size={16} /> Conservar
+            </button>
+            <button
+              type="button"
+              className={`ed-bg-op erase${brush?.on && brush.op === 'erase' ? ' on' : ''}`}
+              onClick={() => onBrush?.({ on: !(brush?.on && brush.op === 'erase'), op: 'erase', tool: 'manual' })}
+            >
+              <Icon name="do_not_disturb_on" size={16} /> Eliminar
+            </button>
+          </div>
+          {sizeSlider}
+          {undoClear}
+          {strokes > 0 && <p className="ed-insp-meta">{strokes} corrección(es)</p>}
+        </InspSection>
+      )}
 
       {/* --- Exportar recorte: hornea el clip animado a un vídeo transparente - */}
       {canExportCutout && (
@@ -210,80 +400,6 @@ export default function EdBgRemove({
               <Icon name="error" size={14} />
               <span>{cutoutJob.error || 'No se pudo exportar el recorte.'}</span>
             </div>
-          )}
-        </InspSection>
-      )}
-
-      {/* --- 2. Selección: inteligente (SAM) o corrección manual (U²-Net) - */}
-      {(ready || (isSam && auto.enabled)) && (
-        <InspSection
-          title={isSam ? 'Selección inteligente' : 'Eliminación personalizada'}
-          hint={isSam
-            ? <>Activa el <b>Lápiz mágico</b> y toca un objeto en el reproductor: el modelo lo
-                detecta entero. Añade toques para ampliarlo o usa el <b>Borrador</b> (−) para
-                quitar zonas, y confírmalo. Las marcas se guardan con el clip.</>
-            : <>Corrige lo que la IA no acertó pintando sobre el reproductor.
-                <b> Conservar</b> devuelve zonas visibles; <b>Eliminar</b> las vuelve
-                transparentes. El zoom y el desplazamiento del reproductor siguen funcionando.</>}
-        >
-          {isSam && (
-            <>
-              <div className="ed-bg-actions">
-                <button
-                  type="button"
-                  className={`ed-btn${magicMode ? ' primary' : ''}`}
-                  onClick={() => onToggleMagic?.(!magicMode)}
-                  title="Toca un objeto y el modelo lo selecciona entero"
-                >
-                  <Icon name="auto_fix_high" size={15} />
-                  {magicMode ? 'Lápiz mágico activo' : 'Lápiz mágico'}
-                </button>
-              </div>
-              {magicBusy && <JobProgress message="Analizando…" />}
-            </>
-          )}
-          <div className="ed-bg-brush">
-            <button
-              type="button"
-              className={`ed-bg-op keep${brush?.on && brush.op === 'keep' ? ' on' : ''}`}
-              onClick={() => onBrush?.({ on: !(brush?.on && brush.op === 'keep'), op: 'keep' })}
-            >
-              <Icon name="add_circle" size={16} /> {isSam ? 'Pincel intel.' : 'Conservar'}
-            </button>
-            <button
-              type="button"
-              className={`ed-bg-op erase${brush?.on && brush.op === 'erase' ? ' on' : ''}`}
-              onClick={() => onBrush?.({ on: !(brush?.on && brush.op === 'erase'), op: 'erase' })}
-            >
-              <Icon name="do_not_disturb_on" size={16} /> {isSam ? 'Borrador intel.' : 'Eliminar'}
-            </button>
-          </div>
-          <InspSlider
-            label="Tamaño" value={Math.round((brush?.size ?? 0.08) * 100)} min={1} max={50} step={1}
-            format={pct} suffix="%" parse={parsePct}
-            onChange={(v) => onBrush?.({ size: v / 100 })} stepper
-          />
-          <div className="ed-bg-actions">
-            <button type="button" className="ed-btn" disabled={!strokes}
-                    onClick={() => onUndoEdit?.()} title="Deshacer el último trazo">
-              <Icon name="undo" size={15} /> {isSam ? 'Último punto' : 'Último trazo'}
-            </button>
-            <button type="button" className="ed-btn" disabled={!strokes}
-                    onClick={() => onClearEdits?.()} title="Quitar todo">
-              <Icon name="restart_alt" size={15} /> Limpiar
-            </button>
-          </div>
-          {isSam && magicMode && (
-            <div className="ed-bg-actions">
-              <button type="button" className="ed-btn primary" disabled={!strokes}
-                      onClick={() => onConfirmMagic?.()}
-                      title="Aplica la eliminación de fondo a todos los fotogramas">
-                <Icon name="check_circle" size={15} /> Confirmar selección
-              </button>
-            </div>
-          )}
-          {strokes > 0 && (
-            <p className="ed-insp-meta">{strokes} {isSam ? 'marca(s)' : 'corrección(es)'}</p>
           )}
         </InspSection>
       )}

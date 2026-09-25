@@ -6,6 +6,41 @@ Toda funcionalidad nueva se documenta aquí y en su `.md` propio.
 
 ---
 
+## 2026-09-24 — El pincel de la Eliminación personalizada, como en CapCut
+
+Detalle: [ELIMINAR_FONDO_PERSONALIZADO.md](ELIMINAR_FONDO_PERSONALIZADO.md#qué-se-ve-mientras-marcas-como-capcut).
+Ajustado tras analizar fotograma a fotograma el tutorial de CapCut PC.
+
+- **Se ve lo que pintas mientras arrastras**: el trazo inteligente en cian (rojo el del
+  borrador inteligente); el pincel y el borrador normales se aplican a la selección al
+  instante, sin esperar al backend, y el borrador deja un rastro rojo.
+- La IA completa el objeto **al soltar** el trazo, no a mitad del arrastre.
+- Mientras editas, el clip se ve **sin recortar** con la selección en cian translúcido
+  encima; al Aplicar vuelve a verse el recorte. Cursor: círculo blanco.
+- **Análisis en segundo plano** («Analizando el clip…», el *Procesando…* de CapCut): con
+  la primera selección se analizan los demás fotogramas mientras sigues marcando, así
+  que Aplicar tarda mucho menos. Cede la CPU a la selección del trazo y se puede detener.
+- Corregido: tras Aplicar, el preview pintaba las marcas del pincel **fijas en todos los
+  fotogramas** encima del recorte (el export no lo hacía).
+
+## 2026-09-24 — Eliminación personalizada del fondo con seguimiento (como CapCut PC)
+
+Detalle: [ELIMINAR_FONDO_PERSONALIZADO.md](ELIMINAR_FONDO_PERSONALIZADO.md).
+
+- **Video → Eliminar fondo → Eliminación personalizada**: las 4 herramientas de CapCut,
+  **Pincel inteligente** (pintas una parte del objeto y la IA lo selecciona entero),
+  **Borrador inteligente**, **Pincel** y **Borrador** normales. La selección del
+  fotograma se ve al momento sobre el reproductor.
+- **Aplicar a todo el clip**: la selección **sigue al objeto** fotograma a fotograma
+  aunque se mueva (antes, SAM usaba los mismos puntos en todos los fotogramas y perdía
+  al sujeto en cuanto se desplazaba). Varios fotogramas marcados = cada tramo se sigue
+  desde la marca más cercana; lista **Marcado en** para saltar a ellos.
+- El panel queda como el de CapCut: *Eliminación automática* (U²-Net, con *Retocar
+  máscara*) y *Eliminación personalizada* (SAM) se excluyen; *Ajustar recorte* sirve
+  para las dos. Al activarla se elige un modelo SAM ya descargado.
+- Recalcular tras cambiar marcas **no** vuelve a analizar los fotogramas (caché de
+  embeddings, ahora en float16: la mitad de disco).
+
 ## 2026-09-24 — Diseño de la ventana (variantes estilo CapCut)
 
 Detalle: [DISENO_VENTANA.md](DISENO_VENTANA.md).

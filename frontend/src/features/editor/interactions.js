@@ -8,6 +8,7 @@ import { canvasToSourceNorm, framingRect, hitFrontmost, pointInDest } from './re
 import { snapAlign, textAlignTargets } from '../../lib/alignGuides'
 import { clipEnd, isVisualClip, timelineToSource } from './editorModel'
 import { clipMasksAt, clipPose, posedTransform } from '../../lib/clipAnim'
+import { clipBg, isInteractiveProvider } from '../../lib/clipBg'
 import { MASK_FEATHER_MAX, maskHandleBox, maskHitMode, toMaskLocal } from '../../lib/clipMask'
 import {
   hitPathAnchor, hitPathSegment, normalizeShape, pathAnchorPoints, pathAnchors, pathLocalPoint,
@@ -43,13 +44,17 @@ function textShapeMode(px, py, clip, render) {
 }
 
 function listenMove(move, onUp) {
+  // pointercancel (el sistema se queda el puntero: gesto táctil, pérdida de foco)
+  // también termina el arrastre; si no, el trazo quedaría "en curso" para siempre.
   const up = () => {
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', up)
+    window.removeEventListener('pointercancel', up)
     onUp?.()
   }
   window.addEventListener('pointermove', move)
   window.addEventListener('pointerup', up)
+  window.addEventListener('pointercancel', up)
 }
 
 // --- Máscara: arrastrar / redimensionar / girar / pluma sobre el preview ----
@@ -128,6 +133,15 @@ function startBgBrush(e, canvas, clip, ctx, frame) {
   const brush = bgBrushRef?.current || {}
   const op = brush.op === 'keep' ? 'keep' : 'erase'
   const size = brush.size || 0.08
+  // Eliminación personalizada (SAM): la marca recuerda en qué fotograma de la
+  // fuente se hizo y con qué herramienta; desde ahí se sigue al objeto.
+  const sam = isInteractiveProvider(clipBg(clip)?.auto?.provider)
+  const mark = sam
+    ? {
+        t: +clamp(timelineToSource(clip, head), clip.in_point || 0, clip.out_point || 0).toFixed(3),
+        tool: brush.tool === 'manual' ? 'manual' : 'smart',
+      }
+    : {}
   let last = null
 
   const at = (ev) => {
@@ -138,15 +152,17 @@ function startBgBrush(e, canvas, clip, ctx, frame) {
   if (!first) return false
   // Un trazo = una entrada de `edits`. Al soltar queda un único estado en el
   // historial (el snapshot del editor colapsa los cambios del arrastre).
-  addBgStroke?.(clip.id, { op, size, points: [{ x: +first.x.toFixed(4), y: +first.y.toFixed(4), m: 1 }] })
+  addBgStroke?.(clip.id, { op, size, ...mark, points: [{ x: +first.x.toFixed(4), y: +first.y.toFixed(4), m: 1 }] })
   last = first
+  // Trazo en curso: la selección inteligente se pide al SOLTAR (como CapCut).
+  ctx.onBgStroke?.(true)
   listenMove((ev) => {
     const q = at(ev)
     if (!q) return
     if (last && Math.hypot(q.x - last.x, q.y - last.y) < 0.003) return
     last = q
     extendBgStroke?.(clip.id, { x: +q.x.toFixed(4), y: +q.y.toFixed(4) })
-  })
+  }, () => ctx.onBgStroke?.(false))
   return true
 }
 

@@ -372,6 +372,7 @@ export const generateSubtitles = (pid, params) => post(`/api/projects/${pid}/sub
 // el export desde las propiedades del clip. Esto es solo para el matte de IA.
 export const listBgProviders = () => get('/api/bg/providers')
 export const createBgRemovalJob = (pid, params) => post(`/api/projects/${pid}/bg-removal`, params)
+export const createBgAnalyzeJob = (pid, params) => post(`/api/projects/${pid}/bg-analyze`, params)
 // Hornea el clip con el fondo eliminado a un WebM transparente (conserva la
 // animación) y lo añade al material como vídeo. Devuelve un Job con progreso.
 export const createBgCutoutJob = (pid, params) => post(`/api/projects/${pid}/bg-cutout`, params)

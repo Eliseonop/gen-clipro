@@ -635,6 +635,20 @@ def bg_removal(project_id: str, body: dict = Body(...)) -> Job:
     return job
 
 
+@app.post("/api/projects/{project_id}/bg-analyze", response_model=Job)
+def bg_analyze(project_id: str, body: dict = Body(...)) -> Job:
+    """Eliminación personalizada: analiza los fotogramas del clip en segundo plano
+    (encode de SAM a la caché) mientras el usuario marca. Devuelve un Job."""
+    proj = projects.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    if not (body or {}).get("filename"):
+        raise HTTPException(status_code=400, detail="Falta el material del clip.")
+    job = jobs.create_job()
+    jobs.start_bg_analyze_job(job, project_id, body or {})
+    return job
+
+
 @app.post("/api/projects/{project_id}/bg-cutout", response_model=Job)
 def bg_cutout(project_id: str, body: dict = Body(...)) -> Job:
     """Hornea el clip con el fondo eliminado a un WebM transparente (conserva la
@@ -651,12 +665,13 @@ def bg_cutout(project_id: str, body: dict = Body(...)) -> Job:
 
 @app.post("/api/projects/{project_id}/bg-segment")
 def bg_segment(project_id: str, body: dict = Body(...)) -> Response:
-    """Máscara INTERACTIVA de UN fotograma (Lápiz mágico): clic(s) → máscara.
+    """Selección INTERACTIVA de UN fotograma (Eliminación personalizada).
 
     Endpoint LIGERO (no lanza el job de todos los frames): encode cacheado +
-    decode de los puntos, vía el proveedor SAM. Devuelve un PNG RGBA con
-    ``alfa = máscara`` para pintar el overlay de selección (hormigas en marcha)
-    sobre el reproductor. Confirmar la selección usa el flujo "Aplicar" de siempre.
+    decode, vía el proveedor SAM. Devuelve un PNG RGBA con ``alfa = máscara``
+    para pintar la selección (relleno cian) sobre el reproductor. El editor manda
+    solo los trazos INTELIGENTES: el pincel/borrador normal lo compone él al
+    instante. "Aplicar" lanza el job que SIGUE la selección por todo el clip.
     """
     import cv2
     import numpy as np
@@ -685,13 +700,18 @@ def bg_segment(project_id: str, body: dict = Body(...)) -> Response:
         raise HTTPException(status_code=404, detail="No se encuentra el material del clip.")
 
     auto = clip_bg.normalize_auto(body.get("auto"))
-    points: list[tuple[float, float, int]] = []
-    for p in (body.get("points") or []):
-        try:
-            x, y = float(p["x"]), float(p["y"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        points.append((x, y, 0 if p.get("op") == "erase" else 1))
+    # Sin ``points``: la selección del fotograma MARCADO en ``src_time`` (trazos
+    # inteligentes + pincel manual de auto.edits), la misma de la que arranca el
+    # seguimiento al aplicar. Con ``points``: solo esos puntos (API anterior).
+    points: list[tuple[float, float, int]] | None = None
+    if body.get("points") is not None:
+        points = []
+        for p in (body.get("points") or []):
+            try:
+                x, y = float(p["x"]), float(p["y"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            points.append((x, y, 0 if p.get("op") == "erase" else 1))
     try:
         mask = bg_service.segment_frame(path, auto, float(body.get("src_time") or 0.0), points)
     except ValueError as exc:

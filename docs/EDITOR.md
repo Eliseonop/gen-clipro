@@ -72,7 +72,7 @@ El orden de las columnas se cambia desde el botón **Diseño** (icono de cuadrí
 - Transiciones de entrada/salida: fade, dissolve, wipe, zoom, slide, pop.
 - Audio: volumen (con keyframes), fundidos de entrada/salida, ecualizador, compresor, reverb, echo, reducción de ruido, distorsión y **filtros de sonido** (bajo el agua, teléfono, radio, megáfono, amortiguado) con intensidad animable; se oyen en la vista previa: [FILTROS_SONIDO.md](FILTROS_SONIDO.md).
 - Cambiar **velocidad** del clip (con o sin cambio de tono) y reproducción inversa.
-- **Eliminar fondo** de un vídeo o imagen: automático con IA, corrección a pincel y chroma key.
+- **Eliminar fondo** de un vídeo o imagen: automático con IA, **personalizado** (pincel inteligente que sigue al objeto por todo el clip, como CapCut) y chroma key: [ELIMINAR_FONDO_PERSONALIZADO.md](ELIMINAR_FONDO_PERSONALIZADO.md).
 
 **Texto y subtítulos**
 - Añadir textos a la composición con estilos, presets y favoritos.
@@ -134,22 +134,28 @@ Pensado para pasar vídeo horizontal (16:9) a vertical sin perder al sujeto.
 
 En **Video → Eliminar fondo** (con un clip de vídeo o imagen seleccionado). El
 archivo original **nunca** se modifica: todo queda como propiedad del clip, así
-que se deshace con Ctrl+Z y viaja con el proyecto. Tres bloques que se pueden
-combinar:
+que se deshace con Ctrl+Z y viaja con el proyecto. La automática y la
+personalizada se excluyen (como en CapCut); el chroma key y el contorno se
+combinan con cualquiera:
 
 - **Eliminación automática.** Detecta el sujeto principal con un modelo de
-  segmentación y separa el fondo. Pulsa *Aplicar* y verás el progreso (se puede
-  cancelar; lo ya calculado se guarda). Cuando termina, tres ajustes afinan el
-  borde al instante, **sin volver a procesar**: *Umbral*, *Suavizado* y *Pluma*.
-  *Invertir* conserva el fondo y quita el sujeto.
+  segmentación y separa el fondo, sin marcar nada. Pulsa *Aplicar* y verás el
+  progreso (se puede cancelar; lo ya calculado se guarda).
   - Modelos: **U²-Net** (mejor borde) o **U²-Net lite** (mucho más rápido). Se
     descargan solos la primera vez. Usa GPU si está disponible y CPU si no.
-- **Eliminación personalizada.** Pincel para corregir lo que la IA no acertó:
-  *Conservar* devuelve zonas visibles y *Eliminar* las vuelve transparentes.
-  Elige uno, ajusta el tamaño y arrastra sobre el reproductor (el zoom y el
-  desplazamiento siguen funcionando). Cada trazo es un paso deshacible, y se
-  guarda pegado al sujeto: aunque después cortes, muevas o escales el clip, la
-  corrección sigue en su sitio.
+  - *Retocar máscara*: pincel *Conservar* / *Eliminar* para corregir lo que la IA
+    no acertó; la corrección se aplica igual en todo el clip y se guarda pegada al
+    sujeto (aunque después cortes, muevas o escales el clip).
+- **Eliminación personalizada** (como CapCut). Tú eliges qué objeto se queda:
+  **Pincel inteligente** (trazas sobre una parte y, al soltar, la IA lo selecciona
+  entero), **Borrador inteligente**, **Pincel** y **Borrador** normales (al
+  instante). Mientras marcas se ve el trazo y la selección en cian, y el resto del
+  clip se analiza en segundo plano. Al *Aplicar a todo el clip*, la selección
+  **sigue al objeto** aunque se mueva. Si se desvía, marcas otro fotograma y
+  recalculas. Detalle:
+  [ELIMINAR_FONDO_PERSONALIZADO.md](ELIMINAR_FONDO_PERSONALIZADO.md).
+- **Ajustar recorte** (automática o personalizada): *Umbral*, *Suavizado*, *Pluma*,
+  *Expandir*, *Opacidad* e *Invertir*, al instante y **sin volver a procesar**.
 - **Chroma key.** Para pantalla verde/azul y fondos de color uniforme. Elige el
   color (con paleta o cuentagotas sobre el reproductor) y ajusta *Tolerancia*,
   *Suavizado* y *Derrame* (quita el tinte del color en piel y pelo). Se ve al

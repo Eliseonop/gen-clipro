@@ -4,7 +4,8 @@ import ConfirmModal from '../../components/ConfirmModal'
 import Toast from '../../components/Toast'
 import { fmt } from '../../lib/utils'
 import { getTimeline, saveTimeline, prepareReframe, getJob, createClipJob, getSettings,
-  createBgRemovalJob, createBgCutoutJob, segmentBg, listBgProviders, cancelJob, addMotionToTimeline,
+  createBgRemovalJob, createBgCutoutJob, createBgAnalyzeJob, segmentBg, listBgProviders, cancelJob,
+  addMotionToTimeline,
   createSegments, faceTrackMaterial, importExplore } from '../../services/api'
 import { dragMark, markToSourceRange, materialDuration, segmentDescription, segmentLabel, MIN_SEGMENT } from './clipExtract'
 import SegmentConfirmModal from './SegmentConfirmModal'
@@ -38,8 +39,12 @@ import { clipFlip } from '../../lib/clipAnim'
 import { readRowHeight, writeRowHeight } from './trackRows'
 import { newTrackIndex, resolveNewTrack } from './dropIntent'
 import { MASK_KF_KEYS, clipMasks, defaultMask, maskId, normalizeMask } from '../../lib/clipMask'
-import { autoActive, bgCapable, chromaBg, clipBg, defaultBg, isInteractiveProvider, normalizeBg } from '../../lib/clipBg'
-import { clearMagic, setMagicMask } from './bgMagic'
+import {
+  DEFAULT_PROVIDER, autoActive, bgCapable, chromaBg, clipBg, defaultBg, editsAtFrame,
+  isInteractiveProvider, isManualMark, matteFrameIndex, matteFrameTime, normalizeBg,
+  preferredSamProvider,
+} from '../../lib/clipBg'
+import { clearMagic, magicCovers, setMagicMask } from './bgMagic'
 import { copyClipAttrs, groupApplies, pasteClipAttrs, pasteableGroups } from '../../lib/clipAttrs'
 import { resetBgMeta, resetCutout } from './bgCutout'
 import { canvasPointer, cropWindow, followTrackMaskKeys, frameRectOf, freeFrameAt, isOverlay, mediaSize, newTransform, sourceCropPx, videosAt } from '../../lib/clipLayout'
@@ -317,16 +322,25 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   // Eliminar fondo: pincel de corrección (op/tamaño/posición del cursor),
   // job del matte y catálogo de modelos. El chroma key no necesita estado:
   // es una propiedad del clip que el preview lee cada fotograma.
-  const [bgBrush, setBgBrush] = useState({ on: false, op: 'erase', size: 0.08, px: null, py: null })
+  // `tool`: 'smart' (pincel/borrador inteligente, SAM) o 'manual' (pinta tal cual).
+  const [bgBrush, setBgBrush] = useState({ on: false, op: 'erase', tool: 'manual', size: 0.08, px: null, py: null })
   const [bgJob, setBgJob] = useState(null)
+  const bgJobRef = useRef(null); bgJobRef.current = bgJob
   // "Exportar recorte": job que hornea el clip con el fondo eliminado a un WebM
   // transparente y lo añade al material (conserva la animación de vídeo/GIF).
   const [cutoutJob, setCutoutJob] = useState(null)
-  // Lápiz mágico (selección inteligente SAM): overlay de la máscara del frame
-  // actual mientras el usuario coloca/refina puntos, antes de "Aplicar".
+  // Eliminación personalizada (SAM): overlay con la selección del fotograma
+  // marcado mientras se pinta con las herramientas, antes de "Aplicar".
   const magicRef = useRef({ on: false, clipId: null })
-  const [magicMode, setMagicMode] = useState(false)
+  const magicSeqRef = useRef({ sent: 0, shown: 0 })   // peticiones de selección
   const [magicBusy, setMagicBusy] = useState(false)
+  const [bgStroking, setBgStroking] = useState(false)  // trazo en curso
+  // Análisis de los fotogramas del clip en segundo plano (el «Procesando…» de
+  // CapCut): arranca con la primera selección; Aplicar solo sigue la selección.
+  const [bgAnalyze, setBgAnalyze] = useState(null)
+  const bgAnalyzeRef = useRef(null); bgAnalyzeRef.current = bgAnalyze
+  const bgAnalyzedRef = useRef(new Set())   // claves ya lanzadas en esta sesión
+  const bgAliveRef = useRef(true)           // false al cerrar el editor
   const [bgInfo, setBgInfo] = useState({ providers: [], device: '' })
   const [chromaPick, setChromaPick] = useState(false)
   // Fondo de vista previa (solo preview): normal|checker|solid|media.
@@ -3013,24 +3027,55 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     patchBg(id, (bg) => normalizeBg({ ...bg, outline: { ...bg.outline, ...patch } }))
   }
 
+  // Eliminación AUTOMÁTICA y PERSONALIZADA comparten `bg_removal.auto` y se
+  // excluyen, como en CapCut: la familia del modelo decide cuál está activa
+  // (U²-Net = automática, SAM = personalizada). Pasar de una a otra descarta
+  // las marcas, porque significan cosas distintas en cada una (corrección fija
+  // vs. prompt que se sigue); el cambio entra en el undo como cualquier otro.
   const toggleBgAuto = (on) => {
     const clip = selectedClip
     if (!clip) return
-    patchBgAuto(clip.id, { enabled: !!on })
-    if (!on) setBgBrush((b) => ({ ...b, on: false }))
+    const bg = clipBg(clip) || defaultBg()
+    const fromSam = on && isInteractiveProvider(bg.auto.provider)
+    patchBgAuto(clip.id, {
+      enabled: !!on,
+      ...(fromSam ? { provider: DEFAULT_PROVIDER, edits: [], base_key: '', status: 'idle', error: null } : {}),
+    })
+    if (fromSam) { resetCutout(clip.id); stopBgAnalyze(clip.id) }
+    if (!on || fromSam) setBgBrush((b) => ({ ...b, on: false }))
+  }
+  const toggleBgCustom = (on) => {
+    const clip = selectedClip
+    if (!clip) return
+    const bg = clipBg(clip) || defaultBg()
+    if (!on) {
+      patchBgAuto(clip.id, { enabled: false })
+      setBgBrush((b) => ({ ...b, on: false }))
+      stopBgAnalyze(clip.id)
+      return
+    }
+    const fromAuto = !isInteractiveProvider(bg.auto.provider)
+    patchBgAuto(clip.id, {
+      enabled: true,
+      provider: preferredSamProvider(bg.auto.provider, bgInfo.providers),
+      ...(fromAuto ? { edits: [], base_key: '', status: 'idle', error: null } : {}),
+    })
+    if (fromAuto) resetCutout(clip.id)
+    onBgBrush({ on: true, tool: 'smart', op: 'keep', size: 0.05 })
+  }
+  // Saltar a un fotograma marcado (tiempo de la FUENTE → timeline).
+  const seekBgMark = (srcT) => {
+    const clip = selectedClip
+    if (!clip) return
+    if (playingRef.current) stopPlayback()
+    seek(clamp(sourceToTimeline(clip, srcT), clip.start || 0, clipEnd(clip)))
   }
 
-  // Lanza el cálculo del matte. Manda el DESCRIPTOR del clip (material + tramo),
-  // no su id: así no hay carrera con el autosave y funciona con clips recién
-  // añadidos que todavía no están guardados en el servidor.
-  function applyBgAuto() {
-    startBgAutoFor(selectedClip)
-  }
-  function startBgAutoFor(clip) {
-    if (!clip || !bgCapable(clip)) return
-    const bg = clipBg(clip) || defaultBg()
-    patchBgAuto(clip.id, { enabled: true, status: 'running', error: null })
-    createBgRemovalJob(project.id, {
+  // Lo que los endpoints de Eliminar fondo necesitan del clip: el DESCRIPTOR
+  // (material + tramo), no su id. Así no hay carrera con el autosave y funciona
+  // con clips recién añadidos que todavía no están guardados en el servidor.
+  function bgClipDescriptor(clip) {
+    return {
       clip_id: clip.id,
       kind: clip.kind,
       asset_kind: clip.asset_kind,
@@ -3040,8 +3085,18 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       in_point: clip.in_point,
       out_point: clip.out_point,
       source_duration: clip.source_duration,
-      auto: bg.auto,
-    })
+    }
+  }
+
+  // Lanza el cálculo del matte.
+  function applyBgAuto() {
+    startBgAutoFor(selectedClip)
+  }
+  function startBgAutoFor(clip) {
+    if (!clip || !bgCapable(clip)) return
+    const bg = clipBg(clip) || defaultBg()
+    patchBgAuto(clip.id, { enabled: true, status: 'running', error: null })
+    createBgRemovalJob(project.id, { ...bgClipDescriptor(clip), auto: bg.auto })
       .then((job) => setBgJob({ ...job, clipId: clip.id }))
       .catch((e) => {
         patchBgAuto(clip.id, { status: 'error', error: e.message })
@@ -3088,33 +3143,52 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setCutoutJob((j) => (j ? { ...j, message: 'Cancelando…' } : j))
   }
 
-  // Lápiz mágico: activa la selección inteligente por clic. Reutiliza el ruteo
-  // del pincel SAM (clic = punto keep) y añade el overlay de máscara en vivo.
-  function toggleMagicWand(on) {
-    const clip = selectedClip
-    if (!clip) return
-    setMagicMode(!!on)
-    if (on) {
-      const bg = clipBg(clip)
-      // Necesita un modelo SAM (segmentación por puntos); si no, se pone base_plus.
-      if (!isInteractiveProvider(bg?.auto?.provider)) changeBgAuto({ provider: 'sam21_base_plus' })
-      magicRef.current = { on: true, clipId: clip.id }
-      setBgBrush((b) => ({ ...b, on: true, op: 'keep', size: 0.02 }))
-    } else {
-      magicRef.current = { on: false, clipId: null }
-      clearMagic(clip.id)
-      setBgBrush((b) => ({ ...b, on: false }))
-    }
+  // Aplicar la Eliminación personalizada = el job de siempre: con SAM, el
+  // backend sigue la selección desde los fotogramas marcados por todo el clip.
+  // El análisis en segundo plano se detiene: lo analizado ya está en caché y el
+  // job continúa desde ahí (dos hilos encodeando a la vez solo se estorban).
+  function applyBgCustom() {
+    if (selectedClip) stopBgAnalyze(selectedClip.id)
+    applyBgAuto()
+    setBgBrush((b) => ({ ...b, on: false }))
   }
 
-  // Confirmar la selección = el flujo "Aplicar" de siempre (matte de todos los
-  // frames). Los puntos ya están en auto.edits (son el prompt de SAM).
-  function confirmMagicWand() {
-    applyBgAuto()
-    setMagicMode(false)
-    magicRef.current = { on: false, clipId: null }
-    setBgBrush((b) => ({ ...b, on: false }))
-    clearMagic(selectedClip?.id)
+  // Análisis en segundo plano (el «Procesando…» de CapCut): en cuanto el objeto
+  // tiene selección, se analizan los demás fotogramas del clip mientras el
+  // usuario sigue marcando, para que Aplicar solo tenga que seguirla. Una vez
+  // por clip, tramo y modelo; solo en material animado (vídeo o GIF).
+  function maybeAnalyzeBg(clip, auto) {
+    if (!bgAliveRef.current) return
+    if (!clip || !(clip.kind === 'video' || /\.gif(\?|#|$)/i.test(clip.filename || ''))) return
+    const key = [clip.id, clip.filename, clip.in_point, clip.out_point,
+      auto.provider, auto.mask_fps, auto.mask_height].join('|')
+    if (bgAnalyzedRef.current.has(key)) return
+    const job = bgJobRef.current
+    if (job?.clipId === clip.id && (job.status === 'pending' || job.status === 'running')) return
+    const cur = bgAnalyzeRef.current
+    if (cur && (cur.status === 'pending' || cur.status === 'running')) cancelJob(cur.id).catch(() => {})
+    bgAnalyzedRef.current.add(key)
+    createBgAnalyzeJob(project.id, { ...bgClipDescriptor(clip), auto })
+      .then((j) => {
+        if (bgAliveRef.current) setBgAnalyze({ ...j, clipId: clip.id })
+        else cancelJob(j.id).catch(() => {})
+      })
+      .catch(() => { /* es una optimización: Aplicar analiza lo que falte */ })
+  }
+  // Al cerrar el editor el análisis se detiene: nadie va a esperar su resultado.
+  useEffect(() => {
+    bgAliveRef.current = true
+    return () => {
+      bgAliveRef.current = false
+      const cur = bgAnalyzeRef.current
+      if (cur?.id && (cur.status === 'pending' || cur.status === 'running')) cancelJob(cur.id).catch(() => {})
+    }
+  }, [])
+  function stopBgAnalyze(clipId) {
+    const cur = bgAnalyzeRef.current
+    if (!cur || (clipId && cur.clipId !== clipId)) return
+    if (cur.status === 'pending' || cur.status === 'running') cancelJob(cur.id).catch(() => {})
+    setBgAnalyze(null)
   }
 
   const changeBgAuto = (patch) => {
@@ -3127,6 +3201,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       : {}
     patchBgAuto(clip.id, { ...patch, ...resets })
     resetCutout(clip.id)
+    if (patch.provider !== undefined) stopBgAnalyze(clip.id)
   }
 
   // Un trazo = una entrada de `edits`; arrastrar solo alarga la última. Se
@@ -3314,39 +3389,73 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cutoutJob?.status])
 
-  // Lápiz mágico: cada vez que cambian los puntos (auto.edits) con el modo activo,
-  // se pide al backend la máscara del frame actual (endpoint ligero SAM) y se
-  // guarda para el overlay. El encode del frame se cachea (nivel 1): solo el
-  // primer clic sobre un frame es lento; refinar es barato.
-  const magicEditsSig = (magicMode && selectedClip)
-    ? JSON.stringify(clipBg(selectedClip)?.auto?.edits || [])
+  // Eliminación personalizada (como CapCut): mientras una herramienta está
+  // activa, el clip se ve SIN recortar con la selección del fotograma actual
+  // encima. bgMagic.js la compone al instante (pincel/borrador normal, línea de
+  // los trazos inteligentes); aquí solo se pide a SAM la selección de los trazos
+  // INTELIGENTES, y al SOLTAR el trazo. El encode del fotograma se cachea en el
+  // backend: solo el primer trazo en un fotograma es lento.
+  const magicBg = selectedClip ? clipBg(selectedClip) : null
+  const magicOn = !!(bgBrush.on && magicBg?.auto?.enabled && isInteractiveProvider(magicBg.auto.provider))
+  // Fotograma del matte bajo el cabezal (el panel resalta si está marcado).
+  const bgCurFrame = magicBg?.auto ? matteFrameIndex(srcTOf(selectedClip), magicBg.auto.mask_fps) : -1
+  const magicFrame = magicOn ? bgCurFrame : -1
+  const magicMarks = magicOn ? editsAtFrame(magicBg.auto.edits, magicFrame, magicBg.auto.mask_fps) : []
+  magicRef.current = {
+    on: magicOn, clipId: magicOn ? selectedClip.id : null,
+    frame: magicFrame, marks: magicMarks, live: bgStroking,
+  }
+  const magicSmart = magicMarks.filter((e) => !isManualMark(e))
+  const magicSig = magicOn
+    ? `${selectedClip.id}|${magicBg.auto.provider}|${magicFrame}|${JSON.stringify(magicSmart)}`
     : ''
   useEffect(() => {
-    if (!magicMode || !selectedClip) return undefined
+    if (!magicOn) { setMagicBusy(false); return }
     const clip = selectedClip
-    const bg = clipBg(clip)
-    const edits = bg?.auto?.edits || []
-    if (!edits.length) { clearMagic(clip.id); setMagicBusy(false); return undefined }
-    const points = edits.flatMap((e) => (e.points || []).map((p) => ({ x: p.x, y: p.y, op: e.op })))
-    let cancelled = false
+    // Sin trazos inteligentes en este fotograma no hay nada que pedir a SAM.
+    if (!magicSmart.length) { clearMagic(clip.id); setMagicBusy(false); return }
+    // Durante el arrastre bgMagic dibuja la línea del trazo; se pide al soltar.
+    if (bgStroking || magicCovers(clip.id, magicFrame, magicSmart)) return
+    const auto = magicBg.auto
+    const frame = magicFrame
+    const marks = magicSmart
+    const seq = ++magicSeqRef.current.sent
     setMagicBusy(true)
     segmentBg(project.id, {
-      clip_id: clip.id,
-      kind: clip.kind,
-      asset_kind: clip.asset_kind,
-      asset_id: String(clip.asset_id ?? ''),
-      filename: clip.filename,
-      asset_scope: clip.asset_scope || 'project',
-      src_time: srcTOf(clip),
-      auto: bg.auto,
-      points,
+      ...bgClipDescriptor(clip),
+      src_time: matteFrameTime(frame, auto.mask_fps),
+      auto: { ...auto, edits: marks },
     })
-      .then((img) => { if (!cancelled) setMagicMask(clip.id, img) })
-      .catch(() => { /* el overlay simplemente no se actualiza */ })
-      .finally(() => { if (!cancelled) setMagicBusy(false) })
-    return () => { cancelled = true }
+      .then((img) => {
+        const q = magicSeqRef.current
+        const now = magicRef.current
+        // Llega tarde (ya hay una más nueva) o el usuario cambió de fotograma.
+        if (seq < q.shown || now.clipId !== clip.id || now.frame !== frame) return
+        q.shown = seq
+        setMagicMask(clip.id, img, { frame, marks })
+        maybeAnalyzeBg(clip, auto)
+      })
+      .catch(() => { /* la selección simplemente no se actualiza */ })
+      .finally(() => { if (seq === magicSeqRef.current.sent) setMagicBusy(false) })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [magicEditsSig, magicMode])
+  }, [magicSig, bgStroking])
+
+  // Sondeo del análisis en segundo plano. Al acabar (o detenerse) desaparece:
+  // lo analizado queda en la caché del backend.
+  useEffect(() => {
+    if (!bgAnalyze?.id) return undefined
+    if (bgAnalyze.status === 'done' || bgAnalyze.status === 'error') {
+      setBgAnalyze(null)
+      return undefined
+    }
+    const id = setInterval(async () => {
+      try {
+        const j = await getJob(bgAnalyze.id)
+        setBgAnalyze((cur) => (cur?.id === j.id ? { ...j, clipId: cur.clipId } : cur))
+      } catch { /* reintenta */ }
+    }, 1000)
+    return () => clearInterval(id)
+  }, [bgAnalyze?.id, bgAnalyze?.status])
 
   // Al terminar, la clave de caché se escribe en EL CLIP (la copia del editor),
   // no en el timeline del servidor: así el autosave no la pisa y el cambio queda
@@ -3611,7 +3720,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     changeReframe, clipsRef, tracksRef, playheadRef, alignGuidesRef, seek: scrub,
     clipModeRef, hitListRef, viewZoomRef,
     maskModeRef, maskDrawRef, changeMask, commitMask,
-    bgBrushRef, addBgStroke, extendBgStroke, outRef,
+    bgBrushRef, addBgStroke, extendBgStroke, outRef, onBgStroke: setBgStroking,
     penRef, addPenPoint, finishPen, pathEditRef, setPathShape,
     trackPickRef, trackBoxRef, onTrackBox: runTrack, onTrackCancel: cancelTrackPick,
     onSelectClip: handleSelectClip,
@@ -4290,10 +4399,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             onCancelAuto: cancelBgAuto,
             onExportCutout: exportBgCutout,
             onCancelCutout: cancelBgCutout,
-            magicMode,
             magicBusy,
-            onToggleMagic: toggleMagicWand,
-            onConfirmMagic: confirmMagicWand,
+            analyzeJob: bgAnalyze && selectedClip && bgAnalyze.clipId === selectedClip.id ? bgAnalyze : null,
+            onStopAnalyze: () => stopBgAnalyze(selectedClip?.id),
+            onToggleCustom: toggleBgCustom,
+            onApplyCustom: applyBgCustom,
+            onSeekMark: seekBgMark,
+            curFrame: bgCurFrame,
             onChangeAuto: changeBgAuto,
             onBrush: onBgBrush,
             onUndoEdit: undoBgEdit,

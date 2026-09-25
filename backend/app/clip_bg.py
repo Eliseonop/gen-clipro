@@ -61,6 +61,43 @@ def edits_to_points(edits: list[dict]) -> list[tuple[float, float, int]]:
             out.append((float(p["x"]), float(p["y"]), lab))
     return out
 
+
+def stroke_prompt_points(edit: dict, limit: Optional[int] = None) -> list[tuple[float, float, int]]:
+    """Trazo inteligente → hasta ``limit`` puntos repartidos a lo largo del trazo."""
+    limit = max(2, int(limit or SMART_POINTS_PER_STROKE))
+    pts = edit.get("points") or []
+    if not pts:
+        return []
+    lab = 1 if edit.get("op") == "keep" else 0
+    if len(pts) <= limit:
+        picked = pts
+    else:
+        step = (len(pts) - 1) / float(limit - 1)
+        picked = [pts[int(round(i * step))] for i in range(limit)]
+    return [(float(p["x"]), float(p["y"]), lab) for p in picked]
+
+
+def sam_keyframes(edits: list[dict], mask_fps: int, default_index: int) -> dict[int, dict]:
+    """Marcas de la Eliminación personalizada agrupadas por FOTOGRAMA del matte.
+
+    Cada fotograma marcado es un fotograma clave del seguimiento:
+    ``{índice: {"points": [(x, y, label)], "manual": [edits]}}``. ``points`` son
+    los prompts de los trazos inteligentes; ``manual`` los trazos del pincel y el
+    borrador normales, que se pintan tal cual sobre la selección de ese fotograma.
+    Las marcas sin ``t`` (proyectos anteriores al seguimiento) caen en
+    ``default_index``.
+    """
+    out: dict[int, dict] = {}
+    for e in edits or []:
+        t = e.get("t")
+        idx = matte_frame_index(float(t), mask_fps) if t is not None else int(default_index)
+        kf = out.setdefault(idx, {"points": [], "manual": []})
+        if e.get("tool") == "manual":
+            kf["manual"].append(e)
+        else:
+            kf["points"].extend(stroke_prompt_points(e))
+    return out
+
 BG_MODES = ("auto", "chroma")
 BG_KIND_OK = frozenset({"video", "image"})
 
@@ -73,6 +110,14 @@ DEFAULT_MASK_FPS = 15
 DEFAULT_MASK_HEIGHT = 512
 
 EDIT_OPS = ("keep", "erase")
+# Herramientas de la Eliminación personalizada (SAM), como en CapCut:
+#   smart  = pincel/borrador INTELIGENTE → el trazo es un prompt (+/−) de SAM,
+#            que completa el objeto entero.
+#   manual = pincel/borrador normal → pinta exactamente lo que cubre el trazo.
+EDIT_TOOLS = ("smart", "manual")
+# Puntos de prompt por trazo inteligente: un arrastre largo genera decenas de
+# puntos y SAM se desorienta con tantos; se muestrean a lo largo del trazo.
+SMART_POINTS_PER_STROKE = 6
 BG_STATUS = ("idle", "running", "ready", "error")
 
 
@@ -133,7 +178,16 @@ def normalize_edit(raw: Any) -> Optional[dict]:
         pts.append(pt)
     if not pts:
         return None
-    return {"op": op, "size": _clamp(_num(e.get("size"), 0.08), 0.002, 1.0), "points": pts}
+    out = {"op": op, "size": _clamp(_num(e.get("size"), 0.08), 0.002, 1.0), "points": pts}
+    # Eliminación personalizada (SAM): en qué fotograma de la FUENTE se marcó
+    # (segundos) y con qué herramienta. Solo se guardan si vienen: los trazos de
+    # corrección de U²-Net no los llevan y sus claves de caché no cambian.
+    t = _num(e.get("t"), float("nan"))
+    if t == t and t >= 0:
+        out["t"] = round(t, 3)
+    if e.get("tool") in EDIT_TOOLS:
+        out["tool"] = e["tool"]
+    return out
 
 
 def normalize_auto(raw: Any) -> dict:

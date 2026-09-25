@@ -90,6 +90,10 @@ class Sam21Provider:
             "available": self.available(),
             "reason": self.unavailable_reason(),
             "interactive": True,
+            # En disco ya: el editor elige por defecto un backbone descargado en
+            # vez de disparar una descarga de cientos de MB.
+            "downloaded": self.encoder_path.exists() and self.decoder_path.exists(),
+            "size_mb": _BACKBONES[self.backbone][1],
         }
 
     def matte(self, frame: np.ndarray) -> np.ndarray:  # pragma: no cover
@@ -206,6 +210,43 @@ class Sam21Provider:
         names = [o.name for o in self._enc.get_outputs()]
         return dict(zip(names, self._enc.run(None, {"image": tensor})))
 
+    def predict(self, embeds: dict, points: list[tuple[float, float, int]],
+                orig_hw: tuple[int, int],
+                box: Optional[tuple[float, float, float, float]] = None,
+                mask_input: Optional[np.ndarray] = None) -> tuple[np.ndarray, np.ndarray]:
+        """Salida COMPLETA del decoder: ``(logits [3, 256, 256], iou [3])``.
+
+        ``points``: ``(x, y, label)`` en fracción 0-1 de la FUENTE, label 1 =
+        incluir / 0 = excluir. ``box``: ``(x0, y0, x1, y1)`` en fracción 0-1
+        (esquinas con labels 2/3, como el prompt de caja de SAM). Sin caja se
+        añade el punto de relleno (label −1) que espera el prompt encoder.
+        ``mask_input``: logits 256×256 de una predicción anterior (opcional).
+        """
+        if self._dec is None:
+            self.ensure_ready()
+        coords = [[x * _INPUT, y * _INPUT] for x, y, _ in points]
+        labels = [float(lab) for _, _, lab in points]
+        if box is not None:
+            x0, y0, x1, y1 = box
+            coords += [[x0 * _INPUT, y0 * _INPUT], [x1 * _INPUT, y1 * _INPUT]]
+            labels += [2.0, 3.0]
+        else:
+            coords.append([0.0, 0.0])
+            labels.append(-1.0)
+        has_mask = mask_input is not None
+        feed = {
+            "image_embed": embeds["image_embed"],
+            "high_res_feats_0": embeds["high_res_feats_0"],
+            "high_res_feats_1": embeds["high_res_feats_1"],
+            "point_coords": np.array([coords], np.float32),
+            "point_labels": np.array([labels], np.float32),
+            "mask_input": (mask_input.reshape(1, 1, 256, 256).astype(np.float32) if has_mask
+                           else np.zeros((1, 1, 256, 256), np.float32)),
+            "has_mask_input": np.array([1.0 if has_mask else 0.0], np.float32),
+        }
+        masks, iou = self._dec.run(None, feed)
+        return masks[0].astype(np.float32), iou.reshape(-1)[: masks.shape[1]].astype(np.float32)
+
     def decode(self, embeds: dict, points: list[tuple[float, float, int]],
                orig_hw: tuple[int, int]) -> np.ndarray:
         """embeddings + puntos -> matte (uint8, HxW, 0..255).
@@ -213,30 +254,13 @@ class Sam21Provider:
         ``points``: lista de ``(x, y, label)`` con x,y en fracción 0-1 de la
         FUENTE y ``label`` 1 = incluir (keep) / 0 = excluir (erase).
         """
-        if self._dec is None:
-            self.ensure_ready()
+        from .sam_track import logits_to_matte
+
         h, w = orig_hw
         if not points:
             return np.zeros((h, w), np.uint8)
-        coords = np.array([[x * _INPUT, y * _INPUT] for x, y, _ in points], np.float32)[None]
-        labels = np.array([[float(lab) for _, _, lab in points]], np.float32)
-        feed = {
-            "image_embed": embeds["image_embed"],
-            "high_res_feats_0": embeds["high_res_feats_0"],
-            "high_res_feats_1": embeds["high_res_feats_1"],
-            "point_coords": coords,
-            "point_labels": labels,
-            "mask_input": np.zeros((1, 1, 256, 256), np.float32),
-            "has_mask_input": np.zeros((1,), np.float32),
-        }
-        masks, iou = self._dec.run(None, feed)
-        best = int(np.argmax(iou.ravel()))
-        logit = masks[0, best].astype(np.float32)          # [Hm, Wm]
-        prob = 1.0 / (1.0 + np.exp(-logit))                # sigmoid → matte suave
-        out = np.clip(prob * 255.0 + 0.5, 0, 255).astype(np.uint8)
-        if out.shape[:2] != (h, w):
-            out = cv2.resize(out, (w, h), interpolation=cv2.INTER_LINEAR)
-        return out
+        logits, iou = self.predict(embeds, points, orig_hw)
+        return logits_to_matte(logits[int(np.argmax(iou))], (h, w))
 
     def segment(self, frame: np.ndarray,
                 points: list[tuple[float, float, int]]) -> np.ndarray:

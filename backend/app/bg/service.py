@@ -28,18 +28,20 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import shutil
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 
 import cv2
 import numpy as np
 
 from .. import clip_bg, config, gpu
-from . import providers
+from . import providers, sam_track
 
 log = logging.getLogger("videoyt.bg")
 
@@ -320,57 +322,231 @@ def _embed_key(src_id: str, provider, mask_fps: int, height: int) -> str:
     })
 
 
-def _embeddings(provider, embed_key: str, index: int, frame: np.ndarray) -> dict:
-    """Embeddings del fotograma ``index`` (cacheados en disco). Encode si faltan."""
-    folder = EMBED_ROOT / embed_key
-    folder.mkdir(parents=True, exist_ok=True)
-    p = folder / f"{int(index) + 1:06d}.npz"
-    if p.exists():
-        try:
-            with np.load(p) as data:
-                return {k: data[k] for k in data.files}
-        except Exception:  # noqa: BLE001 - npz corrupto → recalcular
-            pass
-    emb = provider.encode(frame)
+def _embed_path(embed_key: str, index: int) -> Path:
+    return EMBED_ROOT / embed_key / f"{int(index) + 1:06d}.npz"
+
+
+def _load_embed(p: Path) -> Optional[dict]:
+    """Embeddings de disco en float32 (se guardan en float16: la mitad de disco,
+    ~8 MB por fotograma con SAM, sin diferencia apreciable en la máscara)."""
+    if not p.exists():
+        return None
     try:
-        np.savez(p, **emb)
+        with np.load(p) as data:
+            return {k: data[k].astype(np.float32) for k in data.files}
+    except Exception:  # noqa: BLE001 - npz corrupto → recalcular
+        return None
+
+
+# Candados por fotograma (repartidos en un número fijo): mientras se pinta, cada
+# trazo pide la selección del fotograma y el primer encode tarda segundos; sin
+# esto, varias peticiones encodearían A LA VEZ el mismo fotograma.
+_EMBED_LOCKS = [threading.Lock() for _ in range(64)]
+
+
+def _embeddings(provider, embed_key: str, index: int, frame: Optional[np.ndarray]) -> dict:
+    """Embeddings del fotograma ``index`` (cacheados en disco). Encode si faltan."""
+    p = _embed_path(embed_key, index)
+    emb = _load_embed(p)
+    if emb is not None:
+        return emb
+    if frame is None:
+        raise RuntimeError(f"Faltan los embeddings del fotograma {index}.")
+    with _EMBED_LOCKS[hash(str(p)) % len(_EMBED_LOCKS)]:
+        emb = _load_embed(p)            # otro hilo pudo terminarlo mientras esperábamos
+        if emb is not None:
+            return emb
+        return _encode_and_store(provider, p, frame)
+
+
+# Prioridad de la vista previa del pincel: mientras el usuario espera la selección
+# de un fotograma, el análisis EN SEGUNDO PLANO no empieza otro encode (le robaría
+# la CPU). El job de Aplicar no cede: es lo que el usuario está esperando.
+_INTERACTIVE = {"n": 0}
+_INTERACTIVE_LOCK = threading.Lock()
+
+
+@contextmanager
+def _interactive_request() -> Iterator[None]:
+    with _INTERACTIVE_LOCK:
+        _INTERACTIVE["n"] += 1
+    try:
+        yield
+    finally:
+        with _INTERACTIVE_LOCK:
+            _INTERACTIVE["n"] -= 1
+
+
+def _yield_to_interactive(cancel: Optional[Callable[[], bool]]) -> None:
+    while _INTERACTIVE["n"] > 0:
+        if cancel and cancel():
+            raise BgCancelled("cancelado")
+        time.sleep(0.05)
+
+
+def _missing_embeds(embed_key: str, lo: int, hi: int) -> list[tuple[int, int]]:
+    """Tramos contiguos de ``[lo, hi]`` sin embeddings en disco."""
+    todo: list[tuple[int, int]] = []
+    for i in range(lo, hi + 1):
+        if _embed_path(embed_key, i).exists():
+            continue
+        if todo and todo[-1][1] == i - 1:
+            todo[-1] = (todo[-1][0], i)
+        else:
+            todo.append((i, i))
+    return todo
+
+
+def _encode_missing(provider, path: Path, embed_key: str, todo: list[tuple[int, int]],
+                    is_still: bool, mask_fps: int, width: int, height: int,
+                    cancel: Optional[Callable[[], bool]],
+                    on_done: Optional[Callable[[int], None]] = None,
+                    polite: bool = False) -> int:
+    """Encode (SAM) de los tramos ``todo``. ``polite`` = cede ante la vista previa."""
+    done = 0
+    for a, b in todo:
+        frames = (iter([_still_frame(path, height)]) if is_still else
+                  _iter_frames(path, clip_bg.matte_frame_time(a, mask_fps), b - a + 1,
+                               mask_fps, width, height, cancel))
+        for k, frame in enumerate(frames):
+            if cancel and cancel():
+                raise BgCancelled("cancelado")
+            if polite:
+                _yield_to_interactive(cancel)
+            _embeddings(provider, embed_key, a + k, frame)
+            done += 1
+            if on_done:
+                on_done(done)
+    return done
+
+
+def _encode_and_store(provider, p: Path, frame: np.ndarray) -> dict:
+    emb = provider.encode(frame)
+    # Escritura atómica: el job de Aplicar y la vista previa del pincel pueden
+    # tocar el mismo fotograma a la vez; nadie debe leer un .npz a medias.
+    tmp = p.with_name(p.name + f".{threading.get_ident()}.part")
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(tmp, "wb") as fh:
+            np.savez(fh, **{k: np.asarray(v).astype(np.float16) for k, v in emb.items()})
+        os.replace(tmp, p)
     except Exception:  # noqa: BLE001 - sin disco → seguir sin cachear
-        pass
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
     return emb
 
 
+def _frame_at(path: Path, src_time: float, mask_fps: int, width: int, height: int) -> np.ndarray:
+    """Fotograma RGB del matte en ``src_time`` (o la imagen, si es fija)."""
+    idx = clip_bg.matte_frame_index(max(0.0, float(src_time)), mask_fps)
+    try:
+        for f in _iter_frames(path, clip_bg.matte_frame_time(idx, mask_fps), 1,
+                              mask_fps, width, height):
+            return f
+    except Exception:  # noqa: BLE001 - imagen fija: ffmpeg no da fotogramas por tiempo
+        pass
+    return _still_frame(path, height)
+
+
 def segment_frame(path: Path, auto: dict, src_time: float,
-                  points: list[tuple[float, float, int]]) -> np.ndarray:
-    """Máscara INTERACTIVA de un solo fotograma (Lápiz mágico), vía SAM.
+                  points: Optional[list[tuple[float, float, int]]] = None) -> np.ndarray:
+    """Selección INTERACTIVA de un solo fotograma (vista previa del pincel), vía SAM.
 
     encode del fotograma en ``src_time`` (cacheado como NIVEL 1, reutilizado entre
-    clics) + decode(puntos) (barato). Devuelve el matte crudo (uint8, HxW).
-    Es la misma primitiva que usa ``build_matte`` por-frame, pero para un frame y
-    al vuelo: así el clic-a-máscara del preview no lanza el job de todos los frames.
+    clics) + decode (barato). Devuelve el matte crudo (uint8, HxW). Así pintar
+    sobre el reproductor no lanza el job de todos los fotogramas.
+
+    Sin ``points`` devuelve la selección del fotograma MARCADO en ``src_time``
+    (trazos inteligentes + pincel manual de ``auto.edits`` en ese fotograma),
+    exactamente la que ``build_matte`` usará como punto de partida del
+    seguimiento. Con ``points`` (API antigua) segmenta solo esos puntos.
     """
     provider = providers.get(auto["provider"])
     if not bool(getattr(provider, "interactive", False)):
         raise ValueError("El modelo seleccionado no admite selección por puntos (usa un modelo SAM).")
-    provider.ensure_ready()
     mask_fps = int(auto["mask_fps"])
     width, height = _extract_size(path, int(auto["mask_height"]))
     idx = clip_bg.matte_frame_index(max(0.0, float(src_time)), mask_fps)
 
-    frame: Optional[np.ndarray] = None
-    try:
-        for f in _iter_frames(path, clip_bg.matte_frame_time(idx, mask_fps), 1,
-                              mask_fps, width, height):
-            frame = f
-            break
-    except Exception:  # noqa: BLE001 - imagen fija: ffmpeg no da fotogramas por tiempo
-        frame = None
-    if frame is None:
-        frame = _still_frame(path, height)
+    if points is None:
+        kf = clip_bg.sam_keyframes(auto.get("edits") or [], mask_fps, idx).get(idx)
+        if not kf:
+            return np.zeros((height, width), np.uint8)
+        has_prompt = any(lab == 1 for _, _, lab in kf["points"])
+        if not has_prompt:   # solo pincel manual: no hace falta el modelo
+            return sam_track.keyframe_mask(provider, {}, kf, (height, width))
 
-    embed_key = _embed_key(source_id(path), provider, mask_fps, height)
-    emb = _embeddings(provider, embed_key, idx, frame)
-    pts = [(float(x), float(y), int(lab)) for x, y, lab in (points or [])]
+    with _interactive_request():
+        provider.ensure_ready()
+        embed_key = _embed_key(source_id(path), provider, mask_fps, height)
+        emb = _load_embed(_embed_path(embed_key, idx))
+        if emb is None:
+            emb = _embeddings(provider, embed_key, idx,
+                              _frame_at(path, src_time, mask_fps, width, height))
+    if points is None:
+        return sam_track.keyframe_mask(provider, emb, kf, (height, width))
+    pts = [(float(x), float(y), int(lab)) for x, y, lab in points]
     return provider.decode(emb, pts, (height, width))
+
+
+def _index_range(path: Path, mask_fps: int, t0: float, t1: float,
+                 still: bool) -> tuple[int, int, float]:
+    """Fotogramas del matte ``(i0, i1)`` que cubre el tramo, y la duración de la fuente."""
+    src_dur = float(_probe(path).get("duration") or 0.0)
+    if still and src_dur <= 0.0:
+        return 0, 0, src_dur
+    # Vídeo: el tramo pedido [t0, t1]. Imagen ANIMADA (GIF: still con duración):
+    # toda la animación desde 0, indexada por tiempo de bucle — el preview ya
+    # indexa el matte con loopDur (matteIndexFor) y el GIF se decodifica con
+    # ffmpeg (_iter_frames), no con el primer frame de cv2.
+    limit = src_dur if src_dur > 0 else t1
+    lo_t = 0.0 if still else max(0.0, t0)
+    hi_t = limit if still else min(t1, limit)
+    i0, i1 = index_range(lo_t, hi_t, mask_fps)
+    if i1 - i0 + 1 > MAX_MATTE_FRAMES:
+        i1 = i0 + MAX_MATTE_FRAMES - 1
+    return i0, i1, src_dur
+
+
+def analyze_frames(path: Path, auto: dict, t0: float, t1: float, still: bool = False,
+                   on_progress: ProgressCb = None,
+                   cancel: Optional[Callable[[], bool]] = None) -> dict:
+    """Eliminación personalizada: analiza (encode de SAM) el tramo EN SEGUNDO PLANO.
+
+    Es el «Procesando…» de CapCut: arranca en cuanto el usuario marca el objeto y
+    deja los embeddings en caché, así que Aplicar solo tiene que seguir la
+    selección (barato). No depende de las marcas ni produce matte. Cede la CPU a
+    la vista previa del pincel (``_yield_to_interactive``).
+    """
+    provider = providers.get(auto["provider"])
+    if not bool(getattr(provider, "interactive", False)):
+        raise ValueError("El análisis previo solo se usa con la Eliminación personalizada (SAM).")
+    provider.ensure_ready(on_progress)
+    mask_fps = int(auto["mask_fps"])
+    width, height = _extract_size(path, int(auto["mask_height"]))
+    i0, i1, src_dur = _index_range(path, mask_fps, t0, t1, still)
+    is_still = still and src_dur <= 0.0
+    embed_key = _embed_key(source_id(path), provider, mask_fps, height)
+    todo = _missing_embeds(embed_key, i0, i1)
+    total = sum(b - a + 1 for a, b in todo)
+    device = gpu.onnx_device_label(gpu.onnx_providers(providers._device_setting()))
+    t_start = time.time()
+
+    def on_done(done: int) -> None:
+        if on_progress:
+            rate = done / max(0.01, time.time() - t_start)
+            left = (total - done) / max(0.01, rate)
+            on_progress(min(0.99, done / total),
+                        f"Analizando el clip ({done}/{total}) · {device} · queda ~{int(left)}s")
+
+    if total:
+        log.info("Eliminar fondo (análisis previo): %d fotograma(s) con %s en %s",
+                 total, provider.id, device)
+        _encode_missing(provider, path, embed_key, todo, is_still, mask_fps, width, height,
+                        cancel, on_done, polite=True)
+    return {"frames": i1 - i0 + 1, "encoded": total, "device": device}
 
 
 # --- Nivel 1: matte crudo del modelo ---------------------------------------
@@ -380,7 +556,9 @@ def build_matte(path: Path, auto: dict, t0: float, t1: float, still: bool = Fals
                 cancel: Optional[Callable[[], bool]] = None) -> dict:
     """Asegura el matte crudo del tramo ``[t0, t1]``. Devuelve el meta resultante.
 
-    Es **incremental**: solo procesa los fotogramas que falten en la caché.
+    Vía automática (U²-Net): **incremental**, solo procesa los fotogramas que
+    falten en la caché. Vía asistida (SAM): sigue la selección desde los
+    fotogramas marcados (``_build_tracked``).
     """
     provider = providers.get(auto["provider"])
     provider.ensure_ready(on_progress)
@@ -389,35 +567,21 @@ def build_matte(path: Path, auto: dict, t0: float, t1: float, still: bool = Fals
     folder = matte_dir(key)
     folder.mkdir(parents=True, exist_ok=True)
 
-    info = _probe(path)
-    src_dur = float(info.get("duration") or 0.0)
     width, height = _extract_size(path, int(auto["mask_height"]))
+    i0, i1, src_dur = _index_range(path, mask_fps, t0, t1, still)
 
-    if still and src_dur <= 0.0:
-        i0 = i1 = 0
-    else:
-        # Vídeo: el tramo pedido [t0, t1]. Imagen ANIMADA (GIF: still con
-        # duración): toda la animación desde 0, indexada por tiempo de bucle —
-        # el preview ya indexa el matte con loopDur (matteIndexFor) y el GIF se
-        # decodifica con ffmpeg (_iter_frames), no con el primer frame de cv2.
-        limit = src_dur if src_dur > 0 else t1
-        lo_t = 0.0 if still else max(0.0, t0)
-        hi_t = limit if still else min(t1, limit)
-        i0, i1 = index_range(lo_t, hi_t, mask_fps)
-        if i1 - i0 + 1 > MAX_MATTE_FRAMES:
-            i1 = i0 + MAX_MATTE_FRAMES - 1
+    device = gpu.onnx_device_label(gpu.onnx_providers(providers._device_setting()))
+    # Vía asistida (SAM): la selección se SIGUE desde los fotogramas marcados.
+    if bool(getattr(provider, "interactive", False)):
+        return _build_tracked(path, auto, provider, key, i0, i1, still, src_dur,
+                              width, height, device, on_progress, cancel)
 
     todo = missing_ranges(key, i0, i1)
     total = sum(b - a + 1 for a, b in todo)
-    device = gpu.onnx_device_label(gpu.onnx_providers(providers._device_setting()))
     if total:
         log.info("Eliminar fondo: %d fotograma(s) con %s en %s (%dx%d @ %d fps)",
                  total, provider.id, device, width, height, mask_fps)
     window = clip_bg.stabilize_window(auto)
-    # Vía asistida (SAM): el matte sale de encode (cacheado) + decode(puntos).
-    interactive = bool(getattr(provider, "interactive", False))
-    points = clip_bg.edits_to_points(auto["edits"]) if interactive else []
-    embed_key = _embed_key(source_id(path), provider, mask_fps, height) if interactive else ""
     done = 0
     t_start = time.time()
     for a, b in todo:
@@ -436,11 +600,7 @@ def build_matte(path: Path, auto: dict, t0: float, t1: float, still: bool = Fals
         for frame in frames:
             if cancel and cancel():
                 raise BgCancelled("cancelado")
-            if interactive:
-                emb = _embeddings(provider, embed_key, idx if not smooth else a + len(buffered), frame)
-                m = provider.decode(emb, points, (height, width))
-            else:
-                m = provider.matte(frame)
+            m = provider.matte(frame)
             if smooth:
                 buffered.append(m)
             else:
@@ -462,6 +622,116 @@ def build_matte(path: Path, auto: dict, t0: float, t1: float, still: bool = Fals
     if real is None:
         raise RuntimeError(
             "No se pudo extraer ningún fotograma del material para eliminar el fondo.")
+    return _seal_meta(key, provider, mask_fps, width, height, src_dur, path, real, device)
+
+
+def _build_tracked(path: Path, auto: dict, provider, key: str, i0: int, i1: int,
+                   still: bool, src_dur: float, width: int, height: int, device: str,
+                   on_progress: ProgressCb, cancel: Optional[Callable[[], bool]]) -> dict:
+    """Eliminación personalizada (SAM): la selección SIGUE al objeto.
+
+    Dos pasadas:
+      1. encode de los fotogramas que falten (lo caro; embeddings cacheados en
+         disco, así que cambiar las marcas no vuelve a pasar por aquí);
+      2. seguimiento desde los fotogramas marcados (``sam_track``, barato).
+
+    No es incremental como la vía automática: el matte de cada fotograma depende
+    del anterior, así que se rehace el tramo entero (solo decoder).
+    """
+    mask_fps = int(auto["mask_fps"])
+    prev = covered_range(key)
+    if prev and prev[0] <= i0 and prev[1] >= i1 and not missing_ranges(key, i0, i1):
+        meta = read_meta(key)
+        if meta:
+            return meta
+    lo, hi = (min(i0, prev[0]), max(i1, prev[1])) if prev else (i0, i1)
+    is_still = still and src_dur <= 0.0
+    wrap = still and src_dur > 0.0          # GIF: las marcas dan la vuelta al bucle
+    marks = clip_bg.sam_keyframes(auto["edits"], mask_fps, lo)
+    if not is_still and not wrap:
+        # Una marca fuera del tramo (el clip se recortó después) amplía el tramo
+        # para que el seguimiento arranque de donde el usuario marcó.
+        last = clip_bg.matte_frame_index(src_dur, mask_fps) if src_dur > 0 else hi
+        for k in marks:
+            if 0 <= k <= last:
+                lo, hi = min(lo, k), max(hi, k)
+        if hi - lo + 1 > MAX_MATTE_FRAMES:
+            hi = lo + MAX_MATTE_FRAMES - 1
+    if is_still:
+        lo = hi = 0
+    folder = matte_dir(key)
+    folder.mkdir(parents=True, exist_ok=True)
+    if not marks:
+        # Nada marcado: no hay objeto que seguir → matte vacío, sin pasar por el
+        # encoder (que es lo caro).
+        empty = np.zeros((height, width), np.uint8)
+        for i in range(lo, hi + 1):
+            cv2.imwrite(str(frame_path(folder, i)), empty)
+        return _seal_meta(key, provider, mask_fps, width, height, src_dur, path, (lo, hi), device)
+
+    # --- 1. Embeddings (encode) de lo que falte ------------------------------
+    embed_key = _embed_key(source_id(path), provider, mask_fps, height)
+    todo = _missing_embeds(embed_key, lo, hi)
+    total = sum(b - a + 1 for a, b in todo)
+    enc_share = 0.85 if total else 0.0
+    if total:
+        log.info("Eliminar fondo (personalizada): %d fotograma(s) con %s en %s (%dx%d @ %d fps)",
+                 total, provider.id, device, width, height, mask_fps)
+    t_start = time.time()
+
+    def on_done(done: int) -> None:
+        if on_progress:
+            rate = done / max(0.01, time.time() - t_start)
+            left = (total - done) / max(0.01, rate)
+            on_progress(min(0.99, enc_share * done / total),
+                        f"Analizando fotogramas ({done}/{total}) · {device}"
+                        f" · queda ~{int(left)}s")
+
+    _encode_missing(provider, path, embed_key, todo, is_still, mask_fps, width, height,
+                    cancel, on_done)
+    # El vídeo puede acabar antes que el índice estimado: el tramo real es el
+    # contiguo con embeddings desde ``lo``.
+    n = 0
+    while lo + n <= hi and _embed_path(embed_key, lo + n).exists():
+        n += 1
+    if n == 0:
+        raise RuntimeError(
+            "No se pudo extraer ningún fotograma del material para eliminar el fondo.")
+
+    # --- 2. Seguimiento --------------------------------------------------------
+    rel = sam_track.relative_keyframes(marks, lo, n, wrap=wrap)
+
+    def on_frame(i: int, m: np.ndarray) -> None:
+        cv2.imwrite(str(frame_path(folder, lo + i)), m)
+
+    def on_step(k: int, count: int) -> None:
+        if on_progress:
+            on_progress(min(0.99, enc_share + (1.0 - enc_share) * k / count),
+                        f"Siguiendo la selección ({k}/{count}) · {device}")
+
+    def embed_at(i: int) -> dict:
+        emb = _load_embed(_embed_path(embed_key, lo + i))
+        if emb is None:
+            raise RuntimeError(f"Faltan los embeddings del fotograma {lo + i}.")
+        return emb
+
+    try:
+        sam_track.track(provider, n, embed_at, rel, (height, width), on_frame,
+                        on_step=on_step, cancel=cancel)
+    except sam_track.TrackCancelled as exc:
+        raise BgCancelled("cancelado") from exc
+
+    window = clip_bg.stabilize_window(auto)
+    if window > 1 and not is_still and 1 < n <= SMOOTH_FRAME_CAP:
+        raw = [cv2.imread(str(frame_path(folder, lo + i)), cv2.IMREAD_GRAYSCALE) for i in range(n)]
+        for i, m in enumerate(_temporal_median(raw, window)):
+            cv2.imwrite(str(frame_path(folder, lo + i)), m)
+    return _seal_meta(key, provider, mask_fps, width, height, src_dur, path,
+                      (lo, lo + n - 1), device)
+
+
+def _seal_meta(key: str, provider, mask_fps: int, width: int, height: int,
+               src_dur: float, path: Path, real: tuple[int, int], device: str) -> dict:
     lo, hi = real
     meta = {
         "base_key": key,

@@ -8,6 +8,7 @@ import {
   bgActive, bgCapable, chromaActive, chromaAlpha8, chromaKeyUv, clipBg, defaultBg,
   despillRgb, despillType, frameUv, hexRgb, matteFrameIndex, matteFrameTime,
   matteIndexFor, matteLevels, normalizeBg, normalizeChroma, normalizeEdit, normalizeHex,
+  editsAtFrame, isManualMark, markKey, preferredSamProvider, samMarkFrames, selectionLayers,
 } from './clipBg.js'
 
 // El fixture lo genera backend/tests/test_clip_bg.py, verificado bit a bit
@@ -199,6 +200,63 @@ for (const caso of golden.chroma) {
   const data = new Uint8ClampedArray([90, 180, 90, 255])
   applyChromaKey(data, chroma)
   assert.deepEqual([data[0], data[1], data[2]], despillRgb(90, 180, 90, chroma))
+}
+
+// --- Eliminación personalizada: marcas por fotograma -----------------------
+{
+  // normalizeEdit conserva el fotograma (t) y la herramienta; nada si no vienen.
+  const e = normalizeEdit({ op: 'keep', points: [{ x: 0.5, y: 0.5 }], t: 1.23456, tool: 'manual' })
+  assert.equal(e.t, 1.235)
+  assert.equal(e.tool, 'manual')
+  const plain = normalizeEdit({ op: 'erase', points: [{ x: 0.1, y: 0.2 }] })
+  assert.ok(!('t' in plain) && !('tool' in plain))
+  const bad = normalizeEdit({ points: [{ x: 0, y: 0 }], t: -1, tool: 'lazo' })
+  assert.ok(!('t' in bad) && !('tool' in bad))
+  // normalizeBg no las pierde por el camino (si no, el seguimiento no sabría dónde empezar).
+  const bg = normalizeBg({ enabled: true, mode: 'auto', auto: { provider: 'sam21_base_plus', edits: [e] } })
+  assert.equal(bg.auto.edits[0].t, 1.235)
+}
+{
+  const mk = (t, op = 'keep') => ({ op, size: 0.03, points: [{ x: 0.5, y: 0.5 }], ...(t == null ? {} : { t }) })
+  const edits = [mk(0.0), mk(0.02, 'erase'), mk(1.0), mk(null)]
+  // Mismo agrupado que clip_bg.sam_keyframes: 0 y 0,02 s caen en el fotograma 0 a 15 fps.
+  assert.deepEqual(samMarkFrames(edits, 15).map((m) => [m.idx, m.count]), [[0, 2], [15, 1]])
+  // Las marcas antiguas (sin t) cuentan en cualquier fotograma.
+  assert.equal(editsAtFrame(edits, 0, 15).length, 3)
+  assert.equal(editsAtFrame(edits, 15, 15).length, 2)
+  assert.equal(editsAtFrame(edits, 7, 15).length, 1)
+}
+{
+  // Al activar la personalizada se prefiere un modelo SAM YA descargado.
+  assert.equal(preferredSamProvider('sam21_tiny', []), 'sam21_tiny')
+  assert.equal(preferredSamProvider('u2net', []), 'sam21_base_plus')
+  assert.equal(preferredSamProvider('u2net', [
+    { id: 'sam21_base_plus', interactive: true, downloaded: false },
+    { id: 'sam21_large', interactive: true, downloaded: true },
+  ]), 'sam21_large')
+}
+
+{
+  // Capas de la selección (overlay de la personalizada, como CapCut).
+  const pt = [{ x: 0.5, y: 0.5 }]
+  const smartA = { op: 'keep', size: 0.05, t: 0, tool: 'smart', points: pt }
+  const smartB = { op: 'erase', size: 0.05, t: 0, tool: 'smart', points: pt }
+  const legacy = { op: 'keep', size: 0.05, points: pt }          // sin tool = inteligente
+  const brush = { op: 'keep', size: 0.05, t: 0, tool: 'manual', points: pt }
+  assert.ok(isManualMark(brush) && !isManualMark(smartA) && !isManualMark(legacy))
+  const marks = [smartA, brush, smartB, legacy]
+  // Sin respuesta de SAM: todos los inteligentes están pendientes (se ven como línea).
+  let L = selectionLayers(marks, null)
+  assert.deepEqual(L.manual, [brush])
+  assert.deepEqual(L.smart, [smartA, smartB, legacy])
+  assert.deepEqual(L.pending, [smartA, smartB, legacy])
+  // La selección cubre A y el antiguo: solo B sigue pendiente.
+  L = selectionLayers(marks, new Set([markKey(smartA), markKey(legacy)]))
+  assert.deepEqual(L.pending, [smartB])
+  // Un trazo que sigue creciendo (arrastre) deja de estar cubierto.
+  const grown = { ...smartA, points: [...pt, { x: 0.6, y: 0.6 }] }
+  L = selectionLayers([grown], [markKey(smartA)])
+  assert.deepEqual(L.pending, [grown])
 }
 
 console.log('clipBg ok')

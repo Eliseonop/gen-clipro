@@ -478,6 +478,50 @@ class FakeSam:
             m[:] = 255
         return m
 
+    def predict(self, embeds, points, orig_hw, box=None, mask_input=None):
+        """Mismo criterio que ``decode`` (una caja también cuenta como sujeto)."""
+        self.dec += 1
+        on = box is not None or any(lab == 1 for _, _, lab in points)
+        logits = np.full((3, 16, 16), 10.0 if on else -10.0, np.float32)
+        logits[1:] = -10.0
+        return logits, np.array([0.9, 0.1, 0.1], np.float32)
+
+
+class BlobSam(FakeSam):
+    """SAM falso que SEGMENTA de verdad: el objeto es la mancha clara (>128)
+    que contiene un punto positivo (o, si no toca ninguna, la que cae en la caja).
+
+    Con él se comprueba el seguimiento real: un cuadrado que se mueve se pierde
+    con puntos fijos y se conserva con la propagación."""
+
+    def encode(self, frame):
+        self.enc += 1
+        return {"img": cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)}
+
+    def decode(self, embeds, points, orig_hw):
+        from app.bg.sam_track import logits_to_matte
+        logits, _ = self.predict(embeds, points, orig_hw)
+        return logits_to_matte(logits[0], orig_hw)
+
+    def predict(self, embeds, points, orig_hw, box=None, mask_input=None):
+        self.dec += 1
+        h, w = orig_hw
+        gray = cv2.resize(embeds["img"], (w, h), interpolation=cv2.INTER_NEAREST)
+        n, labels = cv2.connectedComponents((gray > 128).astype(np.uint8))
+        keep = set()
+        for x, y, lab in points:
+            k = labels[min(h - 1, int(y * h)), min(w - 1, int(x * w))]
+            if lab == 1 and k:
+                keep.add(int(k))
+        if not keep and box is not None:
+            x0, y0, x1, y1 = box
+            sub = labels[int(y0 * h):int(y1 * h), int(x0 * w):int(x1 * w)]
+            keep = {int(k) for k in np.unique(sub) if k}
+        m = np.isin(labels, list(keep)) if keep else np.zeros((h, w), bool)
+        logit = np.where(m, 10.0, -10.0).astype(np.float32)
+        empty = np.full_like(logit, -10.0)
+        return np.stack([logit, empty, empty]), np.array([0.9, 0.1, 0.1], np.float32)
+
 
 class SamAssistedTest(CacheBase):
     def setUp(self):
@@ -538,6 +582,188 @@ class SamAssistedTest(CacheBase):
         bg_service.build_matte(src, self._sam_auto(edits=[p2]), 0.0, 1.0)
         self.assertEqual(self.sam.enc, enc_after_first, "re-encodeó: no reusó embeddings")
         self.assertGreater(self.sam.dec, enc_after_first, "no re-decodificó con el nuevo prompt")
+
+
+class SamTrackingTest(CacheBase):
+    """Eliminación personalizada: la selección SIGUE al objeto por el clip."""
+
+    W, H, FPS, N = 160, 96, 10, 12
+    SIDE = 20
+
+    def setUp(self):
+        super().setUp()
+        self.sam = BlobSam()
+        bg_providers.PROVIDERS["sam21_base_plus"] = self.sam
+
+    def _square_x(self, i: int) -> int:
+        return 10 + 8 * i                      # se desplaza 8 px por fotograma
+
+    def _moving(self) -> Path:
+        """Cuadrado blanco que cruza la imagen + otro quieto (distractor)."""
+        frames = np.zeros((self.N, self.H, self.W, 3), np.uint8)
+        for i in range(self.N):
+            x = self._square_x(i)
+            frames[i, 30:30 + self.SIDE, x:x + self.SIDE] = 255
+            frames[i, 70:88, 136:154] = 255   # distractor fijo abajo a la derecha
+        out = self.td / "moving.mp4"
+        subprocess.run(
+            ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+             "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{self.W}x{self.H}",
+             "-r", str(self.FPS), "-i", "-", "-pix_fmt", "yuv444p", "-crf", "0",
+             "-c:v", "libx264", str(out)],
+            input=frames.tobytes(), check=True, capture_output=True)
+        return out
+
+    def _auto(self, edits, **kw):
+        return clip_bg.normalize_auto({"provider": "sam21_base_plus", "mask_fps": self.FPS,
+                                       "mask_height": 128, "edits": edits, **kw})
+
+    def _center(self, i: int) -> tuple[float, float]:
+        return ((self._square_x(i) + self.SIDE / 2) / self.W, (30 + self.SIDE / 2) / self.H)
+
+    def _smart(self, i: int, op: str = "keep") -> dict:
+        x, y = self._center(i)
+        return {"op": op, "size": 0.02, "points": [{"x": x, "y": y}],
+                "t": i / self.FPS, "tool": "smart"}
+
+    def _at(self, meta, i: int, x: float, y: float) -> int:
+        m = bg_service.read_matte_frame(meta["base_key"], i)
+        return int(m[int(y * m.shape[0]), int(x * m.shape[1])])
+
+    def test_la_seleccion_sigue_al_objeto(self):
+        src = self._moving()
+        meta = bg_service.build_matte(src, self._auto([self._smart(0)]), 0.0, 1.1)
+        last = self.N - 1
+        self.assertEqual(self._at(meta, last, *self._center(last)), 255, "perdió el objeto")
+        self.assertEqual(self._at(meta, last, *self._center(0)), 0, "se quedó en el sitio")
+        self.assertEqual(self._at(meta, last, 145 / self.W, 79 / self.H), 0, "cogió el distractor")
+
+    def test_con_puntos_fijos_se_perdia(self):
+        """Lo que hacía antes (mismo punto en todos los frames): pierde el objeto."""
+        src = self._moving()
+        x, y = self._center(0)
+        m = bg_service.segment_frame(src, self._auto([]), (self.N - 1) / self.FPS, [(x, y, 1)])
+        self.assertEqual(int(m.max()), 0)
+
+    def test_marcar_en_medio_propaga_hacia_atras(self):
+        src = self._moving()
+        meta = bg_service.build_matte(src, self._auto([self._smart(6)]), 0.0, 1.1)
+        self.assertEqual(self._at(meta, 0, *self._center(0)), 255)
+        self.assertEqual(self._at(meta, self.N - 1, *self._center(self.N - 1)), 255)
+
+    def test_el_pincel_manual_tambien_se_sigue(self):
+        """Pincel normal (sin IA) en el fotograma 0: lo pintado se sigue igual."""
+        src = self._moving()
+        x, y = self._center(0)
+        brush = {"op": "keep", "size": 0.2, "points": [{"x": x, "y": y}], "t": 0.0, "tool": "manual"}
+        meta = bg_service.build_matte(src, self._auto([brush]), 0.0, 1.1)
+        self.assertEqual(self._at(meta, self.N - 1, *self._center(self.N - 1)), 255)
+
+    def test_el_borrador_manual_quita_del_fotograma_clave(self):
+        src = self._moving()
+        x, y = self._center(0)
+        erase = {"op": "erase", "size": 0.5, "points": [{"x": x, "y": y}], "t": 0.0, "tool": "manual"}
+        meta = bg_service.build_matte(src, self._auto([self._smart(0), erase]), 0.0, 1.1)
+        self.assertEqual(self._at(meta, 0, x, y), 0)
+
+    def test_sin_marcas_no_pasa_por_el_encoder(self):
+        src = self._moving()
+        meta = bg_service.build_matte(src, self._auto([]), 0.0, 1.1)
+        self.assertEqual(self.sam.enc, 0)
+        self.assertEqual(int(bg_service.read_matte_frame(meta["base_key"], 3).max()), 0)
+
+    def test_nueva_marca_no_reencodea(self):
+        src = self._moving()
+        bg_service.build_matte(src, self._auto([self._smart(0)]), 0.0, 1.1)
+        enc = self.sam.enc
+        bg_service.build_matte(src, self._auto([self._smart(0), self._smart(8)]), 0.0, 1.1)
+        self.assertEqual(self.sam.enc, enc, "re-encodeó al añadir una marca")
+
+    def test_vista_previa_del_fotograma_marcado(self):
+        """segment_frame sin puntos = la selección del fotograma marcado (o nada)."""
+        src = self._moving()
+        auto = self._auto([self._smart(5)])
+        m = bg_service.segment_frame(src, auto, 5 / self.FPS)
+        x, y = self._center(5)
+        self.assertEqual(int(m[int(y * m.shape[0]), int(x * m.shape[1])]), 255)
+        self.assertEqual(int(bg_service.segment_frame(src, auto, 0.0).max()), 0)
+
+    def test_vista_previa_solo_pincel_manual_no_carga_el_modelo(self):
+        src = self._moving()
+        brush = {"op": "keep", "size": 0.2, "points": [{"x": 0.5, "y": 0.5}], "t": 0.0, "tool": "manual"}
+        m = bg_service.segment_frame(src, self._auto([brush]), 0.0)
+        self.assertEqual(int(m[m.shape[0] // 2, m.shape[1] // 2]), 255)
+        self.assertEqual(self.sam.enc, 0)
+
+    def test_peticiones_simultaneas_encodean_una_vez(self):
+        """Pintar lanza varias vistas previas del mismo fotograma: un solo encode."""
+        import threading
+        import time
+
+        src = self._moving()
+        orig = self.sam.encode
+
+        def slow(frame):
+            time.sleep(0.2)
+            return orig(frame)
+
+        self.sam.encode = slow
+        auto = self._auto([self._smart(3)])
+        ts = [threading.Thread(target=bg_service.segment_frame, args=(src, auto, 0.3))
+              for _ in range(3)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertEqual(self.sam.enc, 1)
+
+    def test_analisis_previo_y_aplicar_no_reencodea(self):
+        """El análisis en segundo plano llena la caché: Aplicar solo sigue."""
+        src = self._moving()
+        res = bg_service.analyze_frames(src, self._auto([]), 0.0, 1.1)
+        self.assertEqual(res["encoded"], self.sam.enc)
+        self.assertGreaterEqual(self.sam.enc, self.N)
+        enc = self.sam.enc
+        again = bg_service.analyze_frames(src, self._auto([]), 0.0, 1.1)
+        self.assertEqual(again["encoded"], 0)
+        meta = bg_service.build_matte(src, self._auto([self._smart(0)]), 0.0, 1.1)
+        self.assertEqual(self.sam.enc, enc, "Aplicar re-encodeó lo ya analizado")
+        last = self.N - 1
+        self.assertEqual(self._at(meta, last, *self._center(last)), 255)
+
+    def test_analisis_cede_ante_la_vista_previa(self):
+        """Mientras el pincel espera su selección, el análisis no empieza encodes."""
+        import threading
+        import time
+
+        src = self._moving()
+        with bg_service._interactive_request():
+            t = threading.Thread(target=bg_service.analyze_frames,
+                                 args=(src, self._auto([]), 0.0, 1.1))
+            t.start()
+            time.sleep(0.4)
+            self.assertEqual(self.sam.enc, 0, "el análisis no cedió la CPU")
+        t.join(timeout=20)
+        self.assertFalse(t.is_alive())
+        self.assertGreaterEqual(self.sam.enc, self.N)
+
+    def test_analisis_se_puede_cancelar(self):
+        src = self._moving()
+        with self.assertRaises(bg_service.BgCancelled):
+            bg_service.analyze_frames(src, self._auto([]), 0.0, 1.1, cancel=lambda: True)
+
+    def test_analisis_solo_con_sam(self):
+        src = self._moving()
+        with self.assertRaises(ValueError):
+            bg_service.analyze_frames(src, clip_bg.normalize_auto({"provider": "u2net"}), 0.0, 1.1)
+
+    def test_embeddings_en_float16(self):
+        src = self._moving()
+        bg_service.build_matte(src, self._auto([self._smart(0)]), 0.0, 0.3)
+        files = list((self.td / "bgcache" / "embed").rglob("*.npz"))
+        self.assertTrue(files)
+        with np.load(files[0]) as z:
+            self.assertEqual(z["img"].dtype, np.float16)
 
 
 class ProviderRegistryTest(unittest.TestCase):

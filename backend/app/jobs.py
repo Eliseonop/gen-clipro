@@ -1026,6 +1026,38 @@ def start_subtitles_job(job: Job, pid: str, filename: str, asset_kind: str, mode
     thread.start()
 
 
+def _bg_request_clip(pid: str, req: dict):
+    """Clip (descriptor que manda el editor) y ruta de su material, validados.
+
+    El descriptor viene del editor (no de la timeline guardada): así no hay
+    carrera con el autosave y funciona con clips recién añadidos.
+    """
+    from . import clip_bg, compose
+    from .schemas import TimelineClip
+
+    project = projects.get_project(pid)
+    if project is None:
+        raise RuntimeError("Proyecto no encontrado.")
+    clip = TimelineClip(**{
+        "id": str(req.get("clip_id") or "tmp"),
+        "track_id": "V1",
+        "kind": str(req.get("kind") or "video"),
+        "asset_kind": str(req.get("asset_kind") or "clips"),
+        "asset_id": str(req.get("asset_id") or "0"),
+        "filename": str(req.get("filename") or ""),
+        "asset_scope": str(req.get("asset_scope") or "project"),
+        "in_point": float(req.get("in_point") or 0.0),
+        "out_point": float(req.get("out_point") or 0.0),
+        "source_duration": float(req.get("source_duration") or 0.0),
+    })
+    if not clip_bg.bg_capable(clip):
+        raise RuntimeError("Eliminar fondo solo funciona en clips de vídeo o imagen.")
+    path = compose._clip_path(project, clip)
+    if path is None or not path.exists():
+        raise RuntimeError(f"No se encuentra el material: {clip.filename}")
+    return clip, path
+
+
 def _run_bg_removal(job_id: str, pid: str, req: dict) -> None:
     """Calcula el matte de Eliminar fondo de un clip (nivel 1 de la caché).
 
@@ -1043,36 +1075,12 @@ def _run_bg_removal(job_id: str, pid: str, req: dict) -> None:
         job.message = message
 
     try:
-        from . import clip_bg, compose
+        from . import clip_bg
         from .bg import providers as bg_providers
         from .bg import service as bg_service
         from .clip_kind import is_still_clip
-        from .schemas import TimelineClip
 
-        project = projects.get_project(pid)
-        if project is None:
-            raise RuntimeError("Proyecto no encontrado.")
-
-        # El descriptor viene del editor (no de la timeline guardada): así no hay
-        # carrera con el autosave y funciona con clips recién añadidos.
-        clip = TimelineClip(**{
-            "id": str(req.get("clip_id") or "tmp"),
-            "track_id": "V1",
-            "kind": str(req.get("kind") or "video"),
-            "asset_kind": str(req.get("asset_kind") or "clips"),
-            "asset_id": str(req.get("asset_id") or "0"),
-            "filename": str(req.get("filename") or ""),
-            "asset_scope": str(req.get("asset_scope") or "project"),
-            "in_point": float(req.get("in_point") or 0.0),
-            "out_point": float(req.get("out_point") or 0.0),
-            "source_duration": float(req.get("source_duration") or 0.0),
-        })
-        if not clip_bg.bg_capable(clip):
-            raise RuntimeError("Eliminar fondo solo funciona en clips de vídeo o imagen.")
-        path = compose._clip_path(project, clip)
-        if path is None or not path.exists():
-            raise RuntimeError(f"No se encuentra el material: {clip.filename}")
-
+        clip, path = _bg_request_clip(pid, req)
         auto = clip_bg.normalize_auto(req.get("auto"))
         provider = bg_providers.get(auto["provider"])
         on_progress(0.02, f"Preparando el modelo {provider.id}…")
@@ -1108,6 +1116,50 @@ def _run_bg_removal(job_id: str, pid: str, req: dict) -> None:
         else:
             job.error = str(exc)
             job.message = "Error al eliminar el fondo."
+
+
+def _run_bg_analyze(job_id: str, pid: str, req: dict) -> None:
+    """Eliminación personalizada: analiza los fotogramas del clip EN SEGUNDO PLANO
+    mientras el usuario marca (el «Procesando…» de CapCut). Solo llena la caché
+    de embeddings; Aplicar la reutiliza y únicamente sigue la selección."""
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+
+    def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from . import clip_bg
+        from .bg import service as bg_service
+        from .clip_kind import is_still_clip
+
+        clip, path = _bg_request_clip(pid, req)
+        auto = clip_bg.normalize_auto(req.get("auto"))
+        t0, t1 = bg_service.clip_range(clip)
+        res = bg_service.analyze_frames(
+            path, auto, t0, t1, still=is_still_clip(clip),
+            on_progress=on_progress, cancel=lambda: job.cancel_requested)
+        job.progress = 1.0
+        job.message = f"Clip analizado ({res['frames']} fotogramas)."
+        job.status = JobStatus.done
+    except Exception as exc:  # noqa: BLE001
+        from .bg.service import BgCancelled
+
+        job.status = JobStatus.error
+        if isinstance(exc, (JobCancelled, BgCancelled)):
+            job.error = "Cancelado."
+            job.message = "Análisis detenido. Lo analizado queda en caché."
+        else:
+            job.error = str(exc)
+            job.message = "Error al analizar el clip."
+
+
+def start_bg_analyze_job(job: Job, pid: str, req: dict) -> None:
+    thread = threading.Thread(target=_run_bg_analyze, args=(job.id, pid, req), daemon=True)
+    thread.start()
 
 
 def start_bg_removal_job(job: Job, pid: str, req: dict) -> None:

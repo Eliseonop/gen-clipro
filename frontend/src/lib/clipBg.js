@@ -27,9 +27,9 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 export const BG_PROVIDERS = [
   { id: 'u2net', label: 'U²-Net (automático)', hint: 'Detecta el sujeto solo. Mejor borde.' },
   { id: 'u2netp', label: 'U²-Net lite (rápido)', hint: 'Modelo de 4,7 MB, más rápido.' },
-  { id: 'sam21_base_plus', label: 'SAM 2.1 (asistido)', hint: 'Marca el sujeto con puntos. Calidad alta.', interactive: true },
-  { id: 'sam21_large', label: 'SAM 2.1 large', hint: 'Asistido, máxima calidad (más lento).', interactive: true },
-  { id: 'sam21_tiny', label: 'SAM 2.1 tiny', hint: 'Asistido y ligero.', interactive: true },
+  { id: 'sam21_base_plus', label: 'SAM 2.1 (calidad)', hint: 'Buen equilibrio entre calidad y velocidad (259 MB).', interactive: true },
+  { id: 'sam21_large', label: 'SAM 2.1 large (máxima)', hint: 'Máxima calidad, el más lento (768 MB).', interactive: true },
+  { id: 'sam21_tiny', label: 'SAM 2.1 tiny (rápido)', hint: 'El más rápido y ligero (111 MB).', interactive: true },
 ]
 export const BG_PROVIDER_IDS = BG_PROVIDERS.map((p) => p.id)
 export const SAM_PROVIDER_IDS = BG_PROVIDERS.filter((p) => p.interactive).map((p) => p.id)
@@ -38,6 +38,82 @@ export const DEFAULT_PROVIDER = 'u2net'
 /** True para proveedores asistidos por puntos (SAM): el pincel = prompt. */
 export function isInteractiveProvider(id) {
   return String(id || '').startsWith('sam')
+}
+
+// --- Eliminación personalizada (SAM + seguimiento) ---------------------------
+// Las marcas guardan el fotograma de la FUENTE donde se hicieron (`t`); al
+// Aplicar, el backend (bg/sam_track.py) sigue la selección desde esos
+// fotogramas por todo el clip. Espejo de `clip_bg.sam_keyframes`.
+
+export const SAM_DEFAULT_PROVIDER = 'sam21_base_plus'
+
+/**
+ * Modelo SAM a usar al activar la Eliminación personalizada: el actual si ya es
+ * SAM; si no, uno YA DESCARGADO (evita bajar cientos de MB); si no, base_plus.
+ */
+export function preferredSamProvider(current, catalog) {
+  if (isInteractiveProvider(current)) return current
+  const ready = (catalog || []).filter((p) => p?.interactive && p.downloaded)
+  const order = ['sam21_base_plus', 'sam21_large', 'sam21_tiny']
+  return order.find((id) => ready.some((p) => p.id === id)) || SAM_DEFAULT_PROVIDER
+}
+
+/** Fotograma del matte de una marca (`null` si es antigua, sin `t`). */
+export function markFrameIndex(edit, maskFps) {
+  return Number.isFinite(edit?.t) ? matteFrameIndex(edit.t, maskFps) : null
+}
+
+/** Marcas hechas en el fotograma `idx` (las antiguas sin `t` cuentan en todos). */
+export function editsAtFrame(edits, idx, maskFps) {
+  return (edits || []).filter((e) => {
+    const k = markFrameIndex(e, maskFps)
+    return k == null || k === idx
+  })
+}
+
+/**
+ * Trazo del pincel/borrador NORMAL (se pinta tal cual). El resto son trazos
+ * INTELIGENTES (prompt de SAM); las marcas sin `tool` también, como en
+ * `clip_bg.sam_keyframes`.
+ */
+export function isManualMark(edit) {
+  return edit?.tool === 'manual'
+}
+
+/** Identidad de una marca (para saber qué trazos cubre una selección de SAM). */
+export function markKey(edit) {
+  return JSON.stringify(edit)
+}
+
+/**
+ * Capas de la selección de un fotograma marcado, como la enseña CapCut:
+ * `manual`  = pincel/borrador normal → el cliente lo pinta al instante;
+ * `smart`   = trazos inteligentes → se mandan a SAM al soltar;
+ * `pending` = trazos inteligentes que la última selección de SAM aún no cubre
+ *             (`covered`: claves de `markKey`) → se ven como línea mientras tanto.
+ */
+export function selectionLayers(marks, covered) {
+  const done = covered instanceof Set ? covered : new Set(covered || [])
+  const manual = [], smart = [], pending = []
+  for (const e of marks || []) {
+    if (isManualMark(e)) { manual.push(e); continue }
+    smart.push(e)
+    if (!done.has(markKey(e))) pending.push(e)
+  }
+  return { manual, smart, pending }
+}
+
+/** Fotogramas marcados, en orden: `[{ idx, t, count }]` (para saltar a ellos). */
+export function samMarkFrames(edits, maskFps) {
+  const by = new Map()
+  for (const e of edits || []) {
+    const idx = markFrameIndex(e, maskFps)
+    if (idx == null) continue
+    const cur = by.get(idx) || { idx, t: matteFrameTime(idx, maskFps), count: 0 }
+    cur.count += 1
+    by.set(idx, cur)
+  }
+  return [...by.values()].sort((a, b) => a.idx - b.idx)
 }
 
 export const BG_MODES = ['auto', 'chroma']
@@ -54,6 +130,9 @@ export const DEFAULT_MASK_FPS = 15
 export const DEFAULT_MASK_HEIGHT = 512
 
 export const EDIT_OPS = ['keep', 'erase']
+// Herramientas de la Eliminación personalizada (como CapCut): `smart` = pincel /
+// borrador INTELIGENTE (prompt de SAM, completa el objeto); `manual` = pinta tal cual.
+export const EDIT_TOOLS = ['smart', 'manual']
 export const BG_STATUS = ['idle', 'running', 'ready', 'error']
 
 // Presets de color habituales del croma (el selector permite cualquiera).
@@ -88,7 +167,13 @@ export function normalizeEdit(raw) {
     .map((p) => ({ x: num(p?.x, NaN), y: num(p?.y, NaN), ...(p?.m ? { m: 1 } : {}) }))
     .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
   if (!pts.length) return null
-  return { op, size: clamp(num(e.size, 0.08), 0.002, 1), points: pts }
+  const out = { op, size: clamp(num(e.size, 0.08), 0.002, 1), points: pts }
+  // Eliminación personalizada (SAM): fotograma de la FUENTE donde se marcó (s) y
+  // herramienta. Solo si vienen: los trazos de U²-Net no los llevan.
+  const t = num(e.t, NaN)
+  if (Number.isFinite(t) && t >= 0) out.t = Math.round(t * 1000) / 1000
+  if (EDIT_TOOLS.includes(e.tool)) out.tool = e.tool
+  return out
 }
 
 export function normalizeAuto(raw) {

@@ -20,7 +20,8 @@
 // El export hace exactamente lo mismo sobre los mismos PNG, de ahí la paridad.
 import {
   applyChromaKey, applyMatteLevels, autoActive, chromaActive, chromaMorphParams,
-  clipBg, hexRgb, matteIndexFor, MATTE_EXPAND_MAX, outlineAlpha, outlineParams,
+  clipBg, hexRgb, isInteractiveProvider, matteIndexFor, MATTE_EXPAND_MAX, outlineAlpha,
+  outlineParams,
 } from '../../lib/clipBg'
 import { mediaSize } from '../../lib/clipLayout'
 
@@ -113,9 +114,10 @@ function editsSig(edits) {
  *
  * `keep` pinta alfa opaco; `erase` lo borra (destination-out). Es el mismo
  * orden que ``derive_matte`` en Python: primero conservar, luego eliminar, así
- * que eliminar siempre gana en un punto pintado con las dos.
+ * que eliminar siempre gana en un punto pintado con las dos. También lo usa la
+ * selección de la Eliminación personalizada (bgMagic.js) para el pincel normal.
  */
-function paintEdits(ctx, edits, w, h) {
+export function paintEdits(ctx, edits, w, h) {
   for (const op of ['keep', 'erase']) {
     const picked = edits.filter((e) => e.op === op)
     if (!picked.length) continue
@@ -225,8 +227,12 @@ function matteAlphaCanvas(clip, auto, meta, srcTime, w, h, loopDur) {
   const img = matteImage(auto.base_key, idx)
   if (!img) return null
 
+  // En SAM las marcas son el prompt del seguimiento (ya van dentro del matte),
+  // no una corrección: pintarlas aquí las repetiría fijas en TODOS los
+  // fotogramas. Python tampoco las pinta (``derive_matte``) → paridad.
+  const edits = isInteractiveProvider(auto.provider) ? [] : auto.edits
   const sig = [auto.base_key, idx, auto.threshold, auto.softness, auto.feather,
-    auto.expansion, auto.opacity, auto.invert ? 1 : 0, editsSig(auto.edits),
+    auto.expansion, auto.opacity, auto.invert ? 1 : 0, editsSig(edits),
     `${w}x${h}`].join('|')
   const entry = scratch(alphaCache, clip.id, w, h)
   if (!entry) return null
@@ -261,7 +267,7 @@ function matteAlphaCanvas(clip, auto, meta, srcTime, w, h, loopDur) {
   // Pluma: equivalente a la gaussiana de cv2 (misma convención que clipMask).
   const sigma = auto.feather * h
   if (sigma > 0.3) blurCanvasInPlace(entry, clip, w, h, sigma)
-  if (auto.edits.length) paintEdits(ctx, auto.edits, w, h)
+  if (edits.length) paintEdits(ctx, edits, w, h)
   // Opacidad del sujeto: escala el alfa final (espejo de out*opacity en Python).
   const opacity = auto.opacity ?? 1
   if (opacity < 1) {

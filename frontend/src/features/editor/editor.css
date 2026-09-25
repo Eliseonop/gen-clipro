@@ -2523,6 +2523,26 @@ body.ed-mark-dragging, body.ed-mark-dragging * { cursor: ew-resize !important; }
 .ed-bg-op:hover { border-color: var(--line-bright); color: var(--text); }
 .ed-bg-op.keep.on { border-color: #34d399; color: #6ee7b7; background: rgba(16, 185, 129, 0.16); }
 .ed-bg-op.erase.on { border-color: #f87171; color: #fca5a5; background: rgba(220, 38, 38, 0.16); }
+/* Herramientas INTELIGENTES (SAM): borde discontinuo, igual que su cursor. */
+.ed-bg-op.smart { border-style: dashed; }
+.ed-bg-op { text-align: center; line-height: 1.2; }
+
+/* Eliminación personalizada: fotogramas marcados (clic = saltar a él). */
+.ed-bg-analyze {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ed-bg-analyze .ed-job { flex: 1; min-width: 0; }
+.ed-bg-analyze .ed-btn { padding: 4px 6px; }
+.ed-bg-marks { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.ed-bg-mark {
+  background: var(--card-2); border: 1px solid var(--line); color: var(--text-secondary);
+  border-radius: 999px; padding: 2px 8px; font-size: 11px; font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.ed-bg-mark:hover { border-color: var(--line-bright); color: var(--text); }
+.ed-bg-mark.on { border-color: #22d3ee; color: #a5f3fc; background: rgba(34, 211, 238, 0.14); }
 
 /* Color del croma */
 .ed-bg-color { display: flex; align-items: center; gap: 8px; }

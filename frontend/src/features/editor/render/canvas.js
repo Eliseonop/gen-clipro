@@ -11,7 +11,7 @@ import { drawAlignGuides } from '../../../lib/alignGuides'
 import { clipDur, timelineToSource } from '../editorModel'
 import { gifFrameAt, gifInfo } from '../gifPlayer'
 import { cutoutDrawable } from '../bgCutout'
-import { hasMagic, magicOverlayCanvas } from '../bgMagic'
+import { magicOverlayCanvas } from '../bgMagic'
 import { applyCanvasFx, clipFxAt } from '../../../lib/clipFx'
 import { posedTransform, clipPose, clipMasksAt } from '../../../lib/clipAnim'
 import { beginMaskLayer, endMaskLayer, maskHandles, strokeMaskShape } from '../../../lib/clipMask'
@@ -317,9 +317,10 @@ function gifLoopDur(clip, el) {
 // resolución (el recorte topa el lado mayor), así que quien dibuje debe traducir
 // los píxeles de origen con `srcRectOn`. Mismo gancho que ya usaba el GIF: para el
 // resto del dibujo esto "es" la fuente.
-export function drawSourceFor(clip, el, srcTime) {
+export function drawSourceFor(clip, el, srcTime, { cutout = true } = {}) {
   const gif = gifDrawable(clip, el, srcTime)
   const base = gif || el
+  if (!cutout) return base
   return cutoutDrawable(clip, base, srcTime, gifLoopDur(clip, el)) || base
 }
 
@@ -421,15 +422,28 @@ export function bgBrushRadiusPx(clip, size, frame, env, head) {
   return (size / crop.hf) * frame.h * (pose.scale ?? 1) * fxs / 2
 }
 
-// Círculo del pincel de Eliminar fondo bajo el cursor: verde = conservar,
-// rojo = eliminar. Es el mismo radio que se pinta en la máscara.
-function drawBgBrushCursor(ctx, clip, brush, frame, env, head) {
+// Círculo del pincel de Eliminar fondo bajo el cursor. Es el mismo radio que se
+// pinta en la máscara. En la Eliminación personalizada (`plain`) es el círculo
+// blanco de CapCut: el color lo da el trazo (cian añade, rojo quita). En el
+// retoque de la automática: verde = conservar, rojo = eliminar.
+function drawBgBrushCursor(ctx, clip, brush, frame, env, head, plain = false) {
   const r = bgBrushRadiusPx(clip, brush.size || 0.08, frame, env, head)
   if (!(r > 0) || brush.px == null || brush.py == null) return
   const keep = brush.op === 'keep'
   ctx.save()
   ctx.beginPath()
   ctx.arc(brush.px, brush.py, r, 0, Math.PI * 2)
+  if (plain) {
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.16)'
+    ctx.fill()
+    ctx.lineWidth = Math.max(1.5, frame.h * 0.0025)
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)'
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.6)'
+    ctx.shadowBlur = 3
+    ctx.stroke()
+    ctx.restore()
+    return
+  }
   ctx.fillStyle = keep ? 'rgba(52, 211, 153, 0.18)' : 'rgba(248, 113, 113, 0.18)'
   ctx.fill()
   ctx.lineWidth = Math.max(1.5, frame.h * 0.003)
@@ -496,10 +510,10 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
   const fr = frame || { x: 0, y: 0, w: ctx.canvas.width, h: ctx.canvas.height }
   const cw = fr.w, ch = fr.h, ox = fr.x, oy = fr.y
   const outW = outRef.current.w, outH = outRef.current.h
-  // Lápiz mágico: overlay de la selección (SAM) del clip seleccionado, con borde
-  // de hormigas animado. Se dibuja por la MISMA geometría que la fuente del clip.
+  // Eliminación personalizada: mientras se edita, el clip se ve SIN recortar y
+  // con la selección encima (cian), como en CapCut; se dibuja por la MISMA
+  // geometría que la fuente del clip. Al Aplicar vuelve a verse el recorte.
   const magic = env.magicRef?.current
-  const magicPhase = (typeof performance !== 'undefined' ? performance.now() : Date.now())
   // Fondo del área exportada. Normalmente negro; el usuario puede cambiarlo por
   // cuadros (para VER la transparencia), un color o una imagen/vídeo de prueba.
   // Es SOLO vista previa: no afecta al export. El fondo del workspace lo pinta
@@ -549,14 +563,14 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
     // GIF animado + Eliminar fondo: la fuente de dibujo se sustituye por un
     // canvas del MISMO aspecto; la geometría se sigue calculando con `el` (las
     // dimensiones reales del material), nunca con la del recorte.
-    const drawEl = drawSourceFor(clip, el, srcTime)
-    const magicEl = (magic?.on && selected.has(clip.id) && hasMagic(clip.id))
-      ? magicOverlayCanvas(clip.id, magicPhase) : null
+    const editing = !!(magic?.on && magic.clipId === clip.id && !ghost)
+    const drawEl = drawSourceFor(clip, el, srcTime, { cutout: !editing })
+    const magicEl = editing ? magicOverlayCanvas(clip.id, magic, mw, mediaSize(el).h) : null
     const fx = fxForClip(clip, head)
     if (isOverlay(clip)) {
       const dest = drawOverlayLayer(g, el, drawEl, clip, srcTime, outW, outH, fx, localT, fr)
       // Misma geometría de overlay, con el overlay de selección encima.
-      if (magicEl && !ghost) drawOverlayLayer(g, el, magicEl, clip, srcTime, outW, outH, fx, localT, fr)
+      if (magicEl) drawOverlayLayer(g, el, magicEl, clip, srcTime, outW, outH, fx, localT, fr)
       flush()
       if (ghost) continue
       hits.push({ id: clip.id, kind: clip.kind, dest, overlay: true })
@@ -579,7 +593,7 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
       }
       const rfDraw = reframeForDraw(clip, localT, srcTime)
       drawReframe(g, drawEl, rfDraw, srcTime, outW / outH, { clear: false, dest: { dx: 0, dy: 0, dw: cw, dh: ch } })
-      // Overlay de selección del Lápiz mágico, por la MISMA geometría del clip.
+      // Selección de la Eliminación personalizada, por la MISMA geometría del clip.
       if (magicEl) drawReframe(g, magicEl, rfDraw, srcTime, outW / outH, { clear: false, dest: { dx: 0, dy: 0, dw: cw, dh: ch } })
       g.restore()
       flush()
@@ -628,7 +642,7 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
   if (bgBrush?.on) {
     const selId = selected.values().next().value
     const selClip = selId ? clipsRef.current.find((c) => c.id === selId) : null
-    if (selClip) drawBgBrushCursor(ctx, selClip, bgBrush, fr, env, head)
+    if (selClip) drawBgBrushCursor(ctx, selClip, bgBrush, fr, env, head, !!magic?.on)
   }
   if (env.maskModeRef?.current) {
     const selId = selected.values().next().value
