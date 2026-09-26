@@ -6,6 +6,7 @@ import { clipEnd, isVisualClip, timelineToSource } from '../features/editor/edit
 import { stackLayers } from '../features/editor/trackStack.js'
 import { clipFlip, clipPose, posedTransform } from './clipAnim.js'
 import { keyframesOn } from './clipKeyframes.js'
+import { frameHandles, frameOfDest, handleAt, HANDLE_PAD } from './selectionFrame.js'
 
 export const newTransform = () => ({ x: 0.5, y: 0.5, scale: 1, rotation: 0 })
 
@@ -53,10 +54,28 @@ export { clipFlip } from './clipAnim.js'
 export const MAIN_FRAME_FRAC = 1
 
 // Rango de posición (centro del clip) en coords normalizadas del cuadro de salida.
-// El cuadro naranja es solo el área exportada, NO el límite de movimiento: el clip
-// puede salir ~2 anchos/altos hacia cada lado para animar entradas/salidas de escena.
-export const CLIP_POS_MIN = -2
-export const CLIP_POS_MAX = 3
+// El cuadro naranja es solo el área exportada, NO el límite de movimiento: como en
+// CapCut, el clip puede salir muy lejos (10 anchos/altos) para que una animación
+// empiece con él completamente fuera. Espejo de _POS_MIN/_POS_MAX (text_ass.py).
+// Escala máxima de un texto (×): libass lo dibuja como vector, así que no pierde
+// calidad ni pesa. Figuras e imágenes se exportan como imagen escalada: tope ×8.
+export const TEXT_SCALE_MAX = 100
+export const CLIP_POS_MIN = -10
+export const CLIP_POS_MAX = 11
+
+// Posición como la enseña CapCut: (0, 0) en el centro del cuadro, el borde a
+// ±ancho y ±alto del proyecto (1920×1080 → X ±1920, Y ±1080) y la Y hacia
+// arriba. Solo es la UI: el modelo sigue en 0..1 con el origen arriba a la izq.
+export function toCapcutPos(x, y, w, h) {
+  return { X: Math.round((x - 0.5) * 2 * w), Y: Math.round((0.5 - y) * 2 * h) }
+}
+
+export function fromCapcutPos(X, Y, w, h) {
+  return {
+    x: +clamp(0.5 + X / (2 * w), CLIP_POS_MIN, CLIP_POS_MAX).toFixed(6),
+    y: +clamp(0.5 - Y / (2 * h), CLIP_POS_MIN, CLIP_POS_MAX).toFixed(6),
+  }
+}
 
 export function frameRectOf(cw, ch, viewZoom = 1, outAspect) {
   const z = Number(viewZoom)
@@ -373,18 +392,15 @@ export function canvasPointer(ev, canvas) {
   }
 }
 
-export function hitTransformHandle(px, py, dest, pad = 12) {
-  const { dx, dy, dw, dh } = dest
-  const near = (hx, hy) => (px - hx) ** 2 + (py - hy) ** 2 <= pad * pad
-  const corners = [
-    [dx, dy], [dx + dw, dy], [dx, dy + dh], [dx + dw, dy + dh],
-  ]
-  if (corners.some(([x, y]) => near(x, y))) return 'scale'
-  const rx = dx + dw / 2
-  const ry = dy - 22
-  if (near(rx, ry)) return 'rotate'
-  if (px >= dx && px <= dx + dw && py >= dy && py <= dy + dh) return 'move'
-  return null
+export function hitTransformHandle(px, py, dest, pad = HANDLE_PAD) {
+  const f = frameOfDest(dest)
+  const k = handleAt(px, py, frameHandles(f), ['rot', 'tl', 'tr', 'bl', 'br'], pad)
+  if (k === 'rot') return 'rotate'
+  if (k) return 'scale'
+  const a = -f.rotation * Math.PI / 180
+  const x = (px - f.cx) * Math.cos(a) - (py - f.cy) * Math.sin(a)
+  const y = (px - f.cx) * Math.sin(a) + (py - f.cy) * Math.cos(a)
+  return Math.abs(x) <= f.w / 2 && Math.abs(y) <= f.h / 2 ? 'move' : null
 }
 
 /**

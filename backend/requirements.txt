@@ -10,6 +10,6 @@ soundfile
 google-genai
 mcp>=2,<3
 openai
-# Eliminar fondo (segmentación U2-Net) y Kokoro TTS. Para GPU:
+# Eliminar fondo (RVM, BiRefNet, U2-Net, SAM) y Kokoro TTS. Para GPU:
 #   onnxruntime-gpu (NVIDIA/CUDA) u onnxruntime-directml (Windows, cualquier GPU)
 onnxruntime

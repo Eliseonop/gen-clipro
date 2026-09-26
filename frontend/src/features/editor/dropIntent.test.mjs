@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import {
-  NEW_TRACK_BAND, REPLACE_TOL,
-  clipAtTime, clipCollidingWith, dropIntent, trackAbove, resolveNewTrack, newTrackIndex,
+  NEW_TRACK_BAND, REPLACE_TOL, INSERT_EDGE, INSERT_EDGE_PX,
+  clipAtTime, clipCollidingWith, dropIntent, newTrackIndex, insertEdge, insertSlot, slotBoundary, slotIndex,
 } from './dropIntent.js'
 
 const V = (id, track_id, start, dur) => ({
@@ -70,29 +70,6 @@ assert.equal(r.action, 'place')
 r = dropIntent(clips, 'V1', 0, 5, undefined)
 assert.equal(r.action, 'replace')
 
-// --- pista de encima ----------------------------------------------------------
-assert.equal(trackAbove(tracks, 'V1')?.id, 'V2')
-assert.equal(trackAbove(tracks, 'V2'), null)      // no hay V3
-assert.equal(trackAbove(tracks, 'A1'), null)
-assert.equal(trackAbove(tracks, 'nope'), null)
-
-// V2 está ocupada en 0-4 → hay que crear pista, justo encima de V1.
-assert.deepEqual(resolveNewTrack(clips, tracks, 'V1', 0, 3), { trackId: null, create: true, index: 1 })
-// En 10 sí cabe en V2 → se reutiliza en vez de crear otra.
-assert.deepEqual(resolveNewTrack(clips, tracks, 'V1', 10, 3), { trackId: 'V2', create: false })
-// Pista de encima bloqueada → crear.
-const locked = [{ id: 'V1', kind: 'video' }, { id: 'V2', kind: 'video', locked: true }]
-assert.deepEqual(resolveNewTrack(clips, locked, 'V1', 10, 3), { trackId: null, create: true, index: 1 })
-// Sin pista encima → crear.
-assert.deepEqual(resolveNewTrack(clips, tracks, 'V2', 10, 3), { trackId: null, create: true, index: 2 })
-// Pila con un texto entre dos vídeos: la de encima de V1 es T1 (otro tipo), así
-// que la nueva va entre V1 y T1 y no por delante del texto.
-const mixed = [{ id: 'V1', kind: 'video' }, { id: 'T1', kind: 'text' }, { id: 'V2', kind: 'video' }]
-assert.equal(trackAbove(mixed, 'V1')?.id, 'T1')
-assert.deepEqual(resolveNewTrack(clips, mixed, 'V1', 10, 3), { trackId: null, create: true, index: 1 })
-// En audio no hay pila: se deja el sitio de siempre.
-assert.deepEqual(resolveNewTrack(clips, tracks, 'A1', 10, 3), { trackId: null, create: true, index: null })
-
 assert.equal(REPLACE_TOL, 0.2)
 console.log('dropIntent ok')
 
@@ -126,3 +103,60 @@ assert.equal(newTrackIndex(tracks, 'text', 'below'), 0)
 assert.equal(newTrackIndex([{ id: 'A1', kind: 'audio' }], 'text', 'above'), 1)
 assert.equal(newTrackIndex([], 'video', 'above'), 0)
 console.log('dropIntent move ok')
+
+// --- pista nueva al pasar por encima de otras pistas (como CapCut) ------------
+// Array: V1 (fondo), T1, V2 (delante), A1, A2. En pantalla: V2, T1, V1, A1, A2.
+const stackTracks = [
+  { id: 'V1', kind: 'video' }, { id: 'T1', kind: 'text' }, { id: 'V2', kind: 'video' },
+  { id: 'A1', kind: 'audio' }, { id: 'A2', kind: 'audio' },
+]
+// Un texto sobre una pista de VÍDEO: siempre pista nueva, arriba o abajo según la mitad.
+assert.deepEqual(insertSlot(stackTracks, 'text', 'V1', 0.3, 'T1'), { targetId: 'V1', place: 'above' })
+assert.deepEqual(insertSlot(stackTracks, 'text', 'V1', 0.7, 'T1'), { targetId: 'V1', place: 'below' })
+assert.deepEqual(insertSlot(stackTracks, 'text', 'V2', 0.5, 'T1'), { targetId: 'V2', place: 'below' })
+// …y un vídeo sobre una de texto, igual.
+assert.deepEqual(insertSlot(stackTracks, 'video', 'T1', 0.1, 'V1'), { targetId: 'T1', place: 'above' })
+// Sobre una de su tipo: en el cuerpo entra en ella; en los bordes, pista nueva.
+const twoText = [{ id: 'T1', kind: 'text' }, { id: 'T2', kind: 'text' }]
+assert.equal(insertSlot(twoText, 'text', 'T2', 0.5, 'T1'), null)
+assert.deepEqual(insertSlot(twoText, 'text', 'T2', INSERT_EDGE - 0.01, 'T1'), { targetId: 'T2', place: 'above' })
+assert.deepEqual(insertSlot(twoText, 'text', 'T2', 1 - INSERT_EDGE + 0.01, 'T1'), { targetId: 'T2', place: 'below' })
+assert.equal(insertSlot(twoText, 'text', 'T2', INSERT_EDGE, 'T1'), null)
+// También junto a su propia pista (CapCut): la de al lado sea del tipo que sea.
+assert.deepEqual(insertSlot(twoText, 'text', 'T1', 0.05, 'T1'), { targetId: 'T1', place: 'above' })
+// …salvo que sea el único clip de su pista: la nueva pegada a ella no cambiaría nada.
+assert.equal(insertSlot(twoText, 'text', 'T1', 0.05, 'T1', { originAlone: true }), null)
+assert.equal(insertSlot(twoText, 'text', 'T2', 0.95, 'T1', { originAlone: true }), null)   // debajo de T2 = encima de T1
+assert.deepEqual(insertSlot(twoText, 'text', 'T2', 0.05, 'T1', { originAlone: true }), { targetId: 'T2', place: 'above' })
+// Borde en px: se acierta igual en una pista de texto baja que en una de vídeo alta.
+assert.equal(INSERT_EDGE_PX, 9)
+assert.equal(insertEdge(52), 9 / 52)
+assert.equal(insertEdge(28), 0.3)
+assert.equal(insertEdge(120), 0.12)
+assert.equal(insertEdge(0), INSERT_EDGE)
+assert.equal(insertSlot(twoText, 'text', 'T2', 0.25, 'T1', { edge: 0.3 })?.place, 'above')
+assert.equal(insertSlot(twoText, 'text', 'T2', 0.25, 'T1'), null)
+// Una de su tipo pero bloqueada cuenta como "no es suya".
+const lockedT = [{ id: 'T1', kind: 'text' }, { id: 'T2', kind: 'text', locked: true }]
+assert.deepEqual(insertSlot(lockedT, 'text', 'T2', 0.5, 'T1'), { targetId: 'T2', place: 'below' })
+// Un texto bajado hasta el audio: pista nueva al fondo de la pila (encima del audio).
+assert.deepEqual(insertSlot(stackTracks, 'text', 'A2', 0.5, 'T1'), { targetId: 'V1', place: 'below' })
+// Un audio subido hasta la pila: pista nueva arriba del bloque de audio.
+assert.deepEqual(insertSlot(stackTracks, 'audio', 'V2', 0.5, 'A1'), { targetId: 'A1', place: 'above' })
+// Pista desconocida o yRatio ausente.
+assert.equal(insertSlot(stackTracks, 'text', 'nope', 0.5, 'T1'), null)
+assert.deepEqual(insertSlot(stackTracks, 'text', 'V1', undefined, 'T1'), { targetId: 'V1', place: 'below' })
+
+// Índice del array: en la pila "encima" es DESPUÉS en el array; en audio, antes.
+assert.equal(slotIndex(stackTracks, { targetId: 'V1', place: 'above' }), 1)   // entre V1 y T1
+assert.equal(slotIndex(stackTracks, { targetId: 'V1', place: 'below' }), 0)   // fondo de la pila
+assert.equal(slotIndex(stackTracks, { targetId: 'V2', place: 'above' }), 3)   // delante de todo
+assert.equal(slotIndex(stackTracks, { targetId: 'A1', place: 'above' }), 3)
+assert.equal(slotIndex(stackTracks, { targetId: 'A2', place: 'below' }), 5)
+assert.equal(slotIndex(stackTracks, { targetId: 'nope', place: 'above' }), 5)
+// Hueco en pantalla (V2, T1, V1, A1, A2): debajo de V2 = encima de T1.
+assert.equal(slotBoundary(stackTracks, { targetId: 'V2', place: 'below' }), 1)
+assert.equal(slotBoundary(stackTracks, { targetId: 'T1', place: 'above' }), 1)
+assert.equal(slotBoundary(stackTracks, { targetId: 'A2', place: 'below' }), 5)
+assert.equal(slotBoundary(stackTracks, { targetId: 'nope', place: 'below' }), -1)
+console.log('dropIntent insertSlot ok')

@@ -73,7 +73,7 @@ El orden de las columnas se cambia desde el botón **Diseño** (icono de cuadrí
 - Transiciones de entrada/salida: fade, dissolve, wipe, zoom, slide, pop.
 - Audio: volumen (con keyframes), fundidos de entrada/salida, ecualizador, compresor, reverb, echo, reducción de ruido, distorsión y **filtros de sonido** (bajo el agua, teléfono, radio, megáfono, amortiguado) con intensidad animable; se oyen en la vista previa: [FILTROS_SONIDO.md](FILTROS_SONIDO.md).
 - Cambiar **velocidad** del clip (con o sin cambio de tono) y reproducción inversa.
-- **Eliminar fondo** de un vídeo o imagen: automático con IA, **personalizado** (pincel inteligente que sigue al objeto por todo el clip, como CapCut) y chroma key: [ELIMINAR_FONDO_PERSONALIZADO.md](ELIMINAR_FONDO_PERSONALIZADO.md).
+- **Eliminar fondo** de un vídeo o imagen: automático con IA (motores **RVM** para personas en vídeo, **BiRefNet** para cualquier sujeto, U²-Net: [ELIMINAR_FONDO_MOTORES.md](ELIMINAR_FONDO_MOTORES.md)), **personalizado** (pincel inteligente que sigue al objeto por todo el clip, como CapCut) y chroma key: [ELIMINAR_FONDO_PERSONALIZADO.md](ELIMINAR_FONDO_PERSONALIZADO.md).
 
 **Texto y subtítulos**
 - Añadir textos a la composición con estilos, presets y favoritos.
@@ -142,8 +142,12 @@ combinan con cualquiera:
 - **Eliminación automática.** Detecta el sujeto principal con un modelo de
   segmentación y separa el fondo, sin marcar nada. Pulsa *Aplicar* y verás el
   progreso (se puede cancelar; lo ya calculado se guarda).
-  - Modelos: **U²-Net** (mejor borde) o **U²-Net lite** (mucho más rápido). Se
-    descargan solos la primera vez. Usa GPU si está disponible y CPU si no.
+  - Motores: **RVM** (personas en vídeo: recuerda los fotogramas anteriores y el
+    borde no parpadea; se propone para vídeo), **BiRefNet** (cualquier sujeto con
+    el mejor borde, más lento; se propone para imágenes) y **U²-Net** / **U²-Net
+    lite** (rápidos, más toscos). *Detalle del borde* (512/720/1080 px) afina pelo
+    y contornos. Se descargan solos la primera vez; GPU si hay, CPU si no.
+    Detalle: [ELIMINAR_FONDO_MOTORES.md](ELIMINAR_FONDO_MOTORES.md).
   - *Retocar máscara*: pincel *Conservar* / *Eliminar* para corregir lo que la IA
     no acertó; la corrección se aplica igual en todo el clip y se guarda pegada al
     sujeto (aunque después cortes, muevas o escales el clip).

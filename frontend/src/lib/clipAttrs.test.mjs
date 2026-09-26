@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import {
   ATTR_GROUP_IDS, copyClipAttrs, groupApplies, mergeKeyframes, pasteClipAttrs, pasteableGroups,
 } from './clipAttrs.js'
-import { clipPropsAt } from './clipKeyframes.js'
+import { clipPropsAt, textStyleAt } from './clipKeyframes.js'
 
 const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-5, `${msg}: ${a} ≠ ${b}`)
 
@@ -161,5 +161,21 @@ const zoomAnim = () => ({ enabled: true, items: [full(0, { scale: 1 }), full(2, 
   assert.deepEqual(mergeKeyframes(clip('B', 'video', { keyframes: kf }), clip('A'), ['x']), kf, 'keyframes apagados intactos')
 }
 assert.equal(pasteClipAttrs(clip('A'), clip('A', 'video', { flip_h: true }), ['flip']).flip_h, undefined, 'no se pega en sí mismo')
+
+// Color animado de un texto (keyframes de estilo, por propiedad).
+{
+  const kf = (t, props) => ({ id: `k${t}`, t, interpolation: 'linear', props })
+  const txt = (id, items) => ({ id, kind: 'text', style: { x: 0.5, y: 0.5 }, keyframes: { enabled: true, items } })
+  const red = txt('R', [kf(0, { color: '#ff0000' }), kf(1, { color: '#0000ff' })])
+  const moving = txt('M', [kf(0, { x: 0.2 }), kf(2, { x: 0.8 })])
+  // Pegar la Animación de otro texto conserva el color animado del destino.
+  const keep = pasteClipAttrs(red, moving, ['animation'])
+  assert.equal(textStyleAt(keep, 0.5).color, '#800080')
+  assert.ok(Math.abs(clipPropsAt(keep, 1).x - 0.5) < 1e-6)
+  // Pegar el Estilo trae el color animado del origen.
+  const got = pasteClipAttrs(moving, red, ['style'])
+  assert.equal(textStyleAt(got, 1).color, '#0000ff')
+  assert.ok(Math.abs(clipPropsAt(got, 1).x - 0.5) < 1e-6, 'y la pose del destino sigue animada')
+}
 
 console.log('clipAttrs ok')

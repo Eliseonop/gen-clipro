@@ -1,13 +1,15 @@
 // Panel Video → Eliminar fondo. Edita `clip.bg_removal` (ver lib/clipBg.js).
 //
 // Organizado como CapCut:
-//   1. Eliminación automática     → U²-Net detecta el sujeto solo (job + caché)
+//   1. Eliminación automática     → la IA detecta el sujeto sola (job + caché).
+//      Motores: RVM (personas en vídeo, con memoria entre fotogramas),
+//      BiRefNet (cualquier sujeto, mejor borde) y U²-Net (rápido, tosco).
 //   2. Eliminación personalizada  → SAM: el usuario marca el objeto en un
 //      fotograma (pincel/borrador INTELIGENTE o normal) y, al aplicar, la
 //      selección se SIGUE por todo el clip (backend: bg/sam_track.py)
 //   3. Chroma key                 → filtro puro, sin job ni archivos
 // 1 y 2 comparten `bg_removal.auto` y se excluyen: la familia del modelo
-// (U²-Net / SAM) decide cuál está activa.
+// (automático / SAM) decide cuál está activa.
 //
 // Nada de esto toca el archivo original: todo son propiedades del clip, así que
 // entra por el undo/redo del editor y viaja con el proyecto.
@@ -16,7 +18,7 @@ import Hint from '../../components/Hint'
 import Icon from '../../components/Icon'
 import FlipSelect from '../../components/FlipSelect'
 import {
-  BG_PROVIDERS, CHROMA_PRESETS, MATTE_FEATHER_MAX, autoActive, clipBg,
+  BG_PROVIDERS, CHROMA_PRESETS, MASK_HEIGHT_OPTIONS, MATTE_FEATHER_MAX, autoActive, clipBg,
   isInteractiveProvider, normalizeOutline, samMarkFrames,
 } from '../../lib/clipBg'
 import { sourceToTimeline } from './editorModel'
@@ -43,7 +45,7 @@ const CUSTOM_TOOLS = [
     title: 'Quita exactamente lo que pintas (bordes)' },
 ]
 
-function StatusLine({ auto, job }) {
+function StatusLine({ auto, job, notice }) {
   if (job && (job.status === 'pending' || job.status === 'running')) {
     return <JobProgress job={job} progress={job.progress || 0} />
   }
@@ -52,6 +54,14 @@ function StatusLine({ auto, job }) {
       <div className="ed-bg-status err">
         <Icon name="error" size={14} />
         <span>{job.error || 'No se pudo eliminar el fondo.'}</span>
+      </div>
+    )
+  }
+  if (auto.status === 'ready' && auto.base_key && notice) {
+    return (
+      <div className="ed-bg-status warn">
+        <Icon name="warning" size={14} />
+        <span>{notice}</span>
       </div>
     )
   }
@@ -67,7 +77,7 @@ function StatusLine({ auto, job }) {
 }
 
 export default function EdBgRemove({
-  clip, job, cutoutJob, providers, device,
+  clip, job, cutoutJob, providers, device, notice,
   onToggleAuto, onApplyAuto, onCancelAuto, onChangeAuto,
   onToggleCustom, onApplyCustom, onSeekMark, magicBusy, curFrame, analyzeJob, onStopAnalyze,
   onExportCutout, onCancelCutout,
@@ -87,9 +97,17 @@ export default function EdBgRemove({
   const autoOn = !!auto.enabled && !isSam
   const customOn = !!auto.enabled && isSam
   const strokes = auto.edits?.length || 0
-  const provList = (providers?.length ? providers : BG_PROVIDERS.map((p) => ({ ...p, available: true })))
+  // Catálogo del backend (disponibilidad) con las etiquetas/pistas de la UI;
+  // el orden y los textos salen de BG_PROVIDERS, no del servidor.
+  const provList = BG_PROVIDERS.map((p) => ({
+    available: true, ...(providers || []).find((q) => q.id === p.id), ...p,
+  }))
   const autoModels = provList.filter((p) => !isInteractiveProvider(p.id))
   const samModels = provList.filter((p) => isInteractiveProvider(p.id))
+  const autoInfo = autoModels.find((p) => p.id === auto.provider)
+  const heightOptions = MASK_HEIGHT_OPTIONS.some((o) => o.value === auto.mask_height)
+    ? MASK_HEIGHT_OPTIONS
+    : [...MASK_HEIGHT_OPTIONS, { value: auto.mask_height, label: `${auto.mask_height} px` }]
   const samInfo = samModels.find((p) => p.id === auto.provider)
   const marks = customOn ? samMarkFrames(auto.edits, auto.mask_fps) : []
   const isVideo = clip?.kind === 'video'
@@ -152,9 +170,10 @@ export default function EdBgRemove({
           <>
             <label className="ed-insp-select">
               <span>
-                Modelo
+                Motor
                 <Hint>
-                  {autoModels.find((p) => p.id === auto.provider)?.hint || ''}
+                  {autoInfo?.hint || ''}
+                  {autoInfo?.available === false ? ' Se descarga al aplicar por primera vez.' : ''}
                   {device ? ` Se ejecuta en ${device}.` : ''}
                 </Hint>
               </span>
@@ -165,6 +184,27 @@ export default function EdBgRemove({
                   label: p.available === false ? `${p.label} (se descarga)` : p.label,
                 }))}
                 onChange={(v) => onChangeAuto?.({ provider: v })}
+              />
+            </label>
+            {autoInfo?.people && !isVideo && (
+              <div className="ed-bg-note">RVM está pensado para personas en vídeo; en una imagen suele ir mejor BiRefNet.</div>
+            )}
+            {auto.provider === 'birefnet_lite' && isAnimated && device === 'cpu' && (
+              <div className="ed-bg-note">Sin GPU, BiRefNet tarda varios segundos por fotograma: en clips largos puede tardar minutos.</div>
+            )}
+            <label className="ed-insp-select">
+              <span>
+                Detalle del borde
+                <Hint>
+                  Resolución a la que se calcula la máscara. Más alta = pelo y bordes más
+                  finos con RVM y BiRefNet (en U²-Net apenas cambia). Cambiarla obliga
+                  a <b>{ready ? 'Recalcular' : 'Aplicar'}</b>.
+                </Hint>
+              </span>
+              <FlipSelect
+                value={auto.mask_height}
+                options={heightOptions}
+                onChange={(v) => onChangeAuto?.({ mask_height: Number(v) })}
               />
             </label>
             {stabilizeSlider}
@@ -180,7 +220,7 @@ export default function EdBgRemove({
                 </button>
               )}
             </div>
-            <StatusLine auto={auto} job={job} />
+            <StatusLine auto={auto} job={job} notice={notice} />
           </>
         )}
       </InspSection>

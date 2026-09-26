@@ -3,7 +3,7 @@ import Icon from '../../components/Icon'
 import FlipSelect from '../../components/FlipSelect'
 import { clipPose } from '../../lib/clipAnim'
 import { APPEAR_OPTIONS, COLOR_FX, EXIT_OPTIONS, fxNum } from '../../lib/clipFx'
-import { canKeyframe, kfState } from '../../lib/clipKeyframes'
+import { canKeyframe, kfNeighborT, kfState, styleKfState, textStyleAt, withTextStyleKf } from '../../lib/clipKeyframes'
 import { bgCapable } from '../../lib/clipBg'
 import { maskable } from '../../lib/clipMask'
 import { isVisualClip } from './editorModel'
@@ -11,7 +11,7 @@ import EdBgRemove from './EdBgRemove'
 import EdClipNote from './EdClipNote'
 import EdMask from './EdMask'
 import EdShape from './EdShape'
-import EdText, { TextFxPanel } from './EdText'
+import EdText, { SubtitlesPanel, TextFavorites, TextFxPanel } from './EdText'
 import EdTransform, { BlendRow, InspSection, InspSlider } from './EdTransform'
 import { clipBeats } from '../../lib/beats'
 import { shapeDrawAt } from '../../lib/shapes'
@@ -19,10 +19,17 @@ import { FOLLOW_MODES } from '../../lib/objectTrack'
 import EdFilters from './EdFilters'
 import { AudioFxGrid, KfTransitionSelect, VolumePanel } from './EdEffects'
 
-function navsFor(clip, textMode, audioMode) {
+// Pestañas como CapCut. Seguimiento va aparte (no dentro de Animación) cuando
+// el clip se puede enganchar a un objeto del vídeo (`canTrack`).
+function navsFor(clip, textMode, audioMode, canTrack) {
+  const navs = baseNavs(clip, textMode, audioMode)
+  return canTrack && navs.includes('animacion') ? [...navs, 'seguimiento'] : navs
+}
+
+function baseNavs(clip, textMode, audioMode) {
   // Un clip de texto admite máscara ("revelar texto"); la pista de texto no.
-  if (clip?.kind === 'text' && textMode !== 'track') return ['texto', 'mascara', 'animacion']
-  if (textMode || clip?.kind === 'text') return ['texto', 'animacion']
+  if (clip?.kind === 'text' && textMode !== 'track') return ['texto', 'subtitulos', 'mascara', 'animacion']
+  if (textMode || clip?.kind === 'text') return ['texto', 'subtitulos', 'animacion']
   if (audioMode === 'track' || clip?.kind === 'audio') return ['audio']
   if (clip?.kind === 'shape') return ['video', 'animacion']
   if (clip?.kind === 'adjustment') return ['ajuste']
@@ -36,9 +43,11 @@ function navsFor(clip, textMode, audioMode) {
 function navLabel(id) {
   if (id === 'animacion') return 'Animación'
   if (id === 'texto') return 'Texto'
+  if (id === 'subtitulos') return 'Subtítulos'
   if (id === 'mascara') return 'Máscara'
   if (id === 'audio') return 'Audio'
   if (id === 'ajuste') return 'Capa de ajuste'
+  if (id === 'seguimiento') return 'Seguimiento'
   return 'Video'
 }
 
@@ -46,6 +55,115 @@ function opacityOf(clip, playhead) {
   const t = Math.max(0, (playhead ?? 0) - (clip?.start || 0))
   const n = Number(clipPose(clip, t).opacity)
   return Number.isFinite(n) ? n : 1
+}
+
+// Mezcla (panel Básico de CapCut): opacidad con keyframes y modo de fusión.
+function MixSection({ clip, p, kfSt, kfNav }) {
+  const reset = () => {
+    p.onPose?.({ opacity: 1 })
+    p.onBlend?.('normal')
+  }
+  return (
+    <InspSection title="Mezcla" kfSt={kfSt} onAddKf={p.onAddKf} kfNav={kfNav} onReset={reset}>
+      <InspSlider
+        label="Opacidad"
+        value={Math.round(opacityOf(clip, p.playhead) * 100)}
+        min={0}
+        max={100}
+        step={1}
+        format={(v) => `${Math.round(v)}`}
+        suffix="%"
+        parse={(raw) => parseFloat(String(raw).replace(/[^\d.-]/g, ''))}
+        onChange={(pct) => p.onPose?.({ opacity: Math.min(1, Math.max(0, pct / 100)) })}
+        onKf={p.onAddKf}
+        kfSt={kfSt}
+        kfNav={kfNav}
+        stepper
+        defaultValue={100}
+      />
+      {p.onBlend && <BlendRow clip={clip} onBlend={p.onBlend} />}
+    </InspSection>
+  )
+}
+
+// Texto → Básico, en el orden de CapCut: contenido y tipografía, estilos,
+// Trazo / Fondo / Brillo / Sombra, Transformación y Mezcla (las mismas que un
+// vídeo). Después lo de subtítulos y los estilos guardados.
+function TextTab({ clip, textMode, p, kfSt, kfNav, noteProps }) {
+  const te = p.textEditor || {}
+  const mode = textMode === 'track' ? 'track' : 'segment'
+  const st0 = p.textStyle ?? clip?.style ?? {}
+  const textOf = te.clip || (clip?.kind === 'text' ? clip : null)
+  // Color, Trazo, Fondo y Sombra: el panel enseña el valor animado en el cabezal.
+  const animable = clip?.kind === 'text' && mode !== 'track'
+  const localT = Math.max(0, (p.playhead ?? 0) - (clip?.start || 0))
+  const st = animable ? withTextStyleKf(st0, textStyleAt(clip, localT)) : st0
+  const kf = animable && p.onStyleKf ? {
+    state: (keys) => styleKfState(clip, localT, keys, p.fps || 30),
+    toggle: p.onStyleKf,
+    nav: kfNav,
+  } : null
+  return (
+    <>
+      <EdText
+        mode={mode}
+        clip={textOf}
+        style={st}
+        selectionCount={te.selectionCount || 1}
+        onChangeText={te.onChangeText}
+        onChangeStyle={p.onChangeTextStyle}
+        framing={te.framing}
+        onStartFraming={te.onStartFraming}
+        onSaveFraming={te.onSaveFraming}
+        onCancelFraming={te.onCancelFraming}
+        kf={kf}
+      />
+      {clip?.kind === 'text' && mode !== 'track' && (
+        <>
+          <EdTransform
+            clip={clip}
+            playhead={p.playhead}
+            onPose={p.onPose}
+            onAddKf={p.onAddKf}
+            onTextStyle={p.onChangeTextStyle}
+            onFlip={p.onFlip}
+            fps={p.fps}
+            frameW={p.outW}
+            frameH={p.outH}
+            kfNav={kfNav}
+            textStyle={st}
+            styleKf={kf}
+          />
+          <MixSection clip={clip} p={p} kfSt={kfSt} kfNav={kfNav} />
+        </>
+      )}
+      <TextFxPanel section="look" style={st} mode={textMode || 'clip'} onChangeStyle={p.onChangeTextStyle} kf={kf} />
+      <TextFavorites
+        mode={mode}
+        style={st}
+        textFavorites={te.textFavorites}
+        onSaveFavorite={te.onSaveFavorite}
+        onApplyFavorite={te.onApplyFavorite}
+        onDeleteFavorite={te.onDeleteFavorite}
+        onApplyAsGlobalTemplate={te.onApplyAsGlobalTemplate}
+      />
+      {/* En un texto lo que significa ya es su contenido: la nota va al final. */}
+      {clip && noteProps && (
+        <EdClipNote clip={clip} onChange={(note, source) => noteProps.onChange?.(clip.id, note, source)}
+          onSuggest={noteProps.onSuggest} />
+      )}
+    </>
+  )
+}
+
+// Flechas ‹ › del rombo: el cabezal salta al keyframe anterior / siguiente del clip.
+function kfNavFor(clip, localT, fps, onSeek) {
+  if (!clip || !onSeek || !clip.keyframes?.enabled) return null
+  const go = (dir) => {
+    const t = kfNeighborT(clip, localT, dir, fps)
+    return t == null ? null : () => onSeek((clip.start || 0) + t)
+  }
+  return { prev: go(-1), next: go(1) }
 }
 
 // Beats (#12): detectar, densidad (uno de cada N) y quitar.
@@ -101,22 +219,24 @@ export default function EdInspector({
   const hasTarget = !!(clip || textMode || audioMode)
   const visual = isVisualClip(clip)
   const isShape = clip?.kind === 'shape'
-  const navs = navsFor(clip, textMode, audioMode)
+  const p = effectsProps || {}
+  const canTrack = !!p.track
+  const navs = navsFor(clip, textMode, audioMode, canTrack)
   const [nav, setNav] = useState(navs[0] || 'video')
   const [sub, setSub] = useState('basic')
   const activeNav = navs.includes(nav) ? nav : (navs[0] || 'video')
-  const p = effectsProps || {}
   const localT = Math.max(0, (p.playhead ?? 0) - (clip?.start || 0))
   const kfSt = clip && canKeyframe(clip) ? kfState(clip, localT, p.fps || 30) : 'off'
+  const kfNav = kfNavFor(clip, localT, p.fps || 30, p.onSeek)
   const effects = clip?.effects && typeof clip.effects === 'object' ? clip.effects : {}
   const canMask = !!(maskProps && maskable(clip))
   const canBg = !!(bgProps && bgCapable(clip))
 
   useEffect(() => {
-    const next = navsFor(clip, textMode, audioMode)
+    const next = navsFor(clip, textMode, audioMode, canTrack)
     setNav((cur) => (next.includes(cur) ? cur : (next[0] || 'video')))
     setSub('basic')
-  }, [clip?.id, clip?.kind, textMode, audioMode])
+  }, [clip?.id, clip?.kind, textMode, audioMode, canTrack])
 
   // La manipulación de la máscara en el reproductor solo vive con su panel abierto.
   const onMaskOpen = maskProps?.onPanelOpen
@@ -177,7 +297,7 @@ export default function EdInspector({
 
         {/* Qué SIGNIFICA este fragmento en la historia. Va lo primero: es lo que
             después lee la IA, y es lo que no se puede deducir mirando los frames. */}
-        {clip && noteProps && sub === 'basic' && ['video', 'audio', 'texto'].includes(activeNav) && (
+        {clip && noteProps && sub === 'basic' && ['video', 'audio'].includes(activeNav) && (
           <EdClipNote clip={clip} onChange={(note, source) => noteProps.onChange?.(clip.id, note, source)}
             onSuggest={noteProps.onSuggest} />
         )}
@@ -221,25 +341,13 @@ export default function EdInspector({
               onFlip={p.onFlip}
               fps={p.fps}
               heightScale={p.heightScale}
+              frameW={p.outW}
+              frameH={p.outH}
+              kfNav={kfNav}
             />
             )}
             {canKeyframe(clip) && clip?.kind !== 'audio' && (
-              <InspSection title="Mezcla" kfSt={kfSt} onAddKf={p.onAddKf}>
-                <InspSlider
-                  label="Opacidad"
-                  value={Math.round(opacityOf(clip, p.playhead) * 100)}
-                  min={0}
-                  max={100}
-                  step={1}
-                  format={(v) => `${Math.round(v)}`}
-                  suffix="%"
-                  parse={(raw) => parseFloat(String(raw).replace(/[^\d.-]/g, ''))}
-                  onChange={(pct) => p.onPose?.({ opacity: pct / 100 })}
-                  onKf={p.onAddKf}
-                  kfSt={kfSt}
-                />
-                {p.onBlend && <BlendRow clip={clip} onBlend={p.onBlend} />}
-              </InspSection>
+              <MixSection clip={clip} p={p} kfSt={kfSt} kfNav={kfNav} />
             )}
           </>
         )}
@@ -290,23 +398,6 @@ export default function EdInspector({
           </InspSection>
         )}
 
-        {hasTarget && activeNav === 'animacion' && clip?.kind === 'text' && textMode !== 'track' && (
-          // Textos: escala, posición y giro 3D con sus keyframes (#4 texto 3D).
-          <EdTransform
-            clip={clip}
-            playhead={p.playhead}
-            onPose={p.onPose}
-            onAddKf={p.onAddKf}
-            onTextStyle={p.onChangeTextStyle}
-            onFlip={p.onFlip}
-            fps={p.fps}
-          />
-        )}
-        {hasTarget && activeNav === 'animacion' && clip?.kind === 'text' && textMode !== 'track' && p.onBlend && (
-          <InspSection title="Mezcla">
-            <BlendRow clip={clip} onBlend={p.onBlend} />
-          </InspSection>
-        )}
         {hasTarget && activeNav === 'ajuste' && clip?.kind === 'adjustment' && (
           // Capa de ajuste (#19): filtra todo lo de debajo (no los textos, que van encima).
           <>
@@ -347,7 +438,7 @@ export default function EdInspector({
             </InspSection>
           </>
         )}
-        {hasTarget && activeNav === 'animacion' && p.track && (
+        {hasTarget && activeNav === 'seguimiento' && p.track && (
           // Seguimiento (#15): el clip acompaña a un objeto del vídeo de debajo.
           <InspSection title="Seguimiento"
             hint="Marca con un recuadro un objeto del vídeo de debajo y este clip lo seguirá. Pon el cursor en un momento en que el objeto se vea.">
@@ -433,34 +524,18 @@ export default function EdInspector({
         )}
 
         {hasTarget && activeNav === 'texto' && (
-          <>
-            <EdText
-              mode={textMode === 'track' ? 'track' : 'segment'}
-              clip={p.textEditor?.clip || (clip?.kind === 'text' ? clip : null)}
-              style={p.textStyle ?? clip?.style ?? {}}
-              selectionCount={p.textEditor?.selectionCount || 1}
-              onChangeText={p.textEditor?.onChangeText}
-              onChangeStyle={p.onChangeTextStyle}
-              onChangeDur={p.textEditor?.onChangeDur}
-              onApplyAsGlobalTemplate={p.textEditor?.onApplyAsGlobalTemplate}
-              framing={p.textEditor?.framing}
-              onStartFraming={p.textEditor?.onStartFraming}
-              onSaveFraming={p.textEditor?.onSaveFraming}
-              onCancelFraming={p.textEditor?.onCancelFraming}
-              textFavorites={p.textEditor?.textFavorites}
-              onSaveFavorite={p.textEditor?.onSaveFavorite}
-              onApplyFavorite={p.textEditor?.onApplyFavorite}
-              onDeleteFavorite={p.textEditor?.onDeleteFavorite}
-              onFragment={p.textEditor?.onFragment}
-            />
-            <TextFxPanel
-              section="look"
-              style={p.textStyle ?? clip?.style ?? {}}
-              mode={textMode || 'clip'}
-              onChangeStyle={p.onChangeTextStyle}
-              onApplyPreset={p.onApplyTextPreset}
-            />
-          </>
+          <TextTab clip={clip} textMode={textMode} p={p} kfSt={kfSt} kfNav={kfNav} noteProps={noteProps} />
+        )}
+        {hasTarget && activeNav === 'subtitulos' && (
+          <SubtitlesPanel
+            mode={textMode === 'track' ? 'track' : 'segment'}
+            clip={p.textEditor?.clip || (clip?.kind === 'text' ? clip : null)}
+            style={p.textStyle ?? clip?.style ?? {}}
+            onChangeStyle={p.onChangeTextStyle}
+            onApplyPreset={p.onApplyTextPreset}
+            onApplyTrackPreset={p.onApplyTrackTextPreset}
+            onFragment={p.textEditor?.onFragment}
+          />
         )}
       </div>
     </aside>

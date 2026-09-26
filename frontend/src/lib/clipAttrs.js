@@ -4,7 +4,7 @@
 // uno o varios clips sin tocar su contenido, su id ni su sitio en la timeline.
 // Espejo de backend/app/clip_attrs.py.
 
-import { AUDIO_FX_KEYS, KF_PROP_KEYS, interpItems, kfId, staticProps } from './clipKeyframes.js'
+import { AUDIO_FX_KEYS, KF_PROP_KEYS, TEXT_STYLE_KF_KEYS, interpItems, kfId, staticProps } from './clipKeyframes.js'
 import { MASK_KF_KEYS, maskId } from './clipMask.js'
 
 const VISUAL = ['video', 'image', 'shape', 'text']
@@ -36,6 +36,7 @@ const KF_FAMILIES = {
   crop: ['cx', 'cy', 'zoom'],
   mask: [...MASK_KF_KEYS],
   audio: ['volume', ...AUDIO_FX_KEYS],
+  style: [...TEXT_STYLE_KF_KEYS],   // Color, Trazo, Fondo y Sombra del texto
 }
 // Grupos que tocan los keyframes: los de arriba y los que cambian el valor fijo
 // de una propiedad animable (posición y opacidad).
@@ -269,14 +270,37 @@ function resample(s, t, base) {
   })
 }
 
+// Keyframes del estilo del texto (van por propiedad): se llevan tal cual.
+function styleItemsOf(clip) {
+  return itemsOf(clip)
+    .map((k) => {
+      const props = {}
+      for (const key of TEXT_STYLE_KF_KEYS) if (k.props[key] != null && k.props[key] !== '') props[key] = k.props[key]
+      return { ...k, props }
+    })
+    .filter((k) => Object.keys(k.props).length)
+}
+
+function withStyleItems(items, style) {
+  const out = items.map((k) => ({ ...k, props: { ...k.props } }))
+  for (const st of style) {
+    const hit = out.find((k) => Math.abs(k.t - st.t) <= T_EPS)
+    if (hit) Object.assign(hit.props, st.props)
+    else out.push(st)
+  }
+  return out.sort((a, b) => a.t - b.t)
+}
+
 /** Keyframes del destino tras pegar las familias `keys` del origen: las del
  *  origen sustituyen a las del destino (si el origen no las anima, el destino
  *  deja de animarlas) y el resto del destino se conserva. */
 export function mergeKeyframes(target, source, keys) {
   const pasted = new Set(keys)
-  const s = restrictItems(itemsOf(source), [...pasted], staticProps(source))
+  const s = restrictItems(itemsOf(source), KF_PROP_KEYS.filter((k) => pasted.has(k)), staticProps(source))
   const t = restrictItems(itemsOf(target), KF_PROP_KEYS.filter((k) => !pasted.has(k)), staticProps(target))
-  if (!s.length && !target?.keyframes?.enabled) return target?.keyframes ?? null
+  // El estilo animado del texto viene del origen si se pega el Estilo; si no, se queda el del destino.
+  const style = styleItemsOf(TEXT_STYLE_KF_KEYS.some((k) => pasted.has(k)) ? source : target)
+  if (!s.length && !style.length && !target?.keyframes?.enabled) return target?.keyframes ?? null
   let items
   if (!s.length) items = t
   else if (!t.length) items = s
@@ -287,6 +311,7 @@ export function mergeKeyframes(target, source, keys) {
     else if (cs) items = t.map((k) => ({ ...k, props: { ...k.props, ...cs } }))
     else items = resample(s, t, staticProps(target))
   }
+  items = withStyleItems(items, style)
   if (!items.length) return null
   return { enabled: true, items: items.map((k) => ({ ...k, id: kfId() })) }
 }

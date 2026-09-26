@@ -28,6 +28,7 @@ import {
   sourceCropPx, srcRectOn, layersAt,
 } from '../../../lib/clipLayout'
 import { drawPlatformChrome } from './platformChrome'
+import { drawSelectionFrame, frameOfDest } from '../../../lib/selectionFrame'
 
 // Desplaza geometría (dest / box / handles) del sistema local del recuadro Main
 // a coordenadas del canvas, para hit-testing e interacción.
@@ -89,7 +90,7 @@ function drawText3d(g, c, ang, { cw, ch, ox, oy, head, track, localT, selected }
   l.setTransform(1, 0, 0, 1, 0, 0)
   l.clearRect(0, 0, layer.width, layer.height)
   l.translate(ox, oy)
-  const r = drawTextClip(l, c, cw, ch, { selected, time: head, trackStyle: track?.style })
+  const r = drawTextClip(l, c, cw, ch, { selected, frame: false, time: head, trackStyle: track?.style })
   const pose = clipPose(c, localT)
   const f = focalOf(ch, effectiveTextStyle(track?.style, c.style).perspective)
   const cx = ox + pose.x * cw
@@ -223,68 +224,9 @@ function reframeForDraw(clip, localT, srcTime) {
   }
 }
 
+// Vídeo / imagen seleccionados: recuadro de CapCut (esquinas escalan, giro debajo).
 function drawTransformHandles(ctx, dest) {
-  const { dx, dy, dw, dh } = dest
-  const hs = 5
-  ctx.save()
-  // Marco de selección: línea blanca fina (sustituye al rojo grueso anterior).
-  ctx.strokeStyle = 'rgba(255,255,255,0.95)'
-  ctx.lineWidth = 1.2
-  ctx.strokeRect(dx, dy, dw, dh)
-  // Manijas de escala: círculos blancos. Una sombra suave las mantiene visibles
-  // sobre cualquier fondo (claro u oscuro) sin necesidad de borde de color.
-  ctx.shadowColor = 'rgba(0,0,0,0.45)'
-  ctx.shadowBlur = 3
-  ctx.fillStyle = '#fff'
-  ;[[dx, dy], [dx + dw, dy], [dx, dy + dh], [dx + dw, dy + dh]].forEach(([x, y]) => {
-    ctx.beginPath()
-    ctx.arc(x, y, hs, 0, Math.PI * 2)
-    ctx.fill()
-  })
-  // Vástago hacia el control de rotación.
-  ctx.shadowBlur = 0
-  const rx = dx + dw / 2, ry = dy - 22
-  ctx.strokeStyle = 'rgba(255,255,255,0.95)'
-  ctx.lineWidth = 1.2
-  ctx.beginPath()
-  ctx.moveTo(dx + dw / 2, dy)
-  ctx.lineTo(rx, ry)
-  ctx.stroke()
-  drawRotateHandle(ctx, rx, ry, 7)
-  ctx.restore()
-}
-
-// Control de rotación: círculo blanco con una flecha circular (icono de giro)
-// dibujada dentro para que se lea de un vistazo qué hace.
-function drawRotateHandle(ctx, rx, ry, rr) {
-  ctx.save()
-  ctx.shadowColor = 'rgba(0,0,0,0.45)'
-  ctx.shadowBlur = 3
-  ctx.beginPath()
-  ctx.arc(rx, ry, rr, 0, Math.PI * 2)
-  ctx.fillStyle = '#fff'
-  ctx.fill()
-  ctx.shadowBlur = 0
-  // Flecha circular en gris oscuro sobre el disco blanco.
-  const ir = rr - 2.5
-  const a0 = -Math.PI * 0.55, a1 = Math.PI * 0.95
-  ctx.strokeStyle = '#22242e'
-  ctx.lineWidth = 1.2
-  ctx.lineCap = 'round'
-  ctx.beginPath()
-  ctx.arc(rx, ry, ir, a0, a1)
-  ctx.stroke()
-  // Punta de flecha en el extremo del arco, apuntando en el sentido del trazo.
-  const ax = rx + ir * Math.cos(a1), ay = ry + ir * Math.sin(a1)
-  const back = a1 + Math.PI / 2 + Math.PI // sentido contrario a la tangente
-  const ah = 2.8, spread = 0.6
-  ctx.beginPath()
-  ctx.moveTo(ax, ay)
-  ctx.lineTo(ax + ah * Math.cos(back - spread), ay + ah * Math.sin(back - spread))
-  ctx.moveTo(ax, ay)
-  ctx.lineTo(ax + ah * Math.cos(back + spread), ay + ah * Math.sin(back + spread))
-  ctx.stroke()
-  ctx.restore()
+  drawSelectionFrame(ctx, frameOfDest(dest))
 }
 
 function fxForClip(clip, head) {
@@ -523,6 +465,9 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
   let overlayDestSel = null
   let selRender = null
   const hits = []
+  // Recuadros de selección: se pintan al final, encima de todas las capas (como
+  // CapCut); si no, un vídeo en una pista superior taparía el de un texto.
+  const selFrames = []
 
   function drawTextLayer(c) {
     const track = tracksRef.current.find((t) => t.id === c.track_id)
@@ -536,22 +481,32 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
     const ang3d = text3dAngles(clipPropsAt(c, tLocal))
     let r
     if (ang3d) {
-      r = drawText3d(tg, c, ang3d, { cw, ch, ox, oy, head, track, localT: tLocal, selected: isSel && !tLayer })
+      r = drawText3d(tg, c, ang3d, { cw, ch, ox, oy, head, track, localT: tLocal, selected: isSel })
     } else {
       tg.save(); tg.translate(ox, oy)
-      r = drawTextClip(tg, c, cw, ch, { selected: isSel && !tLayer, time: head, trackStyle: track?.style })
+      r = drawTextClip(tg, c, cw, ch, { selected: isSel, frame: false, time: head, trackStyle: track?.style })
       tg.restore()
     }
     if (tLayer) endMaskLayer(ctx, tLayer, tMasks, fr, { cssFontOf: cssFont, op: tOp })
-    // En capa, la caja de selección se pinta aparte (si no, la máscara la recortaría
-    // y el modo de fusión la teñiría).
-    if (tLayer && isSel && !ang3d) {
-      ctx.save(); ctx.translate(ox, oy)
-      drawTextClip(ctx, c, cw, ch, { selected: true, selectionOnly: true, time: head, trackStyle: track?.style })
-      ctx.restore()
-    }
-    if (isSel) selRender = offsetRender(r, ox, oy)
-    if (r?.box) hits.push({ id: c.id, kind: 'text', dest: boxToDest(offsetBox(r.box, ox, oy)), handles: offsetHandles(r.handles, ox, oy) })
+    if (!r?.box) return
+    const hit = { id: c.id, kind: 'text', dest: boxToDest(offsetBox(r.box, ox, oy), r.box.rotation || 0), handles: null }
+    hits.push(hit)
+    if (!isSel) return
+    selFrames.push(() => {
+      let sr
+      if (ang3d) {
+        // Plano sobre la caja proyectada (en la capa deformada se torcería).
+        const b = r.box
+        const h = drawSelectionFrame(ctx, { cx: ox + b.x + b.w / 2, cy: oy + b.y + b.h / 2, w: b.w, h: b.h + 8 }, { del: true, sides: true })
+        sr = { ...r, handles: offsetHandles(h, -ox, -oy) }
+      } else {
+        ctx.save(); ctx.translate(ox, oy)
+        sr = drawTextClip(ctx, c, cw, ch, { selected: true, selectionOnly: true, time: head, trackStyle: track?.style })
+        ctx.restore()
+      }
+      selRender = offsetRender(sr, ox, oy)
+      hit.handles = selRender.handles
+    })
   }
 
   // Una sola pila de fondo a frente (vídeo, imagen, figura… y TEXTO en su capa):
@@ -585,13 +540,19 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
     if (clip.kind === 'shape') {
       const isSel = selected.has(clip.id)
       g.save(); g.translate(ox, oy)
-      const r = drawShapeClip(g, clip, cw, ch, { selected: isSel && !ghost, time: localT })
+      const r = drawShapeClip(g, clip, cw, ch, { time: localT })
       g.restore()
       flush()
       if (ghost) continue
-      if (isSel) selRender = offsetRender(r, ox, oy)
       const dest = r?.box ? boxToDest(offsetBox(r.box, ox, oy), r.box.rotation || 0) : offsetDest(fillDestRect(cw, ch, clip, localT), ox, oy)
-      hits.push({ id: clip.id, kind: 'shape', dest, handles: offsetHandles(r?.handles, ox, oy) })
+      const hit = { id: clip.id, kind: 'shape', dest, handles: null }
+      hits.push(hit)
+      if (isSel) {
+        selFrames.push(() => {
+          hit.handles = drawSelectionFrame(ctx, frameOfDest(dest), { sides: true, tb: true })
+          selRender = { ...offsetRender(r, ox, oy), handles: hit.handles }
+        })
+      }
       continue
     }
     const el = mediaEls.current.get(clip.id)
@@ -644,6 +605,7 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
     }
   }
 
+  for (const draw of selFrames) draw()
   if (overlayDestSel) drawTransformHandles(ctx, overlayDestSel)
   const bgBrush = env.bgBrushRef?.current
   if (bgBrush?.on) {

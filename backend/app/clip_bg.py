@@ -35,17 +35,51 @@ import cv2
 import numpy as np
 
 # Proveedores de segmentación conocidos (el registro real vive en app/bg).
-# Automáticos (U²-Net) + asistidos por puntos (SAM 2.1). Los SAM son
-# INTERACTIVOS: los trazos keep/erase son el PROMPT, no una corrección posterior.
-AUTO_PROVIDER_IDS = ("u2net", "u2netp")
+# Automáticos (RVM, BiRefNet, U²-Net) + asistidos por puntos (SAM 2.1). Los SAM
+# son INTERACTIVOS: los trazos keep/erase son el PROMPT, no una corrección.
+AUTO_PROVIDER_IDS = ("rvm_mobilenetv3", "rvm_resnet50", "birefnet_lite", "u2net", "u2netp")
 SAM_PROVIDER_IDS = ("sam21_tiny", "sam21_base_plus", "sam21_large")
 BG_PROVIDER_IDS = (*AUTO_PROVIDER_IDS, *SAM_PROVIDER_IDS)
+# Respaldo de la normalización (id desconocido o ausente): U²-Net sirve para
+# cualquier sujeto y material. El motor que se PROPONE al activar la
+# eliminación automática depende del material: ``recommended_provider``.
 DEFAULT_PROVIDER = "u2net"
+VIDEO_PROVIDER = "rvm_mobilenetv3"      # personas en vídeo, estable en el tiempo
+IMAGE_PROVIDER = "birefnet_lite"        # imágenes fijas: cualquier sujeto, mejor borde
+
+# Alto del matte con el que rinde cada motor. RVM refina el borde a la
+# resolución pedida (720 cuesta casi lo mismo que 512); BiRefNet infiere a
+# 1024² y bajarlo a 512 tiraría el detalle. U²-Net infiere a 320: más no ayuda.
+PROVIDER_MASK_HEIGHT = {
+    "rvm_mobilenetv3": 720,
+    "rvm_resnet50": 720,
+    "birefnet_lite": 1080,
+}
 
 
 def is_interactive_provider(provider_id: Any) -> bool:
     """True para los proveedores guiados por puntos (SAM): el pincel = prompt."""
     return str(provider_id or "").startswith("sam")
+
+
+def recommended_provider(clip: Any) -> str:
+    """Motor automático que se propone para un clip. Espejo de ``recommendedProvider``.
+
+    Vídeo → RVM (personas, sin parpadeo). GIF → U²-Net (muchos fotogramas y
+    sujetos de todo tipo: BiRefNet sería lentísimo en CPU). Imagen fija →
+    BiRefNet (una sola inferencia: vale la pena el mejor borde).
+    """
+    if _get(clip, "kind") == "video":
+        return VIDEO_PROVIDER
+    name = str(_get(clip, "filename", "") or "").split("?")[0].split("#")[0]
+    if name.lower().endswith(".gif"):
+        return DEFAULT_PROVIDER
+    return IMAGE_PROVIDER
+
+
+def provider_mask_height(provider_id: Any) -> int:
+    """Alto del matte recomendado para un motor (``DEFAULT_MASK_HEIGHT`` si no tiene)."""
+    return int(PROVIDER_MASK_HEIGHT.get(str(provider_id or ""), DEFAULT_MASK_HEIGHT))
 
 
 def edits_to_points(edits: list[dict]) -> list[tuple[float, float, int]]:

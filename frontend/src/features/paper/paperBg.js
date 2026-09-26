@@ -17,7 +17,7 @@
 
 import { createBgCutoutJob, createBgRemovalJob, getJob, uploadImages } from '../../services/api'
 import { cutoutDrawable, resetBgMeta, resetCutout } from '../editor/bgCutout'
-import { defaultBg, normalizeBg } from '../../lib/clipBg'
+import { defaultBg, normalizeBg, providerMaskHeight } from '../../lib/clipBg'
 
 // Id del pseudo-clip con el que se habla con bgCutout. Sus cachés van por id, así
 // que uno fijo basta: en Paper solo hay un objeto a la vez.
@@ -74,7 +74,7 @@ export async function runCutoutJob(projectId, { asset, provider, onProgress, sho
     bg_removal: {
       enabled: true,
       mode: 'auto',
-      auto: { ...defaultBg().auto, enabled: true, provider },
+      auto: { ...defaultBg().auto, enabled: true, provider, mask_height: providerMaskHeight(provider) },
       chroma: { enabled: false },
     },
   })
@@ -114,7 +114,7 @@ export async function runMatteJob(projectId, { asset, provider, onProgress, shou
     in_point: 0,
     out_point: 0,
     source_duration: 0,
-    auto: { ...defaultBg().auto, enabled: true, provider },
+    auto: { ...defaultBg().auto, enabled: true, provider, mask_height: providerMaskHeight(provider) },
   })
 
   while (job && (job.status === 'pending' || job.status === 'running')) {

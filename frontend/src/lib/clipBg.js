@@ -24,21 +24,63 @@ const num = (v, d) => {
 }
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
+// Motores. `temporal`: memoria entre fotogramas (el borde no baila); `people`:
+// solo recorta personas; `maskHeight`: alto del matte con el que rinde (espejo
+// de PROVIDER_MASK_HEIGHT en clip_bg.py).
 export const BG_PROVIDERS = [
-  { id: 'u2net', label: 'U²-Net (automático)', hint: 'Detecta el sujeto solo. Mejor borde.' },
-  { id: 'u2netp', label: 'U²-Net lite (rápido)', hint: 'Modelo de 4,7 MB, más rápido.' },
+  { id: 'rvm_mobilenetv3', label: 'RVM · personas en vídeo',
+    hint: 'Para personas en vídeo: recuerda los fotogramas anteriores, así que el borde no parpadea ni baila. Rápido (15 MB). Solo recorta personas.',
+    temporal: true, people: true, maskHeight: 720 },
+  { id: 'rvm_resnet50', label: 'RVM · personas (más detalle)',
+    hint: 'Como RVM pero con una red más grande (103 MB): algo más de detalle en pelo y ropa, unas 2 veces más lento. Solo recorta personas.',
+    temporal: true, people: true, maskHeight: 720 },
+  { id: 'birefnet_lite', label: 'BiRefNet · cualquier sujeto',
+    hint: 'Objetos, animales, productos o personas, con el mejor borde. Pesado (224 MB, varios segundos por fotograma sin GPU): ideal para imágenes.',
+    maskHeight: 1080 },
+  { id: 'u2net', label: 'U²-Net · rápido', hint: 'El motor anterior: cualquier sujeto y rápido, pero con un borde más tosco.' },
+  { id: 'u2netp', label: 'U²-Net lite', hint: 'Modelo de 4,7 MB: el más rápido y el más basto.' },
   { id: 'sam21_base_plus', label: 'SAM 2.1 (calidad)', hint: 'Buen equilibrio entre calidad y velocidad (259 MB).', interactive: true },
   { id: 'sam21_large', label: 'SAM 2.1 large (máxima)', hint: 'Máxima calidad, el más lento (768 MB).', interactive: true },
   { id: 'sam21_tiny', label: 'SAM 2.1 tiny (rápido)', hint: 'El más rápido y ligero (111 MB).', interactive: true },
 ]
 export const BG_PROVIDER_IDS = BG_PROVIDERS.map((p) => p.id)
 export const SAM_PROVIDER_IDS = BG_PROVIDERS.filter((p) => p.interactive).map((p) => p.id)
+// Respaldo de la normalización (id desconocido): sirve para cualquier sujeto.
+// El motor que se PROPONE al activar la eliminación sale de `recommendedProvider`.
 export const DEFAULT_PROVIDER = 'u2net'
+export const VIDEO_PROVIDER = 'rvm_mobilenetv3'
+export const IMAGE_PROVIDER = 'birefnet_lite'
 
 /** True para proveedores asistidos por puntos (SAM): el pincel = prompt. */
 export function isInteractiveProvider(id) {
   return String(id || '').startsWith('sam')
 }
+
+const isGifName = (name) => /\.gif(\?|#|$)/i.test(name || '')
+
+/**
+ * Motor automático que se propone para un clip. Espejo de `recommended_provider`.
+ * Vídeo → RVM (personas, sin parpadeo). GIF → U²-Net (muchos fotogramas y
+ * sujetos de todo tipo). Imagen fija → BiRefNet (una sola inferencia).
+ */
+export function recommendedProvider(clip) {
+  if (clip?.kind === 'video') return VIDEO_PROVIDER
+  if (isGifName(clip?.filename)) return DEFAULT_PROVIDER
+  return IMAGE_PROVIDER
+}
+
+/** Alto del matte recomendado para un motor. */
+export function providerMaskHeight(id) {
+  return BG_PROVIDERS.find((p) => p.id === id)?.maskHeight || DEFAULT_MASK_HEIGHT
+}
+
+// «Detalle del borde» = alto del matte. Más alto = borde más fino en RVM y
+// BiRefNet (refinan a esa resolución); en U²-Net apenas cambia.
+export const MASK_HEIGHT_OPTIONS = [
+  { value: 512, label: 'Normal (512 px)' },
+  { value: 720, label: 'Alto (720 px)' },
+  { value: 1080, label: 'Máximo (1080 px)' },
+]
 
 // --- Eliminación personalizada (SAM + seguimiento) ---------------------------
 // Las marcas guardan el fotograma de la FUENTE donde se hicieron (`t`); al

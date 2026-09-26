@@ -7,7 +7,7 @@ import {
 } from '../../lib/clipFx'
 import { SUBTITLE_THEMES } from '../../lib/subtitleThemes'
 import { themePreviewStyle } from '../../lib/textstyles'
-import { isVisualClip } from './editorModel'
+import { DEFAULT_TEXT, TEXT_DEFAULT_DUR, dragTextPayload, isVisualClip } from './editorModel'
 
 function NeedClip({ text }) {
   return (
@@ -30,6 +30,7 @@ export default function EdFxLibrary({
   onApplyRecipe,
   recipeBusy,
   selectedClips,
+  onDragInfo,
 }) {
   const visual = isVisualClip(clip)
   const effects = clip?.effects && typeof clip.effects === 'object' ? clip.effects : {}
@@ -48,12 +49,31 @@ export default function EdFxLibrary({
     patchEffects({ [item.id]: fxOn(effects, item.id) ? 0 : item.def })
   }
 
+  // Ficha de texto → timeline: mismo camino que las figuras (application/x-material).
+  function dragText(e, theme) {
+    e.dataTransfer.setData('application/x-material', dragTextPayload(theme))
+    e.dataTransfer.effectAllowed = 'copy'
+    onDragInfo?.({ kind: 'text', duration: TEXT_DEFAULT_DUR, name: theme?.name || DEFAULT_TEXT })
+  }
+
   if (mode === 'text') {
     return (
       <div className="ed-mat-list ed-fx-lib">
-        <button type="button" className="primary alt small" onClick={() => onAddText?.()}>
-          <Icon name="title" size={15} /> Agregar texto
-        </button>
+        <div className="ed-fx-label">Añadir texto</div>
+        <div className="ed-text-tiles">
+          <button
+            type="button"
+            className="ed-text-tile"
+            title="Arrástralo a la timeline, o clic para añadirlo en el cursor"
+            draggable
+            onDragStart={(e) => dragText(e)}
+            onDragEnd={() => onDragInfo?.(null)}
+            onClick={() => onAddText?.()}
+          >
+            <span>{DEFAULT_TEXT}</span>
+            <span className="ed-text-tile-add"><Icon name="add" size={15} /></span>
+          </button>
+        </div>
         <div className="ed-fx-label">Temas</div>
         <div className="ed-theme-grid">
           {SUBTITLE_THEMES.map((t) => (
@@ -62,6 +82,9 @@ export default function EdFxLibrary({
               type="button"
               className="ed-theme-card"
               title={t.name}
+              draggable
+              onDragStart={(e) => dragText(e, t)}
+              onDragEnd={() => onDragInfo?.(null)}
               onClick={() => {
                 if (clip?.kind === 'text') onApplyPreset?.(t)
                 else onAddText?.(t)

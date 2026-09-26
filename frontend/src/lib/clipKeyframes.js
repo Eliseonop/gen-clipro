@@ -52,6 +52,71 @@ export const KF_PROP_KEYS = [
   'volume', ...AUDIO_FX_KEYS,
 ]
 
+// Estilo del texto animable, como CapCut: Color, Trazo, Fondo y Sombra (los
+// rombos de esas secciones). A diferencia de la pose, cada propiedad lleva sus
+// propios keyframes (un item puede tener solo algunas): si ninguno la tiene,
+// manda su valor fijo del estilo. Fuente, tamaño, B/U/I, espaciado y alineación
+// no se animan (tampoco en CapCut).
+export const TEXT_STYLE_KF_KEYS = [
+  'color', 'border_color', 'border_width', 'bg', 'bg_opacity',
+  'bg_radius', 'bg_pad_x', 'bg_pad_y', 'bg_dx', 'bg_dy',
+  'shadow_color', 'shadow_opacity', 'shadow_blur', 'shadow_distance', 'shadow_angle',
+  'glow_color', 'glow_intensity', 'glow_range', 'glow_dx', 'glow_dy',
+  'curve', 'stretch_x', 'stretch_y',
+]
+export const TEXT_KF_SECTIONS = {
+  color: ['color'],
+  stroke: ['border_color', 'border_width'],
+  bg: ['bg', 'bg_opacity', 'bg_radius', 'bg_pad_x', 'bg_pad_y', 'bg_dx', 'bg_dy'],
+  glow: ['glow_color', 'glow_intensity', 'glow_range', 'glow_dx', 'glow_dy'],
+  curve: ['curve'],
+  stretch: ['stretch_x', 'stretch_y'],
+  shadow: ['shadow_color', 'shadow_opacity', 'shadow_blur', 'shadow_distance', 'shadow_angle'],
+}
+const COLOR_KF_KEYS = new Set(['color', 'border_color', 'bg', 'shadow_color', 'glow_color'])
+
+export function hexRgb(v) {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(v ?? '').trim())
+  if (!m) return null
+  const h = m[1].length === 3 ? [...m[1]].map((c) => c + c).join('') : m[1]
+  return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16))
+}
+
+function rgbHex(rgb) {
+  return '#' + rgb.map((c) => Math.round(Math.min(255, Math.max(0, c))).toString(16).padStart(2, '0')).join('')
+}
+
+function validKfValue(key, v) {
+  return COLOR_KF_KEYS.has(key) ? !!hexRgb(v) : v != null && v !== '' && Number.isFinite(Number(v))
+}
+
+function mixKfValue(key, a, b, u) {
+  if (COLOR_KF_KEYS.has(key)) {
+    const ca = hexRgb(a)
+    const cb = hexRgb(b)
+    return rgbHex(ca.map((c, i) => c + (cb[i] - c) * u))
+  }
+  return Number(a) + (Number(b) - Number(a)) * u
+}
+
+// Valor de `key` en `time` entre los items (ordenados) que la tienen; null si ninguno.
+function interpKey(s, key, time) {
+  const ks = s.filter((k) => validKfValue(key, k.props[key]))
+  if (!ks.length) return null
+  const val = (k) => (COLOR_KF_KEYS.has(key) ? rgbHex(hexRgb(k.props[key])) : Number(k.props[key]))
+  if (time <= ks[0].t) return val(ks[0])
+  const last = ks[ks.length - 1]
+  if (time >= last.t) return val(last)
+  for (let i = 0; i < ks.length - 1; i++) {
+    const a = ks[i], b = ks[i + 1]
+    if (time >= a.t && time <= b.t) {
+      if (normalizeInterp(b.interpolation) === 'hold') return val(a)
+      return mixKfValue(key, val(a), val(b), easeT((time - a.t) / ((b.t - a.t) || 1), b.interpolation, b.bezier))
+    }
+  }
+  return val(last)
+}
+
 let _kfUid = 1
 export function kfId() {
   return `k${Date.now().toString(36)}${(_kfUid++).toString(36)}`
@@ -264,28 +329,18 @@ function mergeProps(base, extra) {
   return out
 }
 
+// Cada propiedad se interpola entre los items que la tienen (los de solo estilo
+// de texto no cuentan para la pose); sin ninguno, su valor de `fallback`.
 export function interpItems(items, t, fallback) {
   const s = normalizeItems(items)
-  const fb = mergeProps(staticProps({}), fallback)
-  if (!s.length) return fb
+  const out = mergeProps(staticProps({}), fallback)
+  if (!s.length) return out
   const time = num(t, 0)
-  const propsAt = (k) => mergeProps(fb, k.props)
-  if (time <= s[0].t) return propsAt(s[0])
-  const last = s[s.length - 1]
-  if (time >= last.t) return propsAt(last)
-  for (let i = 0; i < s.length - 1; i++) {
-    const a = s[i], b = s[i + 1]
-    if (time >= a.t && time <= b.t) {
-      const pa = propsAt(a)
-      const pb = propsAt(b)
-      if (normalizeInterp(b.interpolation) === 'hold') return pa
-      const u = easeT((time - a.t) / ((b.t - a.t) || 1), b.interpolation, b.bezier)
-      const out = {}
-      for (const key of KF_PROP_KEYS) out[key] = pa[key] + (pb[key] - pa[key]) * u
-      return out
-    }
+  for (const key of KF_PROP_KEYS) {
+    const v = interpKey(s, key, time)
+    if (v != null) out[key] = v
   }
-  return propsAt(last)
+  return out
 }
 
 export function clipPropsAt(clip, localT, srcTime) {
@@ -294,6 +349,87 @@ export function clipPropsAt(clip, localT, srcTime) {
   const items = clip.keyframes?.items
   if (!items?.length) return base
   return interpItems(items, localT, base)
+}
+
+/** Estilo animado del texto en `localT`: solo las propiedades con keyframes. */
+export function textStyleAt(clip, localT) {
+  if (!keyframesEnabled(clip)) return {}
+  const s = normalizeItems(clip.keyframes.items)
+  const out = {}
+  for (const key of TEXT_STYLE_KF_KEYS) {
+    const v = interpKey(s, key, num(localT, 0))
+    if (v != null) out[key] = v
+  }
+  return out
+}
+
+/**
+ * Estilo con sus keyframes aplicados. Las casillas mandan (como CapCut): sin
+ * Fondo o sin Trazo en el estilo, sus valores animados no hacen nada.
+ */
+export function withTextStyleKf(st, anim) {
+  const out = { ...(st || {}), ...(anim || {}) }
+  if (!st?.bg || st.bg === 'none') out.bg = st?.bg ?? 'none'
+  if (!(Number(st?.border_width) > 0)) out.border_width = st?.border_width ?? 0
+  // Con Escala uniforme (interruptor encendido) no hay Escala X / Y.
+  if (!st?.scale_split) { delete out.stretch_x; delete out.stretch_y }
+  return out
+}
+
+/** Propiedades de estilo con keyframes en el clip. */
+export function textStyleKfKeys(clip) {
+  const keys = new Set()
+  for (const k of normalizeItems(clip?.keyframes?.items)) {
+    for (const key of TEXT_STYLE_KF_KEYS) if (validKfValue(key, k.props[key])) keys.add(key)
+  }
+  return keys
+}
+
+/** Rombo de un grupo de estilo (`keys`): 'on' | 'empty' | 'off', como kfState. */
+export function styleKfState(clip, localT, keys, fps) {
+  if (!keyframesEnabled(clip)) return 'off'
+  const animated = textStyleKfKeys(clip)
+  if (!keys.some((k) => animated.has(k))) return 'off'
+  const t = +snapToFrame(localT, fps).toFixed(6)
+  const item = normalizeItems(clip.keyframes.items).find((k) => Math.abs(k.t - t) < kfSnap(fps))
+  return item && keys.some((k) => validKfValue(k, item.props[k])) ? 'on' : 'empty'
+}
+
+/** Pone (o actualiza) en el keyframe de `localT` las propiedades de estilo de `patch`. */
+export function upsertStyleKf(clip, localT, patch, fps) {
+  const vals = {}
+  for (const key of TEXT_STYLE_KF_KEYS) if (validKfValue(key, patch?.[key])) vals[key] = patch[key]
+  if (!Object.keys(vals).length) return clip
+  const t = +snapToFrame(localT, fps).toFixed(6)
+  const items = normalizeItems(clip?.keyframes?.items)
+  const j = items.findIndex((k) => Math.abs(k.t - t) < kfSnap(fps))
+  if (j >= 0) items[j] = { ...items[j], props: { ...items[j].props, ...vals } }
+  else {
+    const prev = [...items].reverse().find((k) => k.t < t) || items[0]
+    items.push({ id: kfId(), t, interpolation: normalizeInterp(prev?.interpolation || 'linear'), props: vals })
+  }
+  items.sort((a, b) => a.t - b.t)
+  return { ...clip, keyframes: { ...(clip.keyframes || {}), enabled: true, items } }
+}
+
+/** Quita `keys` del keyframe de `localT` (y el keyframe, si se queda vacío). */
+export function removeStyleKfAt(clip, localT, keys, fps) {
+  const t = +snapToFrame(localT, fps).toFixed(6)
+  const items = []
+  for (const k of normalizeItems(clip?.keyframes?.items)) {
+    if (Math.abs(k.t - t) >= kfSnap(fps)) { items.push(k); continue }
+    const props = { ...k.props }
+    for (const key of keys) delete props[key]
+    if (Object.keys(props).length) items.push({ ...k, props })
+  }
+  return { ...clip, keyframes: { ...(clip.keyframes || {}), enabled: items.length > 0, items } }
+}
+
+/** Valores de estilo guardados en el keyframe `item` (para copiar / duplicar). */
+function styleKfValues(item) {
+  const out = {}
+  for (const key of TEXT_STYLE_KF_KEYS) if (validKfValue(key, item?.props?.[key])) out[key] = item.props[key]
+  return out
 }
 
 export function enableKeyframes(clip, localT, srcTime) {
@@ -330,7 +466,8 @@ export function upsertKeyframeAt(clip, localT, propPatch = {}, interpolation, fp
     items[j] = {
       ...items[j],
       t,
-      props,
+      // Conserva lo que el keyframe ya tenía (el estilo del texto va por propiedad).
+      props: { ...items[j].props, ...props },
       interpolation: interpolation ? normalizeInterp(interpolation) : items[j].interpolation,
     }
   } else {
@@ -359,7 +496,7 @@ export const CROP_KEYS = ['cx', 'cy']
  * valor estático, y la animación queda para cuando el usuario la active.
  */
 export function shouldKeyframe(clip, patch) {
-  if (keyframesEnabled(clip)) return true
+  if (keyframesEnabled(clip) && poseKeyframed(clip)) return true
   return CROP_KEYS.some((k) => patch?.[k] != null)
 }
 
@@ -370,9 +507,46 @@ export function shouldKeyframe(clip, patch) {
  *  - 'on'    hay keyframe en el cabezal (modificarla lo actualiza, no duplica).
  */
 export function kfState(clip, localT, fps) {
-  const here = !!keyframeIdAt(clip, localT, fps)
-  if (here) return 'on'
-  return keyframesEnabled(clip) ? 'empty' : 'off'
+  // Solo cuentan los keyframes de pose: los de estilo del texto tienen sus rombos.
+  const t = +snapToFrame(localT, fps).toFixed(6)
+  const snap = kfSnap(fps)
+  const posed = normalizeItems(clip?.keyframes?.items).filter(hasPoseProps)
+  if (posed.some((k) => Math.abs(k.t - t) < snap)) return 'on'
+  if ((clip?.reframe?.keyframes || []).some((k) => Math.abs(k.t - t) < snap)) return 'on'
+  if (!keyframesEnabled(clip)) return 'off'
+  return posed.length || !textStyleKfKeys(clip).size ? 'empty' : 'off'
+}
+
+function hasPoseProps(k) {
+  return KF_PROP_KEYS.some((key) => k.props[key] != null && Number.isFinite(Number(k.props[key])))
+}
+
+/** ¿Tiene el clip keyframes de pose? (Solo de estilo del texto no cuenta.) */
+export function poseKeyframed(clip) {
+  return normalizeItems(clip?.keyframes?.items).some(hasPoseProps)
+}
+
+/** Quita la pose del keyframe `id` y deja su estilo (o lo borra si no tenía). */
+export function removePoseKf(clip, id) {
+  const items = []
+  for (const k of normalizeItems(clip?.keyframes?.items)) {
+    if (k.id !== id) { items.push(k); continue }
+    const style = styleKfValues(k)
+    if (Object.keys(style).length) items.push({ ...k, props: style })
+  }
+  return { ...clip, keyframes: { ...(clip.keyframes || {}), items } }
+}
+
+/** Instante local del keyframe anterior (dir < 0) o siguiente (dir > 0) al
+ *  cabezal, para las flechas ‹ › del rombo; null si no hay. El que está bajo
+ *  el cabezal no cuenta. */
+export function kfNeighborT(clip, localT, dir, fps) {
+  if (!keyframesEnabled(clip)) return null
+  const t = num(localT, 0)
+  const snap = kfSnap(fps)
+  const ts = normalizeItems(clip.keyframes.items).map((k) => k.t)
+  if (dir < 0) return ts.filter((x) => x < t - snap).at(-1) ?? null
+  return ts.find((x) => x > t + snap) ?? null
 }
 
 export function keyframeIdAt(clip, localT, fps) {
@@ -471,6 +645,7 @@ export const KF_GROUPS = [
   { id: 'crop', label: 'Encuadre', keys: ['cx', 'cy', 'zoom'] },
   { id: 'mask', label: 'Máscara', keys: [...MASK_KF_KEYS] },
   { id: 'audio', label: 'Audio', keys: ['volume', ...AUDIO_FX_KEYS] },
+  { id: 'text_style', label: 'Estilo del texto', keys: [...TEXT_STYLE_KF_KEYS] },
 ]
 
 export const KF_GROUP_IDS = KF_GROUPS.map((g) => g.id)
@@ -487,6 +662,9 @@ export function pickProps(props, groupIds) {
       out[key] = Number(props[key])
     }
   }
+  for (const key of TEXT_STYLE_KF_KEYS) {
+    if (keys.has(key) && validKfValue(key, props?.[key])) out[key] = props[key]
+  }
   return out
 }
 
@@ -497,7 +675,7 @@ export function copyKeyframeAt(clip, localT, fps) {
   if (!item) return null
   return {
     type: 'keyframe',
-    props: { ...clipPropsAt(clip, item.t) },
+    props: { ...clipPropsAt(clip, item.t), ...styleKfValues(item) },
     interpolation: normalizeInterp(item.interpolation),
     bezier: item.bezier || null,
     srcKind: clip?.kind || null,
@@ -509,7 +687,10 @@ export function pasteKeyframeAt(clip, localT, board, groupIds, fps) {
   if (!board || board.type !== 'keyframe') return clip
   const props = pickProps(board.props, groupIds)
   if (!Object.keys(props).length) return clip
-  return withBezierAt(upsertKeyframeAt(clip, localT, props, board.interpolation, fps), localT, board.bezier, fps)
+  const style = styleKfValues({ props })
+  const pose = Object.fromEntries(Object.entries(props).filter(([k]) => !(k in style)))
+  const next = Object.keys(pose).length ? upsertKeyframeAt(clip, localT, pose, board.interpolation, fps) : clip
+  return withBezierAt(upsertStyleKf(next, localT, style, fps), localT, board.bezier, fps)
 }
 
 /** Copia un keyframe existente a otro instante conservando todos sus valores. */
@@ -517,7 +698,8 @@ export function duplicateKeyframeAt(clip, id, targetT, fps) {
   const item = normalizeItems(clip?.keyframes?.items).find((k) => k.id === id)
   if (!item) return clip
   const props = { ...clipPropsAt(clip, item.t) }
-  return withBezierAt(upsertKeyframeAt(clip, targetT, props, item.interpolation, fps), targetT, item.bezier, fps)
+  const next = upsertStyleKf(upsertKeyframeAt(clip, targetT, props, item.interpolation, fps), targetT, styleKfValues(item), fps)
+  return withBezierAt(next, targetT, item.bezier, fps)
 }
 
 /** Lleva la curva personalizada al keyframe que hay en `localT` (pegar/duplicar). */

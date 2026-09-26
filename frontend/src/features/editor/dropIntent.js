@@ -13,10 +13,21 @@
 // confirmación si es 'replace').
 
 import { clipEnd, clipDur, freeStartOnTrack } from './editorModel.js'
-import { isStackTrack } from './trackStack.js'
+import { displayTracks, isStackTrack } from './trackStack.js'
 
 /** Fracción superior de la pista que significa "crear pista nueva encima". */
 export const NEW_TRACK_BAND = 0.25
+/** Bordes de una pista de SU tipo que, al mover un clip, piden pista nueva:
+ *  estrechos para no robarle el "déjalo en esta pista". */
+export const INSERT_EDGE = 0.2
+/** El mismo borde en px: igual de fácil de acertar en una pista alta que en una baja. */
+export const INSERT_EDGE_PX = 9
+
+/** Fracción del alto de una pista de `rowH` px que es borde de inserción. */
+export function insertEdge(rowH) {
+  const h = Number(rowH)
+  return h > 0 ? Math.min(0.3, Math.max(0.12, INSERT_EDGE_PX / h)) : INSERT_EDGE
+}
 /** Desfase (en fracción de la duración del clip destino) por debajo del cual
  *  se entiende que quieres REEMPLAZARLO y no ponerlo al lado. */
 export const REPLACE_TOL = 0.2
@@ -100,29 +111,61 @@ export function newTrackIndex(tracks, kind, side) {
   return toEnd ? last + 1 : first
 }
 
-/** Pista inmediatamente superior a `trackId`: en la pila, la capa siguiente
- *  (sea del tipo que sea); en audio, la siguiente de audio. */
-export function trackAbove(tracks, trackId) {
-  const list = tracks || []
-  const t = list.find((x) => x.id === trackId)
-  if (!t) return null
-  const same = list.filter(isStackTrack(t) ? isStackTrack : (x) => x.kind === t.kind)
-  const i = same.findIndex((x) => x.id === trackId)
-  return i >= 0 && i < same.length - 1 ? same[i + 1] : null
+/**
+ * Pista nueva al arrastrar un clip de `kind` sobre la pista `hoverId`, con el
+ * puntero a `yRatio` de su alto (0 = borde superior). Como CapCut: sobre una
+ * pista que no es de su tipo (un texto sobre un vídeo) se señala SIEMPRE una
+ * pista nueva, encima o debajo según la mitad; sobre una de su tipo, en sus
+ * bordes (`edge`, fracción del alto), sea cual sea la pista de al lado. Fuera
+ * de su bloque (un texto sobre el audio), en el borde del bloque más cercano.
+ *
+ * `originAlone`: el clip es el único de su pista (`originId`). Una pista nueva
+ * pegada a ella no cambiaría nada (la suya se quita al quedar vacía), así que
+ * ahí se queda donde está.
+ *
+ * Devuelve `{ targetId, place }` ('above' | 'below' tal como se ve) o null si
+ * el clip entra en esa pista.
+ */
+export function insertSlot(tracks, kind, hoverId, yRatio, originId, { edge = INSERT_EDGE, originAlone = false } = {}) {
+  const rows = displayTracks(tracks)
+  const hover = rows.find((t) => t.id === hoverId)
+  if (!hover) return null
+  const stack = kind === 'video' || kind === 'text'
+  let slot = null
+  if (isStackTrack(hover) !== stack) {
+    const group = rows.filter((t) => isStackTrack(t) === stack)
+    if (!group.length) return null
+    slot = stack ? { targetId: group[group.length - 1].id, place: 'below' } : { targetId: group[0].id, place: 'above' }
+  } else {
+    const y = Number.isFinite(Number(yRatio)) ? Number(yRatio) : 0.5
+    if (hover.kind !== kind || hover.locked) slot = { targetId: hover.id, place: y < 0.5 ? 'above' : 'below' }
+    else if (y < edge) slot = { targetId: hover.id, place: 'above' }
+    else if (y > 1 - edge) slot = { targetId: hover.id, place: 'below' }
+  }
+  if (!slot) return null
+  if (originAlone && originId) {
+    const b = slotBoundary(tracks, slot)
+    const o = rows.findIndex((t) => t.id === originId)
+    if (o >= 0 && (b === o || b === o + 1)) return null
+  }
+  return slot
 }
 
-/**
- * A dónde va un 'newTrack': si la pista de encima es del mismo tipo y tiene el
- * hueco libre se reutiliza (no llenamos el timeline de pistas); si no, hay que
- * crear una. En la pila la nueva va JUSTO encima de la pista destino (`index`),
- * no arriba del todo: así no salta por delante de lo que hubiera más arriba.
- */
-export function resolveNewTrack(clips, tracks, trackId, start, dur) {
+/** Hueco entre filas de un slot tal como se ve: 0 = encima de la primera fila.
+ *  Dos slots con el mismo hueco (debajo de A = encima de B) son la misma pista nueva. */
+export function slotBoundary(tracks, slot) {
+  const rows = displayTracks(tracks)
+  const i = rows.findIndex((t) => t.id === slot?.targetId)
+  if (i < 0) return -1
+  return i + (slot.place === 'below' ? 1 : 0)
+}
+
+/** Índice del array `tracks` para una pista nueva en `slot` (ver insertSlot).
+ *  La pila se ve invertida (la última del array, arriba); el audio, en orden. */
+export function slotIndex(tracks, slot) {
   const list = tracks || []
-  const t = list.find((x) => x.id === trackId)
-  const up = trackAbove(list, trackId)
-  if (up && up.kind === t.kind && !up.locked && !clipCollidingWith(clips, up.id, start, dur)) {
-    return { trackId: up.id, create: false }
-  }
-  return { trackId: null, create: true, index: t && isStackTrack(t) ? list.indexOf(t) + 1 : null }
+  const i = list.findIndex((t) => t.id === slot?.targetId)
+  if (i < 0) return list.length
+  const onTop = isStackTrack(list[i]) ? slot.place === 'above' : slot.place === 'below'
+  return onTop ? i + 1 : i
 }

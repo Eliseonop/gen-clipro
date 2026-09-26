@@ -4,6 +4,8 @@ import {
   deleteKeyframeItem, normalizeInterp, keyframeIdAt,
   canKeyframe, opensEffectsOnSelect, clipVolumeAt, applyVolumeFade, sampleVolumeCurve,
   shouldKeyframe, kfState, copyKeyframeAt, pasteKeyframeAt, duplicateKeyframeAt, pickProps, KF_GROUP_IDS, normalizeItems,
+  kfNeighborT, textStyleAt, withTextStyleKf, textStyleKfKeys, styleKfState, upsertStyleKf, removeStyleKfAt,
+  TEXT_KF_SECTIONS, hexRgb, poseKeyframed, removePoseKf,
 } from './clipKeyframes.js'
 
 assert.equal(normalizeInterp('direct'), 'hold')
@@ -180,5 +182,76 @@ const dup = duplicateKeyframeAt(src, kf0.id, 7, 30)
 assert.equal(dup.keyframes.items.length, 3)
 assert.ok(Math.abs(clipPropsAt(dup, 7).x - clipPropsAt(src, kf0.t).x) < 1e-9)
 assert.ok(Math.abs(clipPropsAt(dup, 7).volume - clipPropsAt(src, kf0.t).volume) < 1e-9)
+
+// --- flechas ‹ › : keyframe anterior / siguiente al cabezal -------------------
+const nav = { kind: 'text', keyframes: { enabled: true, items: [{ t: 2, props: {} }, { t: 0, props: {} }, { t: 5, props: {} }] } }
+assert.equal(kfNeighborT(nav, 3, -1, 30), 2)
+assert.equal(kfNeighborT(nav, 3, 1, 30), 5)
+// En un keyframe: ese no cuenta, salta al de al lado.
+assert.equal(kfNeighborT(nav, 2, -1, 30), 0)
+assert.equal(kfNeighborT(nav, 2, 1, 30), 5)
+assert.equal(kfNeighborT(nav, 2.01, -1, 30), 0)   // a menos de medio cuadro = sobre él
+// En los extremos no hay más.
+assert.equal(kfNeighborT(nav, 0, -1, 30), null)
+assert.equal(kfNeighborT(nav, 5, 1, 30), null)
+// Sin animación, nada.
+assert.equal(kfNeighborT({ kind: 'text' }, 3, 1, 30), null)
+
+// --- Estilo del texto con keyframes (Color, Trazo, Fondo, Sombra), por propiedad ---
+{
+  const moving = upsertKeyframeAt(upsertKeyframeAt({ kind: 'text', style: { x: 0.2 } }, 0, { x: 0.2 }), 2, { x: 0.8 })
+  // Rombo de Color en t=1: un keyframe SOLO de estilo, que no toca la pose.
+  let c = upsertStyleKf(moving, 1, { color: '#ff0000', x: 5 })
+  assert.equal(normalizeItems(c.keyframes.items).length, 3)
+  assert.ok(Math.abs(clipPropsAt(c, 1).x - 0.5) < 1e-9, 'la pose sigue interpolando sin el keyframe de estilo')
+  // Un solo keyframe de color = color fijo; con dos, se mezcla en RGB.
+  assert.deepEqual(textStyleAt(c, 0), { color: '#ff0000' })
+  c = upsertStyleKf(c, 2, { color: '#0000ff', border_width: 6 })
+  assert.equal(textStyleAt(c, 1.5).color, '#800080')
+  assert.equal(textStyleAt(c, 1.5).border_width, 6)
+  assert.deepEqual([...textStyleKfKeys(c)].sort(), ['border_width', 'color'])
+  // Valores no válidos no se guardan (Fondo apagado = 'none').
+  assert.equal(upsertStyleKf(moving, 1, { bg: 'none' }), moving)
+  // Rombos por sección.
+  assert.equal(styleKfState(c, 1, TEXT_KF_SECTIONS.color, 30), 'on')
+  assert.equal(styleKfState(c, 0.5, TEXT_KF_SECTIONS.color, 30), 'empty')
+  assert.equal(styleKfState(c, 1, TEXT_KF_SECTIONS.bg, 30), 'off')
+  assert.equal(styleKfState({ kind: 'text' }, 1, TEXT_KF_SECTIONS.color, 30), 'off')
+  // Mover el texto en un keyframe que ya tiene estilo no lo borra.
+  const moved = upsertKeyframeAt(c, 2, { x: 0.9 })
+  assert.equal(normalizeItems(moved.keyframes.items).find((k) => k.t === 2).props.color, '#0000ff')
+  // Quitar el rombo: el keyframe de solo estilo desaparece; el de pose se queda.
+  const off = removeStyleKfAt(removeStyleKfAt(c, 1, ['color'], 30), 2, TEXT_KF_SECTIONS.stroke, 30)
+  assert.equal(normalizeItems(off.keyframes.items).length, 2)
+  assert.deepEqual(textStyleAt(off, 1.5), { color: '#0000ff' })
+  // Las casillas mandan: sin Fondo / sin Trazo los valores animados no hacen nada.
+  assert.equal(withTextStyleKf({ bg: 'none', border_width: 0 }, { bg: '#111111', border_width: 5 }).bg, 'none')
+  assert.equal(withTextStyleKf({ bg: 'none', border_width: 0 }, { border_width: 5 }).border_width, 0)
+  assert.equal(withTextStyleKf({ bg: '#000000', border_width: 2 }, { bg: '#111111', border_width: 5 }).bg, '#111111')
+  // Con Escala uniforme encendida no hay Escala X / Y (ni sus keyframes).
+  assert.equal(withTextStyleKf({ stretch_x: 2 }, { stretch_y: 3 }).stretch_y, undefined)
+  assert.equal(withTextStyleKf({ scale_split: true }, { stretch_y: 3 }).stretch_y, 3)
+  // Copiar / pegar un keyframe lleva también su estilo.
+  const board = copyKeyframeAt(c, 2, 30)
+  assert.equal(board.props.color, '#0000ff')
+  const pasted = pasteKeyframeAt(moving, 1, board, ['text_style'], 30)
+  assert.equal(textStyleAt(pasted, 1).color, '#0000ff')
+  assert.ok(Math.abs(clipPropsAt(pasted, 1).x - 0.5) < 1e-9)
+  assert.deepEqual(hexRgb('#abc'), [170, 187, 204])
+  // Solo keyframes de color: la pose no está animada (mover ≠ animar) y su rombo, apagado.
+  const onlyColor = upsertStyleKf({ kind: 'text', style: {} }, 1, { color: '#ff0000' }, 30)
+  assert.equal(poseKeyframed(onlyColor), false)
+  assert.equal(shouldKeyframe(onlyColor, { x: 0.3 }), false)
+  assert.equal(kfState(onlyColor, 1, 30), 'off')
+  assert.equal(poseKeyframed(c), true)
+  assert.equal(shouldKeyframe(c, { x: 0.3 }), true)
+  assert.equal(kfState(c, 1, 30), 'empty', 'el keyframe de solo estilo no enciende el rombo de Transformación')
+  // Quitar la pose de un keyframe con estilo deja el estilo.
+  const id2 = normalizeItems(c.keyframes.items).find((k) => k.t === 2).id
+  const noPose = removePoseKf(c, id2)
+  assert.deepEqual(normalizeItems(noPose.keyframes.items).find((k) => k.t === 2).props, { color: '#0000ff', border_width: 6 })
+  assert.equal(normalizeItems(removePoseKf(moving, normalizeItems(moving.keyframes.items)[0].id).keyframes.items).length, 1)
+  assert.equal(hexRgb('none'), null)
+}
 
 console.log('clipKeyframes ok')

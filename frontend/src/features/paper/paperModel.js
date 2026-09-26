@@ -204,7 +204,9 @@ export const DEFAULT_PAPER_STATE = {
   export: { duration: 5, fps: 24, filename: '', format: 'webm', jpgQuality: 95, transparentBackground: true },
   // Herramienta activa del lienzo. No entra en el historial (son ajustes de
   // herramienta: deshacer no debe cambiarle el pincel al usuario).
-  edit: { tool: TOOL.none, brushSize: 20, colorTolerance: 32, bgProvider: 'u2net' },
+  // bgProvider: BiRefNet por defecto — aquí se recortan imágenes (una sola
+  // inferencia), así que compensa su borde aunque sea el motor más pesado.
+  edit: { tool: TOOL.none, brushSize: 20, colorTolerance: 32, bgProvider: 'birefnet_lite' },
   object: DEFAULT_OBJECT,
   text: DEFAULT_TEXT,
   // Qué se está editando: 'image' o el id de un elemento de texto. El inspector,

@@ -9,6 +9,7 @@ import {
   despillRgb, despillType, frameUv, hexRgb, matteFrameIndex, matteFrameTime,
   matteIndexFor, matteLevels, normalizeBg, normalizeChroma, normalizeEdit, normalizeHex,
   editsAtFrame, isManualMark, markKey, preferredSamProvider, samMarkFrames, selectionLayers,
+  MASK_HEIGHT_OPTIONS, isInteractiveProvider, providerMaskHeight, recommendedProvider,
 } from './clipBg.js'
 
 // El fixture lo genera backend/tests/test_clip_bg.py, verificado bit a bit
@@ -23,6 +24,19 @@ assert.ok(BG_PROVIDER_IDS.includes('u2net') && BG_PROVIDER_IDS.includes('u2netp'
 assert.ok(BG_PROVIDER_IDS.includes('sam21_base_plus'))   // asistido (SAM)
 assert.ok(BG_PROVIDERS.every((p) => p.label && p.hint))
 assert.equal(DEFAULT_PROVIDER, 'u2net')
+// Motores nuevos (espejo de AUTO_PROVIDER_IDS en clip_bg.py) y el recomendado
+// por material: vídeo → RVM, imagen → BiRefNet, GIF → U²-Net.
+assert.deepEqual(BG_PROVIDER_IDS.filter((id) => !isInteractiveProvider(id)),
+  ['rvm_mobilenetv3', 'rvm_resnet50', 'birefnet_lite', 'u2net', 'u2netp'])
+assert.equal(recommendedProvider({ kind: 'video', filename: 'a.mp4' }), 'rvm_mobilenetv3')
+assert.equal(recommendedProvider({ kind: 'image', filename: 'a.png' }), 'birefnet_lite')
+assert.equal(recommendedProvider({ kind: 'image', filename: 'A.GIF?x=1' }), 'u2net')
+assert.equal(providerMaskHeight('rvm_mobilenetv3'), 720)
+assert.equal(providerMaskHeight('birefnet_lite'), 1080)
+assert.equal(providerMaskHeight('u2net'), DEFAULT_MASK_HEIGHT)
+assert.equal(providerMaskHeight('sam21_large'), DEFAULT_MASK_HEIGHT)
+assert.ok(MASK_HEIGHT_OPTIONS.some((o) => o.value === DEFAULT_MASK_HEIGHT))
+assert.equal(normalizeBg({ auto: { enabled: true, provider: 'rvm_resnet50' } }).auto.provider, 'rvm_resnet50')
 assert.deepEqual(BG_MODES, ['auto', 'chroma'])
 assert.ok(CHROMA_PRESETS.every((p) => /^#[0-9A-F]{6}$/.test(p.color)))
 

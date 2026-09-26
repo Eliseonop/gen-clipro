@@ -36,6 +36,7 @@ export function trackKindForClip(kind) {
 
 export function laneKindForAsset(assetKind) {
   if (assetKind === 'clips' || assetKind === 'video' || assetKind === 'images' || assetKind === 'image' || assetKind === 'shape') return 'video'
+  if (assetKind === 'text') return 'text'
   return 'audio'
 }
 
@@ -171,6 +172,32 @@ export function removeTrack(tracks, clips, trackId) {
     tracks: remaining.map((t) => (t.linked_track_id === trackId ? { ...t, linked_track_id: null } : t)),
     clips: (clips || []).filter((c) => c.track_id !== trackId),
   }
+}
+
+/**
+ * Pistas de `candidates` que se han quedado sin clips y se quitan solas, como en
+ * CapCut (se movió o se borró su último clip). Nunca una bloqueada ni la última
+ * libre de su tipo: sin ella no habría dónde añadir material de ese tipo con un clic.
+ */
+export function emptiedTracks(tracks, clips, candidates) {
+  const list = tracks || []
+  const used = new Set((clips || []).map((c) => c.track_id))
+  const cand = new Set(candidates || [])
+  const left = new Map()
+  for (const t of list) if (!t.locked) left.set(t.kind, (left.get(t.kind) || 0) + 1)
+  const out = []
+  for (const t of list) {
+    if (!cand.has(t.id) || used.has(t.id) || t.locked || left.get(t.kind) <= 1) continue
+    left.set(t.kind, left.get(t.kind) - 1)
+    out.push(t.id)
+  }
+  return out
+}
+
+/** Nombre de pista en su cabecera: 3 caracteres como mucho (V1, T2, A12…). */
+export const TRACK_NAME_MAX = 3
+export function shortTrackName(name) {
+  return [...String(name ?? '').trim()].slice(0, TRACK_NAME_MAX).join('')
 }
 
 /** Vídeo de biblioteca o audio/sfx: se puede transcribir a pista de texto. */
@@ -872,6 +899,24 @@ export function makeClip(assetKind, item, trackId, start, dur) {
 }
 
 // Crea un clip de texto.
+// Ficha «Texto predeterminado» del panel Texto (como CapCut): se arrastra a la
+// timeline y cae como un texto de 3 s. `themeId` = tema de subtítulo opcional.
+export const DEFAULT_TEXT = 'Texto predeterminado'
+export const TEXT_DEFAULT_DUR = 3
+
+export function dragTextPayload(theme) {
+  return JSON.stringify({
+    asset_kind: 'text',
+    kind: 'text',
+    asset_id: theme?.id || 'text',
+    filename: '',
+    name: theme?.name || DEFAULT_TEXT,
+    text: theme?.sample || DEFAULT_TEXT,
+    duration: TEXT_DEFAULT_DUR,
+    theme_id: theme?.id || null,
+  })
+}
+
 export function makeTextClip(trackId, start, dur, text, style, opts = {}) {
   const role = opts.text_role === 'caption' ? 'caption' : 'free'
   const st = { ...(style || defaultTextStyle()) }

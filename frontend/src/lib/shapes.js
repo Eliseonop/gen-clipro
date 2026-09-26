@@ -2,6 +2,7 @@
 // La geometría vive en un viewBox 0–100; x/y/w/h del clip son fracciones del canvas.
 import { applyShapePose, clipFlip, clipPose } from './clipAnim.js'
 import { clipPropsAt, easeT, keyframesEnabled, normalizeItems, upsertKeyframeAt } from './clipKeyframes.js'
+import { drawSelectionFrame } from './selectionFrame.js'
 
 export const SHAPE_DEFAULT_DUR = 5
 
@@ -672,50 +673,11 @@ export function drawShapeClip(ctx, clip, cw, ch, opts = {}) {
   }
   for (const line of geo.strokes) strokeLine(line, false)
   ctx.setLineDash([])
-
-  const hw = box.bw / 2
-  const hh = box.bh / 2
-  const corners = [
-    mapShapePoint([0, 0], box),
-    mapShapePoint([100, 0], box),
-    mapShapePoint([0, 100], box),
-    mapShapePoint([100, 100], box),
-  ]
-  const dest = { dx: box.cx - hw, dy: box.cy - hh, dw: box.bw, dh: box.bh, rotation: box.rotation }
-  let handles = null
-  if (opts.selected) {
-    ctx.save()
-    ctx.strokeStyle = 'rgba(120,190,255,0.95)'
-    ctx.setLineDash([5, 4])
-    ctx.lineWidth = 1.5
-    ctx.beginPath()
-    corners.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])))
-    ctx.closePath()
-    ctx.stroke()
-    ctx.setLineDash([])
-    const hs = 5
-    ctx.fillStyle = '#7cc4ff'
-    const l = mapShapePoint([0, 50], box)
-    const r = mapShapePoint([100, 50], box)
-    const t = mapShapePoint([50, 0], box)
-    const b = mapShapePoint([50, 100], box)
-    const br = mapShapePoint([100, 100], box)
-    const rot = mapShapePoint([50, -18], box)
-    handles = { l: { x: l[0], y: l[1] }, r: { x: r[0], y: r[1] }, t: { x: t[0], y: t[1] }, b: { x: b[0], y: b[1] }, br: { x: br[0], y: br[1] }, rot: { x: rot[0], y: rot[1] } }
-    for (const h of [l, r, t, b, br]) {
-      ctx.fillRect(h[0] - hs, h[1] - hs, hs * 2, hs * 2)
-    }
-    ctx.beginPath()
-    ctx.moveTo(t[0], t[1])
-    ctx.lineTo(rot[0], rot[1])
-    ctx.strokeStyle = '#7cc4ff'
-    ctx.stroke()
-    ctx.beginPath()
-    ctx.arc(rot[0], rot[1], 6, 0, Math.PI * 2)
-    ctx.fillStyle = '#7cc4ff'
-    ctx.fill()
-    ctx.restore()
-  }
   ctx.restore()
+  const dest = { dx: box.cx - box.bw / 2, dy: box.cy - box.bh / 2, dw: box.bw, dh: box.bh, rotation: box.rotation }
+  // Recuadro de CapCut: esquinas (tamaño), barritas (ancho / alto) y giro debajo.
+  const handles = opts.selected
+    ? drawSelectionFrame(ctx, { cx: box.cx, cy: box.cy, w: box.bw, h: box.bh, rotation: box.rotation }, { sides: true, tb: true })
+    : null
   return { box: dest, handles, cx: box.cx, cy: box.cy }
 }

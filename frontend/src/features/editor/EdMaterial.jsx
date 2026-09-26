@@ -1204,6 +1204,7 @@ export default function EdMaterial({
           mode="text"
           clip={selectedClip}
           onAddText={onAddText}
+          onDragInfo={di}
           onApplyPreset={onApplyTextPreset}
         />
       )}

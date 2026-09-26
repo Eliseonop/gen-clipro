@@ -128,9 +128,12 @@ class BgEndpointsTest(unittest.TestCase):
         self.assertEqual(res.status_code, 200, res.text)
         body = res.json()
         ids = {p["id"] for p in body["providers"]}
-        self.assertTrue({"u2net", "u2netp"} <= ids)      # automáticos
+        self.assertTrue({"rvm_mobilenetv3", "rvm_resnet50", "birefnet_lite",
+                         "u2net", "u2netp"} <= ids)      # automáticos
         self.assertTrue({"sam21_base_plus"} <= ids)      # asistido (SAM)
         self.assertIn("onnx_selected", body)
+        rvm = next(p for p in body["providers"] if p["id"] == "rvm_mobilenetv3")
+        self.assertTrue(rvm["temporal"] and rvm["people_only"])
 
     def test_status_de_una_clave_inexistente_es_404(self):
         self.assertEqual(self._client().get("/api/bg/status/nada").status_code, 404)
@@ -253,6 +256,29 @@ class BgJobTest(unittest.TestCase):
         self.assertEqual(job.bg_removal["base_key"], "bk")
         self.assertEqual(job.bg_removal["clip_id"], "c1")
         self.assertEqual(job.bg_removal["device"], "cpu")
+        self.assertNotIn("warning", job.bg_removal)
+
+    def test_avisa_si_rvm_no_encuentra_ninguna_persona(self):
+        """RVM solo recorta personas: con un gato el matte sale vacío y el job
+        lo dice, en vez de dejar que parezca que el motor no funciona."""
+        from app import jobs
+
+        job = jobs.create_job()
+        meta = {"base_key": "bk", "provider": "rvm_mobilenetv3", "model_version": "rvm-1",
+                "mask_fps": 15, "mask_height": 720, "range": [0, 44],
+                "source_duration": 3.0, "device": "cpu", "subject_found": False}
+        src = Path(tempfile.mkdtemp()) / "a.mp4"
+        src.write_bytes(b"x")
+        with patch("app.projects.get_project", return_value=object()), \
+             patch("app.compose._clip_path", return_value=src), \
+             patch("app.bg.service.build_matte", return_value=meta):
+            jobs._run_bg_removal(job.id, "p1", {
+                "clip_id": "c1", "filename": "a.mp4", "kind": "video",
+                "in_point": 0.0, "out_point": 3.0, "source_duration": 3.0,
+                "auto": {"provider": "rvm_mobilenetv3"}})
+        self.assertEqual(job.status.value, "done", job.error)
+        self.assertIn("ninguna persona", job.bg_removal["warning"])
+        self.assertIn("BiRefNet", job.bg_removal["warning"])
 
     def test_cancelar_deja_el_job_en_error_con_mensaje_claro(self):
         from app import jobs

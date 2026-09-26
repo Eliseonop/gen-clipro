@@ -16,6 +16,40 @@ const sub = {
   max_words: 8,
 }
 
+// Estilos de las capturas de CapCut (Estilo preestablecido) como temas de subtítulo:
+// el mismo look, todas las palabras visibles y la palabra activa en un color que contrasta.
+const look = (id, name, style) => ({
+  id,
+  name,
+  sample: 'hola mundo',
+  style: {
+    ...sub,
+    font: 'Arial Black',
+    border_width: 0,
+    border_color: '#000000',
+    word_fx: 'highlight',
+    block_appear: 'fade',
+    inactive_opacity: 1,
+    ...style,
+  },
+})
+
+const CAPCUT_LOOKS = [
+  look('yellow', 'Amarillo', { color: '#ffe400', border_width: 5, border_color: '#000000', highlight_color: '#ffffff' }),
+  look('ink', 'Tinta', { color: '#111111', border_width: 5, border_color: '#ffffff', highlight_color: '#ff2d2d' }),
+  look('red', 'Rojo', { color: '#ff2d2d', border_width: 5, border_color: '#ffffff', highlight_color: '#ffe400' }),
+  look('orange', 'Naranja', { color: '#ff8a00', border_width: 5, border_color: '#ffffff', highlight_color: '#111111' }),
+  look('blue', 'Azul', { color: '#1e90ff', border_width: 5, border_color: '#ffffff', highlight_color: '#ffe400' }),
+  look('green', 'Verde', { color: '#2ee83f', border_width: 5, border_color: '#000000', highlight_color: '#ffffff' }),
+  look('pink', 'Rosa', { color: '#ff3d8b', border_width: 5, border_color: '#ffffff', highlight_color: '#ffe400' }),
+  look('yellow-box', 'Caja amarilla', { color: '#111111', bg: '#ffd400', bg_opacity: 1, highlight_color: '#e0202a' }),
+  look('purple-box', 'Caja morada', { color: '#ffffff', bg: '#7b2cff', bg_opacity: 1, highlight_color: '#ffe400' }),
+  look('white-box', 'Caja blanca', { color: '#111111', bg: '#ffffff', bg_opacity: 1, highlight_color: '#7b2cff' }),
+  look('green-glow', 'Brillo verde', { color: '#111111', shadow: true, glow: true, shadow_color: '#2ee83f', highlight_color: '#ffffff' }),
+  look('fire-glow', 'Brillo naranja', { color: '#ffc21a', shadow: true, glow: true, shadow_color: '#ff4d00', highlight_color: '#ffffff' }),
+  look('gold-glow', 'Dorado', { color: '#fffbe6', shadow: true, glow: true, shadow_color: '#ffd400', highlight_color: '#ffd400' }),
+]
+
 export const SUBTITLE_THEMES = [
   {
     id: 'classic',
@@ -161,6 +195,7 @@ export const SUBTITLE_THEMES = [
       shadow: false,
     },
   },
+  ...CAPCUT_LOOKS,
 ]
 
 export function themeById(id) {

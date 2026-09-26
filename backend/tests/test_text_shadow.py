@@ -9,7 +9,8 @@ import unittest
 
 from app.schemas import TimelineClip
 from app.text_ass import (
-    LIBASS_BLUR_SIGMA, SHADOW_DEFAULTS, animated_dialogues, build_ass, shadow_dialogues, text_shadow,
+    GLOW_SIGMA_MAX, LIBASS_BLUR_SIGMA, SHADOW_DEFAULTS, animated_dialogues, build_ass, shadow_dialogues,
+    text_glow, text_shadow,
 )
 
 W, H = 400, 400
@@ -28,11 +29,38 @@ SH = {"shadow": True, "shadow_color": "#ff0000", "shadow_opacity": 1, "shadow_di
       "shadow_angle": 90, "shadow_blur": 0.2}
 
 
+class GlowParamsTest(unittest.TestCase):
+    """Brillo completo (CapCut): color propio, Intensidad, Intervalo, desplazamiento y estilo."""
+
+    def test_color_propio_o_el_de_la_sombra(self):
+        self.assertEqual(text_glow({"glow": True, "shadow_color": "#123456"}, 40)["color"], "#123456")
+        self.assertEqual(text_glow({"glow": True, "shadow_color": "#123456", "glow_color": "#abcdef"}, 40)["color"], "#abcdef")
+        self.assertIsNone(text_glow({"glow": False}, 40))
+        self.assertIsNone(text_glow({"glow": True, "glow_intensity": 0}, 40))
+
+    def test_intervalo_desplazamiento_y_estilo(self):
+        g = text_glow({"glow": True, "glow_intensity": 0.5, "glow_range": 1, "glow_dx": 0.5, "glow_dy": 0.25}, 40)
+        self.assertEqual(g["opacity"], 0.5)
+        self.assertAlmostEqual(g["sigma"], GLOW_SIGMA_MAX * 40)
+        self.assertEqual((g["dx"], g["dy"]), (20.0, -10.0))           # Y hacia arriba
+        self.assertEqual(g["spread"], 0.0)
+        self.assertGreater(text_glow({"glow": True, "glow_style": "strong"}, 40)["spread"], 0)
+
+    def test_intenso_engorda_la_silueta(self):
+        doc = build_ass([_clip({"glow": True, "glow_style": "strong", "border_width": 2})], W, H)
+        halo = next(ln for ln in doc.splitlines() if ln.startswith("Dialogue") and ",sht," in ln)
+        bord = float(re.search(r"\\bord([\d.]+)", halo).group(1))
+        self.assertGreater(bord, 2)
+
+
 class TextShadowParamsTest(unittest.TestCase):
     def test_sin_sombra_o_con_brillo(self):
         self.assertIsNone(text_shadow({}, 40))
-        self.assertIsNone(text_shadow({"shadow": True, "glow": True}, 40))
         self.assertIsNone(text_shadow({"shadow": True, "shadow_opacity": 0}, 40))
+        # Con Brillo, la silueta de debajo es su halo (no la sombra paralela).
+        glow = text_shadow({"shadow": True, "glow": True, "glow_color": "#00ff00"}, 40)
+        self.assertEqual(glow["color"], "#00ff00")
+        self.assertEqual((glow["dx"], glow["dy"]), (0.0, 0.0))
 
     def test_defaults_iguales_que_el_preview(self):
         d = text_shadow({"shadow": True}, 40)
@@ -73,7 +101,7 @@ class TextShadowAssTest(unittest.TestCase):
         sh_style = next(ln for ln in doc.splitlines() if ln.startswith("Style: sht,"))
         main_style = next(ln for ln in doc.splitlines() if ln.startswith("Style: st,"))
         self.assertEqual(sh_style.split(",")[15], "1")    # BorderStyle 1: la sombra no lleva caja
-        self.assertEqual(main_style.split(",")[15], "3")  # el texto sí
+        self.assertEqual(main_style.split(",")[15], "4")  # el texto sí (caja en BackColour)
         self.assertEqual(main_style.split(",")[17], "0")  # y ya no usa la sombra del estilo
         layers = [int(ln.split(",")[0].split()[1]) for ln in doc.splitlines() if ln.startswith("Dialogue")]
         self.assertEqual(sorted(layers), [0, 1])
@@ -83,11 +111,14 @@ class TextShadowAssTest(unittest.TestCase):
         self.assertNotIn("Style: sht,", doc)
         self.assertEqual(doc.count("Dialogue:"), 1)
 
-    def test_brillo_conserva_su_sombra_de_estilo(self):
-        doc = build_ass([_clip({"glow": True, "shadow": True})], W, H)
+    def test_brillo_va_en_su_evento_debajo_del_texto(self):
+        doc = build_ass([_clip({"glow": True, "shadow": True, "glow_color": "#00ff00"})], W, H)
         main_style = next(ln for ln in doc.splitlines() if ln.startswith("Style: st,"))
-        self.assertEqual(main_style.split(",")[17], "2")
-        self.assertNotIn("Style: sht,", doc)
+        self.assertEqual(main_style.split(",")[17], "0")          # ya no es la sombra del estilo
+        self.assertIn("Style: sht,", doc)
+        halo = next(ln for ln in doc.splitlines() if ln.startswith("Dialogue") and ",sht," in ln)
+        self.assertIn(r"\c&H1900FF00&", halo)                    # verde, intensidad 0,9
+        self.assertIn(r"\blur", halo)
 
     def test_texto_animado_lleva_sombra_por_fotograma(self):
         kf = {"enabled": True, "items": [

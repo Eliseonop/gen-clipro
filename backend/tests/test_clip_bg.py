@@ -474,5 +474,36 @@ class ChromaFiltersTest(unittest.TestCase):
         self.assertIn("blue=-0.500000", ",".join(azul))
 
 
+class RecommendedProviderTest(unittest.TestCase):
+    """Motor que se propone al activar la eliminación automática (espejo JS)."""
+
+    def test_video_rvm_imagen_birefnet_gif_u2net(self):
+        self.assertEqual(clip_bg.recommended_provider({"kind": "video", "filename": "a.mp4"}),
+                         "rvm_mobilenetv3")
+        self.assertEqual(clip_bg.recommended_provider({"kind": "image", "filename": "a.png"}),
+                         "birefnet_lite")
+        self.assertEqual(clip_bg.recommended_provider({"kind": "image", "filename": "A.GIF?x=1"}),
+                         "u2net")
+
+    def test_alto_del_matte_por_motor(self):
+        self.assertEqual(clip_bg.provider_mask_height("rvm_mobilenetv3"), 720)
+        self.assertEqual(clip_bg.provider_mask_height("birefnet_lite"), 1080)
+        self.assertEqual(clip_bg.provider_mask_height("u2net"), clip_bg.DEFAULT_MASK_HEIGHT)
+        self.assertEqual(clip_bg.provider_mask_height("sam21_large"), clip_bg.DEFAULT_MASK_HEIGHT)
+
+    def test_los_motores_nuevos_se_normalizan_y_no_son_interactivos(self):
+        for pid in ("rvm_mobilenetv3", "rvm_resnet50", "birefnet_lite"):
+            self.assertEqual(clip_bg.normalize_auto({"provider": pid})["provider"], pid)
+            self.assertFalse(clip_bg.is_interactive_provider(pid))
+        self.assertEqual(clip_bg.normalize_auto({"provider": "rmbg"})["provider"], "u2net")
+
+    def test_cambiar_de_motor_o_de_alto_cambia_la_clave_del_matte(self):
+        a = clip_bg.normalize_auto({"provider": "rvm_mobilenetv3", "mask_height": 720})
+        b = clip_bg.normalize_auto({"provider": "rvm_resnet50", "mask_height": 720})
+        c = clip_bg.normalize_auto({"provider": "rvm_mobilenetv3", "mask_height": 1080})
+        keys = {clip_bg.base_key("src", x, "v") for x in (a, b, c)}
+        self.assertEqual(len(keys), 3)
+
+
 if __name__ == "__main__":
     unittest.main()

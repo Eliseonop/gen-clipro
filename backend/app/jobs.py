@@ -1102,6 +1102,13 @@ def _run_bg_removal(job_id: str, pid: str, req: dict) -> None:
         }
         job.progress = 1.0
         job.message = f"Fondo separado ({meta['range'][1] - meta['range'][0] + 1} fotogramas)."
+        if meta.get("subject_found") is False:
+            # RVM solo recorta personas: con otro sujeto el matte sale vacío y,
+            # sin aviso, parecería que el motor no funciona.
+            job.bg_removal["warning"] = (
+                f"{provider.label} no ha encontrado ninguna persona en este clip: solo "
+                "recorta personas. Para objetos o animales usa BiRefNet o U²-Net, "
+                "o la Eliminación personalizada.")
         job.status = JobStatus.done
     except Exception as exc:  # noqa: BLE001 - queremos reportar cualquier fallo
         # La cancelación llega por dos vías: `on_progress` lanza JobCancelled y

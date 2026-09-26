@@ -556,9 +556,10 @@ def build_matte(path: Path, auto: dict, t0: float, t1: float, still: bool = Fals
                 cancel: Optional[Callable[[], bool]] = None) -> dict:
     """Asegura el matte crudo del tramo ``[t0, t1]``. Devuelve el meta resultante.
 
-    Vía automática (U²-Net): **incremental**, solo procesa los fotogramas que
-    falten en la caché. Vía asistida (SAM): sigue la selección desde los
-    fotogramas marcados (``_build_tracked``).
+    Vía automática (RVM, BiRefNet, U²-Net): **incremental**, solo procesa los
+    fotogramas que falten en la caché; los motores temporales (RVM) calientan su
+    estado con los fotogramas previos a cada tramo. Vía asistida (SAM): sigue la
+    selección desde los fotogramas marcados (``_build_tracked``).
     """
     provider = providers.get(auto["provider"])
     provider.ensure_ready(on_progress)
@@ -577,35 +578,48 @@ def build_matte(path: Path, auto: dict, t0: float, t1: float, still: bool = Fals
                               width, height, device, on_progress, cancel)
 
     todo = missing_ranges(key, i0, i1)
-    total = sum(b - a + 1 for a, b in todo)
+    is_still = still and src_dur <= 0.0
+    # Motor temporal (RVM): cada tramo que falta se calcula EN ORDEN con un
+    # estado nuevo, calentado con los fotogramas previos (que no se reescriben).
+    # Sin eso, el primer fotograma de un tramo añadido después (el clip se
+    # alargó) no tendría historia y se notaría la costura con lo ya calculado.
+    temporal = bool(getattr(provider, "temporal", False)) and not is_still
+    warm_max = temporal_warmup_frames(mask_fps) if temporal else 0
+    plan = [(a, b, min(a, warm_max)) for a, b in todo]
+    total = sum(b - a + 1 + w for a, b, w in plan)
     if total:
         log.info("Eliminar fondo: %d fotograma(s) con %s en %s (%dx%d @ %d fps)",
                  total, provider.id, device, width, height, mask_fps)
     window = clip_bg.stabilize_window(auto)
+    people_only = bool(getattr(provider, "people_only", False))
+    found_now: Optional[bool] = None       # None = no se calculó nada nuevo
     done = 0
     t_start = time.time()
-    for a, b in todo:
+    for a, b, warm in plan:
         count = b - a + 1
-        is_still = still and src_dur <= 0.0
         if is_still:
             frames = iter([_still_frame(path, height)])
         else:
-            frames = _iter_frames(path, clip_bg.matte_frame_time(a, mask_fps), count,
-                                  mask_fps, width, height, cancel)
+            frames = _iter_frames(path, clip_bg.matte_frame_time(a - warm, mask_fps),
+                                  count + warm, mask_fps, width, height, cancel)
+        stream = provider.stream()
         # Suavizado temporal: se retiene el tramo en RAM, se calcula la mediana
         # centrada y se escribe. Se omite en imágenes fijas y en tramos enormes.
         smooth = window > 1 and not is_still and count <= SMOOTH_FRAME_CAP
         buffered: list[np.ndarray] = []
-        idx = a
+        idx = a - warm
         for frame in frames:
             if cancel and cancel():
                 raise BgCancelled("cancelado")
-            m = provider.matte(frame)
-            if smooth:
-                buffered.append(m)
-            else:
-                cv2.imwrite(str(frame_path(folder, idx)), m)
-                idx += 1
+            m = stream.matte(frame)
+            if idx >= a:                    # los de calentamiento no se escriben
+                if people_only:
+                    found_now = bool(found_now) or has_subject(m)
+                if smooth:
+                    buffered.append(m)
+                else:
+                    cv2.imwrite(str(frame_path(folder, idx)), m)
+            idx += 1
             done += 1
             if on_progress and total:
                 rate = done / max(0.01, time.time() - t_start)
@@ -617,12 +631,39 @@ def build_matte(path: Path, auto: dict, t0: float, t1: float, still: bool = Fals
             for k, m in enumerate(_temporal_median(buffered, window)):
                 cv2.imwrite(str(frame_path(folder, a + k)), m)
     prev = covered_range(key)
+    prev_meta = read_meta(key) if prev else None
     want_lo = min(i0, prev[0]) if prev else i0
     real = _contiguous_range(key, want_lo, max(i1, prev[1] if prev else i1))
     if real is None:
         raise RuntimeError(
             "No se pudo extraer ningún fotograma del material para eliminar el fondo.")
-    return _seal_meta(key, provider, mask_fps, width, height, src_dur, path, real, device)
+    extra = {}
+    if people_only:
+        prev_found = (prev_meta or {}).get("subject_found")
+        if found_now is not None or prev_found is not None:
+            extra["subject_found"] = bool(found_now) or bool(prev_found)
+    return _seal_meta(key, provider, mask_fps, width, height, src_dur, path, real, device,
+                      extra)
+
+
+# Calentamiento del estado de los motores temporales: ~1 s de fotogramas reales
+# antes de cada tramo. Medido con RVM: la diferencia con un estado de historia
+# larga cae a la mitad en ~5 fotogramas; repetir el primero NO ayuda.
+TEMPORAL_WARMUP_S = 1.0
+TEMPORAL_WARMUP_MAX = 30
+
+
+def temporal_warmup_frames(mask_fps: int) -> int:
+    return max(1, min(TEMPORAL_WARMUP_MAX, int(round(TEMPORAL_WARMUP_S * int(mask_fps)))))
+
+
+# Fracción mínima de píxeles de sujeto para dar por hecho que el modelo ha
+# encontrado algo (0,3 % ≈ una cara pequeña al fondo del plano).
+SUBJECT_MIN_COVERAGE = 0.003
+
+
+def has_subject(matte: np.ndarray) -> bool:
+    return float(np.count_nonzero(matte >= 128)) >= SUBJECT_MIN_COVERAGE * matte.size
 
 
 def _build_tracked(path: Path, auto: dict, provider, key: str, i0: int, i1: int,
@@ -731,9 +772,11 @@ def _build_tracked(path: Path, auto: dict, provider, key: str, i0: int, i1: int,
 
 
 def _seal_meta(key: str, provider, mask_fps: int, width: int, height: int,
-               src_dur: float, path: Path, real: tuple[int, int], device: str) -> dict:
+               src_dur: float, path: Path, real: tuple[int, int], device: str,
+               extra: Optional[dict] = None) -> dict:
     lo, hi = real
     meta = {
+        **(extra or {}),
         "base_key": key,
         "provider": provider.id,
         "model_version": provider.model_version,

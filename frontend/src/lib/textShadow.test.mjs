@@ -1,14 +1,26 @@
 // Sombra paralela del texto: mismos parámetros que el export
 // (backend/tests/test_text_shadow.py usa los mismos números).
 import assert from 'node:assert/strict'
-import { SHADOW_DEFAULTS, textShadow } from './textstyles.js'
+import { SHADOW_DEFAULTS, textGlow, textShadow } from './textstyles.js'
 
 const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg}: ${a} != ${b}`)
 
-// Sin sombra, o con brillo (usa el mismo color y se dibuja aparte) → null.
+// Sin sombra → null. Con Brillo, la silueta de debajo es su halo (no la sombra paralela).
 assert.equal(textShadow({}, 40), null)
-assert.equal(textShadow({ shadow: true, glow: true }, 40), null)
 assert.equal(textShadow({ shadow: true, shadow_opacity: 0 }, 40), null)
+assert.deepEqual(textShadow({ shadow: true, glow: true, glow_color: '#00ff00' }, 40), textGlow({ glow: true, glow_color: '#00ff00' }, 40))
+
+// Brillo completo (espejo de GlowParamsTest del backend).
+assert.equal(textGlow({ glow: true, shadow_color: '#123456' }, 40).color, '#123456')
+assert.equal(textGlow({ glow: true, shadow_color: '#123456', glow_color: '#abcdef' }, 40).color, '#abcdef')
+assert.equal(textGlow({ glow: false }, 40), null)
+assert.equal(textGlow({ glow: true, glow_intensity: 0 }, 40), null)
+{
+  const g = textGlow({ glow: true, glow_intensity: 0.5, glow_range: 1, glow_dx: 0.5, glow_dy: 0.25 }, 40)
+  assert.deepEqual([g.opacity, g.sigma, g.dx, g.dy, g.spread], [0.5, 20, 20, -10, 0])
+  assert.ok(textGlow({ glow: true, glow_style: 'strong' }, 40).spread > 0)
+  assert.equal(Object.is(textGlow({ glow: true }, 40).dy, -0), false)
+}
 
 // Valores por defecto (proyectos antiguos con solo `shadow: true`).
 const d = textShadow({ shadow: true }, 40)

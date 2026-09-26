@@ -25,6 +25,58 @@ KF_PROP_KEYS = (
 )
 
 
+# Estilo del texto animable (espejo de TEXT_STYLE_KF_KEYS de clipKeyframes.js):
+# Color, Trazo, Fondo y Sombra. Cada propiedad lleva sus propios keyframes (un
+# item puede tener solo algunas); si ninguno la tiene, manda el valor del estilo.
+TEXT_STYLE_KF_KEYS = (
+    "color", "border_color", "border_width", "bg", "bg_opacity",
+    "bg_radius", "bg_pad_x", "bg_pad_y", "bg_dx", "bg_dy",
+    "shadow_color", "shadow_opacity", "shadow_blur", "shadow_distance", "shadow_angle",
+    "glow_color", "glow_intensity", "glow_range", "glow_dx", "glow_dy",
+    "curve", "stretch_x", "stretch_y",
+)
+_COLOR_KF_KEYS = frozenset(("color", "border_color", "bg", "shadow_color", "glow_color"))
+
+
+def hex_rgb(v: Any) -> Optional[tuple[int, int, int]]:
+    h = str(v if v is not None else "").strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        return None
+    try:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        return None
+
+
+def _rgb_hex(rgb) -> str:
+    return "#" + "".join(f"{int(round(min(255.0, max(0.0, c)))):02x}" for c in rgb)
+
+
+def _valid_kf_value(key: str, v: Any) -> bool:
+    if key in _COLOR_KF_KEYS:
+        return hex_rgb(v) is not None
+    if v is None or v == "":
+        return False
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(n)
+
+
+def _kf_value(key: str, v: Any):
+    return _rgb_hex(hex_rgb(v)) if key in _COLOR_KF_KEYS else float(v)
+
+
+def _mix_kf_value(key: str, a, b, u: float):
+    if key in _COLOR_KF_KEYS:
+        ca, cb = hex_rgb(a), hex_rgb(b)
+        return _rgb_hex([x + (y - x) * u for x, y in zip(ca, cb)])
+    return a + (b - a) * u
+
+
 def _num(v: Any, default: float) -> float:
     try:
         n = float(v)
@@ -230,34 +282,89 @@ def _merge(base: dict, extra: Optional[dict]) -> dict:
     return out
 
 
-def interp_items(items: Optional[list], t: float, fallback: dict) -> dict:
-    s = sorted(
-        [k for k in (items or []) if isinstance(k, dict) and k.get("t") == k.get("t")],
+def _sorted_items(items: Optional[list]) -> list[dict]:
+    return sorted(
+        [k for k in (items or []) if isinstance(k, dict) and math.isfinite(_num(k.get("t"), float("nan")))],
         key=lambda k: _num(k.get("t"), 0.0),
     )
-    fb = _merge(static_props({}), fallback)
-    if not s:
-        return fb
-    time = _num(t, 0.0)
 
-    def props_at(k: dict) -> dict:
-        return _merge(fb, k.get("props") if isinstance(k.get("props"), dict) else {})
 
-    if time <= _num(s[0].get("t"), 0.0):
-        return props_at(s[0])
-    last = s[-1]
+def _interp_key(s: list[dict], key: str, time: float):
+    """Valor de ``key`` en ``time`` entre los items que la tienen; None si ninguno
+    (espejo de ``interpKey``)."""
+    ks = [k for k in s if isinstance(k.get("props"), dict) and _valid_kf_value(key, k["props"].get(key))]
+    if not ks:
+        return None
+    val = lambda k: _kf_value(key, k["props"][key])  # noqa: E731
+    if time <= _num(ks[0].get("t"), 0.0):
+        return val(ks[0])
+    last = ks[-1]
     if time >= _num(last.get("t"), 0.0):
-        return props_at(last)
-    for i in range(len(s) - 1):
-        a, b = s[i], s[i + 1]
+        return val(last)
+    for a, b in zip(ks, ks[1:]):
         ta, tb = _num(a.get("t"), 0.0), _num(b.get("t"), 0.0)
         if ta <= time <= tb:
-            pa, pb = props_at(a), props_at(b)
-            if normalize_interp(b.get("interpolation")) == "hold":
-                return pa
-            u = ease_t((time - ta) / ((tb - ta) or 1.0), b.get("interpolation"), b.get("bezier"))
-            return {key: pa[key] + (pb[key] - pa[key]) * u for key in KF_PROP_KEYS}
-    return props_at(last)
+            if normalize_interp(b.get("interpolation") or b.get("ease")) == "hold":
+                return val(a)
+            u = ease_t((time - ta) / ((tb - ta) or 1.0), b.get("interpolation") or b.get("ease"), b.get("bezier"))
+            return _mix_kf_value(key, val(a), val(b), u)
+    return val(last)
+
+
+def interp_items(items: Optional[list], t: float, fallback: dict) -> dict:
+    """Cada propiedad se interpola entre los items que la tienen (los de solo estilo
+    de texto no cuentan para la pose); sin ninguno, su valor de ``fallback``."""
+    s = _sorted_items(items)
+    out = _merge(static_props({}), fallback)
+    if not s:
+        return out
+    time = _num(t, 0.0)
+    for key in KF_PROP_KEYS:
+        v = _interp_key(s, key, time)
+        if v is not None:
+            out[key] = v
+    return out
+
+
+def text_style_at(clip: Any, local_t: float) -> dict:
+    """Estilo animado del texto en ``local_t``: solo las propiedades con keyframes."""
+    if not keyframes_enabled(clip):
+        return {}
+    s = _sorted_items(_items(clip))
+    out = {}
+    for key in TEXT_STYLE_KF_KEYS:
+        v = _interp_key(s, key, _num(local_t, 0.0))
+        if v is not None:
+            out[key] = v
+    return out
+
+
+def text_style_animates(clip: Any) -> bool:
+    """True si alguna propiedad de estilo toma valores distintos en sus keyframes."""
+    if not keyframes_enabled(clip):
+        return False
+    s = _sorted_items(_items(clip))
+    for key in TEXT_STYLE_KF_KEYS:
+        vals = {_kf_value(key, k["props"][key]) for k in s
+                if isinstance(k.get("props"), dict) and _valid_kf_value(key, k["props"].get(key))}
+        if len(vals) > 1:
+            return True
+    return False
+
+
+def with_text_style_kf(st: dict, anim: dict) -> dict:
+    """Estilo con sus keyframes; las casillas mandan (sin Fondo o sin Trazo en el
+    estilo, sus valores animados no hacen nada). Espejo de ``withTextStyleKf``."""
+    st = st or {}
+    out = {**st, **(anim or {})}
+    if not st.get("bg") or st.get("bg") == "none":
+        out["bg"] = st.get("bg", "none")
+    if not _num(st.get("border_width"), 0.0) > 0:
+        out["border_width"] = st.get("border_width", 0)
+    if not st.get("scale_split"):
+        out.pop("stretch_x", None)
+        out.pop("stretch_y", None)
+    return out
 
 
 def clip_props_at(clip: Any, local_t: float) -> dict:

@@ -5,12 +5,12 @@ import {
   clipKeepPitch,
   timelineToSource, sourceToTimeline, splitClipAt,
   clipPlaybackMuted, makeClip, mediaUrl, newReframe,
-  shouldConfirmTrackDelete, removeTrack,
+  shouldConfirmTrackDelete, removeTrack, emptiedTracks, shortTrackName, TRACK_NAME_MAX,
   canCaptionClip, textClipsFromTranscript, makeTextClip, resizeGeneratedClip, trimClipPatch, trimPreviewHead,
   previewHead, safeMediaTime, LAST_FRAME_PULL,
   splitClipByMaxWords, splitTrackTextByMaxWords, extraClipsAfterSplit, extraClipsAfterOneSplit, splitOneTextClip,
   nextClipSelection, rangeSelectOnTrack, groupMoveFromOrig, patchClipsStyle, removeClipsByIds,
-  previewElementVolume, parsePreviewVolume, laneKindForAsset, trackKindForClip, syncPreviewMedia,
+  previewElementVolume, parsePreviewVolume, laneKindForAsset, dragTextPayload, DEFAULT_TEXT, TEXT_DEFAULT_DUR, trackKindForClip, syncPreviewMedia,
   duplicateClipOntoTrack, dupCount, lineageRoot, syncMaterialInstances,
   applyFaceTrack, isEditingExistingClip, clipSaveIndex,
   trackContextItems, linkedPartnerName, linkTrackPair, unlinkTrackPair,
@@ -374,6 +374,17 @@ assert.equal(shapeClip.out_point, 5)
 assert.equal(shapeClip.keep_pitch, true)
 assert.equal(trackKindForClip('shape'), 'video')
 assert.equal(laneKindForAsset('shape'), 'video')
+assert.equal(laneKindForAsset('text'), 'text')
+{
+  const plain = JSON.parse(dragTextPayload())
+  assert.equal(plain.asset_kind, 'text')
+  assert.equal(plain.text, DEFAULT_TEXT)
+  assert.equal(plain.duration, TEXT_DEFAULT_DUR)
+  assert.equal(plain.theme_id, null)
+  const themed = JSON.parse(dragTextPayload({ id: 'neon', name: 'Neón', sample: 'hola mundo' }))
+  assert.equal(themed.theme_id, 'neon')
+  assert.equal(themed.text, 'hola mundo')
+}
 assert.equal(isGeneratedDurationClip(shapeClip), true)
 assert.equal(canCaptionClip(shapeClip), false)
 
@@ -734,3 +745,27 @@ assert.equal(clipEnd({ ...mid, ...rp }), 14)
 const lp = trimClipPatch(mid, 'trim-left', clampTrimDelta(trow, mid, 'trim-left', -50))
 assert.equal(({ ...mid, ...lp }).start, 4)
 console.log('trim bounds ok')
+
+// Pista que se queda sin clips: se quita sola (CapCut), salvo bloqueada o última de su tipo.
+{
+  const tr = [
+    { id: 'V1', kind: 'video' }, { id: 'V2', kind: 'video' }, { id: 'V3', kind: 'video', locked: true },
+    { id: 'T1', kind: 'text' }, { id: 'A1', kind: 'audio' }, { id: 'A2', kind: 'audio' },
+  ]
+  const cl = [{ id: 'c', track_id: 'V1' }, { id: 'a', track_id: 'A2' }]
+  assert.deepEqual(emptiedTracks(tr, cl, ['V2', 'V3', 'T1', 'A1']), ['V2', 'A1'])
+  assert.deepEqual(emptiedTracks(tr, cl, ['V1']), [])            // tiene clips
+  assert.deepEqual(emptiedTracks(tr, [], ['V1', 'V2']), ['V1'])  // V2 queda como la última libre (V3 está bloqueada)
+  assert.deepEqual(emptiedTracks([{ id: 'V1', kind: 'video' }], [], ['V1']), [])
+  assert.deepEqual(emptiedTracks(tr, cl, []), [])
+  assert.deepEqual(emptiedTracks(null, null, null), [])
+  // Candidatas sin clips de un mismo tipo: se quitan todas menos una.
+  const two = [{ id: 'A1', kind: 'audio' }, { id: 'A2', kind: 'audio' }]
+  assert.deepEqual(emptiedTracks(two, [], ['A1', 'A2']), ['A1'])
+}
+assert.equal(TRACK_NAME_MAX, 3)
+assert.equal(shortTrackName('V12'), 'V12')
+assert.equal(shortTrackName('Subtítulos'), 'Sub')
+assert.equal(shortTrackName('  T1 '), 'T1')
+assert.equal(shortTrackName(null), '')
+console.log('emptied tracks ok')

@@ -3,14 +3,14 @@ import Icon from '../../components/Icon'
 import FlipPopover from '../../components/FlipPopover'
 import { fmt } from '../../lib/utils'
 import { pseudoWaveform, clamp, kfColor } from '../../lib/panning'
-import { clampStartNoOverlap, clampTrimDelta, clipCopyText, clipDur, clipSourceDur, clipSpeed, displayTracks, isVisualClip, laneKindForAsset, linkedPartnerName, trackKindForClip, trimClipPatch, trimPreviewHead } from './editorModel'
+import { TRACK_NAME_MAX, clampStartNoOverlap, clampTrimDelta, clipCopyText, clipDur, clipSourceDur, clipSpeed, displayTracks, isVisualClip, laneKindForAsset, linkedPartnerName, shortTrackName, trackKindForClip, trimClipPatch, trimPreviewHead } from './editorModel'
 import { alignOthers, alignThresholdSec, asAlignClip, snapClipGroup, snapClipMove, snapClipTrim, timelineAlignHits } from './timelineAlign'
 import { keyframesEnabled, normalizeItems, clipVolumeAt, clampVolume, sampleVolumeCurve, VOL_MAX, hasVolumeControls } from '../../lib/clipKeyframes'
 import { snapToFrame } from '../../lib/projectFps'
 import { clipBeatTimes, snapTargets } from '../../lib/beats'
 import { stackViewForTrack } from './clipStack.js'
 import { stepRowHeight, trackRowHeight } from './trackRows'
-import { dropIntent } from './dropIntent'
+import { dropIntent, insertEdge, insertSlot, slotBoundary } from './dropIntent'
 import { headerScrollPad, timelineWheelAction } from './timelineWheel'
 import { anchorScroll, buildTicks, clampPps, fmtRuler, tickStep, zoomByDrag } from './timelineScale'
 import { isStackTrack } from './trackStack'
@@ -31,7 +31,7 @@ function PreviewVolButton({ value = 1, onChange }) {
         aria-label="Volumen de escucha"
         onClick={() => setOpen((o) => !o)}
       >
-        <Icon name={icon} size={17} />
+        <Icon name={icon} size={15} />
       </button>
       <FlipPopover open={open} anchorRef={btnRef} onClose={() => setOpen(false)} className="ed-preview-vol-pop">
         <span className="ed-preview-vol-pct">{pct}</span>
@@ -69,7 +69,7 @@ function FaceTrackButton({ onPick, disabled, busy }) {
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
       >
-        <Icon name="auto_fix_high" size={15} />
+        <Icon name="auto_fix_high" size={14} />
       </button>
       <FlipPopover open={open} anchorRef={btnRef} onClose={() => setOpen(false)} className="ed-face-track-pop">
         <button type="button" onClick={() => { onPick?.('smooth'); setOpen(false) }}>Suave</button>
@@ -80,6 +80,7 @@ function FaceTrackButton({ onPick, disabled, busy }) {
 }
 
 const laneKindFor = laneKindForAsset
+const NEW_TRACK_LABEL = { text: 'Nueva pista de texto', video: 'Nueva pista de vídeo', audio: 'Nueva pista de audio' }
 
 function TrackName({ track, onRename }) {
   const [draft, setDraft] = useState(null)
@@ -97,7 +98,7 @@ function TrackName({ track, onRename }) {
         className="ed-th-name-input"
         value={draft}
         autoFocus
-        maxLength={32}
+        maxLength={TRACK_NAME_MAX}
         aria-label="Nombre de la pista"
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
@@ -114,20 +115,20 @@ function TrackName({ track, onRename }) {
   return (
     <span
       className="ed-th-name"
-      title={`${track.name} — doble clic para renombrar`}
+      title={`${track.name} — doble clic para renombrar (${TRACK_NAME_MAX} letras)`}
       onDoubleClick={(e) => {
         e.preventDefault()
         e.stopPropagation()
-        setDraft(track.name || '')
+        setDraft(shortTrackName(track.name))
       }}
     >
-      {track.name}
+      {shortTrackName(track.name)}
     </span>
   )
 }
 
 export default function EdTimeline({
-  tracks, clips, pps, setPps, duration, playhead, rowH, setRowH, fps = 30, onMoveToNewTrack,
+  tracks, clips, pps, setPps, duration, playhead, rowH, setRowH, fps = 30, onMoveToNewTrack, onMoveClip,
   selectedClipId, selectedClipIds, selectedTrackId, selKfId, dragInfo,
   onSeek, onScrub, onSelectClip, onSelectTrack, onDoubleClip, onMutateClip, onMoveGroup, onMatchDuration, onSplit, onDuplicate, onCrop, cropDisabled, onFreeze, freezeDisabled, freezeBusy, onDeleteClip,
   previewVol, onPreviewVol,
@@ -142,9 +143,13 @@ export default function EdTimeline({
   const lanesRef = useRef(null)
   const bodyRef = useRef(null)
   const headersRef = useRef(null)
+  const innerRef = useRef(null)
   const drag = useRef(null)
-  const [dropHint, setDropHint] = useState(null)   // { trackId, action, start }
-  const [newTrackHint, setNewTrackHint] = useState(null)   // { side, kind } al arrastrar un clip fuera
+  const [dropHint, setDropHint] = useState(null)   // { trackId, action, start, slot? }
+  // Pista nueva anunciada (clip movido o material soltado): { y, kind, start, w, h, src, key }
+  const [insertView, setInsertView] = useState(null)
+  // Clip movido: fantasma bajo el puntero y dónde caerá. { clip, x, y, w, h, landing }
+  const [moveView, setMoveView] = useState(null)
   const [expandedClusterId, setExpandedClusterId] = useState(null)
   const [trimGuide, setTrimGuide] = useState(null) // { t, dur }
   const [alignTimes, setAlignTimes] = useState(null) // number[] mientras se mueve/recorta
@@ -180,19 +185,38 @@ export default function EdTimeline({
     const rect = el.getBoundingClientRect()
     return Math.max(0, (clientX - rect.left + el.scrollLeft) / pps)
   }
-  function trackUnderPointer(clientX, clientY) {
-    const stack = document.elementsFromPoint(clientX, clientY)
-    for (const node of stack) {
+  // Pista bajo el puntero y a qué altura de ella está (0 = borde superior).
+  function laneUnderPointer(clientX, clientY) {
+    for (const node of document.elementsFromPoint(clientX, clientY)) {
       const lane = node.closest?.('.ed-lane')
-      if (lane) return lane.getAttribute('data-track')
+      if (!lane) continue
+      const r = lane.getBoundingClientRect()
+      return { id: lane.getAttribute('data-track'), yRatio: r.height ? clamp((clientY - r.top) / r.height, 0, 1) : 0.5, h: r.height }
     }
     return null
+  }
+
+  // Línea de pista nueva de `slot` en px del contenido (el hueco entre dos filas).
+  // Va en .ed-tl-inner y no dentro de la pista: el hueco del clip la cruza entera.
+  function insertViewFor(slot, kind, start, dur, src) {
+    const inner = innerRef.current
+    const lane = inner && [...inner.querySelectorAll('.ed-lane')].find((el) => el.getAttribute('data-track') === slot.targetId)
+    if (!lane) return null
+    const r = lane.getBoundingClientRect()
+    const y = (slot.place === 'below' ? r.bottom : r.top) - inner.getBoundingClientRect().top
+    return {
+      y, kind, start, src,
+      w: Math.max(6, dur * pps),
+      h: Math.round(trackRowHeight(kind, rowH) * 0.62),
+      key: `${slotBoundary(tracks, slot)}`,
+    }
   }
 
   /**
    * ¿El puntero se ha salido por arriba o por abajo del bloque de pistas de
    * `kind`? Es la señal de "quiero una pista nueva aquí". Se mide con la
    * geometría real de las calles, así que las alturas distintas dan igual.
+   * Devuelve el hueco como insertSlot: encima de la primera o debajo de la última.
    */
   function laneEdgeUnderPointer(clientY, kind) {
     const scroll = lanesRef.current
@@ -200,10 +224,10 @@ export default function EdTimeline({
     // Vídeo y texto son un solo bloque (la pila de capas); el audio va aparte.
     const lanes = [...scroll.querySelectorAll(kind === 'audio' ? '.ed-lane.audio' : '.ed-lane.video, .ed-lane.text')]
     if (!lanes.length) return null
-    const top = lanes[0].getBoundingClientRect()
-    const bottom = lanes[lanes.length - 1].getBoundingClientRect()
-    if (clientY < top.top) return 'above'
-    if (clientY > bottom.bottom) return 'below'
+    const first = lanes[0]
+    const last = lanes[lanes.length - 1]
+    if (clientY < first.getBoundingClientRect().top) return { targetId: first.getAttribute('data-track'), place: 'above' }
+    if (clientY > last.getBoundingClientRect().bottom) return { targetId: last.getAttribute('data-track'), place: 'below' }
     return null
   }
 
@@ -335,7 +359,12 @@ export default function EdTimeline({
     const idSet = new Set(next.ids || [clip.id])
     const origs = clips.filter((c) => idSet.has(c.id)).map((c) => ({ ...c }))
     const startX = e.clientX
+    const startY = e.clientY
     const waitDrag = !!(e.ctrlKey || e.metaKey || e.shiftKey)
+    // Dónde se agarró el clip: el fantasma sigue al puntero con ese desfase.
+    const clipBox = (e.currentTarget.closest?.('.ed-clip') || e.currentTarget).getBoundingClientRect()
+    const grab = { dx: e.clientX - clipBox.left, dy: e.clientY - clipBox.top, w: clipBox.width, h: clipBox.height }
+    const originAlone = clips.filter((c) => c.track_id === clip.track_id).length === 1
     const movingIds = mode === 'move' && origs.length > 1 ? new Set(origs.map((c) => c.id)) : new Set([clip.id])
     // Imán: bordes de otras pistas + marcadores y beats (#12). Al mover no cuentan
     // los beats de los clips que se mueven; al recortar sí (no se desplazan).
@@ -343,7 +372,7 @@ export default function EdTimeline({
       ...alignOthers(clips, movingIds),
       ...snapTargets(markers, clips, mode === 'move' ? movingIds : []),
     ]
-    drag.current = { mode, startX, orig: { ...clip }, origs, waitDrag, others, trackId: clip.track_id }
+    drag.current = { mode, startX, startY, orig: { ...clip }, origs, waitDrag, others, trackId: clip.track_id }
     const thresh = () => alignThresholdSec(pps)
     const previewTrim = (rawDelta, doSnap) => {
       const which = mode === 'trim-left' ? 'start' : 'end'
@@ -376,43 +405,71 @@ export default function EdTimeline({
           setAlignTimes(snapped.times)
           return
         }
-        // La pista viva del arrastre, no la de origen: así el clip puede VOLVER
-        // a su pista inicial sin soltarlo. (Comparar contra `o.track_id` dejaba
-        // el patch sin track_id justo al regresar, y el clip se quedaba fuera.)
+        // Como CapCut: el clip se levanta y va bajo el puntero (fantasma); un
+        // hueco gris marca dónde caerá. Nada cambia hasta soltar.
+        if (!d.moving) {
+          if (Math.hypot(ev.clientX - d.startX, ev.clientY - d.startY) < 3) return
+          d.moving = true
+        }
         const kind = trackKindForClip(o.kind)
-        const tid = trackUnderPointer(ev.clientX, ev.clientY)
+        // Manda el CENTRO del fantasma, no el puntero: agarrarlo por la etiqueta
+        // (arriba) no pide pista nueva al primer movimiento.
+        const centerY = ev.clientY - grab.dy + grab.h / 2
+        const lane = laneUnderPointer(ev.clientX, centerY)
+        // Pista nueva: sobre una pista que no es de su tipo (un texto sobre un
+        // vídeo), en el borde entre dos pistas, o fuera de ellas por encima o
+        // por debajo del bloque. La pista se crea al soltar.
+        let slot = null
+        if (onMoveToNewTrack) {
+          slot = lane
+            ? insertSlot(tracks, kind, lane.id, lane.yRatio, o.track_id, { edge: insertEdge(lane.h), originAlone })
+            : laneEdgeUnderPointer(centerY, kind)
+          if (slot && !lane && originAlone) {
+            const b = slotBoundary(tracks, slot)
+            const oi = rows.findIndex((t) => t.id === o.track_id)
+            if (b === oi || b === oi + 1) slot = null
+          }
+        }
+        // La pista viva del arrastre, no la de origen: así el clip puede VOLVER
+        // a su pista inicial sin soltarlo.
         let trackId = d.trackId || o.track_id
-        if (tid && tid !== trackId) {
-          const tt = tracks.find((t) => t.id === tid)
-          if (tt && kind === tt.kind && !tt.locked) trackId = tid
+        if (lane && !slot && lane.id !== trackId) {
+          const tt = tracks.find((t) => t.id === lane.id)
+          if (tt && kind === tt.kind && !tt.locked) trackId = lane.id
         }
         d.trackId = trackId   // fuera de las pistas se mantiene la última válida
-        const snapped = snapClipMove(o, deltaT, d.others, thresh(), trackId)
+        const snapped = snapClipMove(o, deltaT, d.others, thresh(), slot ? '__new__' : trackId)
         // Los clips no se montan ni hacen escalones: se PEGAN al vecino. El
         // snap de alineación propone; esto acota al hueco libre más cercano.
-        snapped.start = clampStartNoOverlap(clips, trackId, snapped.start, clipDur(o), { excludeIds: [o.id] })
-        // Sacar el clip por encima/debajo del bloque de pistas = "quiero una
-        // pista nueva aquí". Solo se anuncia; la pista se crea al soltar.
-        // Exige estar FUERA de toda calle (`!tid`): si no, pasar un clip de
-        // vídeo por encima de las pistas de audio pediría pista nueva sin querer.
-        const edge = onMoveToNewTrack && !tid ? laneEdgeUnderPointer(ev.clientY, kind) : null
-        d.newTrack = edge ? { side: edge, start: snapped.start } : null
-        setNewTrackHint(edge ? { side: edge, kind } : null)
-        onMutateClip(o.id, { start: snapped.start, track_id: trackId })
+        const start = slot ? snapped.start : clampStartNoOverlap(clips, trackId, snapped.start, clipDur(o), { excludeIds: [o.id] })
+        d.landing = slot ? { slot, start } : { trackId, start }
+        const inner = innerRef.current?.getBoundingClientRect()
+        setMoveView({
+          clip: o, w: grab.w, h: grab.h, landing: d.landing,
+          x: inner ? ev.clientX - inner.left - grab.dx : 0,
+          y: inner ? ev.clientY - inner.top - grab.dy : 0,
+        })
+        setInsertView(slot ? insertViewFor(slot, kind, start, clipDur(o), 'move') : null)
         setAlignTimes(snapped.times)
       } else if (d.mode === 'trim-left' || d.mode === 'trim-right') {
         previewTrim(deltaT, true)
       }
     }
     const up = () => {
-      const pending = drag.current?.newTrack
+      const d = drag.current
       drag.current = null
       setTrimGuide(null)
       setAlignTimes(null)
-      setNewTrackHint(null)
-      // La pista se crea aquí, al soltar, no en cada pointermove.
-      if (pending) onMoveToNewTrack?.(clip.id, pending.side, pending.start)
+      setInsertView(null)
+      setMoveView(null)
       window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up)
+      // Se aplica aquí, al soltar: la pista nueva se crea ahora, no en cada pointermove.
+      const land = d?.moving ? d.landing : null
+      if (!land) return
+      if (land.slot) onMoveToNewTrack?.(clip.id, land.slot, land.start)
+      else if (land.trackId !== d.orig.track_id || land.start !== d.orig.start) {
+        (onMoveClip || onMutateClip)(clip.id, { start: land.start, track_id: land.trackId })
+      }
     }
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
   }
@@ -533,38 +590,51 @@ export default function EdTimeline({
     return clamp((e.clientY - box.top) / box.height, 0, 1)
   }
 
-  function laneIntent(e, track, dur) {
-    const time = xToTime(e.clientX)
-    return dropIntent(clips, track.id, time, Math.max(0.1, dur || 1), laneYRatio(e))
+  // Material de `kind` soltado en esta pista. Pista nueva, igual que al mover
+  // clips: sobre una pista que no es de su tipo (un vídeo sobre una de texto),
+  // en el borde entre dos pistas, sobre la franja alta de un clip o un texto
+  // encima de otro (CapCut). Si no, lo decide dropIntent. null = no se admite.
+  function laneIntent(e, track, dur, kind) {
+    const time = +xToTime(e.clientX).toFixed(3)
+    const h = e.currentTarget?.getBoundingClientRect?.().height
+    const slot = insertSlot(tracks, kind, track.id, laneYRatio(e), null, { edge: insertEdge(h) })
+    if (slot) return { action: 'insertTrack', start: time, targetId: null, slot }
+    const intent = dropIntent(clips, track.id, time, Math.max(0.1, dur || 1), laneYRatio(e))
+    if (intent.action === 'newTrack' || (kind === 'text' && intent.action === 'replace')) {
+      return { action: 'insertTrack', start: time, targetId: null, slot: { targetId: track.id, place: 'above' } }
+    }
+    return intent
   }
 
   function onLaneDragOver(e, track) {
-    if (!dragKind || laneKindFor(dragKind) !== track.kind) return
+    if (!dragKind) return
+    const kind = laneKindFor(dragKind)
+    const intent = laneIntent(e, track, dragInfo?.duration, kind)
+    if (!intent) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
-    const intent = laneIntent(e, track, dragInfo?.duration)
     setDropHint({ trackId: track.id, ...intent })
+    const view = intent.slot ? insertViewFor(intent.slot, kind, intent.start, Math.max(0.1, dragInfo?.duration || 1), 'asset') : null
+    setInsertView((v) => (view && v?.key === view.key && v.start === view.start ? v : view))
   }
   function onLaneDrop(e, track) {
     e.preventDefault()
     setDropHint(null)
+    setInsertView(null)
     const rawExplore = e.dataTransfer.getData('application/x-explore')
     if (rawExplore) {
       let ex
       try { ex = JSON.parse(rawExplore) } catch { return }
-      const exKind = ex.kind === 'video' ? 'video' : 'image'
-      if (laneKindFor(exKind) !== track.kind) return
-      const intent = laneIntent(e, track, ex.duration || 3)
-      onDropAsset({ ...ex, _explore: true }, track.id, intent.start, intent)
+      const intent = laneIntent(e, track, ex.duration || 3, laneKindFor(ex.kind === 'video' ? 'video' : 'image'))
+      if (intent) onDropAsset({ ...ex, _explore: true }, track.id, intent.start, intent)
       return
     }
     const raw = e.dataTransfer.getData('application/x-material')
     if (!raw) return
     let payload
     try { payload = JSON.parse(raw) } catch { return }
-    if (laneKindFor(payload.asset_kind) !== track.kind) return
-    const intent = laneIntent(e, track, payload.duration)
-    onDropAsset(payload, track.id, intent.start, intent)
+    const intent = laneIntent(e, track, payload.duration, laneKindFor(payload.asset_kind))
+    if (intent) onDropAsset(payload, track.id, intent.start, intent)
   }
 
   // Selección por área (rubber band estilo Windows). Arranca en un hueco de una
@@ -620,30 +690,30 @@ export default function EdTimeline({
       <div className="ed-tl-toolbar">
         <div className="ed-tl-tools-left">
           <button className="ghost small ed-tl-ico" onClick={() => onSplit(selectedClipId, playhead)} disabled={!selectedIds.length} title="Dividir en el cursor (S)">
-            <Icon name="content_cut" size={16} />
+            <Icon name="content_cut" size={14} />
           </button>
           <button className="ghost small ed-tl-ico" onClick={() => onDuplicate?.()} disabled={!selectedIds.length} title="Duplicar en una pista nueva">
-            <Icon name="content_copy" size={16} />
+            <Icon name="content_copy" size={14} />
           </button>
           {onCrop && (
             <button className="ghost small ed-tl-ico" onClick={() => onCrop()} disabled={cropDisabled} title="Recortar el clip seleccionado">
-              <Icon name="crop" size={16} />
+              <Icon name="crop" size={14} />
             </button>
           )}
           {onToggleMarker && (
             <button className="ghost small ed-tl-ico" onClick={() => onToggleMarker(playhead)}
               title="Marcador en el cursor (M) · , y . saltan entre marcadores y beats">
-              <Icon name="bookmark_add" size={16} />
+              <Icon name="bookmark_add" size={14} />
             </button>
           )}
           {onFreeze && (
             <button className="ghost small ed-tl-ico" onClick={() => onFreeze()} disabled={freezeDisabled || freezeBusy}
               title="Congelar fotograma: inserta una imagen fija del fotograma del cursor (3 s)">
-              <Icon name={freezeBusy ? 'hourglass_top' : 'ac_unit'} size={16} />
+              <Icon name={freezeBusy ? 'hourglass_top' : 'ac_unit'} size={14} />
             </button>
           )}
           <button className="ghost small ed-tl-ico danger" onClick={() => onDeleteClip(selectedClipId)} disabled={!selectedIds.length} title="Eliminar clip (Supr)">
-            <Icon name="delete" size={16} />
+            <Icon name="delete" size={14} />
           </button>
           {onFaceTrack && (
             <FaceTrackButton onPick={onFaceTrack} disabled={faceTrackDisabled} busy={faceTrackBusy} />
@@ -657,7 +727,7 @@ export default function EdTimeline({
                 disabled={markIn == null || markOut == null || markOut <= markIn || segmentBusy}
                 title="Revisa título y descripción del rango marcado (Z inicio · X fin) y confírmalo para añadirlo a Mis materiales (Enter)"
               >
-                <Icon name={segmentBusy ? 'hourglass_top' : 'add_to_photos'} size={16} />
+                <Icon name={segmentBusy ? 'hourglass_top' : 'add_to_photos'} size={14} />
                 {markIn != null && markOut != null && markOut > markIn && (
                   <em className="ed-create-seg-dur">{fmt(markOut - markIn)}</em>
                 )}
@@ -671,7 +741,7 @@ export default function EdTimeline({
             <>
               <span className="ed-tl-sep" />
               <button className="ghost small ed-tl-ico" onClick={onDeleteKf} title="Eliminar keyframe seleccionado">
-                <Icon name="wrong_location" size={16} />
+                <Icon name="wrong_location" size={14} />
               </button>
             </>
           )}
@@ -680,26 +750,26 @@ export default function EdTimeline({
           {onGenerateResource && (
             <button className="ghost small ed-tl-ico accent" onClick={onGenerateResource}
               title="Genera un recurso visual para el tramo marcado (o 5 s desde el cursor): la IA lee el guion y propone qué dibujar">
-              <Icon name="auto_awesome" size={16} />
+              <Icon name="auto_awesome" size={14} />
             </button>
           )}
           {onSceneDirection && (
             <button className="ghost small ed-tl-ico" onClick={onSceneDirection}
               title="Dirección de escena: recorre el guion entero tramo a tramo y decide qué se ve en cada uno">
-              <Icon name="theaters" size={16} />
+              <Icon name="theaters" size={14} />
             </button>
           )}
           {(onGenerateResource || onSceneDirection) && <span className="ed-tl-sep" />}
           <button className="ghost small ed-tl-ico" onClick={() => onMatchDuration?.()} disabled={selectedIds.length < 2} title="Copiar el rango de tiempo del primer clip (mismo inicio y mismo fin). Cada uno se queda en su pista. Un vídeo o audio no se alarga más que su fuente.">
-            <Icon name="straighten" size={16} />
+            <Icon name="straighten" size={14} />
           </button>
           <span className="ed-tl-sep" />
-          <button className="ghost small ed-tl-ico" onClick={() => onAddTrack('video')} title="Añadir pista de vídeo"><Icon name="video_call" size={17} /></button>
-          <button className="ghost small ed-tl-ico" onClick={() => onAddTrack('audio')} title="Añadir pista de audio"><Icon name="library_music" size={16} /></button>
-          <button className="ghost small ed-tl-ico" onClick={onAddTextTrack} title="Añadir pista de texto"><Icon name="text_fields" size={16} /></button>
+          <button className="ghost small ed-tl-ico" onClick={() => onAddTrack('video')} title="Añadir pista de vídeo"><Icon name="video_call" size={15} /></button>
+          <button className="ghost small ed-tl-ico" onClick={() => onAddTrack('audio')} title="Añadir pista de audio"><Icon name="library_music" size={14} /></button>
+          <button className="ghost small ed-tl-ico" onClick={onAddTextTrack} title="Añadir pista de texto"><Icon name="text_fields" size={14} /></button>
           <span className="ed-zoom">
-            <button className="icon-btn" onClick={() => setPps((p) => clampPps(p / 1.4, duration, viewW, fps))} title="Alejar"><Icon name="zoom_out" size={17} /></button>
-            <button className="icon-btn" onClick={() => setPps((p) => clampPps(p * 1.4, duration, viewW, fps))} title="Acercar (o arrastra ↔ sobre la regla)"><Icon name="zoom_in" size={17} /></button>
+            <button className="icon-btn" onClick={() => setPps((p) => clampPps(p / 1.4, duration, viewW, fps))} title="Alejar"><Icon name="zoom_out" size={15} /></button>
+            <button className="icon-btn" onClick={() => setPps((p) => clampPps(p * 1.4, duration, viewW, fps))} title="Acercar (o arrastra ↔ sobre la regla)"><Icon name="zoom_in" size={15} /></button>
           </span>
         </div>
       </div>
@@ -731,28 +801,28 @@ export default function EdTimeline({
                   onSelectTrack(t.id)
                 }}
                 onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onContextTrack?.(e, t) }}>
+                <TrackName track={t} onRename={onRenameTrack} />
                 {partner && (
                   <span className="ed-th-link" title={`Relacionada con ${partner}`}>
-                    <Icon name="link" size={11} /> {partner}
+                    <Icon name="link" size={11} />
                   </span>
                 )}
-                <TrackName track={t} onRename={onRenameTrack} />
                 <span className="ed-th-btns">
                   <button className={`ed-th-btn ${t.hidden ? 'off' : ''}`} title="Visibilidad"
                     onClick={(e) => { e.stopPropagation(); if (picking) return; onTrackToggle(t.id, 'hidden') }} disabled={t.kind === 'audio'}>
-                    <Icon name={t.hidden ? 'visibility_off' : 'visibility'} size={14} />
+                    <Icon name={t.hidden ? 'visibility_off' : 'visibility'} size={13} />
                   </button>
                   <button className={`ed-th-btn ${t.muted ? 'off' : ''}`} title="Silenciar"
                     onClick={(e) => { e.stopPropagation(); if (picking) return; onTrackToggle(t.id, 'muted') }} disabled={t.kind === 'text'}>
-                    <Icon name={t.muted ? 'volume_off' : 'volume_up'} size={14} />
+                    <Icon name={t.muted ? 'volume_off' : 'volume_up'} size={13} />
                   </button>
                   <button className="ed-th-btn" title="Juntar clips al inicio (sin huecos ni solapes)"
                     onClick={(e) => { e.stopPropagation(); if (picking) return; onTrackCompact(t.id) }} disabled={t.locked}>
-                    <Icon name="compress" size={14} />
+                    <Icon name="compress" size={13} />
                   </button>
                   <button className={`ed-th-btn ${t.locked ? 'on' : ''}`} title="Bloquear"
                     onClick={(e) => { e.stopPropagation(); if (picking) return; onTrackToggle(t.id, 'locked') }}>
-                    <Icon name={t.locked ? 'lock' : 'lock_open'} size={14} />
+                    <Icon name={t.locked ? 'lock' : 'lock_open'} size={13} />
                   </button>
                 </span>
               </div>
@@ -760,8 +830,14 @@ export default function EdTimeline({
           })}
         </div>
 
-        <div className="ed-tl-scroll" ref={lanesRef}>
-          <div className="ed-tl-inner" style={{ width: totalW }}>
+        <div className="ed-tl-scroll" ref={lanesRef}
+          onDragLeave={(e) => {
+            // Solo al salir del todo de las pistas (no al pasar de una a otra).
+            if (e.currentTarget.contains(e.relatedTarget)) return
+            setDropHint(null)
+            setInsertView(null)
+          }}>
+          <div className="ed-tl-inner" ref={innerRef} style={{ width: totalW }}>
             <div className={`ed-ruler${trimGuide ? ' live' : ''}`} title="Clic: mover el cursor · Arrastra ↔ para hacer zoom en ese punto · I / O: marcar rango"
               onPointerDown={onRulerDown}
               onContextMenu={onContextLane ? (e) => { e.preventDefault(); onContextLane(e, null, xToTime(e.clientX)) } : undefined}>
@@ -799,13 +875,6 @@ export default function EdTimeline({
             {rows.map((t) => {
               const view = viewsByTrack.get(t.id)
               const vh = view.height
-              // Bordes de su bloque (pila vídeo+texto o audio): ahí va la línea de "pista nueva".
-              const sameKind = rows.filter((r) => isStackTrack(r) === isStackTrack(t))
-              const edgeHint = newTrackHint && isStackTrack({ kind: newTrackHint.kind }) === isStackTrack(t)
-                && ((newTrackHint.side === 'above' && sameKind[0]?.id === t.id)
-                  || (newTrackHint.side === 'below' && sameKind[sameKind.length - 1]?.id === t.id))
-                ? newTrackHint.side
-                : null
               return (
                 <div key={t.id}
                   className={`ed-lane ${t.kind} ${t.locked ? 'locked' : ''} ${selectedTrackId === t.id ? 'sel' : ''} ${dragKind && laneKindFor(dragKind) === t.kind ? 'drop-ok' : ''} ${vh > rowH ? 'stack-open' : ''}${linkPick && t.kind === 'text' ? ' link-target' : ''}${linkPick && t.id === linkPick ? ' link-source' : ''}`}
@@ -837,6 +906,7 @@ export default function EdTimeline({
                     if (!lay || lay.variant === 'hidden') return null
                     return (
                       <ClipBlock key={c.id} clip={c} pps={pps} layout={lay} fps={fps}
+                        lifted={moveView?.clip.id === c.id}
                         selected={selectedIds.includes(c.id)} selKfId={selKfId}
                         mcpBusy={mcpBusyIds?.includes(c.id)}
                         onDown={(e, mode) => startClipDrag(e, c, mode)}
@@ -857,30 +927,38 @@ export default function EdTimeline({
                       <Icon name="expand_less" size={14} />
                     </button>
                   )}
-                  {dropHint?.trackId === t.id && dragInfo && (
-                    <>
-                      {/* El fantasma se pinta donde el clip va a CAER de verdad
-                          (detrás del que estorba, o alineado si se reemplaza). */}
-                      <div
-                        className={`ed-drop-ghost ${dropHint.action}`}
-                        style={{ left: dropHint.start * pps, width: Math.max(20, (dragInfo.duration || 1) * pps) }}
-                      >
-                        <span>{dropHint.action === 'replace' ? `Reemplazar · ${dragInfo.name}` : dragInfo.name}</span>
-                      </div>
-                      {dropHint.action === 'newTrack' && (
-                        <div className="ed-drop-newtrack" aria-hidden="true" />
-                      )}
-                    </>
-                  )}
-                  {edgeHint && (
-                    <div className={`ed-drop-newtrack ${edgeHint}`} aria-hidden="true">
-                      <span>Nueva pista</span>
+                  {dropHint?.trackId === t.id && dragInfo && dropHint.action !== 'insertTrack' && (
+                    // El hueco se pinta donde el material va a CAER de verdad
+                    // (detrás del que estorba, o alineado si se reemplaza).
+                    <div
+                      className={`ed-drop-skel ${dropHint.action}`}
+                      style={{ left: dropHint.start * pps, width: Math.max(6, (dragInfo.duration || 1) * pps) }}
+                    >
+                      <span>{dropHint.action === 'replace' ? `Reemplazar · ${dragInfo.name}` : dragInfo.name}</span>
                     </div>
+                  )}
+                  {moveView?.landing.trackId === t.id && (
+                    <div className="ed-drop-skel" aria-hidden="true"
+                      style={{ left: moveView.landing.start * pps, width: moveView.w }} />
                   )}
                 </div>
               )
             })}
 
+            {insertView && (insertView.src === 'move' || dragInfo) && (
+              // Pista nueva: línea en el hueco entre filas y, encima, el hueco del clip.
+              <div className="ed-insert-line" style={{ top: insertView.y }} aria-hidden="true">
+                <span style={{ left: scrollX + 8 }}>{NEW_TRACK_LABEL[insertView.kind] || 'Nueva pista'}</span>
+                <i className="ed-drop-skel" style={{ left: insertView.start * pps, width: insertView.w, height: insertView.h, top: -insertView.h / 2 }} />
+              </div>
+            )}
+            {moveView && (
+              <div className="ed-clip-ghost" style={{ left: moveView.x, top: moveView.y, width: moveView.w, height: moveView.h }} aria-hidden="true">
+                <ClipBlock clip={{ ...moveView.clip, start: 0 }} pps={pps} fps={fps}
+                  layout={{ variant: 'solo', top: 0, height: moveView.h, z: 1 }}
+                  onDown={() => {}} onKfDown={() => {}} />
+              </div>
+            )}
             {(alignTimes || []).map((t) => (
               <div key={t} className="ed-align-guide" style={{ left: t * pps }} aria-hidden="true" />
             ))}
@@ -931,7 +1009,7 @@ function VolumeCurve({ clip, width, height }) {
   )
 }
 
-function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onContext, onDouble, onCopyDesc, audioMaterials, fps = 30, mcpBusy }) {
+function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onContext, onDouble, onCopyDesc, audioMaterials, fps = 30, mcpBusy, lifted }) {
   const dur = clipDur(clip)
   const srcDur = clipSourceDur(clip)
   const sp = clipSpeed(clip)
@@ -948,7 +1026,7 @@ function ClipBlock({ clip, pps, layout, selected, selKfId, onDown, onKfDown, onC
   const audioDesc = clip.kind === 'audio' ? clipCopyText(clip, audioMaterials) : ''
 
   return (
-    <div className={`ed-clip ${clip.kind} ${layout.variant !== 'solo' ? layout.variant : ''} ${selected ? 'sel' : ''} ${clip.muted ? 'muted' : ''} ${clip.disabled ? 'disabled' : ''} ${mcpBusy ? 'mcp-busy' : ''}`}
+    <div className={`ed-clip ${clip.kind} ${layout.variant !== 'solo' ? layout.variant : ''} ${selected ? 'sel' : ''} ${clip.muted ? 'muted' : ''} ${clip.disabled ? 'disabled' : ''} ${mcpBusy ? 'mcp-busy' : ''}${lifted ? ' lifted' : ''}`}
       style={{ left, width: w, top: layout.top, height: layout.height, zIndex: layout.z }}
       title={clip.note ? `${clip.name}
 

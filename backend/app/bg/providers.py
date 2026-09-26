@@ -4,16 +4,25 @@ La app NO conoce ningún modelo concreto: habla con ``BackgroundRemovalProvider`
 y resuelve por id contra ``PROVIDERS``. Cambiar o añadir modelo = una clase nueva
 registrada aquí, sin tocar el servicio, el compose ni el frontend.
 
-Para añadir uno (p. ej. BiRefNet o MediaPipe):
+Para añadir uno (p. ej. MODNet o MediaPipe):
   1. subclase de ``BackgroundRemovalProvider`` (o de ``OnnxMatteProvider`` si es ONNX),
   2. ``register(MiProvider())``,
-  3. añadir su id a ``BG_PROVIDER_IDS`` en ``app/clip_bg.py`` y a
+  3. añadir su id a ``AUTO_PROVIDER_IDS`` en ``app/clip_bg.py`` y a
      ``BG_PROVIDERS`` en ``frontend/src/lib/clipBg.js``.
 
-Modelos elegidos por defecto: familia **U²-Net** en ONNX. Motivos: licencia
-Apache-2.0 (apta para contenido monetizable, al revés que RMBG), ``onnxruntime``
-ya es dependencia del proyecto (kokoro-onnx) así que no añade peso, y sigue el
-precedente de ``backend/models/*.onnx`` (YuNet, Kokoro).
+Motores automáticos (todos ONNX Runtime, ya dependencia del proyecto por
+kokoro-onnx, así que no añaden peso):
+
+* **RVM** (Robust Video Matting) — personas en VÍDEO. Es RECURRENTE: guarda
+  un estado entre fotogramas, así que el borde no «baila» como al procesar cada
+  fotograma por separado. Solo recorta personas. Se usa por ``stream()``.
+* **BiRefNet** (MIT) — cualquier sujeto (objetos, animales) con el mejor
+  borde. Pesado en CPU (segundos por fotograma): pensado para imágenes.
+* **U²-Net** (Apache-2.0) — el motor original: rápido y general, más tosco.
+
+RMBG sigue descartado: licencia no comercial. RVM es GPL-3.0: se descarga
+aparte (no se redistribuye con el proyecto) y el vídeo que produce no queda
+sujeto a la licencia, así que es apto para contenido monetizable.
 """
 from __future__ import annotations
 
@@ -40,16 +49,40 @@ class ProviderUnavailable(RuntimeError):
     """El proveedor no puede trabajar (falta modelo, falta onnxruntime…)."""
 
 
+class MatteStream:
+    """Matte de una secuencia de fotogramas CONSECUTIVOS de la fuente.
+
+    Los modelos por fotograma no guardan nada entre llamadas: este flujo por
+    defecto solo delega en ``provider.matte``. Los TEMPORALES (RVM) devuelven su
+    propio flujo con el estado recurrente dentro — uno por tramo, nunca
+    compartido, así dos jobs a la vez no se mezclan la memoria.
+    """
+
+    def __init__(self, provider: "BackgroundRemovalProvider") -> None:
+        self._provider = provider
+
+    def matte(self, frame: np.ndarray) -> np.ndarray:
+        return self._provider.matte(frame)
+
+
 class BackgroundRemovalProvider:
     """Contrato mínimo de un modelo de segmentación de fondo.
 
     ``matte`` recibe fotogramas RGB (uint8, HxWx3) y devuelve el matte en escala
     de grises (uint8, HxW) con el MISMO tamaño: 255 = sujeto, 0 = fondo.
+    ``stream`` hace lo mismo para fotogramas consecutivos (ver ``MatteStream``).
     """
 
     id: str = ""
     label: str = ""
     model_version: str = "1"
+    # temporal: el matte de un fotograma depende de los anteriores (RVM). El
+    # servicio le da los fotogramas EN ORDEN y calienta el estado antes de cada
+    # tramo que calcula.
+    temporal: bool = False
+    # people_only: el modelo solo sabe recortar personas; con otro sujeto
+    # devuelve un matte vacío (el servicio lo detecta y el job avisa).
+    people_only: bool = False
 
     def available(self) -> bool:                     # pragma: no cover - trivial
         raise NotImplementedError
@@ -64,6 +97,10 @@ class BackgroundRemovalProvider:
     def matte(self, frame: np.ndarray) -> np.ndarray:
         raise NotImplementedError
 
+    def stream(self) -> MatteStream:
+        """Flujo para una secuencia de fotogramas consecutivos."""
+        return MatteStream(self)
+
     def close(self) -> None:
         """Libera recursos (sesión/VRAM). Debe poder llamarse siempre."""
 
@@ -74,6 +111,8 @@ class BackgroundRemovalProvider:
             "model_version": self.model_version,
             "available": self.available(),
             "reason": self.unavailable_reason(),
+            "temporal": self.temporal,
+            "people_only": self.people_only,
         }
 
 
@@ -93,6 +132,10 @@ class OnnxMatteProvider(BackgroundRemovalProvider):
     input_size: tuple[int, int] = (320, 320)
     mean = (0.485, 0.456, 0.406)
     std = (0.229, 0.224, 0.225)
+    # low_memory: sin el «arena» de memoria de ONNX Runtime. Los modelos grandes
+    # (BiRefNet a 1024²) lo hacen crecer en cada inferencia hasta fallar con
+    # «bad allocation» en la segunda; sin él la memoria se libera al acabar.
+    low_memory: bool = False
 
     def __init__(self) -> None:
         self._session = None
@@ -164,6 +207,9 @@ class OnnxMatteProvider(BackgroundRemovalProvider):
             opts = ort.SessionOptions()
             opts.log_severity_level = 3
             opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            if self.low_memory:
+                opts.enable_cpu_mem_arena = False
+                opts.enable_mem_pattern = False
             try:
                 sess = ort.InferenceSession(str(self.model_path), opts, providers=providers)
             except Exception as exc:  # noqa: BLE001 - EP roto → reintento en CPU
@@ -171,10 +217,14 @@ class OnnxMatteProvider(BackgroundRemovalProvider):
                             self.id, providers, exc)
                 sess = ort.InferenceSession(str(self.model_path), opts,
                                             providers=["CPUExecutionProvider"])
+            self._check_io(sess)
             self._session = sess
             self._input_name = sess.get_inputs()[0].name
             self._device = gpu.onnx_device_label(sess.get_providers())
             log.info("Eliminar fondo: modelo %s listo en %s", self.id, self._device)
+
+    def _check_io(self, sess) -> None:
+        """Valida las entradas/salidas del modelo. Por defecto, nada."""
 
     @property
     def device(self) -> str:
@@ -227,6 +277,131 @@ class U2NetLiteProvider(OnnxMatteProvider):
     url = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx"
 
 
+# --- BiRefNet (ONNX, MIT) ---------------------------------------------------
+
+class BiRefNetLiteProvider(OnnxMatteProvider):
+    """BiRefNet general con backbone Swin-T: cualquier sujeto, el mejor borde.
+
+    Mismo preproceso que U²-Net (el de referencia de rembg) pero a 1024², y la
+    salida son logits: sigmoide antes de normalizar. ~8 s por fotograma en CPU,
+    así que es el motor de las imágenes; en vídeo solo compensa con GPU.
+    """
+
+    id = "birefnet_lite"
+    label = "BiRefNet"
+    model_version = "birefnet-general-lite-232"
+    filename = "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx"
+    url = ("https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
+           "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx")
+    input_size = (1024, 1024)
+    low_memory = True
+
+    def _post(self, raw: np.ndarray, width: int, height: int) -> np.ndarray:
+        logits = np.clip(np.asarray(raw, np.float32), -60.0, 60.0)
+        return super()._post(1.0 / (1.0 + np.exp(-logits)), width, height)
+
+
+# --- RVM: Robust Video Matting (ONNX, GPL-3.0) ------------------------------
+
+# Lado largo (px) al que trabaja la red base de RVM. Por encima, el refinador
+# guiado (Deep Guided Filter) sube el matte a la resolución pedida mirando el
+# fotograma original: por eso pedir 720 o 1080 afina el borde casi gratis.
+RVM_BASE_SIDE = 512
+
+
+class RvmStream(MatteStream):
+    """Flujo de RVM: lleva el estado recurrente (r1..r4) de fotograma en fotograma."""
+
+    def __init__(self, provider: "RvmProvider") -> None:
+        super().__init__(provider)
+        self._rec: Optional[list[np.ndarray]] = None
+        self._shape: Optional[tuple[int, int]] = None
+
+    def matte(self, frame: np.ndarray) -> np.ndarray:
+        shape = frame.shape[:2]
+        if self._rec is None or shape != self._shape:
+            # El estado depende del tamaño: si cambia (no debería), se reinicia.
+            self._rec, self._shape = self._provider.initial_state(), shape
+        out, self._rec = self._provider.step(frame, self._rec)
+        return out
+
+
+class RvmProvider(OnnxMatteProvider):
+    """Robust Video Matting: matting de PERSONAS con memoria entre fotogramas.
+
+    A diferencia de U²-Net, no mira cada fotograma por separado: arrastra un
+    estado recurrente, así que el contorno es estable en el tiempo (sin el
+    «baile» del borde) y aguanta fotogramas difíciles (movimiento, contraluz)
+    apoyándose en los anteriores. Solo sabe recortar personas.
+    """
+
+    temporal = True
+    people_only = True
+    _INPUTS = ("src", "r1i", "r2i", "r3i", "r4i", "downsample_ratio")
+    _OUTPUTS = ("pha", "r1o", "r2o", "r3o", "r4o")
+
+    def _check_io(self, sess) -> None:
+        ins = {i.name for i in sess.get_inputs()}
+        outs = {o.name for o in sess.get_outputs()}
+        if not set(self._INPUTS) <= ins or not set(self._OUTPUTS) <= outs:
+            raise ProviderUnavailable(
+                f"{self.filename} no es un modelo RVM válido (entradas: {sorted(ins)}).")
+
+    @staticmethod
+    def downsample_ratio(width: int, height: int) -> float:
+        """Regla de RVM: la red base con el lado largo en ~512 px, nunca ampliando."""
+        return min(1.0, RVM_BASE_SIDE / float(max(1, int(width), int(height))))
+
+    @staticmethod
+    def initial_state() -> list[np.ndarray]:
+        """Estado inicial: tensores [1,1,1,1] a cero (el modelo los amplía solo)."""
+        z = np.zeros((1, 1, 1, 1), np.float32)
+        return [z, z, z, z]
+
+    def step(self, frame: np.ndarray, rec: list[np.ndarray]) -> tuple[np.ndarray, list[np.ndarray]]:
+        """Un fotograma con el estado ``rec`` → (matte uint8, estado siguiente)."""
+        if self._session is None:
+            self.ensure_ready()
+        h, w = frame.shape[:2]
+        src = np.ascontiguousarray(frame.transpose(2, 0, 1)[None], dtype=np.float32)
+        src *= 1.0 / 255.0
+        feed = {
+            "src": src,
+            "r1i": rec[0], "r2i": rec[1], "r3i": rec[2], "r4i": rec[3],
+            "downsample_ratio": np.array([self.downsample_ratio(w, h)], np.float32),
+        }
+        pha, *nxt = self._session.run(list(self._OUTPUTS), feed)
+        out = np.clip(pha[0, 0] * 255.0 + 0.5, 0, 255).astype(np.uint8)
+        if out.shape[:2] != (h, w):
+            out = cv2.resize(out, (w, h), interpolation=cv2.INTER_LINEAR)
+        return out, nxt
+
+    def matte(self, frame: np.ndarray) -> np.ndarray:
+        """Un fotograma suelto, sin historia (imágenes fijas)."""
+        return self.stream().matte(frame)
+
+    def stream(self) -> MatteStream:
+        return RvmStream(self)
+
+
+class RvmMobileNetProvider(RvmProvider):
+    id = "rvm_mobilenetv3"
+    label = "RVM"
+    model_version = "rvm-mobilenetv3-fp32-1"
+    filename = "rvm_mobilenetv3_fp32.onnx"
+    url = ("https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/"
+           "rvm_mobilenetv3_fp32.onnx")
+
+
+class RvmResNet50Provider(RvmProvider):
+    id = "rvm_resnet50"
+    label = "RVM ResNet-50"
+    model_version = "rvm-resnet50-fp32-1"
+    filename = "rvm_resnet50_fp32.onnx"
+    url = ("https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/"
+           "rvm_resnet50_fp32.onnx")
+
+
 # --- Registro ---------------------------------------------------------------
 
 PROVIDERS: dict[str, BackgroundRemovalProvider] = {}
@@ -236,6 +411,10 @@ def register(provider: BackgroundRemovalProvider) -> None:
     PROVIDERS[provider.id] = provider
 
 
+# El orden es el del catálogo: primero los recomendados.
+register(RvmMobileNetProvider())
+register(RvmResNet50Provider())
+register(BiRefNetLiteProvider())
 register(U2NetProvider())
 register(U2NetLiteProvider())
 

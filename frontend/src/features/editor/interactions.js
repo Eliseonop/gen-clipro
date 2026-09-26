@@ -1,11 +1,12 @@
 // Puntero del canvas: compuesto (mover/escalar/rotar/seleccionar) o recorte de fuente.
 import { clamp, clampCenter } from '../../lib/panning'
 import {
-  canvasPointer, CLIP_POS_MAX, CLIP_POS_MIN, cropWindow, frameRectOf,
+  canvasPointer, CLIP_POS_MAX, CLIP_POS_MIN, cropWindow, frameRectOf, TEXT_SCALE_MAX,
   hitTransformHandle, isOverlay, mediaSize,
 } from '../../lib/clipLayout'
-import { canvasToSourceNorm, framingRect, hitFrontmost, pointInDest } from './render/canvas'
-import { snapAlign, textAlignTargets } from '../../lib/alignGuides'
+import { boxToDest, canvasToSourceNorm, framingRect, hitFrontmost, pointInDest } from './render/canvas'
+import { ROTATE_CURSOR, frameHandles, frameOfDest, handleAt, handleCursor } from '../../lib/selectionFrame'
+import { canvasAlignTargets, halfOnFrame, snapAlign, snapMove, textAlignTargets } from '../../lib/alignGuides'
 import { clipEnd, isVisualClip, timelineToSource } from './editorModel'
 import { clipMasksAt, clipPose, posedTransform } from '../../lib/clipAnim'
 import { clipBg, isInteractiveProvider } from '../../lib/clipBg'
@@ -14,33 +15,18 @@ import {
   hitPathAnchor, hitPathSegment, normalizeShape, pathAnchorPoints, pathAnchors, pathLocalPoint,
 } from '../../lib/shapes'
 
-function nearHandle(px, py, h, pad = 12) {
-  return !!(h && Math.abs(px - h.x) < pad && Math.abs(py - h.y) < pad)
+const TEXT_HANDLES = { del: 'delete', rot: 'rotate', tr: 'scale', bl: 'scale', br: 'scale', l: 'width-l', r: 'width-r' }
+const SHAPE_HANDLES = {
+  rot: 'rotate', tl: 'corner', tr: 'corner', bl: 'corner', br: 'corner',
+  l: 'width-l', r: 'width-r', t: 'height-t', b: 'height',
 }
 
+// Tirador del recuadro de CapCut bajo el puntero → modo de arrastre ('move' si ninguno).
 function textShapeMode(px, py, clip, render) {
-  if (clip.kind === 'text') {
-    let mode = 'move'
-    if (render?.handles) {
-      if (nearHandle(px, py, render.handles.br)) mode = 'size'
-      else if (nearHandle(px, py, render.handles.r)) mode = 'width-r'
-      else if (nearHandle(px, py, render.handles.l)) mode = 'width-l'
-    }
-    return mode
-  }
-  if (clip.kind === 'shape') {
-    let mode = 'move'
-    if (render?.handles) {
-      if (nearHandle(px, py, render.handles.rot)) mode = 'rotate'
-      else if (nearHandle(px, py, render.handles.br)) mode = 'corner'
-      else if (nearHandle(px, py, render.handles.r)) mode = 'width-r'
-      else if (nearHandle(px, py, render.handles.l)) mode = 'width-l'
-      else if (nearHandle(px, py, render.handles.b)) mode = 'height'
-      else if (nearHandle(px, py, render.handles.t)) mode = 'height-t'
-    }
-    return mode
-  }
-  return 'move'
+  const map = clip.kind === 'text' ? TEXT_HANDLES : clip.kind === 'shape' ? SHAPE_HANDLES : null
+  if (!map) return 'move'
+  const k = handleAt(px, py, render?.handles, Object.keys(map))
+  return k ? map[k] : 'move'
 }
 
 function listenMove(move, onUp) {
@@ -276,14 +262,21 @@ function handleBgPointer(e, canvas, ctx) {
   return startBgBrush(e, canvas, sel, ctx, frame)
 }
 
-/** Máscara bajo el puntero: devuelve true si el arrastre lo consume la máscara. */
-function handleMaskPointer(e, canvas, ctx) {
-  if (!ctx.maskModeRef?.current) return false
+// Máscara editable del clip seleccionado (con su panel abierto), o null.
+function activeMask(ctx) {
+  if (!ctx.maskModeRef?.current) return null
   const sel = (ctx.clipsRef?.current || []).find((c) => c.id === ctx.selectedClip?.id) || ctx.selectedClip
-  if (!sel) return false
+  if (!sel) return null
   const head = ctx.playheadRef?.current ?? ctx.playhead ?? 0
   const mask = clipMasksAt(sel, Math.max(0, head - (sel.start || 0)), { includeAdjust: true })[0]
-  if (!mask) return false
+  return mask ? { sel, mask } : null
+}
+
+/** Máscara bajo el puntero: devuelve true si el arrastre lo consume la máscara. */
+function handleMaskPointer(e, canvas, ctx) {
+  const active = activeMask(ctx)
+  if (!active) return false
+  const { sel, mask } = active
   const frame = frameRectOf(canvas.width, canvas.height, ctx.viewZoomRef?.current ?? 1, ctx.outAspect)
   if (ctx.maskDrawRef?.current && mask.type === 'brush') {
     startMaskBrush(e, canvas, sel, mask, ctx, frame)
@@ -353,7 +346,7 @@ export function createFramingDownHandler(ctx) {
   }
 }
 
-function startOverlayTransform(e, canvas, clip, dest, mode, { changeTransform, playhead }, frame) {
+function startOverlayTransform(e, canvas, clip, dest, mode, { changeTransform, playhead, alignGuidesRef }, frame) {
   const fr = frame || { x: 0, y: 0, w: canvas.width, h: canvas.height }
   const localT = Math.max(0, playhead - clip.start)
   const t0 = posedTransform(clip, localT)
@@ -362,16 +355,21 @@ function startOverlayTransform(e, canvas, clip, dest, mode, { changeTransform, p
   const cy0 = dest.dy + dest.dh / 2
   const dist0 = Math.hypot(p0.x - cx0, p0.y - cy0) || 1
   const ang0 = Math.atan2(p0.y - cy0, p0.x - cx0)
+  const half = halfOnFrame(dest, fr)
 
   listenMove((ev) => {
     const p = canvasPointer(ev, canvas)
     if (mode === 'move') {
       const dxN = (p.x - p0.x) / fr.w
       const dyN = (p.y - p0.y) / fr.h
-      changeTransform(clip.id, {
-        x: +clamp(t0.x + dxN, CLIP_POS_MIN, CLIP_POS_MAX).toFixed(4),
-        y: +clamp(t0.y + dyN, CLIP_POS_MIN, CLIP_POS_MAX).toFixed(4),
-      })
+      // Imán al centro y a los bordes del cuadro (el borde tocado brilla).
+      const snapped = snapMove(
+        clamp(t0.x + dxN, CLIP_POS_MIN, CLIP_POS_MAX),
+        clamp(t0.y + dyN, CLIP_POS_MIN, CLIP_POS_MAX),
+        canvasAlignTargets([]), half,
+      )
+      if (alignGuidesRef) alignGuidesRef.current = snapped.guides
+      changeTransform(clip.id, { x: +snapped.x.toFixed(4), y: +snapped.y.toFixed(4) })
     } else if (mode === 'scale') {
       const dist = Math.hypot(p.x - cx0, p.y - cy0)
       changeTransform(clip.id, { scale: +clamp(t0.scale * (dist / dist0), 0.05, 8).toFixed(4) })
@@ -379,12 +377,12 @@ function startOverlayTransform(e, canvas, clip, dest, mode, { changeTransform, p
       const ang = Math.atan2(p.y - cy0, p.x - cx0)
       changeTransform(clip.id, { rotation: +((t0.rotation + (ang - ang0) * 180 / Math.PI) % 360).toFixed(2) })
     }
-  })
+  }, () => { if (alignGuidesRef) alignGuidesRef.current = null })
 }
 
 function startTextShapeDrag(e, canvas, clip, render, ctx, frame) {
   const {
-    playingRef, stopPlayback, changeStyle, changeShape,
+    playingRef, stopPlayback, changeStyle, changeShape, commitPose, deleteClip,
     clipsRef, tracksRef, playheadRef, alignGuidesRef, playhead,
   } = ctx
   const p0 = canvasPointer(e, canvas)
@@ -394,67 +392,78 @@ function startTextShapeDrag(e, canvas, clip, render, ctx, frame) {
   const localT = Math.max(0, playhead - (clip.start || 0))
   const pose = clipPose(clip, localT)
   const mode = textShapeMode(p0.x, p0.y, clip, render)
+  if (mode === 'delete') { deleteClip?.(clip.id); return }
+  // Sin tope en el cuadro (como CapCut): se puede sacar del todo para animar su
+  // entrada. El imán pega sus lados a los bordes del cuadro (que brillan).
+  const half = halfOnFrame(render?.dest || render?.box, fr)
+  const moveTo = (dxN, dyN) => snapMove(
+    clamp(pose.x + dxN, CLIP_POS_MIN, CLIP_POS_MAX),
+    clamp(pose.y + dyN, CLIP_POS_MIN, CLIP_POS_MAX),
+    textAlignTargets(clipsRef?.current, tracksRef?.current, playheadRef?.current ?? playhead, clip.id), half,
+  )
+  // Centro y giro del recuadro (px del canvas): escalar, girar y los laterales
+  // trabajan en sus ejes, también con el elemento girado.
+  const dest = render?.dest || boxToDest(render?.box, render?.box?.rotation || 0)
+  const f = dest ? frameOfDest(dest) : { cx: fr.x + pose.x * fr.w, cy: fr.y + pose.y * fr.h, rotation: pose.rotation || 0 }
+  const rad = -(f.rotation || 0) * Math.PI / 180
+  const local = (ev) => {
+    const p = canvasPointer(ev, canvas)
+    const x = p.x - f.cx, y = p.y - f.cy
+    return { x: x * Math.cos(rad) - y * Math.sin(rad), y: x * Math.sin(rad) + y * Math.cos(rad), p }
+  }
+  const l0 = local(e)
+  const dist0 = Math.hypot(l0.x, l0.y) || 1
+  const ang0 = Math.atan2(p0.y - f.cy, p0.x - f.cx)
+  const rot0 = pose.rotation || 0
+  const angleAt = (p) => +(((rot0 + (Math.atan2(p.y - f.cy, p.x - f.cx) - ang0) * 180 / Math.PI) % 360)).toFixed(1)
+  const sc0 = pose.scale || 1
 
+  let move
   if (clip.kind === 'text') {
-    const st = clip.style || {}
-    const s0 = { x: pose.x, y: pose.y, w: st.w ?? 0.8, size: st.size ?? 0.07, cx: e.clientX, cy: e.clientY }
-    const move = (ev) => {
-      const dxN = (ev.clientX - s0.cx) / dispW, dyN = (ev.clientY - s0.cy) / dispH
+    // Ancho de partida = el recuadro que se ve (ceñido al texto), no la caja guardada.
+    const w0 = dest ? dest.dw / fr.w / sc0 : (clip.style?.w ?? 0.8)
+    move = (ev) => {
       if (mode === 'move') {
-        const rawX = clamp(s0.x + dxN, 0, 1)
-        const rawY = clamp(s0.y + dyN, 0, 1)
-        const snapped = snapAlign(rawX, rawY, textAlignTargets(clipsRef?.current, tracksRef?.current, playheadRef?.current ?? playhead, clip.id))
+        const snapped = moveTo((ev.clientX - e.clientX) / dispW, (ev.clientY - e.clientY) / dispH)
         if (alignGuidesRef) alignGuidesRef.current = snapped.guides
         changeStyle(clip.id, { x: +snapped.x.toFixed(4), y: +snapped.y.toFixed(4) })
+        return
       }
+      const l = local(ev)
+      // Esquinas = Escala de Transformación (como CapCut), no el tamaño de fuente.
+      if (mode === 'scale') commitPose?.(clip.id, { scale: +clamp(sc0 * Math.hypot(l.x, l.y) / dist0, 0.05, TEXT_SCALE_MAX).toFixed(4) })
+      else if (mode === 'rotate') commitPose?.(clip.id, { rotation: angleAt(l.p) })
       // La caja en pantalla mide w · escala: el tirador sigue al ratón.
-      else if (mode === 'width-r') changeStyle(clip.id, { w: +clamp(s0.w + dxN * 2 / (pose.scale || 1), 0.1, 1).toFixed(4) })
-      else if (mode === 'width-l') changeStyle(clip.id, { w: +clamp(s0.w - dxN * 2 / (pose.scale || 1), 0.1, 1).toFixed(4) })
-      else if (mode === 'size') changeStyle(clip.id, { size: +clamp(s0.size + dyN * 0.3, 0.02, 0.3).toFixed(4) })
+      else if (mode === 'width-r') changeStyle(clip.id, { w: +clamp(w0 + (l.x - l0.x) * 2 / fr.w / sc0, 0.1, 1).toFixed(4) })
+      else if (mode === 'width-l') changeStyle(clip.id, { w: +clamp(w0 - (l.x - l0.x) * 2 / fr.w / sc0, 0.1, 1).toFixed(4) })
     }
-    const up = () => {
-      if (alignGuidesRef) alignGuidesRef.current = null
-      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up)
-    }
-    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
-    return
-  }
-
-  const st = clip.shape || {}
-  const s0 = {
-    x: pose.x, y: pose.y, w: st.w ?? 0.38, h: st.h ?? 0.16, scale: pose.scale || 1,
-    cx: e.clientX, cy: e.clientY,
-  }
-  const move = (ev) => {
-    const dxN = (ev.clientX - s0.cx) / dispW, dyN = (ev.clientY - s0.cy) / dispH
-    if (mode === 'move') {
-      const rawX = clamp(s0.x + dxN, 0, 1)
-      const rawY = clamp(s0.y + dyN, 0, 1)
-      const snapped = snapAlign(rawX, rawY, textAlignTargets(clipsRef?.current, tracksRef?.current, playheadRef?.current ?? playhead, clip.id))
-      if (alignGuidesRef) alignGuidesRef.current = snapped.guides
-      changeShape(clip.id, { x: +snapped.x.toFixed(4), y: +snapped.y.toFixed(4) })
-    } else if (mode === 'width-r') changeShape(clip.id, { w: +clamp(s0.w + dxN * 2 / (s0.scale || 1), 0.04, 1).toFixed(4) })
-    else if (mode === 'width-l') changeShape(clip.id, { w: +clamp(s0.w - dxN * 2 / (s0.scale || 1), 0.04, 1).toFixed(4) })
-    else if (mode === 'height') changeShape(clip.id, { h: +clamp(s0.h + dyN * 2 / (s0.scale || 1), 0.03, 1).toFixed(4) })
-    else if (mode === 'height-t') changeShape(clip.id, { h: +clamp(s0.h - dyN * 2 / (s0.scale || 1), 0.03, 1).toFixed(4) })
-    else if (mode === 'corner') {
-      changeShape(clip.id, {
-        w: +clamp(s0.w + dxN * 2 / (s0.scale || 1), 0.04, 1).toFixed(4),
-        h: +clamp(s0.h + dyN * 2 / (s0.scale || 1), 0.03, 1).toFixed(4),
-      })
-    } else if (mode === 'rotate') {
-      const p = canvasPointer(ev, canvas)
-      const cx = fr.x + pose.x * fr.w
-      const cy = fr.y + pose.y * fr.h
-      const ang = Math.atan2(p.y - cy, p.x - cx) * 180 / Math.PI + 90
-      changeShape(clip.id, { rotation: +ang.toFixed(1) })
+  } else {
+    const st = clip.shape || {}
+    const s0 = { w: st.w ?? 0.38, h: st.h ?? 0.16 }
+    move = (ev) => {
+      if (mode === 'move') {
+        const snapped = moveTo((ev.clientX - e.clientX) / dispW, (ev.clientY - e.clientY) / dispH)
+        if (alignGuidesRef) alignGuidesRef.current = snapped.guides
+        changeShape(clip.id, { x: +snapped.x.toFixed(4), y: +snapped.y.toFixed(4) })
+        return
+      }
+      const l = local(ev)
+      const dw = (l.x - l0.x) * 2 / fr.w / sc0
+      const dh = (l.y - l0.y) * 2 / fr.h / sc0
+      if (mode === 'width-r') changeShape(clip.id, { w: +clamp(s0.w + dw, 0.04, 1).toFixed(4) })
+      else if (mode === 'width-l') changeShape(clip.id, { w: +clamp(s0.w - dw, 0.04, 1).toFixed(4) })
+      else if (mode === 'height') changeShape(clip.id, { h: +clamp(s0.h + dh, 0.03, 1).toFixed(4) })
+      else if (mode === 'height-t') changeShape(clip.id, { h: +clamp(s0.h - dh, 0.03, 1).toFixed(4) })
+      // Cualquier esquina: la esquina sigue al ratón y el centro no se mueve.
+      else if (mode === 'corner') {
+        changeShape(clip.id, {
+          w: +clamp(Math.abs(l.x) * 2 / fr.w / sc0, 0.04, 1).toFixed(4),
+          h: +clamp(Math.abs(l.y) * 2 / fr.h / sc0, 0.03, 1).toFixed(4),
+        })
+      } else if (mode === 'rotate') changeShape(clip.id, { rotation: angleAt(l.p) })
     }
   }
-  const up = () => {
-    if (alignGuidesRef) alignGuidesRef.current = null
-    window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up)
-  }
-  window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+  listenMove(move, () => { if (alignGuidesRef) alignGuidesRef.current = null })
 }
 
 function startFillSourcePan(e, canvas, clip, dest, mode, ctx, frame) {
@@ -495,6 +504,62 @@ function startFillSourcePan(e, canvas, clip, dest, mode, ctx, frame) {
     const c = clampCenter(cx, cy, z0, srcAspect, outAspect)
     upsertKeyframe(clip, srcT, c.cx, c.cy)
   })
+}
+
+// --- Cursor como CapCut: flechas de redimensionar en los tiradores (giradas con
+// el elemento), el de girar en su botón y «mover» solo sobre algo que se movería
+// al arrastrar. Es el espejo de lo que haría pulsar ahí (onCanvasDown).
+const VIDEO_HANDLE_KEYS = ['rot', 'tl', 'tr', 'bl', 'br']
+const MASK_HANDLE_OF = { corner: 'br', width: 'r', height: 'b', feather: 'l' }
+
+function selectedHandleCursor(px, py, hit) {
+  const map = hit.kind === 'text' ? TEXT_HANDLES : hit.kind === 'shape' ? SHAPE_HANDLES : null
+  const handles = map ? hit.handles : hit.dest && frameHandles(frameOfDest(hit.dest))
+  const k = handleAt(px, py, handles, map ? Object.keys(map) : VIDEO_HANDLE_KEYS)
+  return k ? handleCursor(k, hit.dest?.rotation) : null
+}
+
+function maskCursor(px, py, canvas, ctx) {
+  const active = activeMask(ctx)
+  if (!active) return null
+  const { mask } = active
+  if (ctx.maskDrawRef?.current && mask.type === 'brush') return 'crosshair'
+  const frame = frameRectOf(canvas.width, canvas.height, ctx.viewZoomRef?.current ?? 1, ctx.outAspect)
+  const mode = maskHitMode(px, py, mask, frame)
+  if (mode === 'move') return 'move'
+  if (mode === 'rotate') return ROTATE_CURSOR
+  return mode ? handleCursor(MASK_HANDLE_OF[mode], maskHandleBox(mask, frame).rot * 180 / Math.PI) : null
+}
+
+/** Cursor del lienzo en el punto del evento. */
+export function canvasCursorAt(e, ctx) {
+  const canvas = ctx.mainCanvasRef.current
+  if (!canvas) return ''
+  const p = canvasPointer(e, canvas)
+  const onMask = maskCursor(p.x, p.y, canvas, ctx)
+  if (onMask) return onMask
+  const hits = ctx.hitListRef?.current || []
+  const selId = ctx.selectedClip?.id
+  const sel = selId ? hits.find((h) => h.id === selId) : null
+  const onHandle = sel && selectedHandleCursor(p.x, p.y, sel)
+  if (onHandle) return onHandle
+  return hitFrontmost(hits, p.x, p.y) ? 'move' : 'default'
+}
+
+/**
+ * Pasar el ratón por el lienzo: pone el cursor en el <canvas>. Mientras se
+ * arrastra se queda el del principio; con la pluma, el pincel, el cuentagotas, el
+ * seguimiento o el encuadre de texto manda la cruz del escenario.
+ */
+export function createCanvasHoverHandler(ctx) {
+  return function onCanvasHover(e) {
+    const canvas = ctx.mainCanvasRef.current
+    if (!canvas || e.buttons) return
+    const crosshair = ctx.framingModeRef?.current || ctx.penRef?.current || ctx.trackPickRef?.current
+      || ctx.bgBrushRef?.current?.on || ctx.chromaPickRef?.current
+    const cursor = crosshair ? '' : canvasCursorAt(e, ctx)
+    if (canvas.style.cursor !== cursor) canvas.style.cursor = cursor
+  }
 }
 
 export function createCanvasDownHandler(ctx) {
@@ -557,9 +622,8 @@ export function createCanvasDownHandler(ctx) {
       clip = clipsRef.current.find((c) => c.id === hit.id) || null
       if (!clip) return
       if (clip.id !== selId) onSelectClip?.(clip, e)
-      mode = (hit.kind === 'text' || hit.kind === 'shape')
-        ? textShapeMode(p0.x, p0.y, clip, hit)
-        : (hitTransformHandle(p0.x, p0.y, hit.dest) || 'move')
+      // Sin seleccionar no se ven tiradores: pulsar en cualquier punto lo mueve.
+      mode = 'move'
     }
     if (!clip) return
 
@@ -585,7 +649,7 @@ export function createCanvasDownHandler(ctx) {
       const sz = mediaSize(el)
       if (!sz.w) return
       startOverlayTransform(e, canvas, clip, dest, handle, {
-        changeTransform, playhead,
+        changeTransform, playhead, alignGuidesRef: ctx.alignGuidesRef,
       }, frame)
       return
     }

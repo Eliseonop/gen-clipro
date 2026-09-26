@@ -191,9 +191,14 @@ def _subject_pop(tl, clip_ids, params) -> tuple[Any, list, list]:
     sp = clip_speed(v)
     data = copy.deepcopy(v.model_dump())
     track = _insert_track(tl, v.track_id, "video", "Sujeto")
+    from .clip_bg import provider_mask_height, recommended_provider
+
+    prov = recommended_provider(v)          # vídeo → RVM: el sujeto es una persona
     data.update(id=_uid("c"), dup_of=v.id, track_id=track.id, start=round(start, 4),
                 out_point=round(min(v.out_point, v.in_point + dur * sp), 4), name=f"{v.name or 'Vídeo'} (sujeto)",
-                bg_removal={"enabled": True, "mode": "auto", "auto": {"enabled": True, "status": "idle"}})
+                bg_removal={"enabled": True, "mode": "auto",
+                            "auto": {"enabled": True, "status": "idle", "provider": prov,
+                                     "mask_height": provider_mask_height(prov)}})
     if v.reverse:
         data["in_point"] = round(max(v.in_point, v.out_point - dur * sp), 4)
         data["out_point"] = v.out_point

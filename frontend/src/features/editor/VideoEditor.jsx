@@ -14,12 +14,13 @@ import EdSoundDesign from './EdSoundDesign'
 import EdStickMenu from './EdStickMenu'
 import EdCropModal from './EdCropModal'
 import { clamp } from '../../lib/panning'
-import { defaultTextStyle, subtitleStyle, wrappedText, ensureEditorFonts, selectedSubtitleThemeId, clearTextTheme, effectiveTextStyle } from '../../lib/textstyles'
+import { defaultTextStyle, subtitleStyle, wrappedText, ensureEditorFonts, selectedSubtitleThemeId, clearTextTheme, effectiveTextStyle, SHADOW_DEFAULTS } from '../../lib/textstyles'
 import { applyThemeToStyle, wordsPerBoxOptions, activeWordsPerBox, splitCaptionWords } from '../../lib/textKaraoke'
+import { themeById } from '../../lib/subtitleThemes'
 import {
   uid, mediaUrl, defaultTracks, newReframe, withKfIds,
-  makeClip, makeTextClip, makeShapeClip, makeAdjustmentClip, clipDur, clipEnd, clipPlaybackMuted, clipSpeed, clipKeepPitch, timelineToSource, sourceToTimeline, splitClipAt,
-  canCaptionClip, removeTrack, shouldConfirmTrackDelete,
+  makeClip, makeTextClip, makeShapeClip, DEFAULT_TEXT, TEXT_DEFAULT_DUR, makeAdjustmentClip, clipDur, clipEnd, clipPlaybackMuted, clipSpeed, clipKeepPitch, timelineToSource, sourceToTimeline, splitClipAt,
+  canCaptionClip, removeTrack, emptiedTracks, shouldConfirmTrackDelete,
   extraClipsAfterSplit, extraClipsAfterOneSplit, splitTrackTextByMaxWords, splitOneTextClip,
   nextClipSelection, groupMoveFromOrig, patchClipsStyle, removeClipsByIds, freeStartOnTrack,
   previewElementVolume, parsePreviewVolume, PREVIEW_VOL_KEY, syncPreviewMedia,
@@ -37,13 +38,13 @@ import { textRole } from '../../lib/textRole'
 import { CINEMA_RATIOS, SHAPE_DEFAULT_DUR, cinemaBar, defaultShape, drawInKeyframes, pathShape, renormalizePath } from '../../lib/shapes'
 import { clipFlip } from '../../lib/clipAnim'
 import { readRowHeight, writeRowHeight } from './trackRows'
-import { newTrackIndex, resolveNewTrack } from './dropIntent'
+import { newTrackIndex, slotIndex } from './dropIntent'
 import { TIMELINE_SCHEMA_VERSION, insertTrack, reorderTrack, stepTrack, trackNeighbor } from './trackStack'
 import { MASK_KF_KEYS, clipMasks, defaultMask, maskId, normalizeMask } from '../../lib/clipMask'
 import {
-  DEFAULT_PROVIDER, autoActive, bgCapable, chromaBg, clipBg, defaultBg, editsAtFrame,
-  isInteractiveProvider, isManualMark, matteFrameIndex, matteFrameTime, normalizeBg,
-  preferredSamProvider,
+  DEFAULT_MASK_HEIGHT, DEFAULT_PROVIDER, autoActive, bgCapable, chromaBg, clipBg, defaultBg,
+  editsAtFrame, isInteractiveProvider, isManualMark, matteFrameIndex, matteFrameTime, normalizeBg,
+  preferredSamProvider, providerMaskHeight, recommendedProvider,
 } from '../../lib/clipBg'
 import { clearMagic, magicCovers, setMagicMask } from './bgMagic'
 import { copyClipAttrs, groupApplies, pasteClipAttrs, pasteableGroups } from '../../lib/clipAttrs'
@@ -51,9 +52,10 @@ import { resetBgMeta, resetCutout } from './bgCutout'
 import { canvasPointer, cropWindow, followTrackMaskKeys, frameRectOf, freeFrameAt, isOverlay, mediaSize, newTransform, sourceCropPx, videosAt } from '../../lib/clipLayout'
 import {
   AUDIO_FX_KEYS, applyVolumeFade, canKeyframe, clipPropsAt, clipVolumeAt, clampVolume, deleteKeyframeItem,
-  copyKeyframeAt, disableKeyframes, duplicateKeyframeAt, enableKeyframes, flattenPatch,
+  copyKeyframeAt, duplicateKeyframeAt, enableKeyframes, flattenPatch,
   KF_GROUP_IDS, keyframeIdAt, keyframesOn, kfState, normalizeItems, pasteKeyframeAt,
   keyframesEnabled, patchKeyframe, shouldKeyframe, upsertKeyframeAt,
+  removePoseKf, removeStyleKfAt, styleKfState, textStyleAt, textStyleKfKeys, upsertStyleKf, withTextStyleKf,
 } from '../../lib/clipKeyframes'
 import { drawMainView } from './render/canvas'
 import MotionCanvas from '../motion/MotionCanvas'
@@ -79,7 +81,7 @@ import { useExportJob } from './hooks/useExportJob'
 import { useSubtitles } from './hooks/useSubtitles'
 import { useFavorites } from './hooks/useFavorites'
 import { snapshotTextStyle } from '../../lib/favorites'
-import { createCanvasDownHandler } from './interactions'
+import { createCanvasDownHandler, createCanvasHoverHandler } from './interactions'
 import { kfSnap, normalizeFps, snapToFrame } from '../../lib/projectFps'
 import { fmtRuler, tickStep } from './timelineScale'
 import EdMaterial from './EdMaterial'
@@ -343,6 +345,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const bgAnalyzedRef = useRef(new Set())   // claves ya lanzadas en esta sesión
   const bgAliveRef = useRef(true)           // false al cerrar el editor
   const [bgInfo, setBgInfo] = useState({ providers: [], device: '' })
+  // Aviso del último cálculo del matte (p. ej. RVM sin ninguna persona), por clip.
+  const [bgNotice, setBgNotice] = useState(null)   // { clipId, text }
   const [chromaPick, setChromaPick] = useState(false)
   // Fondo de vista previa (solo preview): normal|checker|solid|media.
   const [bgPreview, setBgPreview] = useState({ mode: 'normal', color: '#3B82F6', kind: '' })
@@ -2030,11 +2034,15 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (!intent || intent.action === 'place' || intent.action === 'after') {
       return { trackId, start: startTime }
     }
-    const dur = Math.max(0.1, payload.duration || SHAPE_DEFAULT_DUR)
+    if (intent.action === 'insertTrack') {
+      // Soltado sobre una pista de otro tipo: la pista nueva va en la línea que se vio.
+      return { trackId: addTrack(laneKindForAsset(payload.asset_kind), undefined, slotIndex(tracksRef.current, intent.slot)), start: startTime }
+    }
     if (intent.action === 'newTrack') {
-      const spot = resolveNewTrack(clipsRef.current, tracksRef.current, trackId, startTime, dur)
-      // Si la de encima está ocupada se crea una: es lo que anuncia la línea verde.
-      return { trackId: spot.create ? addTrack(laneKindForAsset(payload.asset_kind), undefined, spot.index) : spot.trackId, start: startTime }
+      // Siempre una pista nueva justo encima (CapCut), aunque la de encima sea
+      // del mismo tipo y tenga hueco: es lo que anuncia la línea verde.
+      const slot = { targetId: trackId, place: 'above' }
+      return { trackId: addTrack(laneKindForAsset(payload.asset_kind), undefined, slotIndex(tracksRef.current, slot)), start: startTime }
     }
     if (intent.action === 'replace') {
       setReplaceAsk({ payload, trackId, start: startTime, targetId: intent.targetId })
@@ -2094,6 +2102,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   }
 
   function placeAsset(payload, trackId, startTime) {
+    // Ficha «Texto predeterminado» (o un tema) soltada en la timeline.
+    if (payload.asset_kind === 'text') {
+      const preset = themeById(payload.theme_id)
+      const dur = payload.duration || TEXT_DEFAULT_DUR
+      selectNewText(makeTextClip(trackId, startTime, dur, payload.text || DEFAULT_TEXT, newTextStyle(trackId, preset)))
+      return
+    }
     if (payload.asset_kind === 'shape' || payload.kind === 'shape') {
       const clip = makeShapeClip(trackId, startTime, payload.duration || SHAPE_DEFAULT_DUR, payload)
       setClips((prev) => [...prev, clip])
@@ -2151,6 +2166,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       ? selIdsRef.current
       : (id ? [id] : selIdsRef.current)
     if (!ids.length) return
+    mayEmptyTracks(clipsRef.current.filter((c) => ids.includes(c.id)).map((c) => c.track_id))
     setClips((prev) => removeClipsByIds(prev, ids))
     setSelClipId(null)
     setSelClipIds([])
@@ -2351,18 +2367,55 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (!clipId) return
     setClips((prev) => moveClipLayer(prev, clipId, action))
   }
-  // Arrastrar un clip ya colocado fuera del bloque de pistas (o a la franja
-  // superior de una ocupada) crea la pista y lo lleva allí. Se aplica al SOLTAR,
-  // no en cada movimiento: crear pistas en el pointermove sería un desastre.
-  function moveClipToNewTrack(clipId, side, start) {
+  // Arrastrar un clip ya colocado a la línea de "pista nueva" (sobre una pista
+  // de otro tipo, en el borde de una suya o fuera del bloque) crea la pista en
+  // ese hueco y lo lleva allí. Se aplica al SOLTAR, no en cada movimiento:
+  // crear pistas en el pointermove sería un desastre.
+  function moveClipToNewTrack(clipId, slot, start) {
     const clip = clipsRef.current.find((c) => c.id === clipId)
     if (!clip) return
     const kind = trackKindForClip(clip.kind)
-    const trackId = addTrack(kind, undefined, side || 'above')
+    // Un texto se lleva el estilo de su pista: en una pista nueva por defecto cambiaría de aspecto.
+    const src = kind === 'text' ? tracksRef.current.find((t) => t.id === clip.track_id)?.style : null
+    const style = src ? { ...src } : undefined
+    const trackId = addTrack(kind, style, slot ? slotIndex(tracksRef.current, slot) : 'above')
     const at = Number.isFinite(Number(start)) ? Math.max(0, Number(start)) : clip.start
+    mayEmptyTracks([clip.track_id])
     setClips((prev) => prev.map((c) => (c.id === clipId ? { ...c, track_id: trackId, start: +at.toFixed(3) } : c)))
     setSelTrackId(trackId)
   }
+
+  // Soltar un clip arrastrado en la timeline (misma pista u otra ya existente).
+  function moveClip(clipId, patch) {
+    const clip = clipsRef.current.find((c) => c.id === clipId)
+    if (clip && patch.track_id && patch.track_id !== clip.track_id) mayEmptyTracks([clip.track_id])
+    mutateClip(clipId, patch)
+  }
+
+  // Pista que se queda vacía (se movió o se borró su último clip) desaparece,
+  // como en CapCut. Quien vacía una pista la apunta aquí y se quita en cuanto
+  // el cambio llega a `clips`: en el mismo paso del historial. Solo en el Main
+  // (el resto de espacios tienen sus propias pistas fijas).
+  const mayEmptyRef = useRef(new Set())
+  function mayEmptyTracks(ids) {
+    if (mainColTab !== 'main') return
+    for (const id of ids) if (id) mayEmptyRef.current.add(id)
+  }
+  useEffect(() => {
+    const cand = mayEmptyRef.current
+    if (!cand.size) return
+    mayEmptyRef.current = new Set()
+    const gone = emptiedTracks(tracks, clips, cand)
+    if (!gone.length) return
+    let next = { tracks, clips }
+    for (const id of gone) next = removeTrack(next.tracks, next.clips, id)
+    setTracks(next.tracks)
+    if (gone.includes(selTrackId)) {
+      const sel = clips.find((c) => c.id === selClipId)
+      setSelTrackId(sel?.track_id || next.tracks[0]?.id || null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clips])
 
   function moveGroup(origs, deltaT) {
     setClips((prev) => groupMoveFromOrig(prev, origs, deltaT))
@@ -2558,36 +2611,23 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (!clip || !canKeyframe(clip)) return
     const t = clamp(localTOf(clip), 0, clipDur(clip))
     const st = kfState(clip, t, fpsRef.current)
+    const id = keyframeIdAt(clip, t, fpsRef.current)
     if (st === 'on') {
-      deleteAnimKf({ id: keyframeIdAt(clip, t, fpsRef.current) })
+      // Si ese keyframe también guarda estilo del texto, solo se le quita la pose.
+      if (clip.kind === 'text' && textStyleKfKeys(clip).size) {
+        setClips((prev) => prev.map((c) => (c.id === clip.id ? removePoseKf(c, id) : c)))
+        if (selKfId === id) setSelKfId(null)
+      } else deleteAnimKf({ id })
       return
     }
     setClips((prev) => prev.map((c) => {
       if (c.id !== clip.id) return c
-      const next = st === 'off' ? enableKeyframes(c, t, srcTOf(c)) : upsertKf(c, t, {})
+      // Con keyframes de solo estilo, enableKeyframes no crea la pose: la pone upsertKf.
+      const next = upsertKf(enableKeyframes(c, t, srcTOf(c)), t, {})
       markKf(next, t)
       return next
     }))
   }
-  // Al apagar la animación se hornea el valor visible en el cabezal para que el
-  // clip no salte; los keyframes se conservan por si se vuelve a activar.
-  function setClipAnimated(on) {
-    const clip = selectedClip
-    if (!clip || !canKeyframe(clip)) return
-    setClips((prev) => prev.map((c) => {
-      if (c.id !== clip.id) return c
-      const t = clamp(localTOf(c), 0, clipDur(c))
-      if (on) {
-        const next = enableKeyframes(c, t, srcTOf(c))
-        markKf(next, t)
-        return next
-      }
-      const props = clipPropsAt(c, t, srcTOf(c))
-      return disableKeyframes(applyStaticMask(applyStaticPose(c, props), props))
-    }))
-    if (!on) setSelKfId(null)
-  }
-
   // --- Portapapeles de keyframes ---------------------------------------------
   // `kf` llega desde la lista del panel; sin él se copia el del cabezal.
   function copyKeyframe(kf) {
@@ -2796,11 +2836,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (existing) return existing.id
     return addTrack('text', style)
   }
-  function addText(preset) {
-    const tid = ensureTextTrack()
-    const track = tracksRef.current.find((t) => t.id === tid)
-    const fromTrack = track?.style || {}
-    let style = {
+  // Estilo de un texto nuevo en la pista `trackId`: hereda su caja y su tamaño.
+  // Una pista recién creada aún no está en tracksRef: nace con subtitleStyle().
+  function newTextStyle(trackId, preset) {
+    const fromTrack = tracksRef.current.find((t) => t.id === trackId)?.style || subtitleStyle()
+    const style = {
       ...defaultTextStyle(),
       x: fromTrack.x ?? 0.5,
       y: fromTrack.y ?? 0.5,
@@ -2808,28 +2848,59 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       size: fromTrack.size ?? defaultTextStyle().size,
       opacity: fromTrack.opacity ?? 1,
     }
-    if (preset) style = applyThemeToStyle(style, preset)
-    const end = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
-    const dur = Math.max(3, +(end - playhead).toFixed(3))
-    const clip = makeTextClip(tid, playhead, dur, preset?.sample || 'Texto', style)
+    return preset ? applyThemeToStyle(style, preset) : style
+  }
+  function selectNewText(clip) {
     setClips((prev) => [...prev, clip])
     setSelClipId(clip.id)
     setSelClipIds([clip.id])
     setSelKfId(null)
+  }
+  function addText(preset) {
+    const tid = ensureTextTrack()
+    const end = clipsRef.current.reduce((m, c) => Math.max(m, clipEnd(c)), 0)
+    const dur = Math.max(3, +(end - playhead).toFixed(3))
+    selectNewText(makeTextClip(tid, playhead, dur, preset?.sample || DEFAULT_TEXT, newTextStyle(tid, preset)))
     setMatTab('text')
   }
   function changeText(id, text) {
     setClips((prev) => prev.map((c) => (c.id === id ? { ...c, text, name: (text || 'Texto').slice(0, 22) } : c)))
   }
-  function changeStyle(id, patch) {
+  // `opts.fixed`: casillas (Trazo, Fondo…) y otros cambios que valen para todo el
+  // clip: nunca crean keyframes de estilo. El resto, si esa propiedad ya está
+  // animada, va al keyframe del cabezal (como CapCut).
+  function changeStyle(id, patch, opts) {
     const ids = selIdsRef.current.includes(id) ? selIdsRef.current : [id]
     setClips((prev) => patchClipsStyle(prev, ids, patch).map((c) => {
       if (!ids.includes(c.id)) return c
-      const pose = flattenPatch(patch, 'text')
-      if (!Object.keys(pose).length || !shouldKeyframe(c, pose)) return c
+      let next = c
       const t = localTOf(c)
-      const next = upsertKf(c, t, pose)
-      if (c.id === id) markKf(next, t)
+      const pose = flattenPatch(patch, 'text')
+      if (Object.keys(pose).length && shouldKeyframe(c, pose)) next = upsertKf(next, t, pose)
+      const animated = opts?.fixed ? new Set() : textStyleKfKeys(c)
+      const style = Object.fromEntries(Object.entries(patch).filter(([k]) => animated.has(k)))
+      if (Object.keys(style).length) next = upsertStyleKf(next, t, style, fpsRef.current)
+      if (next !== c && c.id === id) markKf(next, t)
+      return next
+    }))
+  }
+  // Rombo de una sección de estilo (Color, Trazo, Fondo, Brillo, Sombra): pone el
+  // valor actual como keyframe en el cabezal, o lo quita si ya hay uno ahí.
+  function toggleStyleKf(id, keys) {
+    const fps = fpsRef.current
+    const defaults = {
+      color: '#ffffff', border_color: '#000000', border_width: 0, bg_opacity: 0.55, shadow_color: '#000000',
+      shadow_opacity: SHADOW_DEFAULTS.opacity, shadow_blur: SHADOW_DEFAULTS.blur,
+      shadow_distance: SHADOW_DEFAULTS.distance, shadow_angle: SHADOW_DEFAULTS.angle,
+    }
+    setClips((prev) => prev.map((c) => {
+      if (c.id !== id || c.kind !== 'text') return c
+      const t = clamp(localTOf(c), 0, clipDur(c))
+      if (styleKfState(c, t, keys, fps) === 'on') return removeStyleKfAt(c, t, keys, fps)
+      const track = tracksRef.current.find((tr) => tr.id === c.track_id)
+      const st = withTextStyleKf(effectiveTextStyle(track?.style, c.style), textStyleAt(c, t))
+      const next = upsertStyleKf(c, t, Object.fromEntries(keys.map((k) => [k, st[k] ?? defaults[k]])), fps)
+      markKf(next, t)
       return next
     }))
   }
@@ -3025,17 +3096,23 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
 
   // Eliminación AUTOMÁTICA y PERSONALIZADA comparten `bg_removal.auto` y se
   // excluyen, como en CapCut: la familia del modelo decide cuál está activa
-  // (U²-Net = automática, SAM = personalizada). Pasar de una a otra descarta
-  // las marcas, porque significan cosas distintas en cada una (corrección fija
-  // vs. prompt que se sigue); el cambio entra en el undo como cualquier otro.
+  // (RVM/BiRefNet/U²-Net = automática, SAM = personalizada). Pasar de una a otra
+  // descarta las marcas, porque significan cosas distintas en cada una
+  // (corrección fija vs. prompt que se sigue); el cambio entra en el undo.
   const toggleBgAuto = (on) => {
     const clip = selectedClip
     if (!clip) return
     const bg = clipBg(clip) || defaultBg()
     const fromSam = on && isInteractiveProvider(bg.auto.provider)
+    // Al activarla por primera vez se propone el motor del material (vídeo →
+    // RVM, imagen → BiRefNet). Si ya se calculó o se eligió otro, se respeta.
+    const pristine = on && !bg.auto.base_key && bg.auto.status === 'idle'
+      && bg.auto.provider === DEFAULT_PROVIDER
+    const provider = recommendedProvider(clip)
     patchBgAuto(clip.id, {
       enabled: !!on,
-      ...(fromSam ? { provider: DEFAULT_PROVIDER, edits: [], base_key: '', status: 'idle', error: null } : {}),
+      ...((fromSam || pristine) ? { provider, mask_height: providerMaskHeight(provider) } : {}),
+      ...(fromSam ? { edits: [], base_key: '', status: 'idle', error: null } : {}),
     })
     if (fromSam) { resetCutout(clip.id); stopBgAnalyze(clip.id) }
     if (!on || fromSam) setBgBrush((b) => ({ ...b, on: false }))
@@ -3054,7 +3131,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     patchBgAuto(clip.id, {
       enabled: true,
       provider: preferredSamProvider(bg.auto.provider, bgInfo.providers),
-      ...(fromAuto ? { edits: [], base_key: '', status: 'idle', error: null } : {}),
+      // SAM trabaja con el alto de siempre (el de RVM/BiRefNet no le aporta y
+      // cambiaría la caché de embeddings).
+      ...(fromAuto ? { edits: [], base_key: '', status: 'idle', error: null, mask_height: DEFAULT_MASK_HEIGHT } : {}),
     })
     if (fromAuto) resetCutout(clip.id)
     onBgBrush({ on: true, tool: 'smart', op: 'keep', size: 0.05 })
@@ -3092,6 +3171,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (!clip || !bgCapable(clip)) return
     const bg = clipBg(clip) || defaultBg()
     patchBgAuto(clip.id, { enabled: true, status: 'running', error: null })
+    setBgNotice((n) => (n?.clipId === clip.id ? null : n))
     createBgRemovalJob(project.id, { ...bgClipDescriptor(clip), auto: bg.auto })
       .then((job) => setBgJob({ ...job, clipId: clip.id }))
       .catch((e) => {
@@ -3190,14 +3270,24 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const changeBgAuto = (patch) => {
     const clip = selectedClip
     if (!clip) return
-    // Cambiar de modelo o la estabilización obliga a recalcular: el matte
-    // cacheado es de otra base_key.
-    const resets = (patch.provider !== undefined || patch.stabilize !== undefined)
+    // Cambiar de modelo, de detalle (alto del matte) o la estabilización obliga
+    // a recalcular: el matte cacheado es de otra base_key.
+    const resets = (patch.provider !== undefined || patch.stabilize !== undefined
+      || patch.mask_height !== undefined)
       ? { base_key: '', status: 'idle', error: null }
       : {}
-    patchBgAuto(clip.id, { ...patch, ...resets })
+    // Un motor automático nuevo trae su alto de matte recomendado (RVM refina a
+    // 720, BiRefNet rinde a 1080); después se puede cambiar en «Detalle».
+    const height = (patch.provider !== undefined && patch.mask_height === undefined
+      && !isInteractiveProvider(patch.provider))
+      ? { mask_height: providerMaskHeight(patch.provider) }
+      : {}
+    patchBgAuto(clip.id, { ...patch, ...height, ...resets })
     resetCutout(clip.id)
-    if (patch.provider !== undefined) stopBgAnalyze(clip.id)
+    if (patch.provider !== undefined) {
+      stopBgAnalyze(clip.id)
+      setBgNotice((n) => (n?.clipId === clip.id ? null : n))
+    }
   }
 
   // Un trazo = una entrada de `edits`; arrastrar solo alarga la última. Se
@@ -3472,6 +3562,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         mask_fps: r.mask_fps,
         mask_height: r.mask_height,
       })
+      setBgNotice(r.warning ? { clipId: bgJob.clipId, text: r.warning } : null)
       setBgJob(null)
     } else if (bgJob.status === 'error') {
       patchBgAuto(bgJob.clipId, { status: 'error', error: bgJob.error || 'Error' })
@@ -3710,7 +3801,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   }
 
   // --- Arrastrar en el canvas: compuesto, o recorte en modo encuadre ---
-  const onCanvasDown = createCanvasDownHandler({
+  const canvasCtx = {
     mainCanvasRef, framingModeRef, playingRef, stopPlayback, setFramingMode,
     selectedClip, mainTextBox, changeStyle, changeShape, mediaEls, playhead, upsertKeyframe, outAspect,
     changeReframe, clipsRef, tracksRef, playheadRef, alignGuidesRef, seek: scrub,
@@ -3721,8 +3812,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     trackPickRef, trackBoxRef, onTrackBox: runTrack, onTrackCancel: cancelTrackPick,
     onSelectClip: handleSelectClip,
     onClearSelection: clearCanvasSelection,
-    changeTransform, commitPose, outW, outH,
-  })
+    changeTransform, commitPose, deleteClip, outW, outH, chromaPickRef,
+  }
+  const onCanvasDown = createCanvasDownHandler(canvasCtx)
+  const onCanvasHover = createCanvasHoverHandler(canvasCtx)
 
   // --- Teclado ---
   useEffect(() => {
@@ -4175,7 +4268,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             className="ed-canvas-stage"
             ref={mainStageRef}
             onPointerDown={(e) => { if (!pickChromaAt(e)) onCanvasDown(e) }}
-            onPointerMove={(e) => { onCanvasPenMove(e); onCanvasBgMove(e) }}
+            onPointerMove={(e) => { onCanvasPenMove(e); onCanvasBgMove(e); onCanvasHover(e) }}
             onPointerLeave={() => { penHoverRef.current = null; onCanvasBgLeave() }}
             onDragOver={(e) => {
               const types = [...e.dataTransfer.types]
@@ -4200,11 +4293,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
                 dropAsset(p, selTrackId, at)
               } catch { /* noop */ }
             }}
-            style={{
-              cursor: (bgBrush.on || chromaPick || pen || trackPick) ? 'crosshair'
-                : ((framingMode || (canEditFrame && !overlayOn)) ? 'crosshair'
-                  : ((canEditFrame || isTextSel || isShapeSel) ? 'move' : 'default')),
-            }}
+            // Fuera de estos modos, el cursor lo pone onCanvasHover en el <canvas>.
+            style={{ cursor: (bgBrush.on || chromaPick || pen || trackPick || framingMode) ? 'crosshair' : undefined }}
           >
             <canvas ref={mainCanvasRef} width={540} height={960} className="ed-main-canvas" />
             {mainColTab === 'clip' && clipMeta.preparing && (
@@ -4325,20 +4415,25 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             onChangeFx: isAudioTrackSel ? (patch) => patchTrackAudio(selTrackObj.id, patch) : patchClipFx,
             textStyle: isTextSel ? effectiveTextStyle(selTrackObj?.style, selectedClip.style) : (isTextTrackSel ? selTrackObj.style : null),
             textMode: isTextSel ? 'clip' : (isTextTrackSel ? 'track' : null),
-            onChangeTextStyle: (patch) => {
-              if (isTextSel) changeStyle(selectedClip.id, patch)
+            onChangeTextStyle: (patch, opts) => {
+              if (isTextSel) changeStyle(selectedClip.id, patch, opts)
               else if (isTextTrackSel) changeTrackStyle(selTrackObj.id, patch)
             },
+            onStyleKf: isTextSel ? (keys) => toggleStyleKf(selectedClip.id, keys) : undefined,
             onApplyTextPreset: (p) => {
               if (isTextSel) applyPreset(selectedClip.id, p)
               else if (isTextTrackSel) applyTrackPreset(selTrackObj.id, p)
             },
+            onApplyTrackTextPreset: isTextSel ? (p) => applyTrackPreset(selectedClip.track_id, p) : undefined,
             playhead,
             onPose: (patch) => !isAudioTrackSel && selectedClip && commitPose(selectedClip.id, patch),
             selKfId,
             onInterpKf: interpAnimKf,
             fps,
             heightScale,
+            outW,
+            outH,
+            onSeek: scrub,
             audioMode: isAudioTrackSel ? 'track' : null,
             trackLabel: isAudioTrackSel ? selTrackObj.name : null,
             trackEmpty: isAudioTrackSel && !trackAudioClip,
@@ -4360,14 +4455,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               clip: isTextSel ? selectedClip : null,
               selectionCount: selClipIds.length,
               onChangeText: (v) => { if (isTextSel) changeText(selectedClip.id, v) },
-              onChangeDur: (d) => {
-                if (!isTextSel || !Number.isFinite(d) || d <= 0) return
-                const next = Math.max(0.15, d)
-                mutateClip(selectedClip.id, {
-                  out_point: +(selectedClip.in_point + next).toFixed(3),
-                  source_duration: +(selectedClip.in_point + next).toFixed(3),
-                })
-              },
               onApplyAsGlobalTemplate: isTextSel ? () => applyGlobalTemplate(selectedClip) : undefined,
               framing: !!(framingMode && selTrackObj && framingMode.trackId === selTrackObj.id),
               onStartFraming: isTextTrackSel ? () => startFraming(selTrackObj) : undefined,
@@ -4387,6 +4474,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             cutoutJob,
             providers: bgInfo.providers,
             device: bgInfo.device,
+            notice: bgNotice && selectedClip && bgNotice.clipId === selectedClip.id ? bgNotice.text : '',
             brush: bgBrush,
             picking: chromaPick,
             onPanelOpen: onBgPanel,
@@ -4484,6 +4572,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             setSelKfId(null)
           }}
           onMutateClip={paperMode ? paperMutateClip : mutateClip}
+          onMoveClip={paperMode ? paperMutateClip : moveClip}
           onMoveGroup={paperMode ? undefined : moveGroup}
           onMoveToNewTrack={paperMode ? undefined : moveClipToNewTrack}
           onMatchDuration={paperMode ? undefined : matchSelectedDurations}
@@ -4564,13 +4653,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           fps={fps}
           playhead={playhead}
           hideVolume
-          layer={layerInfo}
-          onMoveLayer={(action) => selectedClip && moveLayer(selectedClip.id, action)}
           onChangeFx={patchClipFx}
           onPose={(patch) => selectedClip && commitPose(selectedClip.id, patch)}
           onFade={applySelectedFade}
           onAddKf={toggleKeyframeAtPlayhead}
-          onSetAnimated={setClipAnimated}
           onCopyKf={copyKeyframe}
           onPasteKf={pasteKeyframe}
           onDuplicateKf={duplicateKeyframe}

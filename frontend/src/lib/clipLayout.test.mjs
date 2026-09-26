@@ -20,6 +20,9 @@ import {
   sourceCropPx,
   srcRectOn,
   videosAt,
+  toCapcutPos,
+  fromCapcutPos,
+  CLIP_POS_MAX,
 } from './clipLayout.js'
 
 const fillClip = {
@@ -272,3 +275,18 @@ assert.ok(Math.abs(wide.wf / wide.hf - 2.35 / (16 / 9)) < 1e-9)
 assert.ok(wide.cy + wide.hf / 2 <= 1 + 1e-12, 'no se sale por abajo')
 
 console.log('clipLayout overlay crop/transform ok')
+
+// --- Posición en unidades CapCut (centro 0,0; borde ±ancho/±alto; Y arriba) --
+assert.deepEqual(toCapcutPos(0.5, 0.5, 1280, 720), { X: 0, Y: 0 })
+assert.deepEqual(toCapcutPos(1, 0, 1280, 720), { X: 1280, Y: 720 })      // borde der. y superior
+assert.deepEqual(toCapcutPos(0, 1, 1280, 720), { X: -1280, Y: -720 })
+// El ejemplo del vídeo de CapCut (1920×1080): X = 3522 está fuera del cuadro y vale.
+const far = fromCapcutPos(3522, 582, 1920, 1080)
+assert.ok(far.x > 1)
+assert.deepEqual(toCapcutPos(far.x, far.y, 1920, 1080), { X: 3522, Y: 582 })
+// Ida y vuelta con negativos.
+const neg = fromCapcutPos(-2096, -493, 1080, 1920)
+assert.deepEqual(toCapcutPos(neg.x, neg.y, 1080, 1920), { X: -2096, Y: -493 })
+// Topado al rango de movimiento del modelo.
+assert.equal(fromCapcutPos(1e7, 0, 1280, 720).x, CLIP_POS_MAX)
+console.log('clipLayout capcut pos ok')

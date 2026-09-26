@@ -31,6 +31,17 @@
   box-sizing: border-box;
 }
 
+/* Scrollbars minimalistas en toda la app: cualquier panel con overflow las hereda.
+   No usar scrollbar-width/scrollbar-color en Chromium: anulan ::-webkit-scrollbar. */
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 20px; }
+*:hover::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.32); }
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.18) transparent; }
+}
+
 body {
   margin: 0;
   background: var(--bg);

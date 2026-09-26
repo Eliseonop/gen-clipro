@@ -46,6 +46,17 @@ for (const t of SUBTITLE_THEMES) {
   assert.ok(['none', 'fade', 'pop', 'slide_up'].includes(t.style.block_appear))
 }
 
+// Estilos de las capturas de CapCut: nombres únicos, cajas opacas sin contorno
+// (el contorno de la pista no se cuela) y todas las palabras visibles.
+assert.equal(new Set(SUBTITLE_THEMES.map((t) => t.id)).size, SUBTITLE_THEMES.length)
+for (const id of ['yellow-box', 'purple-box', 'white-box']) {
+  const t = themeById(id)
+  assert.equal(t.style.bg_opacity, 1)
+  assert.equal(t.style.border_width, 0)
+  assert.equal(t.style.inactive_opacity, 1)
+}
+assert.equal(applyThemeToStyle({ border_width: 9 }, themeById('purple-box')).border_width, 0)
+
 assert.deepEqual(wordFxList('none'), [])
 assert.deepEqual(wordFxList('glow'), ['glow'])
 assert.deepEqual(wordFxList(['glow', 'pop']), ['glow', 'pop'])

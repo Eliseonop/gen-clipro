@@ -766,6 +766,218 @@ class SamTrackingTest(CacheBase):
             self.assertEqual(z["img"].dtype, np.float16)
 
 
+class FakeTemporalProvider(bg_providers.BackgroundRemovalProvider):
+    """Motor TEMPORAL falso: el píxel (0,0) del matte vale 10 × (fotogramas que
+    lleva vistos su flujo), así el PNG dice si se calentó el estado y en qué
+    orden. El resto es sujeto (255) o, con ``subject=False``, fondo (0)."""
+
+    id = "u2net"
+    label = "temporal falso"
+    model_version = "fake-temporal-1"
+    temporal = True
+    people_only = True
+
+    def __init__(self, subject: bool = True):
+        self.subject = subject
+        self.streams = 0
+        self.calls = 0
+
+    def available(self):
+        return True
+
+    def ensure_ready(self, on_progress=None):
+        pass
+
+    def matte(self, frame):
+        return self.stream().matte(frame)
+
+    def stream(self):
+        prov = self
+        prov.streams += 1
+
+        class _S:
+            seen = 0
+
+            def matte(self, frame):
+                prov.calls += 1
+                self.seen += 1
+                h, w = frame.shape[:2]
+                m = np.full((h, w), 255 if prov.subject else 0, np.uint8)
+                m[0, 0] = min(250, 10 * self.seen)
+                return m
+
+        return _S()
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "requiere ffmpeg en el PATH")
+class TemporalBuildTest(CacheBase):
+    """RVM: cada tramo que falta se calcula EN ORDEN, calentando el estado."""
+
+    def setUp(self):
+        super().setUp()
+        self.tprov = FakeTemporalProvider()
+        bg_providers.PROVIDERS["u2net"] = self.tprov
+
+    def _val(self, meta, idx) -> int:
+        img = cv2.imread(str(bg_service.frame_path(bg_service.matte_dir(meta["base_key"]), idx)),
+                         cv2.IMREAD_GRAYSCALE)
+        return -1 if img is None else int(img[0, 0])
+
+    def test_calienta_el_estado_con_los_fotogramas_previos_sin_escribirlos(self):
+        src = self._video(4.0)
+        meta = bg_service.build_matte(src, self._auto(), 2.0, 2.9)   # índices 20..29
+        warm = bg_service.temporal_warmup_frames(10)
+        self.assertEqual(warm, 10)
+        self.assertEqual(meta["range"], [20, 29])
+        self.assertEqual(self.tprov.streams, 1, "un estado por tramo")
+        self.assertEqual(self.tprov.calls, 10 + warm)
+        # El primer fotograma escrito ya lleva `warm` fotogramas de historia.
+        self.assertEqual(self._val(meta, 20), 10 * (warm + 1))
+        self.assertEqual(self._val(meta, 29), 10 * (warm + 10))
+        for i in range(10, 20):      # los de calentamiento NO se escriben
+            self.assertEqual(self._val(meta, i), -1)
+
+    def test_el_calentamiento_no_pasa_del_inicio_de_la_fuente(self):
+        src = self._video(2.0)
+        meta = bg_service.build_matte(src, self._auto(), 0.3, 0.9)   # índices 3..9
+        self.assertEqual(self.tprov.calls, 3 + 7)
+        self.assertEqual(self._val(meta, 3), 40)
+
+    def test_ampliar_el_tramo_no_toca_lo_ya_calculado(self):
+        src = self._video(4.0)
+        bg_service.build_matte(src, self._auto(), 2.0, 2.9)
+        self.tprov.calls = 0
+        meta = bg_service.build_matte(src, self._auto(), 0.0, 2.9)   # falta 0..19
+        self.assertEqual(meta["range"], [0, 29])
+        self.assertEqual(self.tprov.calls, 20, "solo lo que faltaba, sin calentamiento en 0")
+        self.assertEqual(self._val(meta, 0), 10)
+        self.assertEqual(self._val(meta, 19), 200)
+        self.assertEqual(self._val(meta, 20), 110, "el tramo anterior no se reescribe")
+
+    def test_imagen_fija_un_solo_fotograma_sin_calentar(self):
+        img = self._image()
+        meta = bg_service.build_matte(img, self._auto(), 0.0, 0.0, still=True)
+        self.assertEqual(meta["range"], [0, 0])
+        self.assertEqual(self.tprov.calls, 1)
+
+    def test_el_meta_dice_si_encontro_una_persona(self):
+        src = self._video(2.0)
+        meta = bg_service.build_matte(src, self._auto(), 0.0, 0.5)
+        self.assertIs(meta["subject_found"], True)
+
+    def test_matte_vacio_marca_sin_persona(self):
+        self.tprov.subject = False
+        src = self._video(2.0)
+        meta = bg_service.build_matte(src, self._auto(), 0.0, 0.5)
+        self.assertIs(meta["subject_found"], False)
+
+    def test_una_persona_en_un_tramo_anterior_cuenta(self):
+        src = self._video(2.0)
+        bg_service.build_matte(src, self._auto(), 0.0, 0.5)
+        self.tprov.subject = False
+        meta = bg_service.build_matte(src, self._auto(), 0.0, 1.5)
+        self.assertIs(meta["subject_found"], True)
+
+    def test_un_motor_por_fotograma_no_se_calienta_ni_lleva_aviso(self):
+        bg_providers.PROVIDERS["u2net"] = self.prov
+        src = self._video(4.0)
+        meta = bg_service.build_matte(src, self._auto(), 2.0, 2.9)
+        self.assertEqual(self.prov.calls, 10)
+        self.assertNotIn("subject_found", meta)
+
+
+class RvmStreamTest(unittest.TestCase):
+    """El flujo de RVM encadena el estado recurrente r1..r4 entre fotogramas."""
+
+    class _Sess:
+        def __init__(self):
+            self.feeds = []
+
+        def run(self, outputs, feed):
+            self.feeds.append(feed)
+            n = len(self.feeds)
+            _, _, h, w = feed["src"].shape
+            pha = np.full((1, 1, h, w), 0.5, np.float32)
+            rec = [np.full((1, 2, 2, 2), n * 10 + k, np.float32) for k in range(4)]
+            return [pha, *rec]
+
+    def setUp(self):
+        self.prov = bg_providers.RvmMobileNetProvider()
+        self.sess = self._Sess()
+        self.prov._session = self.sess
+
+    def test_el_estado_de_salida_entra_en_el_siguiente_fotograma(self):
+        s = self.prov.stream()
+        frame = np.zeros((64, 96, 3), np.uint8)
+        m = s.matte(frame)
+        self.assertEqual(m.shape, (64, 96))
+        self.assertEqual(int(m[0, 0]), 128)
+        s.matte(frame)
+        first, second = self.sess.feeds
+        self.assertEqual(first["r1i"].shape, (1, 1, 1, 1))      # estado inicial a cero
+        self.assertEqual(float(first["r1i"].sum()), 0.0)
+        self.assertEqual(float(second["r1i"][0, 0, 0, 0]), 10.0)   # r1o del fotograma 1
+        self.assertEqual(float(second["r4i"][0, 0, 0, 0]), 13.0)
+        self.assertEqual(second["src"].dtype, np.float32)
+        self.assertLessEqual(float(second["src"].max()), 1.0)
+
+    def test_cada_flujo_tiene_su_propio_estado(self):
+        frame = np.zeros((32, 32, 3), np.uint8)
+        a = self.prov.stream()
+        a.matte(frame)
+        self.prov.stream().matte(frame)
+        self.assertEqual(float(self.sess.feeds[1]["r1i"].sum()), 0.0)
+
+    def test_un_cambio_de_tamaño_reinicia_el_estado(self):
+        s = self.prov.stream()
+        s.matte(np.zeros((32, 32, 3), np.uint8))
+        s.matte(np.zeros((48, 32, 3), np.uint8))
+        self.assertEqual(self.sess.feeds[1]["r1i"].shape, (1, 1, 1, 1))
+
+    def test_downsample_ratio_deja_la_red_base_en_512(self):
+        r = bg_providers.RvmProvider.downsample_ratio
+        self.assertAlmostEqual(r(1280, 720), 0.4)
+        self.assertAlmostEqual(r(1920, 1080), 512 / 1920)
+        self.assertEqual(r(288, 512), 1.0)
+        self.assertEqual(r(200, 100), 1.0, "nunca amplía")
+
+    def test_un_modelo_que_no_es_rvm_se_rechaza(self):
+        class _IO:
+            def __init__(self, name):
+                self.name = name
+
+        class _Bad:
+            def get_inputs(self):
+                return [_IO("input")]
+
+            def get_outputs(self):
+                return [_IO("output")]
+
+        with self.assertRaises(bg_providers.ProviderUnavailable):
+            self.prov._check_io(_Bad())
+
+
+@unittest.skipUnless((bg_providers.MODEL_DIR / "rvm_mobilenetv3_fp32.onnx").exists()
+                     and bg_providers.gpu.onnx_providers("cpu"),
+                     "requiere el modelo RVM descargado en backend/models")
+class RvmRealModelTest(unittest.TestCase):
+    """Humo con el modelo REAL: tamaños arbitrarios (impares) y estado que evoluciona."""
+
+    def test_infiere_a_cualquier_tamaño_con_estado(self):
+        prov = bg_providers.RvmMobileNetProvider()
+        with patch.object(bg_providers, "_device_setting", return_value="cpu"):
+            prov.ensure_ready()
+        rng = np.random.default_rng(1)
+        s = prov.stream()
+        for shape in ((65, 97, 3), (65, 97, 3)):
+            m = s.matte(rng.integers(0, 255, shape, dtype=np.uint8))
+            self.assertEqual(m.shape, shape[:2])
+            self.assertEqual(m.dtype, np.uint8)
+        self.assertEqual(len(s._rec), 4)
+        self.assertGreater(s._rec[0].shape[1], 1, "el estado ya no es el inicial")
+        prov.close()
+
+
 class ProviderRegistryTest(unittest.TestCase):
     def test_el_registro_trae_la_familia_u2net_y_sam(self):
         ids = {p["id"] for p in bg_providers.catalog()}
@@ -774,6 +986,29 @@ class ProviderRegistryTest(unittest.TestCase):
         for info in bg_providers.catalog():
             self.assertIn("available", info)
             self.assertIn("model_version", info)
+
+    def test_el_registro_trae_rvm_y_birefnet_primero(self):
+        ids = [p["id"] for p in bg_providers.catalog()]
+        self.assertEqual(ids[:3], ["rvm_mobilenetv3", "rvm_resnet50", "birefnet_lite"])
+        self.assertEqual(set(clip_bg.AUTO_PROVIDER_IDS) | set(clip_bg.SAM_PROVIDER_IDS), set(ids))
+
+    def test_rvm_es_temporal_y_solo_personas(self):
+        for pid in ("rvm_mobilenetv3", "rvm_resnet50"):
+            p = bg_providers.get(pid)
+            self.assertTrue(p.temporal and p.people_only)
+            self.assertIsInstance(p.stream(), bg_providers.RvmStream)
+        for pid in ("u2net", "birefnet_lite"):
+            p = bg_providers.get(pid)
+            self.assertFalse(p.temporal or p.people_only)
+
+    def test_birefnet_aplica_sigmoide_a_los_logits(self):
+        prov = bg_providers.BiRefNetLiteProvider()
+        raw = np.array([[[[-10.0, 0.0, 1.0], [-10.0, 0.0, 1.0]]]], np.float32)
+        out = prov._post(raw, 3, 2)
+        # σ → [0,00005; 0,5; 0,73] → min-max → [0; 0,68; 1]. Sin σ serían 0,91.
+        self.assertEqual([int(v) for v in out[0]], [0, 174, 255])
+        self.assertTrue(prov.low_memory, "BiRefNet sin arena: si no, «bad allocation»")
+        self.assertEqual(prov.input_size, (1024, 1024))
 
     def test_sam_es_interactivo(self):
         self.assertTrue(getattr(bg_providers.get("sam21_base_plus"), "interactive", False))
@@ -790,7 +1025,9 @@ class ProviderRegistryTest(unittest.TestCase):
 
     def test_licencia_y_url_del_modelo_declaradas(self):
         """El modelo se descarga de un sitio fijo: sin URL no hay proveedor."""
-        for prov in (bg_providers.U2NetProvider(), bg_providers.U2NetLiteProvider()):
+        for prov in (bg_providers.U2NetProvider(), bg_providers.U2NetLiteProvider(),
+                     bg_providers.RvmMobileNetProvider(), bg_providers.RvmResNet50Provider(),
+                     bg_providers.BiRefNetLiteProvider()):
             self.assertTrue(prov.url.startswith("https://"))
             self.assertTrue(prov.filename.endswith(".onnx"))
 

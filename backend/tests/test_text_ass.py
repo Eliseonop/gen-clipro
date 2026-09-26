@@ -1,7 +1,9 @@
 import unittest
 
 from app.schemas import TimelineClip
-from app.text_ass import active_word_index, ass_bgr, ass_time, build_ass, caption_dialogues, word_opacity
+from app.text_ass import (
+    active_word_index, ass_bgr, ass_time, build_ass, caption_dialogues, shadow_dialogues, word_opacity,
+)
 
 
 class TextAssTest(unittest.TestCase):
@@ -219,8 +221,12 @@ class TextAssTest(unittest.TestCase):
             text="hola mundo", text_role="caption",
             style={"word_fx": "highlight", "glow": True, "color": "#ffffff", "highlight_color": "#ffe566"},
         )
+        # El Brillo del estilo es un halo en su propio evento (debajo), para todas
+        # las palabras; el texto no se desenfoca.
         lines = caption_dialogues(clip, 720, 1280)
-        self.assertTrue(any("\\blur3" in ln for ln in lines))
+        self.assertFalse(any("\\blur3" in ln for ln in lines))
+        halo = shadow_dialogues(clip, 720, 1280)
+        self.assertTrue(halo and all("\\blur" in ln for ln in halo))
 
     def test_karaoke_preserva_saltos_de_linea(self):
         clip = TimelineClip(

@@ -6,6 +6,36 @@ Toda funcionalidad nueva se documenta aquí y en su `.md` propio.
 
 ---
 
+## 2026-09-25 — Panel de keyframes compacto y scroll fino en toda la app
+
+- **Keyframes** (panel junto a la timeline): cada keyframe es una fila de una línea
+  (color · número · tiempo) con iconos más pequeños. Se quitaron «Agregar keyframe» y
+  «Desactivar animación»: los keyframes se crean y quitan con el rombo de cada
+  propiedad (Transformación, Color, Trazo…). «Pegar keyframe» solo aparece si hay uno copiado.
+- **Sin pestaña Capas**: el orden se lee en la timeline (la pista de arriba va delante).
+  La pestaña **Clip** (velocidad) solo aparece en vídeo y audio. Traer al frente /
+  enviar atrás sigue en el menú contextual del clip.
+- **Scrollbars**: el estilo fino y redondeado es global (`App.css`); ya no hace falta
+  añadir cada panel nuevo a una lista.
+
+## 2026-09-25 — Motores nuevos para Eliminar fondo: RVM (vídeo) y BiRefNet (imágenes)
+
+Detalle: [ELIMINAR_FONDO_MOTORES.md](ELIMINAR_FONDO_MOTORES.md).
+
+- **RVM (Robust Video Matting)** para personas en vídeo: guarda memoria entre
+  fotogramas, así que el borde **no parpadea ni baila**. En CPU es incluso más rápido
+  que U²-Net (~0,08 s/fotograma frente a 0,26) y sin los restos de fondo que dejaba.
+  Dos variantes: rápida (15 MB) y con más detalle (103 MB). **Solo recorta personas.**
+- **BiRefNet** para cualquier sujeto (objetos, animales, productos) con el mejor
+  borde; pesado sin GPU (~8 s/fotograma), pensado para imágenes.
+- El editor **propone el motor según el material** al activar la eliminación
+  automática: vídeo → RVM, imagen → BiRefNet, GIF → U²-Net.
+- Nuevo **Detalle del borde** (512/720/1080 px): RVM y BiRefNet refinan la máscara a
+  esa resolución (pelo y contornos más finos).
+- Aviso en el panel si RVM no encuentra ninguna persona en el clip.
+- La receta *sujeto que se adelanta* usa RVM; Paper Animator usa BiRefNet por defecto.
+- Los clips que ya tenían el fondo quitado con U²-Net no cambian.
+
 ## 2026-09-24 — Orden de capas: el texto puede ir detrás de un vídeo (como CapCut)
 
 Detalle: [CAPAS_TIMELINE.md](CAPAS_TIMELINE.md).

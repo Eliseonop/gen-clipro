@@ -11,7 +11,7 @@ import copy
 import uuid
 from typing import Any, Optional
 
-from .clip_keyframes import AUDIO_FX_KEYS, KF_PROP_KEYS, interp_items, static_props
+from .clip_keyframes import AUDIO_FX_KEYS, KF_PROP_KEYS, TEXT_STYLE_KF_KEYS, interp_items, static_props
 from .clip_mask import MASK_KF_KEYS
 
 _VISUAL = ("video", "image", "shape", "text")
@@ -42,6 +42,7 @@ _KF_FAMILIES = {
     "crop": ("cx", "cy", "zoom"),
     "mask": tuple(MASK_KF_KEYS),
     "audio": ("volume", *AUDIO_FX_KEYS),
+    "style": TEXT_STYLE_KF_KEYS,        # Color, Trazo, Fondo y Sombra del texto
 }
 _KF_TOUCH = {*_KF_FAMILIES, "transform", "blend"}
 _CROP_KEYS = set(_KF_FAMILIES["crop"])
@@ -278,6 +279,27 @@ def _resample(s: list[dict], t: list[dict], base: dict) -> list[dict]:
     return out
 
 
+def _style_items_of(clip: dict) -> list[dict]:
+    """Keyframes del estilo del texto (van por propiedad): se llevan tal cual."""
+    out = []
+    for k in _items_of(clip):
+        props = {key: k["props"][key] for key in TEXT_STYLE_KF_KEYS if k["props"].get(key) not in (None, "")}
+        if props:
+            out.append({**k, "props": props})
+    return out
+
+
+def _with_style_items(items: list[dict], style: list[dict]) -> list[dict]:
+    out = [{**k, "props": dict(k["props"])} for k in items]
+    for st in style:
+        hit = next((k for k in out if abs(k["t"] - st["t"]) <= _T_EPS), None)
+        if hit:
+            hit["props"].update(st["props"])
+        else:
+            out.append(st)
+    return sorted(out, key=lambda k: k["t"])
+
+
 def merge_keyframes(target: dict, source: dict, keys) -> Optional[dict]:
     """Keyframes del destino tras pegar las propiedades ``keys`` del origen: las del
     origen sustituyen a las del destino (si el origen no las anima, el destino deja
@@ -285,8 +307,10 @@ def merge_keyframes(target: dict, source: dict, keys) -> Optional[dict]:
     pasted = set(keys)
     s = _restrict_items(_items_of(source), [k for k in KF_PROP_KEYS if k in pasted], static_props(source))
     t = _restrict_items(_items_of(target), [k for k in KF_PROP_KEYS if k not in pasted], static_props(target))
+    # El estilo animado del texto viene del origen si se pega el Estilo; si no, el del destino.
+    style = _style_items_of(source if any(k in pasted for k in TEXT_STYLE_KF_KEYS) else target)
     tkf = target.get("keyframes")
-    if not s and not (isinstance(tkf, dict) and tkf.get("enabled")):
+    if not s and not style and not (isinstance(tkf, dict) and tkf.get("enabled")):
         return tkf
     if not s:
         items = t
@@ -301,6 +325,7 @@ def merge_keyframes(target: dict, source: dict, keys) -> Optional[dict]:
             items = [{**k, "props": {**k["props"], **cs}} for k in t]
         else:
             items = _resample(s, t, static_props(target))
+    items = _with_style_items(items, style)
     if not items:
         return None
     return {"enabled": True, "items": [{**k, "id": _kf_id()} for k in items]}
