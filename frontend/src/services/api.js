@@ -73,6 +73,22 @@ export const setCollectionsRoot = (path) => post('/api/collections/root', { path
 export const searchCollections = ({ q = '', kind = '', collection = '' } = {}) =>
   get(`/api/collections/search?q=${encodeURIComponent(q)}&kind=${encodeURIComponent(kind)}&collection=${encodeURIComponent(collection)}`)
 export const updateCollection = (cid, data) => patch(`/api/collections/${encodeURIComponent(cid)}`, data)
+export const createCollection = (name) => post('/api/collections', { name })
+export const uploadCollectionFiles = (cid, files) => {
+  const body = new FormData()
+  for (const f of files) body.append('files', f)
+  return req(`/api/collections/${encodeURIComponent(cid)}/files`, { method: 'POST', body })
+}
+// Sticks (personajes): crear, subir a una expresión y recategorizar (sin mover el archivo).
+export const createStick = ({ name, emoji = '', chroma_color = '#00FF00' }) => post('/api/sticks', { name, emoji, chroma_color })
+export const uploadStickFiles = (cid, files, expression) => {
+  const body = new FormData()
+  for (const f of files) body.append('files', f)
+  body.append('expression', expression || 'otros')
+  return req(`/api/sticks/${encodeURIComponent(cid)}/items`, { method: 'POST', body })
+}
+export const setStickItemExpression = (cid, file, expression) =>
+  patch(`/api/sticks/${encodeURIComponent(cid)}/items`, { file, expression })
 
 // --- Sticks (personajes de la biblioteca con stick.json, para "Agregar Stick") ---
 export const listSticks = () => get('/api/sticks')

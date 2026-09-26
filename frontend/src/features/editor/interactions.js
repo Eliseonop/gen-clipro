@@ -4,9 +4,9 @@ import {
   canvasPointer, CLIP_POS_MAX, CLIP_POS_MIN, cropWindow, frameRectOf, TEXT_SCALE_MAX,
   hitTransformHandle, isOverlay, mediaSize,
 } from '../../lib/clipLayout'
-import { boxToDest, canvasToSourceNorm, framingRect, hitFrontmost, pointInDest } from './render/canvas'
+import { boxToDest, canvasToSourceNorm, hitFrontmost, pointInDest } from './render/canvas'
 import { ROTATE_CURSOR, frameHandles, frameOfDest, handleAt, handleCursor } from '../../lib/selectionFrame'
-import { canvasAlignTargets, halfOnFrame, snapAlign, snapMove, textAlignTargets } from '../../lib/alignGuides'
+import { canvasAlignTargets, halfOnFrame, snapMove, textAlignTargets } from '../../lib/alignGuides'
 import { clipEnd, isVisualClip, timelineToSource } from './editorModel'
 import { clipMasksAt, clipPose, posedTransform } from '../../lib/clipAnim'
 import { clipBg, isInteractiveProvider } from '../../lib/clipBg'
@@ -289,63 +289,6 @@ function handleMaskPointer(e, canvas, ctx) {
   return true
 }
 
-// Encuadre de texto (framingMode): mover/redimensionar el recuadro amarillo.
-// El recorte de la fuente ya no se edita en el lienzo, sino en EdCropModal.
-export function createFramingDownHandler(ctx) {
-  const {
-    mainCanvasRef, framingModeRef, playingRef, stopPlayback, setFramingMode,
-    outAspect, clipsRef, tracksRef, playheadRef, alignGuidesRef, viewZoomRef,
-  } = ctx
-
-  return function onFramingDown(e) {
-    const canvas = mainCanvasRef.current
-    if (!canvas) return
-    const ptr0 = canvasPointer(e, canvas)
-
-    const fm = framingModeRef.current
-    if (!fm) return
-    if (playingRef.current) stopPlayback()
-    // El encuadre de texto se dibuja dentro del recuadro Main (workspace).
-    const frame = frameRectOf(canvas.width, canvas.height, viewZoomRef?.current ?? 1, outAspect)
-    const dispW = frame.w * ptr0.scale, dispH = frame.h * ptr0.scale
-    const px = ptr0.x, py = ptr0.y
-    const local = framingRect(frame.w, frame.h, fm)
-    const bx = local.bx + frame.x, by = local.by + frame.y, boxW = local.boxW, boxH = local.boxH
-    const near = (hx, hy) => Math.abs(px - hx) < 14 && Math.abs(py - hy) < 14
-    let mode = 'move'
-    if (near(bx + boxW, by + boxH)) mode = 'corner'
-    else if (near(bx, by + boxH / 2)) mode = 'width-l'
-    else if (near(bx + boxW, by + boxH / 2)) mode = 'width-r'
-    else if (near(bx + boxW / 2, by + boxH)) mode = 'height'
-    const s0 = { x: fm.x ?? 0.5, y: fm.y ?? 0.5, w: fm.w ?? 0.8, h: fm.h ?? 0.13, cx: e.clientX, cy: e.clientY }
-    const move = (ev) => {
-      const dxN = (ev.clientX - s0.cx) / dispW, dyN = (ev.clientY - s0.cy) / dispH
-      setFramingMode((prev) => {
-        if (!prev) return prev
-        const n = { ...prev }
-        if (mode === 'move') {
-          const rawX = clamp(s0.x + dxN, 0, 1)
-          const rawY = clamp(s0.y + dyN, 0, 1)
-          const snapped = snapAlign(rawX, rawY, textAlignTargets(clipsRef?.current, tracksRef?.current, playheadRef?.current ?? 0, null))
-          if (alignGuidesRef) alignGuidesRef.current = snapped.guides
-          n.x = snapped.x
-          n.y = snapped.y
-        }
-        else if (mode === 'width-r') n.w = clamp(s0.w + dxN * 2, 0.05, 1)
-        else if (mode === 'width-l') n.w = clamp(s0.w - dxN * 2, 0.05, 1)
-        else if (mode === 'height') n.h = clamp(s0.h + dyN * 2, 0.03, 0.95)
-        else if (mode === 'corner') { n.w = clamp(s0.w + dxN * 2, 0.05, 1); n.h = clamp(s0.h + dyN * 2, 0.03, 0.95) }
-        return n
-      })
-    }
-    const up = () => {
-      if (alignGuidesRef) alignGuidesRef.current = null
-      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up)
-    }
-    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
-  }
-}
-
 function startOverlayTransform(e, canvas, clip, dest, mode, { changeTransform, playhead, alignGuidesRef }, frame) {
   const fr = frame || { x: 0, y: 0, w: canvas.width, h: canvas.height }
   const localT = Math.max(0, playhead - clip.start)
@@ -549,13 +492,13 @@ export function canvasCursorAt(e, ctx) {
 /**
  * Pasar el ratón por el lienzo: pone el cursor en el <canvas>. Mientras se
  * arrastra se queda el del principio; con la pluma, el pincel, el cuentagotas, el
- * seguimiento o el encuadre de texto manda la cruz del escenario.
+ * o el seguimiento manda la cruz del escenario.
  */
 export function createCanvasHoverHandler(ctx) {
   return function onCanvasHover(e) {
     const canvas = ctx.mainCanvasRef.current
     if (!canvas || e.buttons) return
-    const crosshair = ctx.framingModeRef?.current || ctx.penRef?.current || ctx.trackPickRef?.current
+    const crosshair = ctx.penRef?.current || ctx.trackPickRef?.current
       || ctx.bgBrushRef?.current?.on || ctx.chromaPickRef?.current
     const cursor = crosshair ? '' : canvasCursorAt(e, ctx)
     if (canvas.style.cursor !== cursor) canvas.style.cursor = cursor
@@ -564,23 +507,18 @@ export function createCanvasHoverHandler(ctx) {
 
 export function createCanvasDownHandler(ctx) {
   const {
-    mainCanvasRef, framingModeRef, playingRef, stopPlayback,
+    mainCanvasRef, playingRef, stopPlayback,
     selectedClip, playhead, mediaEls,
     changeTransform, clipsRef,
     hitListRef, onSelectClip, onClearSelection,
   } = ctx
-  const onFramingDown = createFramingDownHandler(ctx)
 
   return function onCanvasDown(e) {
     if (e.button != null && e.button !== 0) return
     const canvas = mainCanvasRef.current
     if (!canvas) return
 
-    // Prioridad del puntero: encuadre de texto > máscara > compuesto.
-    if (framingModeRef.current) {
-      onFramingDown(e)
-      return
-    }
+    // Prioridad del puntero: herramientas activas > máscara > compuesto.
     // Seguimiento (#15): marcando el objeto, cada arrastre es su recuadro.
     if (handleTrackBoxPointer(e, canvas, ctx)) return
     // La pluma (#14) manda mientras está activa: cada clic es un ancla.

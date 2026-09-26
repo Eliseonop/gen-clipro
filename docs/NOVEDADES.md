@@ -6,6 +6,59 @@ Toda funcionalidad nueva se documenta aquí y en su `.md` propio.
 
 ---
 
+## 2026-09-26 — Pestañas de Material en horizontal, abajo
+
+Detalle: [EDITOR.md](EDITOR.md) (columna Material).
+
+- La barra de iconos de **Material** (Video, Imagen, Audio… Chat IA) pasa de columna
+  vertical a la izquierda a **fila horizontal al pie del panel**: el contenido gana ancho.
+- La **rueda del ratón** encima de la barra la desplaza en horizontal; un degradado en el
+  borde avisa de que quedan iconos ocultos y la pestaña activa se mantiene a la vista.
+  **Shift+rueda** sigue cambiando de pestaña. El nombre de cada icono aparece encima.
+
+## 2026-09-26 — Biblioteca por carpetas y sticks que se crean y rellenan arrastrando
+
+Detalle: [BIBLIOTECA_STICKS.md](BIBLIOTECA_STICKS.md).
+
+- La **Biblioteca** ya no muestra todo mezclado: la raíz enseña **carpetas**; clic para
+  entrar y **arrastrar vídeos/imágenes/audio** desde el explorador (o *Subir*). La
+  búsqueda sigue recorriendo toda la biblioteca (o solo la carpeta abierta).
+- **Nuevo stick**: crea un personaje (nombre, emoji, color de croma) con su carpeta y una
+  subcarpeta por expresión (feliz, triste…).
+- Dentro de un stick, **cada expresión es una zona donde soltar**: lo que sueltas en
+  «Triste» queda categorizado. Un selector por tarjeta lo cambia de expresión sin
+  mover el archivo. Copiar a la subcarpeta desde el explorador también categoriza.
+- Los sticks arrastrados desde la Biblioteca (o con **+**) entran a la timeline con el
+  **croma ya activado**, igual que desde *Agregar Stick*.
+
+## 2026-09-26 — Instalador para otra PC (verificación de integridad + descargas)
+
+Detalle: [setup/LEEME.md](../setup/LEEME.md).
+
+- **`instalar.bat`** (raíz): en una PC nueva busca o instala Python y abre una ventana
+  que comprueba requisitos (Python, Node, FFmpeg, Git; instalables con winget), verifica
+  cada componente con SHA-256 y descarga/repara lo marcado.
+- **Modelos IA** desde sus URLs oficiales; **recursos** (`assets/`) y, opcionalmente,
+  **proyectos** desde un zip en Google Drive. Nunca viajan las API keys.
+- **`setup/empaquetar.bat`** (PC de origen): genera el zip para Drive, `manifest.json`
+  con los hashes y `requirements.lock.txt` con las versiones exactas del `.venv`.
+- `backend/requirements.txt` ahora incluye `playwright` (Motion Studio lo necesitaba).
+
+## 2026-09-26 — Pista de texto (general) con la misma Transformación que un texto
+
+Detalle: [EDITOR.md](EDITOR.md) (sección Texto).
+
+- **Adiós al recuadro amarillo «Encuadrar»** de la pista de texto: cambiaba el tamaño de
+  fuente para encajar la caja. Ahora el panel general de la pista tiene la misma
+  **Transformación** que un texto suelto (Escala, Posición en unidades CapCut, Rotación,
+  Texto 3D) y el **Ancho de caja**; todo se aplica al momento a los textos de la pista.
+- **Se guarda todo, no solo el encuadre**: un texto nuevo en la pista hereda el estilo
+  general completo (fuente, tamaño de fuente, colores, trazo, fondo, escala…), no solo
+  posición/ancho/tamaño como antes.
+- **Aplicar a la pista** (Texto → Mis estilos, en un texto suelto): su estilo completo
+  pasa a ser el general de la pista. **Aplicar a todos** además guarda ese estilo en
+  cada pista de texto, para que los nuevos también lo usen.
+
 ## 2026-09-25 — Panel de keyframes compacto y scroll fino en toda la app
 
 - **Keyframes** (panel junto a la timeline): cada keyframe es una fila de una línea

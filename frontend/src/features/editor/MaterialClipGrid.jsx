@@ -86,6 +86,8 @@ export function dragPayload(assetKind, item) {
     // Segmento por referencia: el clip de la timeline recorta el vídeo original.
     ...(segmentRange(item) ? { in_point: item.in_point, out_point: item.out_point } : {}),
     ...(hasFaceTrack(item) ? { face_track: true } : {}),
+    // Stick de la Biblioteca: el clip nace con el croma de su personaje.
+    ...(item.chromaColor ? { chroma_color: item.chromaColor } : {}),
   })
 }
 

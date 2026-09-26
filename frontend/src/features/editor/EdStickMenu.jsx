@@ -80,7 +80,7 @@ export default function EdStickMenu({ x, y, onPick, onClose }) {
         const list = r.sticks || []
         setSticks(list)
         if (list[0]) setStickId(list[0].id)
-        else setError(r.available ? 'No hay sticks. Añade un stick.json a una carpeta de la biblioteca.' : 'No hay carpeta de biblioteca configurada.')
+        else setError(r.available ? 'No hay sticks. Crea uno en Biblioteca → «Nuevo stick».' : 'No hay carpeta de biblioteca configurada.')
       })
       .catch((e) => { if (alive) setError(e?.message || 'No se pudieron cargar los sticks.') })
     return () => { alive = false }

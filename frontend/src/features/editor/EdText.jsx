@@ -422,6 +422,7 @@ export function SubtitlesPanel({ mode = 'segment', clip, style, onChangeStyle, o
 /** Estilos guardados (Favoritos) y "Aplicar a todos". */
 export function TextFavorites({
   mode = 'segment', style, textFavorites, onSaveFavorite, onApplyFavorite, onDeleteFavorite, onApplyAsGlobalTemplate,
+  onApplyToTrack,
 }) {
   const saved = textFavorites || []
   const isTrack = mode === 'track'
@@ -432,6 +433,12 @@ export function TextFavorites({
           onClick={() => onSaveFavorite?.(style || {})}>
           <Icon name="star" size={15} /> Guardar como predefinido
         </button>
+        {!isTrack && onApplyToTrack && (
+          <button type="button" className="ghost small" title="Pone todo el estilo de este texto (fuente, tamaño, colores, posición, escala…) como general de su pista: se aplica a todos sus textos y a los nuevos"
+            onClick={onApplyToTrack}>
+            <Icon name="view_stream" size={15} /> Aplicar a la pista
+          </button>
+        )}
         {!isTrack && onApplyAsGlobalTemplate && (
           <button type="button" className="ghost small" title="Aplica estilo y posición de este texto a todos los textos del Timeline"
             onClick={onApplyAsGlobalTemplate}>
@@ -466,7 +473,6 @@ export function TextFavorites({
 /** Contenido y Básico de CapCut, hasta Estilo preestablecido. */
 export default function EdText({
   mode = 'segment', clip, style, onChangeText, onChangeStyle,
-  framing, onStartFraming, onSaveFraming, onCancelFraming,
   selectionCount = 1, kf,
 }) {
   const st = style || {}
@@ -480,28 +486,9 @@ export default function EdText({
 
   return (
     <div className="ed-text-basic">
-      {isTrack && <p className="ed-insp-meta">Se aplica a todos los textos de la pista y a los nuevos.</p>}
+      {isTrack && <p className="ed-insp-meta">General: todo lo que cambies aquí (fuente, tamaño, estilo, posición…) se aplica a todos los textos de la pista y a los nuevos.</p>}
       {multi && (
         <p className="ed-insp-meta">{selectionCount} textos seleccionados. Estilo y posición se aplican a todos; el contenido, solo al último clic.</p>
-      )}
-      {isTrack && onStartFraming && (
-        <div className="ed-text-actions">
-          {!framing ? (
-            <button className="primary alt small" onClick={onStartFraming} title="Definir posición y tamaño de los textos con un recuadro en el Main">
-              <Icon name="crop_free" size={15} /> Encuadrar
-            </button>
-          ) : (
-            <>
-              <button className="primary small" onClick={onSaveFraming} title="Aplicar el encuadre a todos los textos de la pista">
-                <Icon name="check" size={15} /> Guardar
-              </button>
-              <button className="ghost small" onClick={onCancelFraming}>Cancelar</button>
-            </>
-          )}
-        </div>
-      )}
-      {framing && isTrack && (
-        <p className="ed-insp-meta">Mueve y ajusta el recuadro amarillo en el Main. Al guardar define posición, ancho y tamaño de los textos de la pista.</p>
       )}
       {!isTrack && (
         <textarea className="ed-text-content" rows={4} value={clip?.text || ''}
@@ -556,12 +543,10 @@ export default function EdText({
           ))}
         </div>
       </Row>
-      {!isTrack && (
-        <InspSlider label="Ancho de caja" hint="Ancho máximo de línea antes de saltar a la siguiente."
-          value={Math.round(numOr(st.w, 0.8) * 100)} min={15} max={100} step={1}
-          format={pct} suffix="%" parse={parseNum} stepper
-          onChange={(v) => set({ w: Math.max(0.15, Math.min(1, v / 100)) })} defaultValue={80} />
-      )}
+      <InspSlider label="Ancho de caja" hint="Ancho máximo de línea antes de saltar a la siguiente."
+        value={Math.round(numOr(st.w, 0.8) * 100)} min={15} max={100} step={1}
+        format={pct} suffix="%" parse={parseNum} stepper
+        onChange={(v) => set({ w: Math.max(0.15, Math.min(1, v / 100)) })} defaultValue={80} />
       <LookGrid st={st} set={set} />
     </div>
   )

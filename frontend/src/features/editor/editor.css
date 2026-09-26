@@ -635,7 +635,7 @@
 .ed-material {
   width: var(--ed-mat-w); flex: 0 0 var(--ed-mat-w); min-width: 0; background: #10131c;
   border: 1px solid var(--line); border-radius: 6px;
-  padding: 8px 8px 8px 6px; display: flex; flex-direction: row; gap: 8px; min-height: 0;
+  padding: 8px; display: flex; flex-direction: column; gap: 6px; min-height: 0;
   overflow: hidden; position: relative;
 }
 .ed-material.file-drop {
@@ -651,12 +651,30 @@
   border-radius: 6px; pointer-events: none;
 }
 .ed-drop-hint.bad { color: #fca5a5; }
+/* Pestañas de Material: barra horizontal al pie del panel. Sin scrollbar
+   visible: se desplaza con la rueda (EdMaterial) y un degradado avisa de que
+   hay más iconos por ese lado. */
 .ed-mat-nav {
-  width: 34px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; min-height: 0;
+  flex-shrink: 0; display: flex; min-width: 0;
+  border-top: 1px solid var(--line); padding-top: 6px;
 }
 .ed-mat-nav-scroll {
-  flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
-  display: flex; flex-direction: column; gap: 2px;
+  flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden;
+  display: flex; flex-direction: row; align-items: center; gap: 2px;
+  scrollbar-width: none;
+}
+.ed-mat-nav-scroll::-webkit-scrollbar { display: none; }
+.ed-mat-nav.fade-r .ed-mat-nav-scroll {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+.ed-mat-nav.fade-l .ed-mat-nav-scroll {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 28px);
+  mask-image: linear-gradient(to right, transparent, #000 28px);
+}
+.ed-mat-nav.fade-l.fade-r .ed-mat-nav-scroll {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
 }
 .ed-mat-nav-btn {
   width: 34px; height: 34px; flex-shrink: 0; padding: 0;
@@ -668,10 +686,10 @@
 .ed-mat-nav-btn.on { background: var(--accent-gradient); color: #fff; }
 .ed-mat-nav-btn.working .material-icons { animation: ed-spin 1s linear infinite; }
 .ed-mat-nav-sep {
-  height: 1px; margin: 4px 6px; background: var(--line); flex-shrink: 0;
+  width: 1px; height: 20px; margin: 0 4px; background: var(--line); flex-shrink: 0;
 }
 .ed-fast-tip {
-  position: fixed; transform: translateY(-50%);
+  position: fixed; transform: translate(-50%, -100%);
   z-index: 200; pointer-events: none;
   background: #16161e; border: 1px solid var(--line-bright);
   color: #fff; font-size: 11.5px; font-weight: 650; letter-spacing: 0.01em;
@@ -866,6 +884,85 @@
 .ed-lib-fav.on { color: #f5c518; }
 .ed-lib-toggle { display: flex; align-items: center; color: var(--muted); cursor: pointer; padding: 2px; }
 .ed-lib-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+
+/* Navegación por carpetas: raíz = tarjetas de carpeta; dentro, migas + contenido. */
+.ed-lib-scroll { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
+.ed-lib-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.ed-lib-folder-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px;
+  align-content: start; padding: 2px 4px 8px 0;
+}
+.ed-lib-fcard {
+  display: flex; flex-direction: column; gap: 3px; padding: 0; background: none; border: none;
+  cursor: pointer; color: var(--text); text-align: left; min-width: 0;
+}
+.ed-lib-fcard-cover {
+  position: relative; aspect-ratio: 4 / 3; border-radius: var(--radius-sm); overflow: hidden;
+  background: var(--card-2); border: 1px solid var(--line); color: var(--muted);
+  display: flex; align-items: center; justify-content: center;
+}
+.ed-lib-fcard.stick .ed-lib-fcard-cover {
+  background: repeating-conic-gradient(rgba(255,255,255,0.06) 0% 25%, transparent 0% 50%) 0 / 14px 14px, var(--card-2);
+}
+.ed-lib-fcard:hover .ed-lib-fcard-cover { border-color: var(--accent, #ff7a1a); color: var(--text); }
+.ed-lib-fcard-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ed-lib-fcard-badge {
+  position: absolute; left: 4px; bottom: 4px; font-size: 10px; font-weight: 700; padding: 1px 6px;
+  border-radius: 999px; background: rgba(0,0,0,0.65); color: #fff;
+}
+.ed-lib-fcard-fav { position: absolute; top: 4px; right: 4px; color: #f5c518; display: flex; }
+.ed-lib-fcard-name { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-lib-fcard-count { font-size: 10.5px; color: var(--muted); }
+
+.ed-lib-crumb { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 12px; color: var(--muted); }
+.ed-lib-crumb-root { background: none; border: none; color: var(--muted); cursor: pointer; padding: 2px 2px; font-size: 12px; }
+.ed-lib-crumb-root:hover { color: var(--text); }
+.ed-lib-crumb-cur { flex: 1; min-width: 0; color: var(--text); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-lib-chroma { width: 14px; height: 14px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.35); flex-shrink: 0; }
+.ed-lib-busy { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+
+/* Crear carpeta / stick */
+.ed-lib-create {
+  display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: var(--radius-sm);
+  background: var(--card-2); border: 1px solid var(--line);
+}
+.ed-lib-create-h { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; color: var(--text); }
+.ed-lib-create-row { display: flex; gap: 6px; align-items: center; }
+.ed-lib-create-row input:not([type=color]) {
+  flex: 1; min-width: 0; background: var(--card-3); border: 1px solid var(--line); border-radius: 6px;
+  color: var(--text); font-size: 12.5px; padding: 5px 8px; outline: none;
+}
+.ed-lib-create-row input.ed-lib-create-emoji { flex: 0 0 42px; text-align: center; }
+.ed-lib-create-color { display: flex; }
+.ed-lib-create-color input { width: 30px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; }
+.ed-lib-create-note { font-size: 10.5px; color: var(--muted); line-height: 1.35; }
+.ed-lib-create-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* Zonas donde soltar archivos del explorador */
+.ed-lib-drop { position: relative; }
+.ed-lib-drop.drop-over { outline: 2px dashed var(--accent, #ff7a1a); outline-offset: -2px; border-radius: var(--radius-sm); }
+.ed-lib-drop-hint {
+  position: absolute; inset: 0; z-index: 5; pointer-events: none;
+  display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; text-align: center;
+  background: rgba(16, 19, 28, 0.78); color: #fff; font-size: 12.5px; font-weight: 600; border-radius: var(--radius-sm);
+}
+
+/* Carpeta stick: un grupo (y zona de suelta) por expresión */
+.ed-lib-xgroups { display: flex; flex-direction: column; gap: 8px; padding: 0 4px 8px 0; }
+.ed-lib-xgroup { padding: 6px; border-radius: var(--radius-sm); background: var(--card-2); border: 1px solid var(--line); min-height: 64px; }
+.ed-lib-xgroup-h { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; color: var(--text); margin-bottom: 5px; }
+.ed-lib-xgroup-name { flex: 1; min-width: 0; }
+.ed-lib-xtiles { display: flex; gap: 8px; flex-wrap: wrap; }
+.ed-lib-xempty {
+  font-size: 11px; color: var(--muted); text-align: center; padding: 10px 6px;
+  border: 1px dashed var(--line); border-radius: 6px;
+}
+.ed-lib-stile { display: flex; flex-direction: column; gap: 3px; width: 84px; cursor: grab; }
+.ed-lib-stile:hover .ed-stick-thumb { border-color: var(--accent, #ff7a1a); }
+.ed-lib-stile-expr {
+  width: 100%; font-size: 10px; padding: 1px 2px; border-radius: 4px; cursor: pointer;
+  background: var(--card-3); color: var(--muted); border: 1px solid var(--line);
+}
 .ed-card-media .gif-badge {
   position: absolute; top: 4px; left: 4px; z-index: 2;
   font-size: 9px; font-weight: 700; letter-spacing: 0.05em; padding: 1px 4px; border-radius: 3px;

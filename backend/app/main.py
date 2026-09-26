@@ -1675,6 +1675,32 @@ def collection_file(ref: str) -> FileResponse:
     return FileResponse(str(path))
 
 
+@app.post("/api/collections")
+def create_collection(body: dict = Body(...)) -> dict:
+    """Nueva carpeta (colección) vacía en la raíz de material."""
+    from . import collections
+    try:
+        cid = collections.create_collection((body or {}).get("name") or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"id": cid, **collections.list_collections()}
+
+
+@app.post("/api/collections/{cid}/files")
+def upload_collection_files(cid: str, files: list[UploadFile] = File(...)) -> dict:
+    """Sube vídeos/imágenes/audio a una carpeta de la biblioteca (arrastrar y soltar)."""
+    from . import collections
+    try:
+        out = collections.add_files(cid, [(f.filename or "archivo", f.file) for f in files])
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not out["saved"] and out["errors"]:
+        raise HTTPException(status_code=400, detail=out["errors"][0]["error"])
+    return out
+
+
 @app.get("/api/sticks")
 def list_sticks() -> dict:
     """Personajes (colecciones con stick.json) para el menú "Agregar Stick"."""
@@ -1688,6 +1714,48 @@ def stick_detail(cid: str) -> dict:
     from . import stick_library
     try:
         return stick_library.stick_detail(cid)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/sticks")
+def create_stick(body: dict = Body(...)) -> dict:
+    """Nuevo personaje stick: su carpeta + stick.json + una subcarpeta por expresión."""
+    from . import stick_library
+    data = body or {}
+    try:
+        return stick_library.create_stick(
+            data.get("name") or "", emoji=data.get("emoji") or "",
+            chroma_color=data.get("chroma_color") or stick_library.DEFAULT_CHROMA)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/sticks/{cid}/items")
+def upload_stick_items(cid: str, files: list[UploadFile] = File(...),
+                       expression: str = Form("otros")) -> dict:
+    """Sube vídeos/imágenes a la expresión ``expression`` del stick (su subcarpeta)."""
+    from . import stick_library
+    try:
+        out = stick_library.add_files(cid, [(f.filename or "archivo", f.file) for f in files], expression)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not out["saved"] and out["errors"]:
+        raise HTTPException(status_code=400, detail=out["errors"][0]["error"])
+    return out
+
+
+@app.patch("/api/sticks/{cid}/items")
+def set_stick_item_expression(cid: str, body: dict = Body(...)) -> dict:
+    """Cambia la expresión de un recurso del stick (sin mover el archivo)."""
+    from . import stick_library
+    data = body or {}
+    try:
+        return stick_library.set_expression(cid, data.get("file") or "", data.get("expression") or "")
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

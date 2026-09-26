@@ -1,5 +1,5 @@
 // Dibujo del editor sobre <canvas>: compuesto final (vídeo + texto), vista de edición
-// del Main (recorte/keyframes) y overlay de encuadre de texto.
+// del Main (recorte/keyframes) y guías de alineado.
 //
 // Estas funciones son puras respecto a React: reciben un `env` con las refs vivas del
 // componente (clipsRef, tracksRef, mediaEls, outRef, …) y leen `.current` en el momento
@@ -151,40 +151,6 @@ export function hitFrontmost(hits, px, py) {
   return null
 }
 
-
-// Geometría (en px del canvas) del encuadre de texto a partir de fm normalizado.
-export function framingRect(cw, ch, fm) {
-  const boxW = (fm.w ?? 0.8) * cw
-  const boxH = (fm.h ?? 0.13) * ch
-  const bx = (fm.x ?? 0.5) * cw - boxW / 2
-  const by = (fm.y ?? 0.5) * ch - boxH / 2
-  return { bx, by, boxW, boxH }
-}
-
-// Dibuja el overlay amarillo de encuadre sobre el canvas principal.
-// El rectángulo define la POSICIÓN y el TAMAÑO de los textos de la pista.
-export function drawFramingOverlay(ctx, cw, ch, fm) {
-  const { bx, by, boxW, boxH } = framingRect(cw, ch, fm)
-  const hs = 6
-  ctx.save()
-  ctx.fillStyle = 'rgba(255, 215, 0, 0.14)'
-  ctx.fillRect(bx, by, boxW, boxH)
-  ctx.strokeStyle = '#FFD700'
-  ctx.lineWidth = 2.5
-  ctx.setLineDash([9, 5])
-  ctx.strokeRect(bx, by, boxW, boxH)
-  ctx.setLineDash([])
-  ctx.fillStyle = '#FFD700'
-  ctx.fillRect(bx - hs, by + boxH / 2 - hs, hs * 2, hs * 2)              // izq (ancho)
-  ctx.fillRect(bx + boxW - hs, by + boxH / 2 - hs, hs * 2, hs * 2)       // der (ancho)
-  ctx.fillRect(bx + boxW / 2 - hs, by + boxH - hs, hs * 2, hs * 2)       // abajo (alto)
-  ctx.fillRect(bx + boxW - hs, by + boxH - hs, hs * 2, hs * 2)           // esquina (ambos)
-  ctx.font = 'bold 11px Arial'
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'bottom'
-  ctx.fillText('Encuadre de texto', bx + boxW / 2, by - 4)
-  ctx.restore()
-}
 
 function overlayDest(ctx, media, clip, srcTime, outW, outH, localT, frame) {
   const { w: vw, h: vh } = mediaSize(media)
@@ -751,7 +717,7 @@ export function drawMaskOverlay(ctx, mask, frame) {
 export function drawMainView(head, env) {
   const {
     mainCanvasRef, clipsRef, outRef, selRef, selIdsRef,
-    framingModeRef, mainTextBox, alignGuidesRef,
+    mainTextBox, alignGuidesRef,
     viewZoomRef, mainStageRef, platformOverlayRef,
   } = env
   const canvas = mainCanvasRef.current
@@ -786,10 +752,9 @@ export function drawMainView(head, env) {
   ctx.fillRect(0, frame.y, frame.x, frame.h)
   ctx.fillRect(frame.x + frame.w, frame.y, cw - (frame.x + frame.w), frame.h)
   ctx.restore()
-  // Overlays de edición (encuadre de texto, guías) mapeados al recuadro Main.
+  // Overlays de edición (guías) mapeados al recuadro Main.
   ctx.save()
   ctx.translate(frame.x, frame.y)
-  if (framingModeRef.current) drawFramingOverlay(ctx, frame.w, frame.h, framingModeRef.current)
   drawAlignGuides(ctx, frame.w, frame.h, alignGuidesRef?.current)
   ctx.restore()
   // Borde fijo = límite del área que se exporta. Línea fina y neutra (blanco muy
@@ -802,7 +767,7 @@ export function drawMainView(head, env) {
   ctx.strokeRect(frame.x + lw / 2, frame.y + lw / 2, frame.w - lw, frame.h - lw)
   ctx.restore()
   // Marco de plataforma (TikTok / Shorts): solo vista previa, encima del recuadro
-  // exportable. Se omite durante el encuadre de texto para no estorbar.
-  if (!framingModeRef.current) drawPlatformChrome(ctx, frame, platformOverlayRef?.current)
+  // exportable.
+  drawPlatformChrome(ctx, frame, platformOverlayRef?.current)
 }
 

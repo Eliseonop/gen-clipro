@@ -13,7 +13,10 @@ las subcarpetas directas son colecciones y cada una se recorre de forma recursiv
 """
 from __future__ import annotations
 
+import re
+import shutil
 from pathlib import Path
+from typing import BinaryIO, Iterable
 from urllib.parse import quote
 
 from . import config, settings
@@ -154,6 +157,9 @@ def list_collections() -> dict:
             "enabled": bool(pref.get("enabled", True)),
             "favorite": bool(pref.get("favorite", False)),
             "cover_url": _first_image_url(items),
+            # Carpeta de un personaje stick (ver stick_library): la Biblioteca la
+            # abre agrupada por expresión.
+            "stick": (sub / "stick.json").is_file(),
         })
     # Favoritas primero, luego alfabético.
     out.sort(key=lambda c: (not c["favorite"], c["name"].lower()))
@@ -200,6 +206,49 @@ def search(q: str = "", kind: str = "", collection: str = "", limit: int = 500) 
         "items": items[:limit],
         "collections": cols,
     }
+
+
+def create_collection(name: str) -> str:
+    """Crea una carpeta (colección) vacía bajo la raíz. Devuelve su id."""
+    base = get_root()
+    if base is None:
+        raise ValueError("No hay carpeta raíz de material.")
+    clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(name or "")).strip(" .")
+    if not clean:
+        raise ValueError("Ponle un nombre a la carpeta.")
+    cid, n = clean, 2
+    while (base / cid).exists():
+        cid, n = f"{clean} {n}", n + 1
+    (base / cid).mkdir(parents=True)
+    return cid
+
+
+def add_files(collection: str, files: Iterable[tuple[str, BinaryIO]]) -> dict:
+    """Guarda archivos de medio en la raíz de una colección (nombre único).
+
+    ``files`` = ``[(nombre, stream)]``. Devuelve ``{saved, errors}``.
+    """
+    base = get_root()
+    cid = _safe_collection_id(collection)
+    folder = base / cid if base is not None else None
+    if folder is None or not folder.is_dir():
+        raise LookupError("Carpeta no encontrada.")
+    saved: list[dict] = []
+    errors: list[dict] = []
+    for raw_name, stream in files:
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", Path(str(raw_name or "")).name).strip(" .")
+        if not name or kind_for(Path(name)) is None:
+            errors.append({"file": raw_name, "error": "Tipo de archivo no soportado."})
+            continue
+        target = folder / name
+        stem, suffix, n = target.stem, target.suffix, 2
+        while target.exists():
+            target = folder / f"{stem}_{n}{suffix}"
+            n += 1
+        with target.open("wb") as out:
+            shutil.copyfileobj(stream, out)
+        saved.append(_entry(cid, target.relative_to(folder)))
+    return {"saved": saved, "errors": errors}
 
 
 def resolve(ref: str) -> Path | None:

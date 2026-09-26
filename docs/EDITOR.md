@@ -18,7 +18,7 @@ El editor se divide en dos zonas: parte superior (3 columnas) y parte inferior (
 
 El orden de las columnas se cambia desde el botón **Diseño** (icono de cuadrícula) de la barra superior: predeterminado, Main a la derecha, Main a la izquierda, invertido, materiales a toda altura o Main a toda altura (a la derecha, de arriba abajo). Detalle: [DISENO_VENTANA.md](DISENO_VENTANA.md).
 
-**Columna izquierda — Material y paneles.** Barra de pestañas:
+**Columna izquierda — Material y paneles.** Barra de pestañas horizontal al pie del panel (iconos; la **rueda del ratón** la desplaza de lado a lado, un degradado indica que hay más iconos y **Shift+rueda** cambia de pestaña):
 - **Video** — clips del proyecto, clips guardados y "Cargar" (pegar URL de YouTube o subir/arrastrar un archivo).
 - **Imagen** — imágenes del proyecto + búsqueda de stock (Explorar).
 - **Audio** — generar narración (TTS) o extraer audio de YouTube.
@@ -47,6 +47,7 @@ El orden de las columnas se cambia desde el botón **Diseño** (icono de cuadrí
 - Generar **narración por voz (TTS)** con varios motores (Kokoro, Gemini, ElevenLabs), elegir voz, mezclar dos voces, velocidad y pausas.
 - Extraer el **audio** de un vídeo de YouTube.
 - Biblioteca de **SFX** con categorías, clasificación y favoritos.
+- **Biblioteca** de material reutilizable por **carpetas**: entrar, arrastrar archivos para añadirlos y crear **sticks** (personajes) cuyas expresiones se rellenan soltando vídeos o imágenes: [BIBLIOTECA_STICKS.md](BIBLIOTECA_STICKS.md).
 
 **Timeline y clips**
 - Añadir clips a las pistas arrastrando o con un clic.
@@ -187,7 +188,7 @@ reabrir el proyecto y al exportar.
 - **Temas de subtítulo (presets):** galería de estilos predefinidos aplicables con un clic.
 - **Efecto karaoke** (resaltado palabra a palabra): color de la palabra activa, opacidad de palabras activas/inactivas y efectos combinables sobre la palabra que se está diciendo.
 - **Palabras por cuadro:** límite de palabras que se muestran a la vez (1–10). **Fragmentar** parte un texto largo en varios clips respetando los tiempos originales.
-- **Posición y tamaño:** X/Y, ancho de caja y duración; el texto también se arrastra directamente en el Main. En una pista de texto, **Encuadrar** define de golpe la posición y el tamaño de todos sus textos con un recuadro.
+- **Posición y tamaño:** X/Y, ancho de caja y duración; el texto también se arrastra directamente en el Main. En una pista de texto (panel **general**), la sección **Transformación** es la misma que la de un texto suelto (Escala, Posición, Rotación, Texto 3D) y cada cambio —igual que fuente, tamaño de fuente, colores, trazo, fondo…— se aplica a todos sus textos y queda guardado en la pista: los textos nuevos heredan **todo** el estilo general. Desde un texto, **Aplicar a la pista** convierte su estilo completo en el general de su pista.
 - **Aplicar a todos:**
   - **Global** — copia estilo y posición de un texto a todos los del timeline.
   - **Nivel pista** — el estilo de la pista se aplica a todos sus textos y a los nuevos.

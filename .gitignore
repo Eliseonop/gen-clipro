@@ -11,6 +11,10 @@ backend/clips/*
 backend/data/
 backend/models/
 
+# Instalador: descargas a medias, caché de hashes y zips para subir a Drive
+setup/_descargas/
+setup/_paquetes/
+
 # Node / React
 node_modules/
 frontend/dist/

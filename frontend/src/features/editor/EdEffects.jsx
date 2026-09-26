@@ -263,10 +263,6 @@ export default function EdEffects({
                 onApplyPreset={onApplyTextPreset}
                 onChangeDur={textEditor?.onChangeDur}
                 onApplyAsGlobalTemplate={textEditor?.onApplyAsGlobalTemplate}
-                framing={textEditor?.framing}
-                onStartFraming={textEditor?.onStartFraming}
-                onSaveFraming={textEditor?.onSaveFraming}
-                onCancelFraming={textEditor?.onCancelFraming}
                 textFavorites={textEditor?.textFavorites}
                 onSaveFavorite={textEditor?.onSaveFavorite}
                 onApplyFavorite={textEditor?.onApplyFavorite}

@@ -112,10 +112,6 @@ function TextTab({ clip, textMode, p, kfSt, kfNav, noteProps }) {
         selectionCount={te.selectionCount || 1}
         onChangeText={te.onChangeText}
         onChangeStyle={p.onChangeTextStyle}
-        framing={te.framing}
-        onStartFraming={te.onStartFraming}
-        onSaveFraming={te.onSaveFraming}
-        onCancelFraming={te.onCancelFraming}
         kf={kf}
       />
       {clip?.kind === 'text' && mode !== 'track' && (
@@ -137,6 +133,20 @@ function TextTab({ clip, textMode, p, kfSt, kfNav, noteProps }) {
           <MixSection clip={clip} p={p} kfSt={kfSt} kfNav={kfNav} />
         </>
       )}
+      {mode === 'track' && (
+        // La pista (general) usa la misma Transformación que un texto suelto;
+        // sin keyframes: cada cambio va a la pista y a todos sus textos.
+        <EdTransform
+          clip={{ id: 'track-style', kind: 'text', start: 0, style: st }}
+          playhead={0}
+          onPose={p.onPose}
+          onTextStyle={p.onChangeTextStyle}
+          fps={p.fps}
+          frameW={p.outW}
+          frameH={p.outH}
+          textStyle={st}
+        />
+      )}
       <TextFxPanel section="look" style={st} mode={textMode || 'clip'} onChangeStyle={p.onChangeTextStyle} kf={kf} />
       <TextFavorites
         mode={mode}
@@ -146,6 +156,7 @@ function TextTab({ clip, textMode, p, kfSt, kfNav, noteProps }) {
         onApplyFavorite={te.onApplyFavorite}
         onDeleteFavorite={te.onDeleteFavorite}
         onApplyAsGlobalTemplate={te.onApplyAsGlobalTemplate}
+        onApplyToTrack={te.onApplyToTrack}
       />
       {/* En un texto lo que significa ya es su contenido: la nota va al final. */}
       {clip && noteProps && (

@@ -350,6 +350,8 @@ export default function EdMaterial({
   const navTipTimer = useRef(0)
   const navTipOn = useRef(false)
   const navTipNext = useRef(null)
+  const navScrollRef = useRef(null)
+  const [navEdge, setNavEdge] = useState({ l: false, r: false })
   const tabRef = useRef(tab)
   const setTabRef = useRef(setTab)
   const wheelLock = useRef(0)
@@ -479,6 +481,51 @@ export default function EdMaterial({
     return () => window.removeEventListener('wheel', onWheel)
   }, [])
 
+  // Barra de pestañas horizontal: marca qué bordes tienen más iconos ocultos
+  // (degradado) y convierte la rueda vertical en desplazamiento horizontal.
+  const updateNavEdge = useCallback(() => {
+    const el = navScrollRef.current
+    if (!el) return
+    const l = el.scrollLeft > 1
+    const r = el.scrollLeft + el.clientWidth < el.scrollWidth - 1
+    setNavEdge((p) => (p.l === l && p.r === r ? p : { l, r }))
+  }, [])
+
+  useEffect(() => {
+    const el = navScrollRef.current
+    if (!el) return undefined
+    updateNavEdge()
+    const ro = new ResizeObserver(updateNavEdge)
+    ro.observe(el)
+    function onWheel(e) {
+      // Shift+rueda la maneja el listener global (cambia de pestaña); un gesto
+      // ya horizontal (trackpad) lo desplaza el navegador solo.
+      if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return
+      if (Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return
+      if (el.scrollWidth <= el.clientWidth) return
+      e.preventDefault()
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientWidth : 1
+      el.scrollLeft += e.deltaY * unit
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => {
+      ro.disconnect()
+      el.removeEventListener('wheel', onWheel)
+    }
+  }, [updateNavEdge])
+
+  // La pestaña activa siempre a la vista (p. ej. al cambiarla con Shift+rueda).
+  useEffect(() => {
+    const el = navScrollRef.current
+    const btn = el?.querySelector('.ed-mat-nav-btn.on')
+    if (!btn) return
+    const pad = 28
+    const c = el.getBoundingClientRect()
+    const b = btn.getBoundingClientRect()
+    if (b.left < c.left + pad) el.scrollLeft -= c.left + pad - b.left
+    else if (b.right > c.right - pad) el.scrollLeft += b.right - (c.right - pad)
+  }, [tab])
+
   function openMatMenu(e, kind, item) {
     e.preventDefault()
     e.stopPropagation()
@@ -574,6 +621,9 @@ export default function EdMaterial({
   const shownAudios = audioFilter === 'saved' ? (library.audios || []) : [...projectAudios, ...(library.audios || [])]
   const shownImages = imageFilter === 'saved' ? (library.images || []) : [...projectImages, ...(library.images || [])]
   const onCargarPane = tab === 'video' && videoFilter === 'cargar'
+  // En la Biblioteca, soltar archivos del explorador los sube a SU carpeta
+  // (EdLibrary), no al proyecto.
+  const ownFileDrop = onCargarPane || tab === 'library'
 
   useEffect(() => {
     if (onCargarPane) requestAnimationFrame(() => ytInputRef.current?.focus())
@@ -588,7 +638,7 @@ export default function EdMaterial({
   }, [ytAnalyzing])
 
   function onFileDragEnter(e) {
-    if (onCargarPane) return
+    if (ownFileDrop) return
     if (!hasOsFileDrag(e)) return
     e.preventDefault()
     dropDepth.current += 1
@@ -596,20 +646,20 @@ export default function EdMaterial({
     setFileDrop(true)
   }
   function onFileDragOver(e) {
-    if (onCargarPane) return
+    if (ownFileDrop) return
     if (!hasOsFileDrag(e)) return
     e.preventDefault()
     setDragKind(dragMediaKind(e))
     e.dataTransfer.dropEffect = dragMediaKind(e) === 'other' ? 'none' : 'copy'
   }
   function onFileDragLeave(e) {
-    if (onCargarPane) return
+    if (ownFileDrop) return
     if (!hasOsFileDrag(e)) return
     dropDepth.current = Math.max(0, dropDepth.current - 1)
     if (dropDepth.current === 0) setFileDrop(false)
   }
   function onFileDrop(e) {
-    if (onCargarPane) return
+    if (ownFileDrop) return
     if (!hasOsFileDrag(e)) return
     e.preventDefault()
     dropDepth.current = 0
@@ -852,7 +902,9 @@ export default function EdMaterial({
 
   function openNavTip(e, text) {
     const r = e.currentTarget.getBoundingClientRect()
-    navTipNext.current = { text, left: Math.round(r.right + 8), top: Math.round(r.top + r.height / 2) }
+    // Encima del botón, centrado; sin salirse por los lados de la ventana.
+    const cx = Math.min(Math.max(r.left + r.width / 2, 64), window.innerWidth - 64)
+    navTipNext.current = { text, left: Math.round(cx), top: Math.round(r.top - 8) }
     if (navTipOn.current) {
       setNavTip(navTipNext.current)
       return
@@ -884,42 +936,6 @@ export default function EdMaterial({
           <Icon name={dragKind === 'other' ? 'block' : 'upload'} size={22} />
           <span>{DROP_HINT[dragKind] || DROP_HINT.file}</span>
         </div>
-      )}
-      <nav className="ed-mat-nav" aria-label="Materiales" onMouseLeave={closeNavTip}>
-        <div className="ed-mat-nav-scroll" onScroll={closeNavTip}>
-          {MAT_NAV.map((item) => {
-            const n = navCounts[item.id]
-            const label = n != null ? `${item.label} (${n})` : item.label
-            return (
-              <Fragment key={item.id}>
-                {item.sep ? <div className="ed-mat-nav-sep" aria-hidden="true" /> : null}
-                <button
-                  type="button"
-                  className={`ed-mat-nav-btn${tab === item.id ? ' on' : ''}${item.id === 'chat' && chatBusy ? ' working' : ''}`}
-                  aria-label={item.id === 'chat' && chatBusy ? `${label} (trabajando)` : label}
-                  aria-current={tab === item.id ? 'page' : undefined}
-                  onMouseEnter={(e) => openNavTip(e, item.id === 'chat' && chatBusy ? `${label} (trabajando)` : label)}
-                  onClick={() => {
-                    setTab(item.id)
-                    // Motion y Paper son estudios: elegir su pestaña entra en el
-                    // workspace correspondiente. Cualquier otra saca del estudio.
-                    if (item.id === 'motion') onGoMotion?.()
-                    else if (item.id === 'paper') onGoPaper?.()
-                    else onExitStudio?.()
-                  }}
-                >
-                  <Icon name={item.icon} size={20} />
-                </button>
-              </Fragment>
-            )
-          })}
-        </div>
-      </nav>
-      {navTip && createPortal(
-        <div className="ed-fast-tip" style={{ left: navTip.left, top: navTip.top }} role="tooltip">
-          {navTip.text}
-        </div>,
-        document.body,
       )}
       <div className="ed-mat-body">
       {navItem && <div className="ed-mat-title">{navItem.label}</div>}
@@ -1232,6 +1248,49 @@ export default function EdMaterial({
         <EdChat project={project} context={aiContext} clips={timelineClips} onReload={onReloadTimeline} onBusy={setChatBusy} onMcpAudit={onMcpAudit} />
       </div>
       </div>
+
+      {/* Pestañas de Material: barra horizontal al pie del panel; la rueda del
+          ratón la desplaza (Shift+rueda sigue cambiando de pestaña). */}
+      <nav
+        className={`ed-mat-nav${navEdge.l ? ' fade-l' : ''}${navEdge.r ? ' fade-r' : ''}`}
+        aria-label="Materiales"
+        onMouseLeave={closeNavTip}
+      >
+        <div ref={navScrollRef} className="ed-mat-nav-scroll" onScroll={() => { closeNavTip(); updateNavEdge() }}>
+          {MAT_NAV.map((item) => {
+            const n = navCounts[item.id]
+            const label = n != null ? `${item.label} (${n})` : item.label
+            return (
+              <Fragment key={item.id}>
+                {item.sep ? <div className="ed-mat-nav-sep" aria-hidden="true" /> : null}
+                <button
+                  type="button"
+                  className={`ed-mat-nav-btn${tab === item.id ? ' on' : ''}${item.id === 'chat' && chatBusy ? ' working' : ''}`}
+                  aria-label={item.id === 'chat' && chatBusy ? `${label} (trabajando)` : label}
+                  aria-current={tab === item.id ? 'page' : undefined}
+                  onMouseEnter={(e) => openNavTip(e, item.id === 'chat' && chatBusy ? `${label} (trabajando)` : label)}
+                  onClick={() => {
+                    setTab(item.id)
+                    // Motion y Paper son estudios: elegir su pestaña entra en el
+                    // workspace correspondiente. Cualquier otra saca del estudio.
+                    if (item.id === 'motion') onGoMotion?.()
+                    else if (item.id === 'paper') onGoPaper?.()
+                    else onExitStudio?.()
+                  }}
+                >
+                  <Icon name={item.icon} size={20} />
+                </button>
+              </Fragment>
+            )
+          })}
+        </div>
+      </nav>
+      {navTip && createPortal(
+        <div className="ed-fast-tip" style={{ left: navTip.left, top: navTip.top }} role="tooltip">
+          {navTip.text}
+        </div>,
+        document.body,
+      )}
 
       {imgAddOpen && (
         <ImageAddModal

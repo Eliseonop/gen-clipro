@@ -157,6 +157,9 @@ function reframeForCut(reframe, t0, t1) {
 }
 
 // Modo libre: el ÚNICO modo de un clip visual desde que no existe "Fijar vídeo".
+// Pose de un texto (Transformación): vive en su estilo (ver applyStaticPose).
+const TEXT_POSE_KEYS = ['x', 'y', 'scale', 'rotation', 'opacity', 'rot_x', 'rot_y']
+
 // El clip es un objeto suelto sobre el lienzo (se mueve, se escala y se recorta a
 // mano, estilo CapCut). Todo lo que llegue en el layout antiguo — 'fill' (el propio
 // "Fijar vídeo") o un overlay pegado a un hueco — se convierte al entrar.
@@ -289,7 +292,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   // Soltar un clip justo encima de otro = intención de reemplazarlo: se confirma.
   const [replaceAsk, setReplaceAsk] = useState(null)
   const [dragInfo, setDragInfo] = useState(null)    // { kind, duration, name }
-  const [framingMode, setFramingMode] = useState(null) // { trackId, x, y, w } o null
   const [mainColTab, setMainColTab] = useState('main')
   // Motion Studio como MODO nativo: estado de composición compartido; el timeline
   // real muestra las capas como clips (adapter en editorModel), el canvas central el
@@ -411,7 +413,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const pendingKfSel = useRef(null)
   const clipClipboardRef = useRef(null)   // [{ clip, offset }] copiados con Ctrl+C
   const outRef = useRef({ w: outW, h: outH }); outRef.current = { w: outW, h: outH }
-  const framingModeRef = useRef(null); framingModeRef.current = framingMode
   const maskModeRef = useRef(false); maskModeRef.current = maskMode
   const maskDrawRef = useRef(false); maskDrawRef.current = maskDraw
   const bgBrushRef = useRef(bgBrush); bgBrushRef.current = bgBrush
@@ -637,7 +638,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   useEffect(() => {
     const env = {
       clipsRef, tracksRef, mediaEls, outRef, selRef, selIdsRef, selKfRef,
-      playingRef, framingModeRef, mainCanvasRef, mainStageRef, mainTextBox, topVideoAt, alignGuidesRef,
+      playingRef, mainCanvasRef, mainStageRef, mainTextBox, topVideoAt, alignGuidesRef,
       clipModeRef, fpsRef, hitListRef, viewZoomRef,
       maskModeRef, maskDrawRef, bgBrushRef, bgPreviewRef, bgPreviewElRef, magicRef,
       platformOverlayRef, penRef, penHoverRef, pathEditRef, trackBoxRef,
@@ -1771,7 +1772,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     // Desde el cabezal, pero sin pisar lo que ya hay: la pista es una secuencia.
     // Pulsar + varias veces encadena los clips en vez de amontonarlos.
     const at0 = freeStartOnTrack(clipsRef.current, track.id, at, dur)
-    const clip = makeClip(assetKind, item, track.id, at0, dur)
+    const base = makeClip(assetKind, item, track.id, at0, dur)
+    // Un stick de la Biblioteca trae su color de croma: nace con el fondo quitado.
+    const clip = item.chromaColor ? { ...base, bg_removal: chromaBg(item.chromaColor) } : base
     setClips((prev) => [...prev, clip])
     setSelClipId(clip.id)
     setSelClipIds([clip.id])
@@ -2116,7 +2119,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       setSelClipIds([clip.id])
       return
     }
-    const clip = makeClip(payload.asset_kind, {
+    const base = makeClip(payload.asset_kind, {
       index: payload.asset_id, id: payload.asset_id, filename: payload.filename,
       name: payload.name, label: payload.name, duration: payload.duration, end: payload.duration, start: 0,
       reframe: payload.reframe,
@@ -2129,6 +2132,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       out_point: payload.out_point,
       face_track: payload.face_track,
     }, trackId, startTime, payload.duration)
+    // Stick arrastrado desde la Biblioteca: nace con el croma de su personaje.
+    const clip = payload.chroma_color ? { ...base, bg_removal: chromaBg(payload.chroma_color) } : base
     setClips((prev) => [...prev, clip])
     setSelClipId(clip.id)
     setSelClipIds([clip.id])
@@ -2230,7 +2235,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       setSelKfId(null)
     }
     setSelClipIds((prev) => prev.filter((id) => next.clips.some((c) => c.id === id)))
-    if (framingMode?.trackId === trackId) setFramingMode(null)
     setTrackToDelete(null)
   }
   function requestDeleteTrack(track) {
@@ -2293,7 +2297,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setSelClipId(null)
     setSelClipIds([])
     setSelKfId(null)
-    setFramingMode(null)
   }
   function renameTrack(id, name) {
     const n = String(name || '').trim().slice(0, 32)
@@ -2330,9 +2333,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     selRef.current = next.anchorId
     setSelKfId(null)
     if (clip.track_id) setSelTrackId(clip.track_id)
-    if (!keepGroup) {
-      setFramingMode(null)
-    }
     return next
   }
   function clearCanvasSelection() {
@@ -2354,7 +2354,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     selIdsRef.current = arr
     selRef.current = anchor
     setSelKfId(null)
-    setFramingMode(null)
     const last = anchor ? clipsRef.current.find((c) => c.id === anchor) : null
     if (last?.track_id) setSelTrackId(last.track_id)
   }
@@ -2836,17 +2835,23 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (existing) return existing.id
     return addTrack('text', style)
   }
-  // Estilo de un texto nuevo en la pista `trackId`: hereda su caja y su tamaño.
-  // Una pista recién creada aún no está en tracksRef: nace con subtitleStyle().
+  // Estilo de un texto nuevo en la pista `trackId`: hereda TODO el estilo general
+  // de la pista (fuente, tamaño, colores, posición, escala…), no solo su caja.
+  // Una pista recién creada aún no está en tracksRef: toma la caja de subtitleStyle().
   function newTextStyle(trackId, preset) {
-    const fromTrack = tracksRef.current.find((t) => t.id === trackId)?.style || subtitleStyle()
-    const style = {
-      ...defaultTextStyle(),
-      x: fromTrack.x ?? 0.5,
-      y: fromTrack.y ?? 0.5,
-      w: fromTrack.w ?? 0.8,
-      size: fromTrack.size ?? defaultTextStyle().size,
-      opacity: fromTrack.opacity ?? 1,
+    const trackStyle = tracksRef.current.find((t) => t.id === trackId)?.style
+    let style
+    if (trackStyle) style = { ...defaultTextStyle(), ...trackStyle }
+    else {
+      const sub = subtitleStyle()
+      style = {
+        ...defaultTextStyle(),
+        x: sub.x ?? 0.5,
+        y: sub.y ?? 0.5,
+        w: sub.w ?? 0.8,
+        size: sub.size ?? defaultTextStyle().size,
+        opacity: sub.opacity ?? 1,
+      }
     }
     return preset ? applyThemeToStyle(style, preset) : style
   }
@@ -3579,6 +3584,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       return { ...c, style: clearing ? clearTextTheme(c.style) : applyThemeToStyle(c.style, preset) }
     }))
   }
+  // Transformación de la pista (general): la pose de un texto vive en su estilo.
+  function changeTrackPose(trackId, patch) {
+    const out = {}
+    for (const k of TEXT_POSE_KEYS) if (patch?.[k] != null) out[k] = patch[k]
+    if (Object.keys(out).length) changeTrackStyle(trackId, out)
+  }
   // Estilo general de la pista: se aplica a la pista y a todos sus segmentos.
   function changeTrackStyle(trackId, patch) {
     setTracks((prev) => prev.map((t) => (t.id === trackId ? { ...t, style: { ...(t.style || defaultTextStyle()), ...patch } } : t)))
@@ -3597,27 +3608,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       return { ...c, style: clearing ? clearTextTheme(c.style) : applyThemeToStyle(c.style, preset) }
     }))
   }
-
-  // --- Encuadre de texto por pista (overlay amarillo en el Main) ---
-  function startFraming(track) {
-    const st = track.style || defaultTextStyle()
-    const h = clamp((st.size ?? 0.07) * 1.5, 0.05, 0.5)
-    setSelClipId(null)
-    setSelClipIds([])
-    setSelKfId(null)
-    setSelTrackId(track.id)
-    setFramingMode({ trackId: track.id, x: st.x ?? 0.5, y: st.y ?? 0.5, w: st.w ?? 0.8, h })
-  }
-  function saveFraming() {
-    const fm = framingMode
-    if (!fm) return
-    const size = +clamp(fm.h / 1.22, 0.02, 0.4).toFixed(4)
-    const patch = { x: +fm.x.toFixed(4), y: +fm.y.toFixed(4), w: +fm.w.toFixed(4), size }
-    if (fm.clipIds?.length) setClips((prev) => patchClipsStyle(prev, fm.clipIds, patch))
-    else if (fm.trackId) changeTrackStyle(fm.trackId, patch)
-    setFramingMode(null)
-  }
-  function cancelFraming() { setFramingMode(null) }
 
   function requestFragmentTrack(trackId) {
     const maxWords = Math.min(10, Math.max(1, Math.floor(Number(tracksRef.current.find((t) => t.id === trackId)?.style?.max_words) || 8)))
@@ -3651,14 +3641,32 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setFragmentAsk(null)
   }
 
-  // Aplica el estilo de un clip de texto a TODOS los clips de texto del Timeline.
+  // Estilo completo (pista + clip) de un texto: lo que se ve en el visor.
+  function fullTextStyle(clip) {
+    const track = tracksRef.current.find((t) => t.id === clip.track_id)
+    return effectiveTextStyle(track?.style, clip.style)
+  }
+  // Aplica el estilo de un clip de texto a TODOS los clips de texto del Timeline
+  // y lo deja como general de cada pista de texto (los textos nuevos lo heredan).
   function applyGlobalTemplate(sourceClip) {
     if (!sourceClip || sourceClip.kind !== 'text') return
-    const template = { ...(sourceClip.style || {}) }
+    const template = fullTextStyle(sourceClip)
+    setTracks((prev) => prev.map((t) => (t.kind === 'text' ? { ...t, style: { ...template } } : t)))
     setClips((prev) => prev.map((c) => {
       if (c.kind !== 'text') return c
       return { ...c, style: { ...template } }
     }))
+  }
+  // «Aplicar a la pista»: todo el estilo de este texto pasa a ser el general de
+  // su pista (tamaño de fuente, colores, posición, escala…), no solo el encuadre.
+  function applyTextToTrack(sourceClip) {
+    if (!sourceClip || sourceClip.kind !== 'text' || !sourceClip.track_id) return
+    const template = fullTextStyle(sourceClip)
+    const trackId = sourceClip.track_id
+    setTracks((prev) => prev.map((t) => (t.id === trackId ? { ...t, style: { ...template } } : t)))
+    setClips((prev) => prev.map((c) => (
+      c.kind === 'text' && c.track_id === trackId ? { ...c, style: { ...template } } : c
+    )))
   }
 
   function applyTextFavorite(item) {
@@ -3800,9 +3808,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setMarkers(s.markers || [])
   }
 
-  // --- Arrastrar en el canvas: compuesto, o recorte en modo encuadre ---
+  // --- Arrastrar en el canvas: compuesto ---
   const canvasCtx = {
-    mainCanvasRef, framingModeRef, playingRef, stopPlayback, setFramingMode,
+    mainCanvasRef, playingRef, stopPlayback,
     selectedClip, mainTextBox, changeStyle, changeShape, mediaEls, playhead, upsertKeyframe, outAspect,
     changeReframe, clipsRef, tracksRef, playheadRef, alignGuidesRef, seek: scrub,
     clipModeRef, hitListRef, viewZoomRef,
@@ -4294,7 +4302,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               } catch { /* noop */ }
             }}
             // Fuera de estos modos, el cursor lo pone onCanvasHover en el <canvas>.
-            style={{ cursor: (bgBrush.on || chromaPick || pen || trackPick || framingMode) ? 'crosshair' : undefined }}
+            style={{ cursor: (bgBrush.on || chromaPick || pen || trackPick) ? 'crosshair' : undefined }}
           >
             <canvas ref={mainCanvasRef} width={540} height={960} className="ed-main-canvas" />
             {mainColTab === 'clip' && clipMeta.preparing && (
@@ -4305,7 +4313,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             {mainColTab === 'clip' && !clipMeta.preparing && !clips.length && (
               <div className="ed-stage-empty">Elige un tramo en Materiales para prepararlo</div>
             )}
-            {mainColTab === 'main' && clips.length === 0 && !framingMode && (
+            {mainColTab === 'main' && clips.length === 0 && (
               <div className="ed-stage-empty">Arrastra un clip al timeline o al canvas</div>
             )}
             {(exporting || clipSaving) && (
@@ -4340,7 +4348,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             ) : isShapeSel && (
               <div className="ed-stage-hint">Arrastra la figura · esquinas para tamaño · círculo para rotar</div>
             )}
-            {framingMode && <div className="ed-stage-hint">Ajusta el recuadro amarillo y pulsa Guardar</div>}
           </div>
           <div className="ed-transport">
             <button className="icon-btn" type="button" onClick={(e) => nudgePlayhead(e.shiftKey ? -1 : -0.1)} title="Atrás 0,1s (← · Shift = 1s)">
@@ -4426,7 +4433,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
             },
             onApplyTrackTextPreset: isTextSel ? (p) => applyTrackPreset(selectedClip.track_id, p) : undefined,
             playhead,
-            onPose: (patch) => !isAudioTrackSel && selectedClip && commitPose(selectedClip.id, patch),
+            onPose: (patch) => {
+              if (isTextTrackSel) changeTrackPose(selTrackObj.id, patch)
+              else if (!isAudioTrackSel && selectedClip) commitPose(selectedClip.id, patch)
+            },
             selKfId,
             onInterpKf: interpAnimKf,
             fps,
@@ -4456,10 +4466,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               selectionCount: selClipIds.length,
               onChangeText: (v) => { if (isTextSel) changeText(selectedClip.id, v) },
               onApplyAsGlobalTemplate: isTextSel ? () => applyGlobalTemplate(selectedClip) : undefined,
-              framing: !!(framingMode && selTrackObj && framingMode.trackId === selTrackObj.id),
-              onStartFraming: isTextTrackSel ? () => startFraming(selTrackObj) : undefined,
-              onSaveFraming: isTextTrackSel ? saveFraming : undefined,
-              onCancelFraming: isTextTrackSel ? cancelFraming : undefined,
+              onApplyToTrack: isTextSel ? () => applyTextToTrack(selectedClip) : undefined,
               textFavorites: fav.favs.textStyles,
               onSaveFavorite: (st) => fav.saveTextStyle(st),
               onApplyFavorite: applyTextFavorite,
