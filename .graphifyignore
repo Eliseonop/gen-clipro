@@ -1,4 +1,0 @@
-# Texturas de papel que usa Paper Animator en runtime (16 .webp). No son fuente:
-# meten ruido en el grafo y cada imagen gasta un subagente de visión en cada
-# update. El código de Paper Animator (frontend/src/features/paper/) sí se indexa.
-frontend/public/paper-animator/

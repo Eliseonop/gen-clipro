@@ -29,3 +29,7 @@ Thumbs.db
 # Recursos locales del programa (sfx_library, alfnum…): cada máquina trae los suyos
 /assets/
 /docs/
+
+# graphify: grafo de conocimiento local (se regenera en cada máquina)
+graphify-out/
+.graphifyignore
