@@ -4,7 +4,7 @@ import Icon from '../../components/Icon'
 import Hint from '../../components/Hint'
 import { fmt, parseTime } from '../../lib/utils'
 import { FAV_CAT } from '../../lib/favorites'
-import { analyze, listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryItem, unsaveLibraryItem, uploadImages, uploadVideo, uploadAudio, getSettings, putSettings, deleteMaterial, updateMaterial, fetchRemoteImage } from '../../services/api'
+import { analyze, listSfx, setSfxFolder, pickFolder, listLibrary, saveLibraryItem, unsaveLibraryItem, uploadImages, uploadVideo, uploadAudio, getSettings, putSettings, deleteMaterial, updateMaterial, fetchRemoteImage, createYoutubeVideoJob, getJob, cancelJob, getClipVersions, replaceClipVersions } from '../../services/api'
 import MaterialClipGrid, { bustUrl, dragPayload, useToggle, useExclusiveMedia, Empty, ImageCard, MaterialMenuBtn } from './MaterialClipGrid'
 import SfxClassifyModal from './SfxClassifyModal'
 import ImageAddModal from './ImageAddModal'
@@ -24,11 +24,12 @@ import MaterialInfoModal from './MaterialInfoModal'
 import { canDeleteMaterial, canDownloadMaterial, downloadMaterialFile, materialIdent, materialMenuItems, materialDeleteTitle, materialLabel } from './materialMenu'
 import { hasFaceTrack, materialDuration, segmentRange } from './clipExtract'
 import { clipCopyText } from './editorModel'
-import { isTypingTarget, scopeShortcutIndex, scopeTabsFor, stepNavId, wheelStepDir } from './materialNav'
+import { MAT_NAV, isTypingTarget, scopeShortcutIndex, scopeTabsFor, stepNavId, wheelStepDir } from './materialNav'
 import JobStatusBar from '../../components/JobStatusBar'
 import FlipPopover from '../../components/FlipPopover'
 import Toast from '../../components/Toast'
 import { collectFromClipboardItems, collectPastePayload, hasImagePaste, imageUrlsFromText, isImageFile, resolvePasteImages } from './imagePaste'
+import { qualityMeta, qualityShort, qualityTag, upgradeMessage, usedUpgrades, videoQualities } from './ytQuality'
 
 const YT_ANALYZE_OPTS = { min_score: 0.4, max_clips: 10, max_duration: 60, padding: 10 }
 
@@ -62,6 +63,14 @@ function isYtUrl(u) {
   } catch {
     return /youtu\.be|youtube\.com/i.test(s)
   }
+}
+
+// «Usar esta calidad en la timeline»: vídeo del proyecto que viene de YouTube
+// (no un segmento por referencia: el cambio se hace desde el archivo entero).
+function canUpgradeFrom(menu) {
+  const it = menu?.item
+  if (menu?.kind !== 'clips' || !it || it.scope === 'library' || it.in_point != null) return false
+  return it.provider === 'youtube' || isYtUrl(it.source_url)
 }
 
 function normalizeHistory(raw) {
@@ -276,30 +285,13 @@ function withProjectScope(items, kind) {
   }))
 }
 
-const MAT_NAV = [
-  { id: 'video', icon: 'movie', label: 'Video' },
-  { id: 'image', icon: 'image', label: 'Imagen' },
-  { id: 'audio', icon: 'mic', label: 'Audio' },
-  { id: 'sfx', icon: 'graphic_eq', label: 'SFX' },
-  { id: 'library', icon: 'collections_bookmark', label: 'Biblioteca', sep: true },
-  { id: 'effects', icon: 'auto_awesome', label: 'Efectos', sep: true },
-  { id: 'shapes', icon: 'category', label: 'Figuras' },
-  { id: 'text', icon: 'title', label: 'Texto' },
-  { id: 'transitions', icon: 'animation', label: 'Transiciones' },
-  { id: 'motion', icon: 'animation', label: 'Motion', sep: true },
-  { id: 'paper', icon: 'draw', label: 'Paper' },
-  { id: 'ai', icon: 'smart_toy', label: 'IA', sep: true },
-  { id: 'settings', icon: 'settings', label: 'Configuración', sep: true },
-  { id: 'chat', icon: 'forum', label: 'Chat IA' },
-]
-
 export default function EdMaterial({
   project, onAdd, onDragInfo, onRefresh, fav, onEditYtClip,
   selectedClip, onChangeFx,
   onAddText, onApplyTextPreset,
   matTab, onMatTab,
   audioDb, onAudioDb,
-  aiContext, onReloadTimeline, timelineClips, onMcpAudit,
+  aiContext, onReloadTimeline, onFlushTimeline, timelineClips, onMcpAudit,
   motion, motionFormat, onGoMotion, onMotionBack, onMotionSeek, motionTimeRef,
   paper, onGoPaper, onExitStudio, onGeneratePaper,
   onFaceTrackMaterial, faceTrackBusyIdent,
@@ -328,6 +320,10 @@ export default function EdMaterial({
   const [ytConfigs, setYtConfigs] = useState({})
   const [ytHistory, setYtHistory] = useState([])
   const [histOpen, setHistOpen] = useState(false)
+  const [qualOpen, setQualOpen] = useState(false)
+  const [ytDlJob, setYtDlJob] = useState(null)   // descarga del vídeo completo al material
+  const [upgradeAsk, setUpgradeAsk] = useState(null) // { index, quality, versions } → «subir calidad»
+  const [upgrading, setUpgrading] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState('')
   const [vidOver, setVidOver] = useState(false)
@@ -341,6 +337,7 @@ export default function EdMaterial({
   const imgPendingRef = useRef([])
   const ytInputRef = useRef(null)
   const histBtnRef = useRef(null)
+  const qualBtnRef = useRef(null)
   const mediaFileRef = useRef(null)
   const dropDepth = useRef(0)
   const vidDropDepth = useRef(0)
@@ -620,6 +617,9 @@ export default function EdMaterial({
     })
   const shownAudios = audioFilter === 'saved' ? (library.audios || []) : [...projectAudios, ...(library.audios || [])]
   const shownImages = imageFilter === 'saved' ? (library.images || []) : [...projectImages, ...(library.images || [])]
+  const ytQuals = videoQualities(ytResult)
+  const bestQual = ytQuals[0] || null
+  const canAddFull = !!ytResult?.url && !ytDlJob && !ytAnalyzing && !importing
   const onCargarPane = tab === 'video' && videoFilter === 'cargar'
   // En la Biblioteca, soltar archivos del explorador los sube a SU carpeta
   // (EdLibrary), no al proyecto.
@@ -636,6 +636,40 @@ export default function EdMaterial({
     const id = setInterval(() => setYtElapsed(Math.floor((Date.now() - ytT0.current) / 1000)), 500)
     return () => clearInterval(id)
   }, [ytAnalyzing])
+
+  const ytDlTitle = ytDlJob?.title
+  useEffect(() => {
+    const jobId = ytDlJob?.id
+    if (!jobId) return undefined
+    let finished = false
+    const id = setInterval(async () => {
+      let next
+      try { next = await getJob(jobId) } catch { return /* reintenta */ }
+      if (finished) return
+      if (next.status === 'done' || next.status === 'error') {
+        finished = true
+        clearInterval(id)
+      }
+      if (next.status === 'done') {
+        const q = next.result?.quality
+        setYtDlJob(null)
+        setImportMsg(`«${ytDlTitle}»${q ? ` (${qualityShort(q)})` : ''} está en el material.`)
+        onRefresh?.()
+        // La timeline ya usaba este vídeo en menos calidad → ofrecer el cambio.
+        if (usedUpgrades(next.result?.upgradable).length && next.result?.clip_index != null) {
+          setUpgradeAsk({ index: next.result.clip_index, quality: q, versions: next.result.upgradable })
+        }
+      } else if (next.status === 'error') {
+        setYtDlJob(null)
+        setYtErr(next.error || 'No se pudo descargar el vídeo.')
+      } else {
+        setYtDlJob((cur) => (cur?.id === jobId
+          ? { ...cur, ...next, elapsed: Math.floor((Date.now() - cur.t0) / 1000) }
+          : cur))
+      }
+    }, 1000)
+    return () => clearInterval(id)
+  }, [ytDlJob?.id, ytDlTitle])
 
   function onFileDragEnter(e) {
     if (ownFileDrop) return
@@ -686,7 +720,7 @@ export default function EdMaterial({
     setYtAnalyzing(true)
     try {
       const res = await analyze({ url, ...YT_ANALYZE_OPTS })
-      setYtResult(res)
+      setYtResult({ ...res, url })
       const dur = Number(res?.video?.duration) || 0
       setYtIn(0)
       setYtOut(dur > 0.5 ? Math.min(dur, 30) : 30)
@@ -698,6 +732,74 @@ export default function EdMaterial({
       setYtErr(e.message || 'No se pudo cargar el vídeo.')
     } finally {
       setYtAnalyzing(false)
+    }
+  }
+
+  // Vídeo completo al material en la calidad elegida (sin elegir → la mejor).
+  async function addFullYt(quality) {
+    setQualOpen(false)
+    const url = (ytResult?.url || '').trim()
+    if (!url || ytDlJob) return
+    setYtErr('')
+    setImportMsg('')
+    const title = ytResult?.video?.title || 'Vídeo'
+    try {
+      const job = await createYoutubeVideoJob({ project_id: project.id, url, quality: quality || null })
+      setYtDlJob({ ...job, title, t0: Date.now() })
+    } catch (e) {
+      setYtErr(e.message || 'No se pudo descargar el vídeo.')
+    }
+  }
+
+  // Menú del material → ¿hay versiones de menos calidad en la timeline?
+  async function checkUpgrade(item) {
+    const ident = materialIdent('clips', item)
+    try {
+      const info = await getClipVersions(project.id, ident)
+      if (usedUpgrades(info.upgradable).length) {
+        setUpgradeAsk({ index: ident, quality: info.material?.quality, versions: info.upgradable })
+        return
+      }
+      const blocked = (info.versions || []).find((v) => v.timeline_uses > 0 && !v.compatible)
+      setMatToast({
+        type: 'info',
+        message: blocked
+          ? `«${blocked.label}» no se puede cambiar: ${blocked.reason}.`
+          : 'La timeline no usa versiones de menos calidad de este vídeo.',
+      })
+    } catch (e) {
+      setMatToast({ type: 'error', message: e.message || 'No se pudieron buscar versiones.' })
+    }
+  }
+
+  async function runUpgrade() {
+    const ask = upgradeAsk
+    if (!ask || upgrading) return
+    setUpgrading(true)
+    try {
+      const olds = usedUpgrades(ask.versions).map((v) => String(v.index))
+      await onFlushTimeline?.()
+      const res = await replaceClipVersions(project.id, String(ask.index), olds)
+      setUpgradeAsk(null)
+      await onReloadTimeline?.()
+      onRefresh?.()
+      const q = ask.quality ? ` a ${qualityShort(ask.quality)}` : ''
+      const bg = (res.warnings || []).some((w) => w.includes('Quitar fondo'))
+      setMatToast({
+        type: 'success',
+        message: `${res.replaced} clip${res.replaced === 1 ? '' : 's'} pasado${res.replaced === 1 ? '' : 's'}${q}.`
+          + (bg ? ' Vuelve a generar «Quitar fondo» en los que lo usaban.' : ''),
+      })
+    } catch (e) {
+      setMatToast({ type: 'error', message: e.message || 'No se pudo cambiar la versión.' })
+    } finally {
+      setUpgrading(false)
+    }
+  }
+
+  async function cancelFullYt() {
+    if (ytDlJob?.id) {
+      try { await cancelJob(ytDlJob.id) } catch { /* ya terminó */ }
     }
   }
 
@@ -748,8 +850,10 @@ export default function EdMaterial({
     // Vídeo local del proyecto → extractor sobre el archivo original (sin proxy).
     // Un segmento por referencia abre su vídeo entero con el rango ya marcado.
     // (Los segmentos van siempre por aquí: sus tiempos son del archivo, no de YouTube.)
+    // Un vídeo completo bajado de YouTube (provider 'youtube') también: el archivo
+    // local ES el original, no hace falta volver a descargarlo.
     const localMedia = c.scope !== 'library' && media.startsWith(`/api/media/${project.id}/video/`)
-    if (localMedia && (seg || !isYtUrl(src))) {
+    if (localMedia && (seg || !isYtUrl(src) || c.provider === 'youtube')) {
       onEditYtClip?.({
         url: media,
         start: 0,
@@ -902,9 +1006,10 @@ export default function EdMaterial({
 
   function openNavTip(e, text) {
     const r = e.currentTarget.getBoundingClientRect()
-    // Encima del botón, centrado; sin salirse por los lados de la ventana.
+    // Debajo del botón (la barra está arriba del panel), centrado; sin salirse
+    // por los lados de la ventana.
     const cx = Math.min(Math.max(r.left + r.width / 2, 64), window.innerWidth - 64)
-    navTipNext.current = { text, left: Math.round(cx), top: Math.round(r.top - 8) }
+    navTipNext.current = { text, left: Math.round(cx), top: Math.round(r.bottom + 6) }
     if (navTipOn.current) {
       setNavTip(navTipNext.current)
       return
@@ -921,8 +1026,6 @@ export default function EdMaterial({
     setNavTip(null)
   }
 
-  const navItem = MAT_NAV.find((x) => x.id === tab)
-
   return (
     <div
       className={`ed-material${fileDrop ? ' file-drop' : ''}`}
@@ -937,9 +1040,48 @@ export default function EdMaterial({
           <span>{DROP_HINT[dragKind] || DROP_HINT.file}</span>
         </div>
       )}
+      {/* Pestañas de Material: barra horizontal arriba del panel, icono + nombre
+          corto; la rueda del ratón la desplaza (Shift+rueda sigue cambiando de
+          pestaña). El tooltip solo sale si añade algo (nombre completo, nº). */}
+      <nav
+        className={`ed-mat-nav${navEdge.l ? ' fade-l' : ''}${navEdge.r ? ' fade-r' : ''}`}
+        aria-label="Materiales"
+        onMouseLeave={closeNavTip}
+      >
+        <div ref={navScrollRef} className="ed-mat-nav-scroll" onScroll={() => { closeNavTip(); updateNavEdge() }}>
+          {MAT_NAV.map((item) => {
+            const n = navCounts[item.id]
+            const base = n != null ? `${item.label} (${n})` : item.label
+            const label = item.id === 'chat' && chatBusy ? `${base} (trabajando)` : base
+            return (
+              <Fragment key={item.id}>
+                {item.sep ? <div className="ed-mat-nav-sep" aria-hidden="true" /> : null}
+                <button
+                  type="button"
+                  className={`ed-mat-nav-btn${tab === item.id ? ' on' : ''}${item.id === 'chat' && chatBusy ? ' working' : ''}`}
+                  aria-label={label}
+                  aria-current={tab === item.id ? 'page' : undefined}
+                  onMouseEnter={(e) => { if (label !== item.short) openNavTip(e, label); else closeNavTip() }}
+                  onClick={() => {
+                    setTab(item.id)
+                    // Motion y Paper son estudios: elegir su pestaña entra en el
+                    // workspace correspondiente. Cualquier otra saca del estudio.
+                    if (item.id === 'motion') onGoMotion?.()
+                    else if (item.id === 'paper') onGoPaper?.()
+                    else onExitStudio?.()
+                  }}
+                >
+                  <Icon name={item.icon} size={18} />
+                  <span className="ed-mat-nav-lbl" aria-hidden="true">{item.short}</span>
+                </button>
+              </Fragment>
+            )
+          })}
+        </div>
+      </nav>
+
       <div className="ed-mat-body">
-      {navItem && <div className="ed-mat-title">{navItem.label}</div>}
-      {err && <div className="ed-mat-err">{err}</div>}
+      {err &&<div className="ed-mat-err">{err}</div>}
 
       {tab === 'video' && (
         <div className="ed-mat-list">
@@ -1011,7 +1153,61 @@ export default function EdMaterial({
                     </div>
                   ))}
                 </FlipPopover>
+                <div ref={qualBtnRef} className="ed-yt-full">
+                  <button
+                    type="button"
+                    className="ghost small ed-yt-full-main"
+                    onClick={() => addFullYt(bestQual?.quality)}
+                    disabled={!canAddFull}
+                    title={canAddFull
+                      ? `Agregar el vídeo completo al proyecto en ${bestQual ? qualityShort(bestQual.quality) : 'la mejor calidad'}`
+                      : ytDlJob ? 'Ya se está descargando un vídeo' : 'Carga un vídeo para agregarlo completo al proyecto'}
+                    aria-label="Agregar vídeo completo al proyecto"
+                  >
+                    <Icon name="download" size={16} />
+                    {bestQual && <span>{qualityShort(bestQual.quality)}</span>}
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost small ed-yt-full-caret"
+                    onClick={() => setQualOpen((o) => !o)}
+                    disabled={!canAddFull || !ytQuals.length}
+                    title="Elegir calidad"
+                    aria-label="Elegir calidad"
+                    aria-expanded={qualOpen}
+                  >
+                    <Icon name="expand_more" size={16} />
+                  </button>
+                </div>
+                <FlipPopover open={qualOpen} anchorRef={qualBtnRef} onClose={() => setQualOpen(false)} className="ed-yt-hist-pop ed-yt-qual-pop">
+                  <div className="ed-yt-hist-head">Agregar vídeo completo</div>
+                  {ytQuals.map((q, i) => (
+                    <button
+                      key={q.quality}
+                      type="button"
+                      className={`ed-yt-qual-row${i === 0 ? ' best' : ''}`}
+                      onClick={() => addFullYt(q.quality)}
+                    >
+                      <span className="ed-yt-qual-p">{q.quality}p</span>
+                      {qualityTag(q.quality) && <span className="ed-yt-qual-tag">{qualityTag(q.quality)}</span>}
+                      {i === 0 && <span className="ed-yt-qual-best">Mejor</span>}
+                      <span className="ed-yt-qual-meta">{qualityMeta(q)}</span>
+                    </button>
+                  ))}
+                </FlipPopover>
               </div>
+              {ytDlJob && (
+                <div className="ed-yt-dl">
+                  <JobStatusBar
+                    progress={ytDlJob.progress || 0}
+                    message={ytDlJob.message || 'Preparando descarga…'}
+                    elapsed={ytDlJob.elapsed || 0}
+                  />
+                  <button type="button" className="icon-btn" title="Cancelar descarga" aria-label="Cancelar descarga" onClick={cancelFullYt}>
+                    <Icon name="close" size={15} />
+                  </button>
+                </div>
+              )}
               {ytAnalyzing && (
                 <JobStatusBar
                   indeterminate
@@ -1249,42 +1445,6 @@ export default function EdMaterial({
       </div>
       </div>
 
-      {/* Pestañas de Material: barra horizontal al pie del panel; la rueda del
-          ratón la desplaza (Shift+rueda sigue cambiando de pestaña). */}
-      <nav
-        className={`ed-mat-nav${navEdge.l ? ' fade-l' : ''}${navEdge.r ? ' fade-r' : ''}`}
-        aria-label="Materiales"
-        onMouseLeave={closeNavTip}
-      >
-        <div ref={navScrollRef} className="ed-mat-nav-scroll" onScroll={() => { closeNavTip(); updateNavEdge() }}>
-          {MAT_NAV.map((item) => {
-            const n = navCounts[item.id]
-            const label = n != null ? `${item.label} (${n})` : item.label
-            return (
-              <Fragment key={item.id}>
-                {item.sep ? <div className="ed-mat-nav-sep" aria-hidden="true" /> : null}
-                <button
-                  type="button"
-                  className={`ed-mat-nav-btn${tab === item.id ? ' on' : ''}${item.id === 'chat' && chatBusy ? ' working' : ''}`}
-                  aria-label={item.id === 'chat' && chatBusy ? `${label} (trabajando)` : label}
-                  aria-current={tab === item.id ? 'page' : undefined}
-                  onMouseEnter={(e) => openNavTip(e, item.id === 'chat' && chatBusy ? `${label} (trabajando)` : label)}
-                  onClick={() => {
-                    setTab(item.id)
-                    // Motion y Paper son estudios: elegir su pestaña entra en el
-                    // workspace correspondiente. Cualquier otra saca del estudio.
-                    if (item.id === 'motion') onGoMotion?.()
-                    else if (item.id === 'paper') onGoPaper?.()
-                    else onExitStudio?.()
-                  }}
-                >
-                  <Icon name={item.icon} size={20} />
-                </button>
-              </Fragment>
-            )
-          })}
-        </div>
-      </nav>
       {navTip && createPortal(
         <div className="ed-fast-tip" style={{ left: navTip.left, top: navTip.top }} role="tooltip">
           {navTip.text}
@@ -1376,6 +1536,18 @@ export default function EdMaterial({
                     <div className="ed-ctx-sep" />
                   </>
                 )}
+                {canUpgradeFrom(matMenu) && (
+                  <>
+                    <button
+                      type="button"
+                      className="accent"
+                      onClick={() => { const it = matMenu.item; closeMatMenu(); checkUpgrade(it) }}
+                    >
+                      <Icon name="high_quality" size={15} /> Usar esta calidad en la timeline
+                    </button>
+                    <div className="ed-ctx-sep" />
+                  </>
+                )}
                 {materialMenuItems({
                   saved: matMenu.saved,
                   canDelete: canDeleteMaterial(matMenu.item),
@@ -1433,6 +1605,16 @@ export default function EdMaterial({
         />
       )}
       <Toast toast={matToast} onClose={() => setMatToast(null)} />
+      <ConfirmModal
+        open={!!upgradeAsk}
+        title="Subir calidad en la timeline"
+        message={upgradeAsk ? upgradeMessage(upgradeAsk.versions, upgradeAsk.quality) : ''}
+        confirmText={upgrading ? 'Cambiando…' : 'Cambiar'}
+        cancelText="Ahora no"
+        danger={false}
+        onConfirm={runUpgrade}
+        onCancel={() => { if (!upgrading) setUpgradeAsk(null) }}
+      />
       <ConfirmModal
         open={!!deleteTarget}
         title={materialDeleteTitle(deleteTarget?.kind)}

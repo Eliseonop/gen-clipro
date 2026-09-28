@@ -1,3 +1,34 @@
+// Pestañas de Material. `short` = nombre que se ve bajo el icono (cabe en el
+// ancho del botón); `label` = nombre completo del tooltip / aria-label.
+export const MAT_NAV = [
+  { id: 'video', icon: 'movie', label: 'Video', short: 'Video' },
+  { id: 'image', icon: 'image', label: 'Imagen', short: 'Imagen' },
+  { id: 'audio', icon: 'mic', label: 'Audio', short: 'Audio' },
+  { id: 'sfx', icon: 'graphic_eq', label: 'SFX', short: 'SFX' },
+  { id: 'library', icon: 'collections_bookmark', label: 'Biblioteca', short: 'Biblio', sep: true },
+  { id: 'effects', icon: 'auto_awesome', label: 'Efectos', short: 'Efectos', sep: true },
+  { id: 'shapes', icon: 'category', label: 'Figuras', short: 'Figuras' },
+  { id: 'text', icon: 'title', label: 'Texto', short: 'Texto' },
+  { id: 'transitions', icon: 'animation', label: 'Transiciones', short: 'Trans.' },
+  { id: 'motion', icon: 'animation', label: 'Motion', short: 'Motion', sep: true },
+  { id: 'paper', icon: 'draw', label: 'Paper', short: 'Paper' },
+  { id: 'ai', icon: 'smart_toy', label: 'IA', short: 'IA', sep: true },
+  { id: 'settings', icon: 'settings', label: 'Configuración', short: 'Config', sep: true },
+  { id: 'chat', icon: 'forum', label: 'Chat IA', short: 'Chat' },
+]
+
+// Medidas de la barra (en sintonía con .ed-mat-nav* / .ed-material de editor.css).
+export const MAT_NAV_METRICS = { btn: 36, gap: 1, sep: 5, chrome: 18 }
+
+/** Ancho del panel Material para que quepan todas las pestañas sin desplazar. */
+export function matNavWidth(items = MAT_NAV, m = MAT_NAV_METRICS) {
+  const seps = items.filter((x) => x.sep).length
+  const children = items.length + seps
+  return items.length * m.btn + seps * m.sep + Math.max(0, children - 1) * m.gap + m.chrome
+}
+
+export const MAT_NAV_WIDTH = matNavWidth()
+
 export function scopeTabsFor(tab) {
   if (tab === 'video' || tab === 'audio') return ['all', 'saved', 'cargar']
   if (tab === 'image') return ['all', 'saved', 'explore']

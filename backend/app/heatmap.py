@@ -94,6 +94,11 @@ def analyze(
         thumbnail=info.get("thumbnail"),
         uploader=info.get("uploader"),
     )
+    try:
+        from .youtube_video import available_qualities
+        video.qualities = available_qualities(info)
+    except Exception:
+        pass
 
     heatmap = info.get("heatmap") or []
     try:

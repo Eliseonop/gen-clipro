@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { digitTabIndex, isTypingTarget, scopeShortcutIndex, scopeTabsFor, stepNavId, wheelStepDir } from './materialNav.js'
+import { MAT_NAV, MAT_NAV_WIDTH, digitTabIndex, matNavWidth, isTypingTarget, scopeShortcutIndex, scopeTabsFor, stepNavId, wheelStepDir } from './materialNav.js'
 
 assert.deepEqual(scopeTabsFor('video'), ['all', 'saved', 'cargar'])
 assert.deepEqual(scopeTabsFor('audio'), ['all', 'saved', 'cargar'])
@@ -31,5 +31,11 @@ assert.equal(wheelStepDir(0, 0), 0)
 
 assert.equal(isTypingTarget({ tagName: 'INPUT' }), true)
 assert.equal(isTypingTarget({ tagName: 'BUTTON', isContentEditable: false }), false)
+
+// Ancho por defecto del panel Material = lo que ocupan todas las pestañas.
+assert.equal(new Set(MAT_NAV.map((x) => x.id)).size, MAT_NAV.length)
+assert.ok(MAT_NAV.every((x) => x.short && x.short.length <= 7), 'nombre corto que quepa bajo el icono')
+assert.equal(matNavWidth([{ id: 'a' }, { id: 'b', sep: true }], { btn: 36, gap: 1, sep: 5, chrome: 18 }), 36 * 2 + 5 + 2 + 18)
+assert.equal(MAT_NAV_WIDTH, matNavWidth())
 
 console.log('materialNav ok')

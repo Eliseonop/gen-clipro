@@ -124,12 +124,15 @@ def _clamp01(v, default: float = 0.5) -> float:
 # --- Lectura / validación ------------------------------------------------
 
 def track_overlaps(tl: Timeline, track_id: str) -> list[tuple[str, str]]:
-    """Pares de clips que se solapan en el tiempo dentro de una misma pista."""
+    """Pares de clips que se solapan en el tiempo dentro de una misma pista.
+
+    Tras cada operación ``no_overlap.settle_timeline`` los resuelve; solo quedan
+    los que ya traía un proyecto antiguo."""
     row = sorted((c for c in tl.clips if c.track_id == track_id), key=lambda c: c.start)
     out: list[tuple[str, str]] = []
     for i in range(len(row) - 1):
         a = row[i]
-        if a.start + _clip_dur(a) > row[i + 1].start + 1e-6:
+        if a.start + _clip_tl_dur(a) > row[i + 1].start + 1e-6:
             out.append((a.id, row[i + 1].id))
     return out
 
@@ -159,8 +162,9 @@ def validate_timeline(tl: Timeline) -> list[str]:
     return issues
 
 
-def _warn_overlaps(tl: Timeline, track_id: str) -> list[str]:
+def track_overlap_warnings(tl: Timeline, track_id: str) -> list[str]:
     return [f"solape en {track_id}: {a} ↔ {b}" for a, b in track_overlaps(tl, track_id)]
+
 
 
 def _clip_tl_dur(c: TimelineClip) -> float:
@@ -264,7 +268,7 @@ def add_clip(tl: Timeline, clip: dict | TimelineClip) -> EditResult:
     if any(x.id == c.id for x in out.clips):
         raise ValueError(f"Ya existe un clip con id {c.id}")
     out.clips.append(c)
-    return EditResult(out, changed=[c.id], warnings=_warn_overlaps(out, c.track_id))
+    return EditResult(out, changed=[c.id], warnings=track_overlap_warnings(out, c.track_id))
 
 
 def move_clip(tl: Timeline, clip_id: str, start: float | None = None, track_id: str | None = None) -> EditResult:
@@ -279,7 +283,7 @@ def move_clip(tl: Timeline, clip_id: str, start: float | None = None, track_id: 
         if start < 0:
             raise ValueError("start no puede ser negativo")
         c.start = _round(start)
-    return EditResult(out, changed=[clip_id], warnings=_warn_overlaps(out, c.track_id))
+    return EditResult(out, changed=[clip_id], warnings=track_overlap_warnings(out, c.track_id))
 
 
 def remove_clip(tl: Timeline, clip_id: str) -> EditResult:
@@ -345,7 +349,7 @@ def split_clip(tl: Timeline, clip_id: str, at_time: float) -> EditResult:
 
     idx = out.clips.index(c)
     out.clips[idx:idx + 1] = [a, b]
-    return EditResult(out, changed=[a.id, b.id], warnings=_warn_overlaps(out, c.track_id))
+    return EditResult(out, changed=[a.id, b.id], warnings=track_overlap_warnings(out, c.track_id))
 
 
 def add_subtitles(tl: Timeline, source_clip_id: str, segments, style: dict | None = None,
@@ -385,7 +389,7 @@ def add_subtitles(tl: Timeline, source_clip_id: str, segments, style: dict | Non
         c = TimelineClip(**cd)
         out.clips.append(c)
         new_ids.append(c.id)
-    return EditResult(out, changed=[*created, *new_ids], warnings=_warn_overlaps(out, tid))
+    return EditResult(out, changed=[*created, *new_ids], warnings=track_overlap_warnings(out, tid))
 
 
 def set_project_format(tl: Timeline, aspect: str | None = None, width: int | None = None,
@@ -1341,7 +1345,7 @@ def add_shape(tl: Timeline, shape: dict | None = None, track_id: str | None = No
         source_duration=_round(dur), shape=st, layout="fill", frame="full",
     )
     out.clips.append(c)
-    return EditResult(out, changed=[*created, c.id], warnings=_warn_overlaps(out, tid))
+    return EditResult(out, changed=[*created, c.id], warnings=track_overlap_warnings(out, tid))
 
 
 def duplicate_clip(tl: Timeline, clip_id: str, start: float | None = None) -> EditResult:
@@ -1360,7 +1364,7 @@ def duplicate_clip(tl: Timeline, clip_id: str, start: float | None = None) -> Ed
         speed = c.speed or 1.0
         d.start = _round(c.start + _clip_dur(c) / (speed if speed > 0 else 1.0))
     out.clips.append(d)
-    return EditResult(out, changed=[d.id], warnings=_warn_overlaps(out, d.track_id))
+    return EditResult(out, changed=[d.id], warnings=track_overlap_warnings(out, d.track_id))
 
 
 def link_tracks(tl: Timeline, track_id: str, to_track_id: str) -> EditResult:
@@ -1382,3 +1386,76 @@ def unlink_track(tl: Timeline, track_id: str) -> EditResult:
     track = _find_track(out, track_id)
     track.linked_track_id = None
     return EditResult(out, changed=[track_id])
+
+
+def _shift_times(items, delta: float, key: str = "t") -> None:
+    for it in items or []:
+        if isinstance(it, dict):
+            if isinstance(it.get(key), (int, float)):
+                it[key] = _round(it[key] + delta)
+        elif hasattr(it, key):
+            setattr(it, key, _round(getattr(it, key) + delta))
+
+
+def replace_media(tl: Timeline, sources: list[dict], target: dict) -> EditResult:
+    """Cambia los clips que usan otras versiones de un vídeo por ``target``.
+
+    ``sources``: [{filename, delta}] — archivos a sustituir y cuántos segundos
+    hay que sumar a sus tiempos de ARCHIVO para caer en el mismo instante del
+    nuevo (un tramo que empezaba en el 12 s del original → delta 12).
+    ``target``: {asset_id, filename, duration, media_version?}.
+
+    Se desplaza todo lo que va en tiempo de archivo (in/out, reframe.keyframes,
+    beats, puntos de la eliminación de fondo); lo que va en tiempo local del
+    clip (keyframes, anim, máscaras) no cambia. El encuadre va normalizado, así
+    que vale tal cual si la proporción es la misma (lo comprueba quien llama).
+    El matte de «Quitar fondo» se invalida: hay que volver a generarlo.
+    """
+    out = _copy(tl)
+    deltas = {str(s["filename"]): float(s.get("delta") or 0.0) for s in sources or [] if s.get("filename")}
+    if not deltas:
+        raise ValueError("replace_media: faltan los archivos a sustituir (sources)")
+    new_file = str(target.get("filename") or "")
+    new_dur = float(target.get("duration") or 0.0)
+    if not new_file or new_file in deltas:
+        raise ValueError("replace_media: target.filename inválido")
+    changed: list[str] = []
+    warnings: list[str] = []
+    for c in out.clips:
+        if c.asset_kind != "clips" or c.filename not in deltas:
+            continue
+        if (c.asset_scope or "project") != "project":
+            warnings.append(f"clip {c.id}: usa la copia de la biblioteca; no se cambia")
+            continue
+        d = deltas[c.filename]
+        c.in_point = _round(max(0.0, c.in_point + d))
+        c.out_point = _round(c.out_point + d)
+        if new_dur > 0:
+            if c.out_point > new_dur:
+                warnings.append(f"clip {c.id}: el tramo pasaba del final del vídeo nuevo; recortado")
+                c.out_point = _round(new_dur)
+            c.source_duration = _round(new_dur)
+            if c.out_point < new_dur - 0.05:
+                c.ref_segment = True
+        c.asset_id = str(target["asset_id"])
+        c.asset_scope = "project"
+        c.filename = new_file
+        c.media_version = target.get("media_version") or c.media_version
+        if d:
+            if c.reframe:
+                _shift_times(c.reframe.keyframes, d)
+                _shift_times(c.reframe.keyframes2, d)
+            if isinstance(c.beats, dict) and isinstance(c.beats.get("times"), list):
+                c.beats["times"] = [_round(t + d) for t in c.beats["times"] if isinstance(t, (int, float))]
+        auto = (c.bg_removal or {}).get("auto") if isinstance(c.bg_removal, dict) else None
+        if isinstance(auto, dict):
+            if d:
+                _shift_times(auto.get("edits"), d)
+            if auto.get("enabled"):
+                auto["base_key"] = ""
+                auto["status"] = "idle"
+                warnings.append(f"clip {c.id}: vuelve a generar «Quitar fondo» con el vídeo nuevo")
+        changed.append(c.id)
+    if not changed:
+        warnings.append("ningún clip de la timeline usaba esas versiones")
+    return EditResult(out, changed=changed, warnings=warnings)

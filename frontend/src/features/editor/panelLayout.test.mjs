@@ -40,6 +40,11 @@ assert.equal(readPanelLayout(storage).materials, 500)
 assert.equal(readPanelLayout(storage).inspector, 500)
 assert.ok(store.get(PANEL_LAYOUT_KEY).includes('"materials":500'))
 
+// Layout guardado antes de v2: Material vuelve al ancho de su barra de pestañas, el resto se conserva.
+store.set(PANEL_LAYOUT_KEY, JSON.stringify({ materials: 380, inspector: 410, bottom: 200, crops: 220 }))
+assert.equal(readPanelLayout(storage).materials, PANEL_DEFAULTS.materials)
+assert.equal(readPanelLayout(storage).inspector, 410)
+
 console.log('panelLayout ok')
 
 // Disposiciones del workspace: el signo del arrastre sigue al lado del panel

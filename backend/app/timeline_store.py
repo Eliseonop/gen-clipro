@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from . import config, projects, timeline_history, timeline_ops
+from . import config, no_overlap, projects, timeline_history, timeline_ops
 from .schemas import Timeline
 
 HISTORY_DIR = config.DATA_DIR / "history"
@@ -57,6 +57,7 @@ OPS = {
     "unlink_track": timeline_ops.unlink_track,
     "rename_track": timeline_ops.rename_track,
     "reorder_track": timeline_ops.reorder_track,
+    "replace_media": timeline_ops.replace_media,
 }
 
 
@@ -108,6 +109,18 @@ def apply_op(pid: str, op: str, params: dict | None = None) -> dict:
         raise ValueError(f"Operación desconocida: {op} (usa {list(OPS)})")
     current = _current(pid)
     res = fn(Timeline(**current), **(params or {}))
+
+    # Una pista nunca tiene dos clips a la vez: lo que la op haya montado sube de
+    # pista o empuja a los de detrás (misma regla que el editor, ver no_overlap).
+    settled, created, notes = no_overlap.settle_timeline(Timeline(**current), res.timeline)
+    if settled is not res.timeline:
+        touched = no_overlap.touched_clip_ids(Timeline(**current), settled)
+        touched_tracks = {c.track_id for c in settled.clips if c.id in touched}
+        # Los avisos de solape de la op ya no valen: se recalculan sobre el resultado.
+        warns = [w for w in res.warnings if not w.startswith("solape en ")]
+        for tid in sorted(touched_tracks):
+            warns += timeline_ops.track_overlap_warnings(settled, tid)
+        res = timeline_ops.EditResult(settled, changed=[*created, *res.changed], warnings=warns + notes)
 
     # Rechazar solo errores NUEVOS (no bloquear por suciedad preexistente).
     before = set(timeline_ops.validate_timeline(Timeline(**current)))

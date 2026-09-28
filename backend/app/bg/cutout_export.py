@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .. import clip_bg, compose, detect
-from ..clip_kind import ffmpeg_input_args, ffmpeg_trim_window
+from ..clip_kind import ffmpeg_input_args, ffmpeg_trim_filter, ffmpeg_trim_window
 from . import service as bg_service
 
 ProgressCb = Optional[Callable[[float, str], None]]
@@ -61,7 +61,7 @@ def render_clip_cutout(project, clip, out_path: Path, on_progress: ProgressCb = 
 
     tin, tout = ffmpeg_trim_window(clip, fps)
     out_dur = max(0.1, tout - tin)
-    steps = [f"[0:v]trim={tin:.3f}:{tout:.3f},setpts=PTS-STARTPTS[bgin0]"]
+    steps = [f"[0:v]{ffmpeg_trim_filter(clip, fps)},setpts=PTS-STARTPTS[bgin0]"]
     bg_steps, bg_label = compose._bg_source_chain(clip, path, spec, bg_input, 0, fps, "bgin0")
     steps.extend(bg_steps)
     # yuva420p: el formato de alfa que espera libvpx-vp9.

@@ -89,6 +89,21 @@ def ffmpeg_trim_window(clip, fps: int = 30) -> tuple[float, float]:
     return inp, out
 
 
+def ffmpeg_trim_filter(clip, fps: int = 30) -> str:
+    """Filtro ``trim`` del input de un clip (sin ``setpts``).
+
+    En vídeo va precedido de ``fps``: las grabaciones de pantalla son VFR y solo
+    escriben fotograma cuando la pantalla cambia, así que pueden pasar decenas de
+    segundos sin ninguno. Un ``trim`` que cae entero en ese hueco sale VACÍO (el
+    clip se exporta negro) y uno que empieza dentro del hueco arranca en el
+    siguiente fotograma y adelanta todo el clip. Pasar antes a CFR repite el
+    último fotograma durante el hueco, que es lo que muestra el preview.
+    """
+    tin, tout = ffmpeg_trim_window(clip, fps)
+    trim = f"trim={tin:.3f}:{tout:.3f}"
+    return trim if is_still_clip(clip) else f"fps={int(fps)},{trim}"
+
+
 def ffmpeg_input_args(clip, path, fps: int) -> list[str]:
     """Args ``-i`` de un clip. Still: loop; vídeo/audio: archivo tal cual.
 

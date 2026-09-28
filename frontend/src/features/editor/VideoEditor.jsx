@@ -24,7 +24,7 @@ import {
   extraClipsAfterSplit, extraClipsAfterOneSplit, splitTrackTextByMaxWords, splitOneTextClip,
   nextClipSelection, groupMoveFromOrig, patchClipsStyle, removeClipsByIds, freeStartOnTrack,
   previewElementVolume, parsePreviewVolume, PREVIEW_VOL_KEY, syncPreviewMedia,
-  isVisualClip, trackKindForClip, laneKindForAsset, IMAGE_DEFAULT_DUR,
+  isVisualClip, isGeneratedDurationClip, trackKindForClip, laneKindForAsset, IMAGE_DEFAULT_DUR,
   duplicateClipOntoTrack, syncMaterialInstances, applyFaceTrack,
   isEditingExistingClip, clipSaveIndex,
   trackContextItems, linkTrackPair, unlinkTrackPair,
@@ -39,6 +39,8 @@ import { CINEMA_RATIOS, SHAPE_DEFAULT_DUR, cinemaBar, defaultShape, drawInKeyfra
 import { clipFlip } from '../../lib/clipAnim'
 import { readRowHeight, writeRowHeight } from './trackRows'
 import { newTrackIndex, slotIndex } from './dropIntent'
+import { overlapPairs, separateOverlaps, settleClips } from './noOverlap'
+import { mainTrackOf, packMagnetic } from './magnetic'
 import { TIMELINE_SCHEMA_VERSION, insertTrack, reorderTrack, stepTrack, trackNeighbor } from './trackStack'
 import { MASK_KF_KEYS, clipMasks, defaultMask, maskId, normalizeMask } from '../../lib/clipMask'
 import {
@@ -289,8 +291,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const [linkPick, setLinkPick] = useState(null)    // id de pista de audio al relacionar
   const [trackToDelete, setTrackToDelete] = useState(null)
   const [fragmentAsk, setFragmentAsk] = useState(null)
-  // Soltar un clip justo encima de otro = intención de reemplazarlo: se confirma.
-  const [replaceAsk, setReplaceAsk] = useState(null)
   const [dragInfo, setDragInfo] = useState(null)    // { kind, duration, name }
   const [mainColTab, setMainColTab] = useState('main')
   // Motion Studio como MODO nativo: estado de composición compartido; el timeline
@@ -383,6 +383,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const durationRef = useRef(0)
   const fpsRef = useRef(30); fpsRef.current = fps
   const clipsRef = useRef(clips); clipsRef.current = clips
+  // Regla «una pista nunca tiene dos clips a la vez» (ver el efecto de settleClips):
+  // la base son los clips antes del último cambio. `settleResetRef` = el próximo
+  // cambio NO es una edición (cargar, recargar, deshacer, volver a Main): no se toca.
+  const settleBaseRef = useRef(null)
+  const settleResetRef = useRef(true)
   const markersRef = useRef(markers); markersRef.current = markers
   const tracksRef = useRef(tracks); tracksRef.current = tracks
   const selRef = useRef(selClipId); selRef.current = selClipId
@@ -471,6 +476,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         const tl = await getTimeline(project.id)
         if (!alive) return
         if (tl && tl.tracks && tl.tracks.length) {
+          settleResetRef.current = true
           setTracks(tl.tracks)
           setClips((tl.clips || []).map((c) => ({
             ...c,
@@ -604,6 +610,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         }
         return nextClips
       }
+      settleResetRef.current = true
       setTracks(nextTracks)
       setClips(nextClips)
       setMarkers(normalizeMarkers(tl.markers))
@@ -782,6 +789,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   }
   function applyTl(s) {
     if (!s) return
+    settleResetRef.current = true
     setTracks(s.tracks)
     setClips(s.clips)
     setMarkers(s.markers || [])
@@ -1754,7 +1762,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       const track = targetTrackFor('video')
       if (!track) return
       // Las figuras son objetos libres (rótulos, flechas): se quedan en el
-      // cabezal aunque haya un clip debajo, porque suelen ir SOBRE el vídeo.
+      // cabezal y, si ahí hay un clip, suben a la pista de encima (noOverlap.js):
+      // así quedan SOBRE el vídeo sin montarse en su pista.
       const clip = makeShapeClip(track.id, at, SHAPE_DEFAULT_DUR, item)
       setClips((prev) => [...prev, clip])
       setSelClipId(clip.id)
@@ -2031,40 +2040,46 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     setStickMenu(null)
   }
 
-  // Aplica la intención deducida al soltar (ver dropIntent.js). Devuelve la
-  // pista definitiva y el instante, o null si hay que esperar confirmación.
-  function resolveDropTarget(payload, trackId, startTime, intent) {
-    if (!intent || intent.action === 'place' || intent.action === 'after') {
-      return { trackId, start: startTime }
+  // Aplica dónde cae el material (ver dropTarget en dropIntent.js): crea la pista
+  // nueva que anunciaba la raya verde o quita el clip que se reemplaza (Alt).
+  // Devuelve { trackId, start, fitDur? } (fitDur = ocupar el hueco del reemplazado).
+  function resolveDropTarget(payload, target) {
+    if (!target) return null
+    if (target.slot) {
+      return { trackId: addTrack(laneKindForAsset(payload.asset_kind), undefined, slotIndex(tracksRef.current, target.slot)), start: target.start }
     }
-    if (intent.action === 'insertTrack') {
-      // Soltado sobre una pista de otro tipo: la pista nueva va en la línea que se vio.
-      return { trackId: addTrack(laneKindForAsset(payload.asset_kind), undefined, slotIndex(tracksRef.current, intent.slot)), start: startTime }
+    if (target.replaceId) {
+      // Como CapCut: el nuevo ocupa el sitio del de debajo (y su duración, si es
+      // más largo). Se deshace con Ctrl+Z, así que no se pregunta.
+      const old = clipsRef.current.find((c) => c.id === target.replaceId)
+      setClips((prev) => removeClipsByIds(prev, [target.replaceId]))
+      return { trackId: target.trackId, start: target.start, fitDur: old ? clipDur(old) : null }
     }
-    if (intent.action === 'newTrack') {
-      // Siempre una pista nueva justo encima (CapCut), aunque la de encima sea
-      // del mismo tipo y tenga hueco: es lo que anuncia la línea verde.
-      const slot = { targetId: trackId, place: 'above' }
-      return { trackId: addTrack(laneKindForAsset(payload.asset_kind), undefined, slotIndex(tracksRef.current, slot)), start: startTime }
-    }
-    if (intent.action === 'replace') {
-      setReplaceAsk({ payload, trackId, start: startTime, targetId: intent.targetId })
-      return null
-    }
-    return { trackId, start: startTime }
+    return { trackId: target.trackId, start: target.start }
   }
 
-  function dropAsset(payload, trackId, startTime, intent) {
+  function dropAsset(payload, target) {
     if (payload._explore) {
-      dropExploreAsset(payload, trackId, startTime, intent)
+      dropExploreAsset(payload, target)
       return
     }
-    const spot = resolveDropTarget(payload, trackId, startTime, intent)
-    if (!spot) return                       // el modal de reemplazo decide
-    placeAsset(payload, spot.trackId, spot.start)
+    const spot = resolveDropTarget(payload, target)
+    if (spot) placeAsset(payload, spot.trackId, spot.start, spot.fitDur)
   }
 
-  async function dropExploreAsset(item, trackId, startTime, intent) {
+  // Material soltado en el preview: entra en el cabezal, en la pista de su tipo
+  // (la seleccionada si vale). Si ahí hay otro clip, la regla de no solapar lo
+  // sube a la pista de encima; sin pista de su tipo, se crea.
+  function dropOnCanvas(payload) {
+    const kind = laneKindForAsset(payload._explore ? (payload.kind === 'video' ? 'video' : 'image') : payload.asset_kind)
+    const track = targetTrackFor(kind)
+    const start = +Math.max(0, playheadRef.current || 0).toFixed(3)
+    dropAsset(payload, track
+      ? { trackId: track.id, start }
+      : { slot: { targetId: null, place: kind === 'audio' ? 'below' : 'above' }, start })
+  }
+
+  async function dropExploreAsset(item, target) {
     setClipToast({ type: 'info', message: 'Importando material…' })
     try {
       const res = await importExplore(project.id, item)
@@ -2086,34 +2101,28 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         description: imported.description || null,
         media_version: imported.created_at || null,
       }
-      const spot = resolveDropTarget(materialPayload, trackId, startTime, intent)
+      const spot = resolveDropTarget(materialPayload, target)
       if (!spot) return
-      placeAsset(materialPayload, spot.trackId, spot.start)
+      placeAsset(materialPayload, spot.trackId, spot.start, spot.fitDur)
       setClipToast({ type: 'success', message: isVideo ? 'Vídeo añadido a la timeline.' : 'Imagen añadida a la timeline.' })
     } catch (e) {
       setClipToast({ type: 'error', message: e.message || 'No se pudo importar.' })
     }
   }
 
-  // Confirmado el reemplazo: fuera el clip de debajo y el nuevo ocupa su sitio.
-  function applyReplaceDrop() {
-    const ask = replaceAsk
-    setReplaceAsk(null)
-    if (!ask) return
-    setClips((prev) => removeClipsByIds(prev, [ask.targetId]))
-    placeAsset(ask.payload, ask.trackId, ask.start)
-  }
-
-  function placeAsset(payload, trackId, startTime) {
+  // `fitDur`: el clip ocupa el hueco de uno reemplazado. Un vídeo o audio más
+  // largo se recorta; una imagen, texto o figura toma esa duración.
+  function placeAsset(payload, trackId, startTime, fitDur) {
+    const fit = Number(fitDur) > 0 ? Number(fitDur) : null
     // Ficha «Texto predeterminado» (o un tema) soltada en la timeline.
     if (payload.asset_kind === 'text') {
       const preset = themeById(payload.theme_id)
-      const dur = payload.duration || TEXT_DEFAULT_DUR
+      const dur = fit || payload.duration || TEXT_DEFAULT_DUR
       selectNewText(makeTextClip(trackId, startTime, dur, payload.text || DEFAULT_TEXT, newTextStyle(trackId, preset)))
       return
     }
     if (payload.asset_kind === 'shape' || payload.kind === 'shape') {
-      const clip = makeShapeClip(trackId, startTime, payload.duration || SHAPE_DEFAULT_DUR, payload)
+      const clip = makeShapeClip(trackId, startTime, fit || payload.duration || SHAPE_DEFAULT_DUR, payload)
       setClips((prev) => [...prev, clip])
       setSelClipId(clip.id)
       setSelClipIds([clip.id])
@@ -2132,8 +2141,13 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       out_point: payload.out_point,
       face_track: payload.face_track,
     }, trackId, startTime, payload.duration)
+    let sized = base
+    if (fit && (isGeneratedDurationClip(base) || clipDur(base) > fit)) {
+      const span = isGeneratedDurationClip(base) ? fit : fit * clipSpeed(base)
+      sized = { ...base, out_point: +((base.in_point || 0) + span).toFixed(3) }
+    }
     // Stick arrastrado desde la Biblioteca: nace con el croma de su personaje.
-    const clip = payload.chroma_color ? { ...base, bg_removal: chromaBg(payload.chroma_color) } : base
+    const clip = payload.chroma_color ? { ...sized, bg_removal: chromaBg(payload.chroma_color) } : sized
     setClips((prev) => [...prev, clip])
     setSelClipId(clip.id)
     setSelClipIds([clip.id])
@@ -2206,14 +2220,18 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   // índice del array para colocarla justo encima de otra, o nada = el sitio de
   // siempre (ver defaultTrackIndex).
   function addTrack(kind, style, where) {
-    const prefix = kind === 'video' ? 'V' : kind === 'audio' ? 'A' : 'T'
-    const nums = tracksRef.current.filter((t) => t.kind === kind).map((t) => parseInt(String(t.name).replace(/\D/g, ''), 10) || 0)
-    const n = (nums.length ? Math.max(...nums) : 0) + 1
-    const id = `${prefix}${n}-${uid('')}`
-    const nt = { id, kind, name: `${prefix}${n}`, hidden: false, muted: false, locked: false, linked_track_id: null }
-    if (kind === 'text') nt.style = style || subtitleStyle()
+    const nt = buildTrack(kind, style, tracksRef.current)
     setTracks((prev) => insertTrack(prev, nt, typeof where === 'string' ? newTrackIndex(prev, kind, where) : where))
-    return id
+    return nt.id
+  }
+  // Pista nueva de `kind` numerada tras las que ya hay en `list` (V3, A2, T2…).
+  function buildTrack(kind, style, list) {
+    const prefix = kind === 'video' ? 'V' : kind === 'audio' ? 'A' : 'T'
+    const nums = (list || []).filter((t) => t.kind === kind).map((t) => parseInt(String(t.name).replace(/\D/g, ''), 10) || 0)
+    const n = (nums.length ? Math.max(...nums) : 0) + 1
+    const nt = { id: `${prefix}${n}-${uid('')}`, kind, name: `${prefix}${n}`, hidden: false, muted: false, locked: false, linked_track_id: null }
+    if (kind === 'text') nt.style = style ? { ...style } : subtitleStyle()
+    return nt
   }
   function reorderTracks(next) {
     if (next !== tracksRef.current) setTracks(next)
@@ -2400,21 +2418,76 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     if (mainColTab !== 'main') return
     for (const id of ids) if (id) mayEmptyRef.current.add(id)
   }
+  // Tras cada cambio de clips, en el mismo paso del historial:
+  //  1) Sin solapes (noOverlap.js): lo que este cambio haya montado se resuelve
+  //     (empuja, sube de pista o empaqueta la magnética). Solo en Main, y cargar,
+  //     recargar o deshacer no cuenta como edición.
+  //  2) Las pistas que se quedaron vacías se quitan.
+  // Van juntos para que un paso no pise las pistas que acaba de tocar el otro.
   useEffect(() => {
+    const base = settleBaseRef.current
+    settleBaseRef.current = clips
+    let nextClips = clips
+    let nextTracks = tracks
+    if (settleResetRef.current || !base || !loaded || mainColTab !== 'main') {
+      settleResetRef.current = false
+    } else {
+      const out = settleClips(base, clips, tracks, { makeTrack: buildTrack })
+      if (out.changed) {
+        nextClips = out.clips
+        nextTracks = out.tracks
+      }
+    }
     const cand = mayEmptyRef.current
-    if (!cand.size) return
     mayEmptyRef.current = new Set()
-    const gone = emptiedTracks(tracks, clips, cand)
-    if (!gone.length) return
-    let next = { tracks, clips }
-    for (const id of gone) next = removeTrack(next.tracks, next.clips, id)
-    setTracks(next.tracks)
+    const gone = cand.size ? emptiedTracks(nextTracks, nextClips, cand) : []
+    for (const id of gone) nextTracks = removeTrack(nextTracks, nextClips, id).tracks
+    if (nextClips !== clips) {
+      settleBaseRef.current = nextClips
+      setClips(nextClips)
+    }
+    if (nextTracks !== tracks) setTracks(nextTracks)
     if (gone.includes(selTrackId)) {
-      const sel = clips.find((c) => c.id === selClipId)
-      setSelTrackId(sel?.track_id || next.tracks[0]?.id || null)
+      const sel = nextClips.find((c) => c.id === selClipId)
+      setSelTrackId(sel?.track_id || nextTracks[0]?.id || null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clips])
+
+  // Clips montados en la misma pista que ya traía el proyecto (antes se podía).
+  const overlapCount = useMemo(
+    () => (mainColTab === 'main' ? overlapPairs(clips).length : 0),
+    [clips, mainColTab],
+  )
+  // «Separar solapes»: el clip de delante de cada solape sube a su propia pista.
+  function separateClipOverlaps() {
+    const out = separateOverlaps(clipsRef.current, tracksRef.current, { makeTrack: buildTrack })
+    if (!out.moved) return
+    setTracks(out.tracks)
+    setClips(out.clips)
+    setClipToast({ type: 'success', message: out.moved === 1 ? '1 clip movido a su propia pista' : `${out.moved} clips movidos a su propia pista` })
+  }
+
+  // Imán de la pista principal (como CapCut): la de vídeo del fondo pasa a ser una
+  // secuencia sin huecos. Al activarlo se cierran los huecos que hubiera.
+  const magnetOn = !!mainTrackOf(tracks)?.magnetic
+  function toggleMagnet() {
+    const main = mainTrackOf(tracksRef.current)
+    if (!main) return
+    const on = !main.magnetic
+    // Una sola pista magnética: si otra lo era (tras reordenar), deja de serlo.
+    setTracks((prev) => prev.map((t) => {
+      if (t.id === main.id) return { ...t, magnetic: on }
+      return t.magnetic ? { ...t, magnetic: false } : t
+    }))
+    if (on) setClips((prev) => packMagnetic(prev, main.id))
+    setClipToast({
+      type: 'info',
+      message: on
+        ? `Pista ${main.name} magnética: sin huecos, soltar inserta y empuja`
+        : `Pista ${main.name} ya no es magnética`,
+    })
+  }
 
   function moveGroup(origs, deltaT) {
     setClips((prev) => groupMoveFromOrig(prev, origs, deltaT))
@@ -3803,6 +3876,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
 
   function applyHistSnap(s) {
     if (!s) return
+    settleResetRef.current = true
     setTracks(s.tracks || [])
     setClips(s.clips || [])
     setMarkers(s.markers || [])
@@ -4132,6 +4206,11 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           onAudioDb={setAudioDb}
           aiContext={{ project_id: project.id, selected_clip_id: selClipId || null, selected_track_id: selTrackId || null, current_time: Math.round((playhead || 0) * 100) / 100 }}
           onReloadTimeline={reloadTimeline}
+          onFlushTimeline={async () => {
+            // Antes de una edición hecha en el servidor: que no se pierda lo último.
+            if (clipModeRef.current || motionModeRef.current || paperModeRef.current) return
+            try { await saveTimeline(project.id, timelinePayload()) } catch { /* usa lo guardado */ }
+          }}
           onMcpAudit={setMcpAudit}
           motion={motion}
           motionFormat={{ width: outW, height: outH, fps }}
@@ -4286,20 +4365,12 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               e.preventDefault()
               const rawExplore = e.dataTransfer.getData('application/x-explore')
               if (rawExplore) {
-                try {
-                  const ex = JSON.parse(rawExplore)
-                  const at = freeStartOnTrack(clipsRef.current, selTrackId, playhead, ex.duration || 3)
-                  dropAsset({ ...ex, _explore: true }, selTrackId, at)
-                } catch { /* noop */ }
+                try { dropOnCanvas({ ...JSON.parse(rawExplore), _explore: true }) } catch { /* noop */ }
                 return
               }
               const raw = e.dataTransfer.getData('application/x-material')
               if (!raw) return
-              try {
-                const p = JSON.parse(raw)
-                const at = freeStartOnTrack(clipsRef.current, selTrackId, playhead, p.duration || SHAPE_DEFAULT_DUR)
-                dropAsset(p, selTrackId, at)
-              } catch { /* noop */ }
+              try { dropOnCanvas(JSON.parse(raw)) } catch { /* noop */ }
             }}
             // Fuera de estos modos, el cursor lo pone onCanvasHover en el <canvas>.
             style={{ cursor: (bgBrush.on || chromaPick || pen || trackPick) ? 'crosshair' : undefined }}
@@ -4591,6 +4662,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           markers={mainColTab === 'main' ? markers : null}
           onMarkerChange={mainColTab === 'main' ? patchMarker : undefined}
           onToggleMarker={mainColTab === 'main' ? toggleMarker : undefined}
+          magnetOn={magnetOn}
+          onToggleMagnet={mainColTab === 'main' ? toggleMagnet : undefined}
+          overlapCount={overlapCount}
+          onSeparateOverlaps={mainColTab === 'main' ? separateClipOverlaps : undefined}
           freezeDisabled={selClipIds.length > 1 || !canFreeze(selectedClip, playhead)}
           freezeBusy={freezeBusy}
           onFaceTrack={mainColTab === 'clip' ? startFaceTrack : undefined}
@@ -4951,16 +5026,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         danger={false}
         onConfirm={applyFragment}
         onCancel={() => setFragmentAsk(null)}
-      />
-      <ConfirmModal
-        open={!!replaceAsk}
-        title="¿Reemplazar el clip?"
-        message={replaceAsk
-          ? `“${clips.find((c) => c.id === replaceAsk.targetId)?.name || 'El clip de debajo'}” se quitará de la pista y “${replaceAsk.payload?.name || 'el nuevo clip'}” ocupará su lugar. Para dejar los dos, suelta en la franja superior de la pista (crea una pista nueva).`
-          : ''}
-        confirmText="Reemplazar"
-        onConfirm={applyReplaceDrop}
-        onCancel={() => setReplaceAsk(null)}
       />
       {cropClipId && clips.some((c) => c.id === cropClipId) && (
         <EdCropModal

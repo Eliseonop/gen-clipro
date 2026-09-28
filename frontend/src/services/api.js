@@ -62,6 +62,13 @@ export const revealMaterial = ({ projectId, kind, filename, scope }) =>
 export const listVoices = () => get('/api/voices')
 export const createTtsJob = (params) => post('/api/tts', params)
 export const createYoutubeAudioJob = (params) => post('/api/youtube-audio', params)
+// Vídeo completo al material: { project_id, url, quality? } (sin quality → la mejor).
+export const createYoutubeVideoJob = (params) => post('/api/youtube-video', params)
+// Subir calidad: otras versiones del mismo vídeo y cambiarlas en la timeline.
+export const getClipVersions = (pid, ident) =>
+  get(`/api/projects/${pid}/clips/${encodeURIComponent(ident)}/versions`)
+export const replaceClipVersions = (pid, ident, oldIdents = null) =>
+  post(`/api/projects/${pid}/clips/${encodeURIComponent(ident)}/replace-versions`, { old_idents: oldIdents })
 export const listLibrary = () => get('/api/library')
 export const saveLibraryItem = (params) => post('/api/library/save', params)
 export const unsaveLibraryItem = (id) => del(`/api/library/${id}`)

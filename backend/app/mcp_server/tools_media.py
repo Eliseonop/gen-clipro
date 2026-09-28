@@ -100,8 +100,35 @@ def fetch_image(project_id: str, url: str, label: str | None = None) -> dict:
                                   "height": info.height, "url": info.url}}
 
 
+def download_youtube_video(project_id: str, url: str, quality: int | None = None) -> dict:
+    """Job que baja el vídeo COMPLETO al material (quality 720/1080/2160…; None = la máxima)."""
+    from ..schemas import YouTubeVideoRequest
+    from ..youtube_audio import is_youtube_url
+    _project_or_raise(project_id)
+    if not is_youtube_url(url):
+        raise MCPError("invalid_parameter", "URL de YouTube no válida.", param="url", retryable=True)
+    job = jobs.create_job()
+    jobs.start_youtube_video_job(job, YouTubeVideoRequest(project_id=project_id, url=url, quality=quality))
+    return dto.job_dto(job)
+
+
+def replace_media_version(project_id: str, clip_index: str, old_indexes: list | None = None,
+                          dry_run: bool = False) -> dict:
+    """Cambia en la timeline las otras versiones del vídeo por clip_index (deshacible). dry_run = solo detectar."""
+    from .. import media_upgrade
+    _project_or_raise(project_id)
+    try:
+        if dry_run:
+            return media_upgrade.find_versions(project_id, clip_index)
+        return media_upgrade.replace_with(project_id, clip_index, old_indexes)
+    except LookupError as exc:
+        raise MCPError("resource_not_found", str(exc), hint="list_media para ver los index.") from None
+
+
 def register(mcp) -> None:
     tool(mcp, access="read")(analyze_youtube)
     tool(mcp, access="write")(create_clips_from_segments)
     tool(mcp, access="write")(fetch_image)
+    tool(mcp, access="write")(download_youtube_video)
+    tool(mcp, access="write")(replace_media_version)
     tool(mcp, access="destructive")(delete_media)

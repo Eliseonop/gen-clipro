@@ -34,12 +34,20 @@ class AnalyzeRequest(BaseModel):
     padding: int = Field(default=10, ge=0, le=60)
 
 
+class VideoQuality(BaseModel):
+    """Una calidad descargable del vídeo (etiqueta de YouTube: lado corto en px)."""
+    quality: int                 # 720, 1080, 2160…
+    fps: Optional[int] = None
+    size: Optional[int] = None   # bytes estimados (vídeo + audio)
+
+
 class VideoInfo(BaseModel):
     id: str
     title: str
     duration: float
     thumbnail: Optional[str] = None
     uploader: Optional[str] = None
+    qualities: list[VideoQuality] = []   # de mejor a peor
 
 
 class AnalyzeResponse(BaseModel):
@@ -344,6 +352,25 @@ class YouTubeAudioRequest(BaseModel):
     name: Optional[str] = None
 
 
+class ReplaceVersionsRequest(BaseModel):
+    """Cambiar en la timeline otras versiones del vídeo por éste. Vacío = las de menos calidad."""
+    old_idents: Optional[list[str]] = None
+
+
+class UpgradeQualityRequest(BaseModel):
+    """Workflow «subir calidad»: sin url = todos los vídeos de YouTube de la timeline."""
+    url: Optional[str] = None
+    quality: Optional[int] = Field(default=None, ge=144, le=4320)
+    replace: bool = True
+
+
+class YouTubeVideoRequest(BaseModel):
+    """Descargar el vídeo completo al material. ``quality`` ausente → la mejor."""
+    project_id: str
+    url: str
+    quality: Optional[int] = Field(default=None, ge=144, le=4320)
+
+
 class ImageInfo(BaseModel):
     """Un archivo de imagen del proyecto (PNG/JPG/WebP…), sin convertir a vídeo."""
     id: str
@@ -446,6 +473,9 @@ class TimelineTrack(BaseModel):
     locked: bool = False
     style: Optional[dict] = None  # plantilla de la pista de texto (tema, fuente, karaoke…)
     linked_track_id: Optional[str] = None  # audio↔texto: al cambiar velocidad, la pista ligada se escala
+    # Pista magnética (la principal de CapCut): sin huecos desde 0; soltar inserta y
+    # empuja. La empaqueta ``no_overlap.settle_timeline`` tras cada operación.
+    magnetic: bool = False
 
 
 class TimelineClip(BaseModel):

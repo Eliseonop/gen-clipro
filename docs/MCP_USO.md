@@ -46,9 +46,9 @@ puente. En `claude_desktop_config.json`:
 
 Reinicia Claude Desktop tras editar el archivo.
 
-## 3. Qué puede hacer la IA — catálogo de tools (52)
+## 3. Qué puede hacer la IA — catálogo de tools (96)
 
-Total: **14 read / 35 write / 3 destructive**.
+Total: **31 read / 62 write / 3 destructive**.
 
 Toda tool declara un nivel de política (`read` / `write` / `destructive`) y queda
 **auditada** en `backend/data/mcp_audit.jsonl` (tool, nivel, proyecto, claves de
@@ -85,9 +85,15 @@ params —nunca valores—, estado y ms). Cada tool lleva además `meta.domain` 
 - `analyze_youtube(url, …)` — tramos del heatmap (síncrono)
 - `create_clips_from_segments(project_id, url, segments, crop_mode)` — job de recorte
 - `fetch_image(project_id, url)` — trae una imagen al proyecto
+- `download_youtube_video(project_id, url, quality?)` — job: vídeo COMPLETO al material (None = máxima calidad; `analyze_youtube` da `video.qualities`) · [detalle](YOUTUBE_VIDEO_COMPLETO.md)
+- `replace_media_version(project_id, clip_index, old_indexes?, dry_run?)` — cambia en la timeline las versiones de menos calidad del mismo vídeo por ésta (deshacible) · [detalle](SUBIR_CALIDAD.md)
 - `delete_media` *(destructive)*
 
 **Edición estructural**
+- **Regla de pistas**: una pista nunca tiene dos clips a la vez. Tras cada operación,
+  un clip colocado/movido encima de otro sube a la pista vecina libre (o a una nueva) y
+  uno que crece empuja a los de detrás; `warnings` dice qué se movió y `changed`
+  incluye las pistas creadas. Una pista con `magnetic: true` no tiene huecos · [detalle](TIMELINE_ARRASTRE.md)
 - `add_to_timeline` (clip/audio/imagen) · `move_clip` · `split_clip` ·
   `remove_clip` *(destructive)*
 - `freeze_frame(clip_id, at_time, duration=3)` — congela el fotograma de un vídeo
@@ -151,8 +157,9 @@ params —nunca valores—, estado y ms). Cada tool lleva además `meta.domain` 
 **Workflows de una sola llamada**
 - `create_short_from_youtube(project_id, url, …)`
 - `make_short_from_library(project_id, asset_id, …)`
+- `upgrade_timeline_quality(project_id, url?, quality?)` — edición en baja → final en alta: baja la máxima calidad de los vídeos de YouTube de la timeline y cambia los clips
 
-## 4. Los 3 flujos objetivo
+## 4. Los 4 flujos objetivo
 
 Los jobs (recorte, transcripción, export) devuelven `{id, status}` → espera con
 `wait_for_job(job_id)`.
@@ -180,6 +187,16 @@ add_subtitles(pid, source_clip_id=clip_id, segments=…)
 export_project(pid)                         → job → wait_for_job → export_url
 ```
 Si algo sale mal: `undo` (o `restore_checkpoint`).
+
+**D) Editar en baja, terminar en alta**
+```
+upgrade_timeline_quality(pid)              → job (detecta, baja la máxima, cambia)
+wait_for_job(job.id)                       → result.videos[].replaced
+# o paso a paso:
+download_youtube_video(pid, url)           → job → result.clip_index, upgradable
+replace_media_version(pid, clip_index, dry_run=True)   → qué cambiaría
+replace_media_version(pid, clip_index)     → clips cambiados (undo para volver)
+```
 
 ## 5. Notas operativas
 

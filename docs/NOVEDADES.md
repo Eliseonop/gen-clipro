@@ -6,6 +6,72 @@ Toda funcionalidad nueva se documenta aquí y en su `.md` propio.
 
 ---
 
+## 2026-09-28 — Arrastrar y soltar en la timeline, sin solapes y pista magnética
+
+Detalle: [TIMELINE_ARRASTRE.md](TIMELINE_ARRASTRE.md).
+
+- **Soltar dentro de una pista entra en ella**: la pista nueva solo sale en la raya
+  entre dos pistas (6 px) o fuera del bloque. Antes los bordes (hasta el 60 % de una
+  pista de texto) y la franja alta de los clips pedían pista nueva casi siempre.
+- Al arrastrar material, una **pastilla** con el nombre sustituye a la miniatura del
+  navegador: su borde izquierdo es donde empieza el clip.
+- **Sitio ocupado**: se pega al hueco si está cerca; si no, **sube a la pista de
+  encima** en el mismo instante. Ya no se manda al final de la pista.
+- **Alt al soltar** reemplaza el clip de debajo (sin ventana de confirmación; Ctrl+Z).
+- **Autodesplazamiento** al arrastrar cerca del borde de las pistas.
+- **Una pista nunca tiene dos clips a la vez**, por ninguna vía (pegar, «+», velocidad,
+  mover en grupo, MCP…): lo que crece empuja, lo que cae encima sube de pista. Los
+  proyectos antiguos con clips montados muestran un aviso ámbar → **Separar solapes**.
+- **Pista principal magnética** (botón del imán): sin huecos; soltar inserta en el
+  corte más cercano y empuja lo de detrás.
+
+## 2026-09-27 — Arreglo de export: grabaciones de pantalla (VFR) salían en negro
+
+- Las grabadoras de pantalla (RecorderX, Vysor…) solo escriben fotograma cuando la
+  pantalla cambia: con la pantalla quieta puede haber decenas de segundos sin ninguno.
+  Un clip cuyo in/out caía entero en ese hueco se exportaba **negro** (el preview sí
+  mostraba el último fotograma), y uno que empezaba dentro del hueco salía adelantado.
+- El export (y `render_timeline_frame`, y el recorte transparente de Quitar fondo) pasa
+  el vídeo a fotogramas constantes **antes** de recortar (`ffmpeg_trim_filter` en
+  `clip_kind.py`), así el hueco repite el último fotograma igual que el preview.
+  Test: `backend/tests/test_vfr_trim.py`.
+
+## 2026-09-26 — Subir calidad: la timeline pasa de la versión ligera a la buena
+
+Detalle: [SUBIR_CALIDAD.md](SUBIR_CALIDAD.md).
+
+- Editas rápido con un tramo o el vídeo en 480p/720p, bajas el vídeo completo en máxima
+  calidad y el editor **detecta** que la timeline usa otra versión del mismo vídeo:
+  ofrece cambiar todos esos clips conservando cortes, encuadre y animaciones
+  (deshacible). También a mano: clic derecho en el vídeo → **Usar esta calidad en la
+  timeline**.
+- MCP: `download_youtube_video`, `replace_media_version` (con `dry_run`) y el workflow
+  `upgrade_timeline_quality` (detecta, baja la máxima y cambia en un job).
+
+## 2026-09-26 — Agregar vídeo completo de YouTube eligiendo la calidad
+
+Detalle: [YOUTUBE_VIDEO_COMPLETO.md](YOUTUBE_VIDEO_COMPLETO.md).
+
+- En **Video → Cargar**, al lado de **Historial de enlaces**, un botón **⬇ 4K ▾**: tras
+  cargar un enlace, un clic baja el vídeo **entero** al material en la **mejor calidad**
+  disponible; la flecha abre la lista (4K, 1440p, 1080p, 720p…) con fps y tamaño aproximado.
+- Barra de progreso con cancelar; el vídeo queda como «Título · 1080p» y se edita desde el
+  archivo local, sin volver a descargarlo.
+
+## 2026-09-26 — Pestañas de Material arriba, con nombre
+
+Detalle: [EDITOR.md](EDITOR.md) (columna Material).
+
+- La barra de pestañas de **Material** pasa **arriba** del panel y cada icono lleva su
+  **nombre en pequeño** debajo (Video, Imagen, Biblio, Trans., Config…). El tooltip solo
+  aparece cuando añade algo (nombre completo o número de elementos).
+- Se quita el **título** de cada pestaña (VIDEO, IMAGEN…): ya se lee en la barra.
+- Panel más **compacto en vertical**: menos hueco entre la barra, los filtros (Todos /
+  Guardados…), el buscador y las tarjetas.
+- El **ancho por defecto** del panel Material es el que ocupan todas las pestañas (565 px),
+  así se ven todas sin desplazar. Un ancho guardado de antes se reajusta una vez a este;
+  los demás paneles conservan su tamaño.
+
 ## 2026-09-26 — Pestañas de Material en horizontal, abajo
 
 Detalle: [EDITOR.md](EDITOR.md) (columna Material).

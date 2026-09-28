@@ -46,6 +46,9 @@ from .schemas import (
     TTSRequest,
     UpdateMaterialRequest,
     YouTubeAudioRequest,
+    YouTubeVideoRequest,
+    ReplaceVersionsRequest,
+    UpgradeQualityRequest,
 )
 
 _MEDIA_KIND = {"clips": "video", "audios": "audio", "images": "image"}
@@ -333,6 +336,38 @@ def create_segments(project_id: str, ident: str, req: CreateSegmentsRequest) -> 
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     return {"clips": [c.model_dump() for c in created]}
+
+
+@app.get("/api/projects/{project_id}/clips/{ident}/versions")
+def clip_versions(project_id: str, ident: str) -> dict:
+    """Otras versiones del mismo vídeo de YouTube en el proyecto (para subir calidad)."""
+    from . import media_upgrade
+    try:
+        return media_upgrade.find_versions(project_id, ident)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+
+
+@app.post("/api/projects/{project_id}/clips/{ident}/replace-versions")
+def replace_clip_versions(project_id: str, ident: str, req: ReplaceVersionsRequest) -> dict:
+    """Pone este vídeo en la timeline en lugar de sus otras versiones (deshacible)."""
+    from . import media_upgrade
+    try:
+        return media_upgrade.replace_with(project_id, ident, req.old_idents)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+@app.post("/api/projects/{project_id}/upgrade-quality", response_model=Job)
+def upgrade_quality(project_id: str, req: UpgradeQualityRequest) -> Job:
+    """Workflow: baja la máxima calidad de los vídeos de YouTube de la timeline y los cambia."""
+    if projects.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    job = jobs.create_job()
+    jobs.start_upgrade_quality_job(job, project_id, req.model_dump())
+    return job
 
 
 @app.post("/api/projects/{project_id}/clips/{ident}/face-track", response_model=Job)
@@ -1947,6 +1982,19 @@ def create_youtube_audio(req: YouTubeAudioRequest) -> Job:
         raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
     job = jobs.create_job()
     jobs.start_youtube_audio_job(job, req)
+    return job
+
+
+@app.post("/api/youtube-video", response_model=Job)
+def create_youtube_video(req: YouTubeVideoRequest) -> Job:
+    """Descarga el vídeo completo (calidad elegida; sin ella, la mejor) al material."""
+    from . import youtube_audio
+    if not youtube_audio.is_youtube_url(req.url):
+        raise HTTPException(status_code=400, detail="URL de YouTube no válida.")
+    if projects.get_project(req.project_id) is None:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado.")
+    job = jobs.create_job()
+    jobs.start_youtube_video_job(job, req)
     return job
 
 

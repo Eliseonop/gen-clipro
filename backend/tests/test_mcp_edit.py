@@ -59,14 +59,27 @@ class EditToolsTest(unittest.TestCase):
     def test_add_image_reuses_video_track(self):
         projects.add_image(self.pid, ImageInfo(
             id="im1", filename="logo.png", url="/i", width=100, height=80, label="Logo"))
-        self._add_clip0()
-        res = tools_edit.add_to_timeline(self.pid, "images", "im1", start=2.0)
+        self._add_clip0()                                   # vídeo en [0-10)
+        res = tools_edit.add_to_timeline(self.pid, "images", "im1", start=10.0)
         kinds = {t["kind"] for t in res["timeline"]["tracks"]}
         self.assertEqual(kinds, {"video"})
         img = next(c for c in res["timeline"]["clips"] if c["kind"] == "image")
         self.assertEqual(img["duration"], 5.0)
         self.assertEqual(img["layout"], "fill")
         self.assertEqual(img["track_id"], res["timeline"]["tracks"][0]["id"])
+
+    def test_add_image_over_video_goes_to_new_track(self):
+        # Una pista nunca tiene dos clips a la vez: encima del vídeo sube a otra.
+        projects.add_image(self.pid, ImageInfo(
+            id="im1", filename="logo.png", url="/i", width=100, height=80, label="Logo"))
+        self._add_clip0()                                   # vídeo en [0-10)
+        res = tools_edit.add_to_timeline(self.pid, "images", "im1", start=2.0)
+        tracks = res["timeline"]["tracks"]
+        self.assertEqual([t["kind"] for t in tracks], ["video", "video"])
+        img = next(c for c in res["timeline"]["clips"] if c["kind"] == "image")
+        self.assertEqual(img["start"], 2.0)                 # mismo instante
+        self.assertNotEqual(img["track_id"], tracks[0]["id"])
+        self.assertIn(img["track_id"], res["changed"])      # la pista creada se reporta
 
     def test_add_unknown_asset_raises(self):
         with self.assertRaises(ValueError):

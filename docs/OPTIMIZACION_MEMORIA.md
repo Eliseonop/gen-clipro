@@ -1,9 +1,15 @@
 # Optimización de memoria del editor web
 
-> Estado: **plan, nada implementado** (2026-09-18).
+> Estado: **plan, nada implementado** (2026-09-18; revisado el 2026-09-28).
 > Objetivo: que la RAM del editor deje de crecer mientras se edita (una meseta estable en vez de un
 > crecimiento sin fin), para no tener que recargar la página, **sin perder ninguna funcionalidad
 > de UI/UX actual**.
+>
+> **Revisión 2026-09-28**: los 7 focos originales siguen en el código. Se añaden 6 más (filas 8–13),
+> dos de ellos importantes: el **backend nunca descarga los modelos de IA** y **cada fragmento de
+> subtítulo guarda una copia entera de la descripción del audio**, lo que hace crecer la timeline con
+> el cuadrado de la duración del vídeo. El motor de efectos animados
+> ([EFECTOS_ANIMADOS.md](EFECTOS_ANIMADOS.md)) debe construirse sobre las utilidades de la Fase 1.
 
 ---
 
@@ -31,6 +37,18 @@ Ordenados de más a menos probable como causa principal.
 | 5 | **Sondeo MCP del chat cada 1 s** | `features/editor/EdChat.jsx` (`setInterval(load, 1000)`) → `onMcpAudit` → `setMcpAudit` en `VideoEditor` | Crea un objeto nuevo cada segundo aunque nada cambie, y eso vuelve a renderizar entero `VideoEditor` (más de 4000 líneas), incluido el `mediaPool` con closures nuevas. No es una fuga, pero genera mucha basura y presión constante del GC. |
 | 6 | **Rejillas de material sin virtualizar** | `MaterialClipGrid.jsx`, `EdLibrary.jsx`, `EdExplore.jsx`, `EdStickMenu.jsx` | Hay un `<video>` por tarjeta aunque no se vea, y los que ya se han previsualizado conservan su decodificador. |
 | 7 | **Cachés de Paper y Motion** | `features/paper/usePaperComp.js` (`bitmapsRef`, `glyphCacheRef`), iframes de `MotionCanvas` y `MotionTemplates` | Se quedan vivas al salir de esos modos. |
+| 8 | **Backend: los modelos de IA nunca se descargan** *(nuevo)* | `backend/app/bg/providers.py` (`close()` existe pero **nadie lo llama**), `bg/sam.py`, `transcribe.py` (`_models`, uno por tamaño), `tts.py` | Cada función usada deja su modelo en la RAM de `python.exe` hasta cerrar el backend. Solo en disco: SAM 2.1 large 829 MB, Kokoro 325 MB, BiRefNet 224 MB, U²-Net 176 MB, RVM resnet50 107 MB, más Whisper. En RAM ocupan más (pesos + arena de ONNX Runtime, que no devuelve memoria). Explica el «cuanto más tiempo en el editor, peor» aunque el navegador estuviera perfecto. |
+| 9 | **`origin.source` duplicado en cada fragmento de subtítulo** *(nuevo)* | `features/editor/editorModel.js` (≈L246: `...(srcRef ? { source: srcRef } : {})`); solo lo lee `trackSource()` (≈L1111) | Cada cuadro de subtítulo lleva el título y la **descripción completa** del audio (≈3 KB). Medido en el proyecto más grande: timeline de **720 KB, de los que 485 KB (67 %) son `origin`**, en 167 clips. Crece con el **cuadrado** de la duración (descripción más larga × más fragmentos) y se multiplica por las 80 instantáneas del undo (≈58 MB solo de cadenas), el `JSON.stringify` cada 320 ms, el autoguardado y las respuestas del MCP, que devuelven la timeline entera. |
+| 10 | **Filtros SVG de color que nunca se borran** *(nuevo)* | `lib/clipAdjust.js::matrixFilterUrl` | Crea un `<filter>` en el DOM por cada matriz distinta y no lo quita nunca. Arrastrar un slider de exposición, temperatura, tono o intensidad de filtro crea decenas; una sesión de etalonaje, miles. |
+| 11 | **Cachés nuevas por clip sin purga** *(nuevo)* | `bgCutout.js` (`outlineCache`, `olGrayCache`, `olBlurCache`, del contorno #9) y `bgMagic.js` (`sam`, `comp`, de la eliminación personalizada) | Mismo patrón que el foco 3: varios canvas por clip, sin tope por bytes y sin purga al borrar el clip. |
+| 12 | **Web Audio retiene los `<video>`** *(nuevo)* | `features/editor/audioGraph.js` | `createMediaElementSource(el)` ata el elemento al grafo de audio para siempre. Si el clip tenía un efecto de sonido y luego se borra o se divide, su `<video>` (con sus búferes) no se libera nunca. Será más grave con el pool de la Fase 2, que monta y desmonta elementos. |
+| 13 | **Bordes rasgados de Paper vía `toDataURL`** *(nuevo)* | `features/paper/paperRender.js::generateTornCache` | 4 imágenes a tamaño completo por imagen **y por letra**, pasando por cadenas base64 enormes. Desaparece si Paper pasa a ser un efecto ([EFECTOS_ANIMADOS.md](EFECTOS_ANIMADOS.md) §9). |
+
+**Qué pesa según el síntoma**:
+
+- *«Cuanto más largo es el vídeo»*: focos 1 (un `<video>` por clip), 9 (`origin.source`) y 4 (undo).
+- *«Cuanto más tiempo paso en el editor»*: foco 8 (modelos del backend) y las cachés sin tope 2, 3,
+  10, 11 y 12.
 
 ### Lo que ya está bien (no tocar)
 
@@ -58,8 +76,11 @@ Ordenados de más a menos probable como causa principal.
   3. quitar el fondo a 2–3 clips;
   4. añadir un GIF de Explorar;
   5. 15 minutos de edición y reproducción.
-- Anotar la memoria del proceso de la pestaña (Administrador de tareas de Chrome) y hacer heap
-  snapshots al principio y al final.
+- Anotar la memoria del proceso de la pestaña (Administrador de tareas del navegador; Edu usa Brave)
+  y hacer heap snapshots al principio y al final.
+- Anotar también la RAM de `python.exe` del backend: endpoint `GET /api/diagnostics/memory` con el RSS
+  del proceso (`psutil`, que hoy **no** está instalado en el `.venv`; alternativa sin dependencias:
+`GetProcessMemoryInfo` por `ctypes`) y la lista de modelos cargados, mostrado en el mismo panel `?debug=mem`.
 
 **Criterio de salida:** sabemos qué foco aporta más, y en función de eso se ajusta el orden de las
 fases 1–3 si hace falta.
@@ -85,9 +106,44 @@ Ninguno cambia el comportamiento visible.
    - Mantener el máximo de 80 instantáneas y añadir un **tope de bytes** (por ejemplo 40 MB en total,
      sumando `snap.length`). Si se supera, se descartan las más antiguas.
    - Undo y redo se comportan igual. Solo en sesiones enormes se pierden los pasos más antiguos.
+5. **`origin.source` una sola vez (foco 9)**
+   - Guardar el título y la descripción de la fuente **una vez por pista** (`track.source`) y dejar
+     en cada clip solo `origin.transcript_id` y sus rangos. `trackSource()` lee de la pista (y, por
+     compatibilidad, del primer clip que aún lo tenga).
+   - Migración al cargar la timeline (frontend y `timeline_store.py`): mover el primer `source`
+     encontrado a la pista y borrarlo de los clips. Test con la timeline de 167 clips: debe bajar de
+     unos 720 KB a unos 240 KB.
+   - Revisar que el export SRT con referencia y la Dirección de escena siguen leyendo la fuente.
+6. **Filtros SVG (foco 10)**: `matrixFilterUrl` con LRU (por ejemplo 64 filtros) que **reutiliza** los
+   nodos `<filter>` más antiguos en lugar de crear nuevos. Los ids en uso en el fotograma actual nunca
+   se reciclan.
+7. **Cachés nuevas (foco 11)**: `outlineCache`, `olGrayCache`, `olBlurCache`, `bgMagic.sam` y
+   `bgMagic.comp` entran en la misma purga por ids vivos y en el mismo LRU que el punto 2.
+8. **Web Audio (foco 12)**: `releaseAudioFx(el)` en `audioGraph.js` que desconecta la fuente y los
+   nodos, llamado desde el callback ref de desmontaje de `HiddenMedia`.
+9. **Utilidad común `lib/lruBytes.js`** (con test): un LRU con tope en bytes y `purge(aliveIds)`. La
+   usan el GIF, bgCutout, bgMagic, los filtros SVG y, después, el runtime de efectos animados. Así
+   todas las cachés se miden igual y el panel `?debug=mem` las suma.
 
 **Criterio de salida:** el escenario de la Fase 0 muestra que las cachés se estabilizan y no crecen
 con el tiempo.
+
+### Fase 1b: modelos de IA del backend (½–1 día)
+
+1. **Gestor de modelos** (`backend/app/model_manager.py`): registra cada modelo cargado
+   (proveedores de Eliminar fondo, SAM, Whisper, Kokoro, Piper) con su hora de último uso.
+2. **Descarga por inactividad**: un hilo cada minuto cierra los modelos sin uso desde hace N minutos
+   (configurable en ajustes; por defecto 5) llamando a su `close()` (que ya existe en
+   `bg/providers.py`) y después `gc.collect()`.
+3. **Un solo modelo pesado a la vez**: cargar SAM large, BiRefNet o RVM resnet50 descarga antes el
+   otro pesado que esté inactivo.
+4. **Arena de ONNX Runtime desactivada** (`low_memory = True`) también en los modelos grandes que
+   hoy la tienen activa. Medir antes y después: puede costar algo de velocidad.
+5. **Whisper**: `_models` guarda como mucho un tamaño; si se pide otro, se libera el anterior.
+6. Los jobs en curso marcan su modelo como «en uso», para no descargarlo a mitad de un proceso.
+
+**Criterio de salida:** tras usar quitar fondo, SAM, transcribir y TTS, y esperar el tiempo de
+inactividad, el RSS del backend vuelve a menos de 1 GB.
 
 ### Fase 2: pool de medios con ventana (2–3 días; el cambio de más impacto)
 
@@ -148,6 +204,7 @@ de la timeline, y no hay fotogramas negros ni cortes de audio en las pruebas ant
 ### Fase 5: liberar recursos al cambiar de modo (½ día)
 
 - Al salir de Paper: vaciar `bitmapsRef` y `glyphCacheRef` y llamar a `invalidateTornCache()`.
+  (Innecesario si antes se retira la pestaña Paper, ver EFECTOS_ANIMADOS.md §9.)
 - Al salir de Motion: desmontar los iframes de plantillas y de preview.
 - Al volver, todo se regenera bajo demanda (ya ocurre así la primera vez).
 
@@ -172,14 +229,16 @@ de la timeline, y no hay fotogramas negros ni cortes de audio en las pruebas ant
 | Fase | Esfuerzo | Riesgo | Impacto esperado |
 |------|----------|--------|------------------|
 | 0. Medir | ½ día | nulo | permite decidir con datos |
-| 1. Cachés y sondeo | 1 día | muy bajo | alto si se usan GIFs o quitar fondo; frena el crecimiento continuo |
+| 1. Cachés, sondeo, `origin.source`, SVG, audio | 1½ días | muy bajo | alto; `origin.source` reduce la timeline a un tercio en proyectos con subtítulos |
+| 1b. Modelos del backend | ½–1 día | bajo | **muy alto** en la RAM total del equipo si se usan las IAs |
 | 2. Pool de medios con ventana | 2–3 días | medio | **el mayor**, en timelines con muchos clips |
 | 3. Rejillas de material | 1 día | bajo | medio-alto con mucho material |
 | 4. Renderizados | 1–2 días | bajo | menos presión del GC y más fluidez |
 | 5. Cambio de modo | ½ día | muy bajo | medio si se alterna con Paper o Motion |
 
-**Orden:** 0 → 1 → 2 → 3, y después 4 y 5. Las Fases 0 y 1 dan una mejora visible casi sin riesgo.
-La Fase 2 es la que más memoria recupera y la más delicada.
+**Orden:** 0 → 1 → 1b → 2 → 3, y después 4 y 5. Las Fases 0, 1 y 1b dan una mejora visible casi sin
+riesgo. La Fase 2 es la que más memoria recupera en el navegador y la más delicada. El motor de
+efectos animados empieza después de la Fase 1 (ver EFECTOS_ANIMADOS.md §13).
 
 ---
 

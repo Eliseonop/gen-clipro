@@ -39,7 +39,7 @@ from .diagnostics import timed
 from .recipe_layout import contain_scale_filter, dual_slot_wh, join_dual_filters, split_orientation_for
 from .reframe_math import frame_at
 from .clip_audio import clip_mixes_audio
-from .clip_kind import ASSET_DISK_KIND, clip_fits_track, ffmpeg_input_args, ffmpeg_trim_window, is_still_clip
+from .clip_kind import ASSET_DISK_KIND, clip_fits_track, ffmpeg_input_args, ffmpeg_trim_filter, is_still_clip
 from .clip_speed import audio_speed_filters, clip_source_duration, clip_timeline_duration, video_speed_filters
 from .text_ass import ass_filter_path, build_ass, effective_text_style, text_is_3d, text_warp_spec
 from .font_metrics import BUNDLED_FONT_DIR, BUNDLED_FONTS, FONT_DIR, FONTS, FONTS_BOLD, resolve_font_path
@@ -963,14 +963,14 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         spd_part = f",{spd}" if spd else ""
         overlay_xy = overlay_xy_for_fx(overlay_xy, c, start, dur, W, H)
         vlabel = f"v{n}"
-        tin, tout = ffmpeg_trim_window(c, fps)
+        trim = ffmpeg_trim_filter(c, fps)
         color_pre = f"{ASSUME_BT709_FILTER}," if (not is_still_clip(c) and _color_untagged(path)) else ""
         if has_bg:
             # El alfa se aplica en el espacio del MATERIAL (antes del recorte),
             # igual que el preview, que sustituye el elemento fuente por un
             # recorte con alfa. Velocidad/reverse van después: el alfa las
             # hereda sin duplicar filtros.
-            filt.append(f"[{k}:v]{color_pre}trim={tin:.3f}:{tout:.3f},setpts=PTS-STARTPTS[bgin{n}]")
+            filt.append(f"[{k}:v]{color_pre}{trim},setpts=PTS-STARTPTS[bgin{n}]")
             filt.extend(bg_steps)
             filt.append(
                 f"[{bg_label}]{cropscale},fps={fps}{spd_part}{fx_part},"
@@ -978,7 +978,7 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
             )
         else:
             filt.append(
-                f"[{k}:v]{color_pre}trim={tin:.3f}:{tout:.3f},setpts=PTS-STARTPTS,"
+                f"[{k}:v]{color_pre}{trim},setpts=PTS-STARTPTS,"
                 f"{cropscale},fps={fps}{spd_part}{fx_part},setpts=PTS-STARTPTS+{start:.3f}/TB[{vlabel}]"
             )
         out_label = f"ov{n}"

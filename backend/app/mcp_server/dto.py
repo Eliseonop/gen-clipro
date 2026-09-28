@@ -213,7 +213,9 @@ def timeline_detail(tl: Timeline | None) -> dict:
         "tracks": [
             {"id": t.id, "kind": t.kind, "name": t.name,
              "hidden": t.hidden, "muted": t.muted, "locked": t.locked,
-             "linked_track_id": t.linked_track_id}
+             "linked_track_id": t.linked_track_id,
+             # Magnética: sin huecos; lo que entra se inserta y empuja (no_overlap).
+             **({"magnetic": True} if getattr(t, "magnetic", False) else {})}
             for t in tl.tracks
         ],
         "clips": [_clip_summary(c, counts.get(c.id, 0), kinds_by_id.get(c.track_id)) for c in tl.clips],
@@ -296,6 +298,8 @@ def analyze_dto(resp) -> dict:
             "title": resp.video.title,
             "duration": resp.video.duration,
             "uploader": resp.video.uploader,
+            # Calidades para download_youtube_video (lado corto, de mejor a peor).
+            "qualities": [q.quality for q in resp.video.qualities],
         },
         "has_heatmap": resp.has_heatmap,
         "segments": [

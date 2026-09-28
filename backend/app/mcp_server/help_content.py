@@ -35,6 +35,8 @@ TOOL_DOMAINS: dict[str, str] = {
     "create_clips_from_segments": "media",
     "fetch_image": "media",
     "delete_media": "media",
+    "download_youtube_video": "media",
+    "replace_media_version": "media",
     # transcription
     "transcribe": "transcription",
     "generate_subtitles": "transcription",
@@ -82,6 +84,7 @@ TOOL_DOMAINS: dict[str, str] = {
     # workflow
     "create_short_from_youtube": "workflow",
     "make_short_from_library": "workflow",
+    "upgrade_timeline_quality": "workflow",
     # vision
     "get_frame": "vision",
     "set_clip_ai_description": "vision",
@@ -145,6 +148,11 @@ HELP: dict[str, str] = {
         "timeline resumida e historial (undo/redo/checkpoints). Primer paso.\n"
         "- get_timeline: pistas y clips con sus propiedades (posición, duración, "
         "frame/layout/look/speed…), SIN datos pesados (words, keyframes).\n"
+        "- Regla de pistas: una pista NUNCA tiene dos clips a la vez. Un clip "
+        "colocado/movido encima de otro sube a la pista vecina libre de su tipo (o "
+        "a una nueva) en el mismo instante; uno que crece (speed/duración) empuja a "
+        "los de detrás. Mira warnings/changed para saber dónde quedó. Una pista con "
+        "magnetic=true no tiene huecos: lo que entra se inserta y empuja.\n"
         "- inspect_clip(clip_id): un clip COMPLETO (reframe/keyframes, words, "
         "transform, origin). Úsalo solo para el clip que vas a tocar.\n"
         "- list_media: inventario detallado del material.\n"
@@ -188,7 +196,18 @@ HELP: dict[str, str] = {
         "- fetch_image(url, label?): descarga una imagen y la añade al proyecto "
         "(devuelve id para add_to_timeline con asset_kind=images).\n"
         "- delete_media(kind, ident): borra material Y su archivo. kind clips|"
-        "audios|images; ident = index del clip o id del audio/imagen. NO deshacible."
+        "audios|images; ident = index del clip o id del audio/imagen. NO deshacible.\n"
+        "- download_youtube_video(url, quality?): job que baja el vídeo COMPLETO al "
+        "material. quality = lado corto (720, 1080, 1440, 2160…); None = la máxima "
+        "(analyze_youtube devuelve video.qualities). result: clip_index, quality y "
+        "upgradable (versiones de menos calidad del mismo vídeo que la timeline "
+        "podría cambiar por ésta).\n"
+        "- replace_media_version(clip_index, old_indexes?, dry_run=False): pone "
+        "clip_index (vídeo completo) en la timeline en lugar de sus otras versiones "
+        "(mismo vídeo de YouTube, menos calidad) conservando cortes, encuadre y "
+        "animaciones; desplaza in/out si la versión vieja era un tramo. dry_run=True "
+        "solo lista versions/upgradable. Deshacible con undo. Rechaza versiones con "
+        "otra proporción (recorte 9:16 horneado). «Quitar fondo» hay que regenerarlo."
     ),
     "transcription": (
         "Generar guion con words[] reales (faster-whisper, local):\n"
@@ -369,6 +388,11 @@ HELP: dict[str, str] = {
         "- make_short_from_library(asset_id, asset_kind=clips, model?, language?, "
         "subtitles=True, export=True): igual pero desde un clip ya en el proyecto "
         "(asset_id = index del clip), sin descargar.\n"
+        "- upgrade_timeline_quality(url?, quality?, replace=True): edición rápida "
+        "en baja calidad → final en alta. Por cada vídeo de YouTube que usa la "
+        "timeline (o solo url) reutiliza la versión completa ya descargada si llega "
+        "a quality (None = máxima) o la baja, y cambia los clips a ella "
+        "(replace_media_version). result.videos[]: quality, downloaded, replaced.\n"
         "Pon export=False para frenar antes del render."
     ),
     "vision": (

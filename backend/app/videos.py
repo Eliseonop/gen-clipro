@@ -1,6 +1,7 @@
 """Importar un vídeo local al proyecto como material de vídeo."""
 from __future__ import annotations
 
+import shutil
 import uuid
 from pathlib import Path
 from urllib.parse import quote
@@ -42,6 +43,38 @@ def import_video(
     if not data:
         raise ValueError("Archivo vacío.")
 
+    return _add_video(project, filename, lambda dest: dest.write_bytes(data), label=label,
+                      description=description, origin=origin, source=source, provider=provider,
+                      external_id=external_id, source_url=source_url, author=author,
+                      license_info=license_info)
+
+
+def import_video_file(project, src: Path, filename: str, **meta) -> ClipInfo:
+    """Como ``import_video`` pero MUEVE un archivo ya descargado (vídeos grandes)."""
+    src = Path(src)
+    if Path(filename or "").suffix.lower() not in VIDEO_EXTS:
+        raise ValueError("Formato de vídeo no válido. Usa MP4, MOV, MKV, WEBM…")
+    if not src.is_file() or src.stat().st_size == 0:
+        raise ValueError("Archivo vacío.")
+    return _add_video(project, filename, lambda dest: shutil.move(str(src), str(dest)), **meta)
+
+
+def _add_video(
+    project,
+    filename: str,
+    write,
+    *,
+    label: str | None = None,
+    description: str | None = None,
+    origin: str | None = None,
+    source: str | None = None,
+    provider: str | None = None,
+    external_id: str | None = None,
+    source_url: str | None = None,
+    author: str | None = None,
+    license_info: str | None = None,
+) -> ClipInfo:
+    ext = Path(filename).suffix.lower()
     storage.ensure_dirs(storage.project_base(project))
     ident = _new_id()
     stem = storage.safe_name(Path(filename).stem)
@@ -49,7 +82,7 @@ def import_video(
     dest = storage.resolve_media(project, "video", dest_name)
     if dest is None:
         raise ValueError("No se pudo guardar el vídeo.")
-    dest.write_bytes(data)
+    write(dest)
 
     try:
         duration = float(probe_duration(dest))

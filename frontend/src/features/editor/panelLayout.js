@@ -1,10 +1,15 @@
 // Tamaños de paneles del editor. Se guardan en localStorage y se recortan
 // para que el canvas y la timeline no desaparezcan al arrastrar.
 
+import { MAT_NAV_WIDTH } from './materialNav.js'
+
 export const PANEL_LAYOUT_KEY = 'vy:panel-layout'
+// v2: el ancho por defecto de Material pasa a ser el de su barra de pestañas;
+// un layout guardado antes (v1) recupera ese ancho una vez y conserva el resto.
+export const PANEL_LAYOUT_VERSION = 2
 
 export const PANEL_DEFAULTS = {
-  materials: 380,
+  materials: MAT_NAV_WIDTH,
   inspector: 340,
   bottom: 240,
   crops: 268,
@@ -119,7 +124,12 @@ export function applyPanelDrag(kind, origin, dx, dy, box, preset = 'default') {
 
 export function readPanelLayout(storage) {
   try {
-    return parsePanelLayout(storage?.getItem?.(PANEL_LAYOUT_KEY))
+    const raw = storage?.getItem?.(PANEL_LAYOUT_KEY)
+    const out = parsePanelLayout(raw)
+    let v = 0
+    try { v = Number(JSON.parse(raw)?.v) || 0 } catch { /* sin guardar / corrupto */ }
+    if (raw && v < PANEL_LAYOUT_VERSION) out.materials = PANEL_DEFAULTS.materials
+    return out
   } catch {
     return { ...PANEL_DEFAULTS }
   }
@@ -127,6 +137,7 @@ export function readPanelLayout(storage) {
 
 export function writePanelLayout(storage, layout) {
   try {
-    storage?.setItem?.(PANEL_LAYOUT_KEY, JSON.stringify(parsePanelLayout(layout)))
+    const data = { ...parsePanelLayout(layout), v: PANEL_LAYOUT_VERSION }
+    storage?.setItem?.(PANEL_LAYOUT_KEY, JSON.stringify(data))
   } catch { /* quota / modo privado */ }
 }

@@ -18,7 +18,7 @@ El editor se divide en dos zonas: parte superior (3 columnas) y parte inferior (
 
 El orden de las columnas se cambia desde el botón **Diseño** (icono de cuadrícula) de la barra superior: predeterminado, Main a la derecha, Main a la izquierda, invertido, materiales a toda altura o Main a toda altura (a la derecha, de arriba abajo). Detalle: [DISENO_VENTANA.md](DISENO_VENTANA.md).
 
-**Columna izquierda — Material y paneles.** Barra de pestañas horizontal al pie del panel (iconos; la **rueda del ratón** la desplaza de lado a lado, un degradado indica que hay más iconos y **Shift+rueda** cambia de pestaña):
+**Columna izquierda — Material y paneles.** Barra de pestañas horizontal arriba del panel (icono + nombre corto debajo; sin título aparte; el ancho por defecto del panel es el que ocupan todas las pestañas; si lo estrechas, la **rueda del ratón** la desplaza de lado a lado, un degradado indica que hay más iconos y **Shift+rueda** cambia de pestaña):
 - **Video** — clips del proyecto, clips guardados y "Cargar" (pegar URL de YouTube o subir/arrastrar un archivo).
 - **Imagen** — imágenes del proyecto + búsqueda de stock (Explorar).
 - **Audio** — generar narración (TTS) o extraer audio de YouTube.
@@ -42,6 +42,7 @@ El orden de las columnas se cambia desde el botón **Diseño** (icono de cuadrí
 
 **Material**
 - Cargar vídeo desde **URL de YouTube** (con detección de tramos recomendados por el heatmap) o definir un tramo personalizado.
+- Agregar el **vídeo de YouTube completo** al material eligiendo la **calidad** (4K, 1080p, 720p…; por defecto la mejor): [YOUTUBE_VIDEO_COMPLETO.md](YOUTUBE_VIDEO_COMPLETO.md).
 - **Subir/arrastrar** vídeos, imágenes y audios locales.
 - Buscar y añadir **imágenes y vídeos de stock** (Pexels, GIPHY, Pixabay, Unsplash…).
 - Generar **narración por voz (TTS)** con varios motores (Kokoro, Gemini, ElevenLabs), elegir voz, mezclar dos voces, velocidad y pausas.
@@ -50,7 +51,7 @@ El orden de las columnas se cambia desde el botón **Diseño** (icono de cuadrí
 - **Biblioteca** de material reutilizable por **carpetas**: entrar, arrastrar archivos para añadirlos y crear **sticks** (personajes) cuyas expresiones se rellenan soltando vídeos o imágenes: [BIBLIOTECA_STICKS.md](BIBLIOTECA_STICKS.md).
 
 **Timeline y clips**
-- Añadir clips a las pistas arrastrando o con un clic.
+- Añadir clips a las pistas arrastrando o con un clic. Soltar dentro de una pista entra en ella; pista nueva solo en la raya entre pistas; si el sitio está ocupado se pega al hueco cercano o sube a la pista de encima; **Alt** reemplaza. **Una pista nunca tiene dos clips a la vez** y la **pista principal** puede ser **magnética** (sin huecos, inserta y empuja): [TIMELINE_ARRASTRE.md](TIMELINE_ARRASTRE.md).
 - **Cortar/dividir**, **duplicar**, **eliminar**, mover y recortar clips.
 - Múltiples **pistas** de vídeo/audio/texto; crear, renombrar, ocultar, silenciar, bloquear, compactar y **relacionar** pista de audio con su texto.
 - Ordenar **capas** (adelante/atrás) de clips superpuestos.
@@ -98,6 +99,18 @@ El orden de las columnas se cambia desde el botón **Diseño** (icono de cuadrí
 ## Funciones en detalle
 
 > Novedades recientes: ver [NOVEDADES.md](NOVEDADES.md).
+
+### Vídeo completo de YouTube
+
+En **Video → Cargar**, junto a *Historial de enlaces*: botón **⬇ 4K ▾** que baja el vídeo
+entero al material en la mejor calidad (o la que elijas en la lista). Detalle:
+[YOUTUBE_VIDEO_COMPLETO.md](YOUTUBE_VIDEO_COMPLETO.md).
+
+### Subir calidad en la timeline
+
+Si la timeline usa una versión ligera del mismo vídeo (tramo, 720p…), al bajar la buena
+se ofrece cambiarla en todos los clips sin perder la edición; también con clic derecho en
+el vídeo → *Usar esta calidad en la timeline*. Detalle: [SUBIR_CALIDAD.md](SUBIR_CALIDAD.md).
 
 ### Recortar
 

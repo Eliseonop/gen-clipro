@@ -223,7 +223,12 @@ export default function EdLibrary({ onAdd, onDragInfo, onPlay }) {
   const [err, setErr] = useState('')
   const di = onDragInfo || (() => {})
   const alive = useRef(true)
-  useEffect(() => () => { alive.current = false }, [])
+  // Se reactiva en cada montaje: StrictMode (dev) monta, desmonta y remonta, y
+  // sin esto `alive` quedaba en false y loadLib descartaba las carpetas.
+  useEffect(() => {
+    alive.current = true
+    return () => { alive.current = false }
+  }, [])
 
   const cols = lib.collections || []
   const openCol = folder ? cols.find((c) => c.id === folder) : null

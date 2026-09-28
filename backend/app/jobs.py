@@ -24,6 +24,7 @@ from .schemas import (
     TranscriptSegment,
     TTSRequest,
     YouTubeAudioRequest,
+    YouTubeVideoRequest,
 )
 
 _jobs: dict[str, Job] = {}
@@ -430,6 +431,113 @@ def _run_youtube_audio(job_id: str, req: YouTubeAudioRequest) -> None:
 
 def start_youtube_audio_job(job: Job, req: YouTubeAudioRequest) -> None:
     thread = threading.Thread(target=_run_youtube_audio, args=(job.id, req), daemon=True)
+    thread.start()
+
+
+def _run_youtube_video(job_id: str, req: YouTubeVideoRequest) -> None:
+    """Descarga el vídeo completo en la calidad pedida y lo añade al material.
+
+    ``job.result.upgradable``: otras versiones del mismo vídeo, de menos calidad,
+    que la timeline podría cambiar por esta (ver media_upgrade).
+    """
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+
+    def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
+        job.progress = round(frac, 3)
+        job.message = message
+
+    try:
+        from . import media_upgrade, youtube_video
+
+        project = projects.get_project(req.project_id)
+        if project is None:
+            raise RuntimeError("Proyecto no encontrado.")
+        clip, quality = youtube_video.download_to_project(project, req.url, req.quality, on_progress)
+        result: dict = {"quality": quality, "clip_index": clip.index, "label": clip.label}
+        try:
+            result["upgradable"] = media_upgrade.find_versions(req.project_id, clip.index)["upgradable"]
+        except Exception:  # noqa: BLE001 - la detección es un extra; el vídeo ya está
+            result["upgradable"] = []
+        job.clips = [clip]
+        job.result = result
+        job.progress = 1.0
+        job.message = f"Vídeo añadido ({quality}p)."
+        job.status = JobStatus.done
+    except Exception as exc:  # noqa: BLE001
+        from . import ytdlp
+        job.status = JobStatus.error
+        job.error = "Cancelado." if job.cancel_requested else ytdlp.friendly_error(exc)
+        job.message = "Error descargando el vídeo."
+
+
+def _run_upgrade_quality(job_id: str, pid: str, params: dict) -> None:
+    """Workflow «subir calidad»: por cada vídeo de YouTube que usa la timeline (o
+    solo ``url``), reutiliza una versión completa ya descargada si llega a la
+    calidad pedida o baja la máxima, y cambia los clips a esa versión."""
+    job = _jobs[job_id]
+    job.status = JobStatus.running
+    span = [0.0, 1.0]   # tramo de la barra que toca al vídeo en curso
+
+    def on_progress(frac: float, message: str) -> None:
+        if job.cancel_requested:
+            raise JobCancelled("cancelado")
+        job.progress = round(span[0] + (span[1] - span[0]) * frac, 3)
+        job.message = message
+
+    try:
+        from . import media_upgrade, youtube_video
+
+        targets = media_upgrade.youtube_sources(pid, params.get("url"))
+        if not targets:
+            raise RuntimeError("La timeline no usa vídeos de YouTube (o falta la URL).")
+        report = []
+        n = len(targets)
+        for i, (vid, url) in enumerate(targets.items()):
+            span[0], span[1] = i / n, (i + 1) / n
+            label = f"[{i + 1}/{n}] " if n > 1 else ""
+            on_progress(0.01, f"{label}Consultando calidades…")
+            info = youtube_video.fetch_info(url)
+            wanted = youtube_video.resolve_quality(
+                youtube_video.available_qualities(info), params.get("quality"))
+            have = media_upgrade.best_full_version(pid, vid)
+            if have is not None and wanted and (have[1] or 0) >= wanted:
+                clip, quality, downloaded = have[0], have[1], False
+            else:
+                project = projects.get_project(pid)
+                clip, quality = youtube_video.download_to_project(
+                    project, url, params.get("quality"),
+                    lambda f, m, _l=label: on_progress(0.9 * f, _l + m), info=info)
+                downloaded = True
+            entry = {"youtube_id": vid, "quality": quality, "clip_index": clip.index,
+                     "downloaded": downloaded, "replaced": 0, "segments": 0, "warnings": []}
+            if params.get("replace", True):
+                on_progress(0.95, f"{label}Cambiando los clips de la timeline…")
+                rep = media_upgrade.replace_with(pid, clip.index)
+                entry.update(replaced=rep["replaced"], segments=rep["segments"],
+                             warnings=rep["warnings"])
+            report.append(entry)
+        total = sum(e["replaced"] for e in report)
+        job.result = {"videos": report, "replaced": total}
+        job.progress = 1.0
+        job.message = f"{total} clip(s) pasados a la versión de más calidad."
+        job.status = JobStatus.done
+    except Exception as exc:  # noqa: BLE001
+        from . import ytdlp
+        job.status = JobStatus.error
+        job.error = "Cancelado." if job.cancel_requested else ytdlp.friendly_error(exc)
+        job.message = "Error subiendo la calidad."
+
+
+def start_upgrade_quality_job(job: Job, pid: str, params: dict) -> None:
+    thread = threading.Thread(target=_run_upgrade_quality, args=(job.id, pid, params), daemon=True)
+    thread.start()
+
+
+def start_youtube_video_job(job: Job, req: YouTubeVideoRequest) -> None:
+    thread = threading.Thread(target=_run_youtube_video, args=(job.id, req), daemon=True)
     thread.start()
 
 

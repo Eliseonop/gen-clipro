@@ -53,6 +53,17 @@ def make_short_from_library(project_id: str, asset_id: str, asset_kind: str = "c
     return dto.job_dto(job)
 
 
+def upgrade_timeline_quality(project_id: str, url: str | None = None, quality: int | None = None,
+                             replace: bool = True) -> dict:
+    """Pasa la timeline a la máxima calidad (un job): baja el vídeo completo de YouTube y cambia los clips."""
+    _project_or_raise(project_id)
+    params = {"url": (url or "").strip() or None, "quality": quality, "replace": replace}
+    job = jobs.create_job()
+    jobs.start_upgrade_quality_job(job, project_id, params)
+    return dto.job_dto(job)
+
+
 def register(mcp) -> None:
     tool(mcp, access="write")(create_short_from_youtube)
     tool(mcp, access="write")(make_short_from_library)
+    tool(mcp, access="write")(upgrade_timeline_quality)

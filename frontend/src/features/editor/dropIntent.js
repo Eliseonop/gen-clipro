@@ -1,42 +1,37 @@
-// Qué significa soltar un clip en un punto de la timeline.
+// Dónde cae un clip en la timeline: material soltado desde el panel o un clip
+// que se mueve. Una sola regla para los dos, como CapCut:
 //
-// La pista es una SECUENCIA. Cuando el destino está ocupado no se apila a
-// ciegas: se deduce la intención por la POSICIÓN del puntero, como en CapCut.
+//   ┌──────────────────────────────┐ ← raya entre pistas (BOUNDARY_PX): pista nueva
+//   │  cuerpo de la pista          │ ← aquí dentro: ESTA pista, sin más
+//   └──────────────────────────────┘ ← raya entre pistas: pista nueva
 //
-//   ┌──────────────────────────────┐  ← franja superior: pista nueva encima
-//   │  clip existente              │     (se dibuja una línea horizontal)
-//   └──────────────────────────────┘
-//      ↑ casi alineado        ↑ desplazado ≥20%
-//        = reemplazar           = colocar detrás
+//   - Hueco libre: cae donde está el fantasma (y se pega al vecino si lo roza).
+//   - Ocupado: se pega al hueco más cercano solo si está a ≤ STICK_PX en
+//     pantalla. Si no, sube a la pista libre de encima (o a una nueva) en el
+//     MISMO instante. Nunca se manda lejos ni al final de la pista.
+//   - Alt: reemplaza el clip que hay bajo el puntero.
+//   - Pista magnética: se inserta en el corte más cercano (magnetic.js).
 //
-// Solo decide; no toca estado. Quien llama aplica la acción (y pide
-// confirmación si es 'replace').
+// Solo decide; no toca estado. Quien llama aplica el resultado.
 
-import { clipEnd, clipDur, freeStartOnTrack } from './editorModel.js'
+import { clipEnd, clampStartNoOverlap } from './editorModel.js'
+import { magneticCut } from './magnetic.js'
 import { displayTracks, isStackTrack } from './trackStack.js'
 
-/** Fracción superior de la pista que significa "crear pista nueva encima". */
-export const NEW_TRACK_BAND = 0.25
-/** Bordes de una pista de SU tipo que, al mover un clip, piden pista nueva:
- *  estrechos para no robarle el "déjalo en esta pista". */
-export const INSERT_EDGE = 0.2
-/** El mismo borde en px: igual de fácil de acertar en una pista alta que en una baja. */
-export const INSERT_EDGE_PX = 9
+/** Banda a cada lado de la raya entre dos pistas que pide pista nueva (px). */
+export const BOUNDARY_PX = 6
+/** Distancia máxima en pantalla a la que un clip se deja pegar al hueco libre. */
+export const STICK_PX = 48
 
-/** Fracción del alto de una pista de `rowH` px que es borde de inserción. */
-export function insertEdge(rowH) {
-  const h = Number(rowH)
-  return h > 0 ? Math.min(0.3, Math.max(0.12, INSERT_EDGE_PX / h)) : INSERT_EDGE
-}
-/** Desfase (en fracción de la duración del clip destino) por debajo del cual
- *  se entiende que quieres REEMPLAZARLO y no ponerlo al lado. */
-export const REPLACE_TOL = 0.2
+const r3 = (v) => +(Math.max(0, Number(v) || 0)).toFixed(3)
+const toSet = (ids) => (ids instanceof Set ? ids : new Set(ids || []))
 
 /** Clip de la pista que cubre `t` (el último del array = el de encima). */
-export function clipAtTime(clips, trackId, t) {
+export function clipAtTime(clips, trackId, t, excludeIds) {
+  const skip = toSet(excludeIds)
   let hit = null
   for (const c of clips || []) {
-    if (c.track_id !== trackId) continue
+    if (c.track_id !== trackId || skip.has(c.id)) continue
     if (t >= c.start && t < clipEnd(c)) hit = c
   }
   return hit
@@ -46,7 +41,7 @@ export function clipAtTime(clips, trackId, t) {
  *  `excludeIds` deja fuera al clip que se está arrastrando (si no, choca consigo mismo). */
 export function clipCollidingWith(clips, trackId, start, dur, excludeIds) {
   const end = start + Math.max(0, dur || 0)
-  const skip = excludeIds instanceof Set ? excludeIds : new Set(excludeIds || [])
+  const skip = toSet(excludeIds)
   let hit = null
   for (const c of clips || []) {
     if (c.track_id !== trackId || skip.has(c.id)) continue
@@ -58,38 +53,156 @@ export function clipCollidingWith(clips, trackId, start, dur, excludeIds) {
 }
 
 /**
- * Intención de soltar en `trackId` a la altura `yRatio` (0 = borde superior de
- * la pista, 1 = inferior) y en el instante `time`.
+ * Zona de la timeline bajo el puntero para un clip de `kind`.
  *
- * Devuelve `{ action, start, targetId }`:
- *   - `place`    hueco libre: se coloca tal cual en `start`
- *   - `after`    sobre un clip pero desplazado: va justo detrás (`start`)
- *   - `replace`  sobre un clip y casi alineado: sustituirlo (pide confirmación)
- *   - `newTrack` soltado en la franja superior: pista nueva encima
+ * `geo` es la geometría real de las filas en pantalla: `[{ id, top, bottom }]`
+ * en px del contenido, en el orden en que se ven. `y` va en esas mismas px.
+ *
+ * Devuelve `{ trackId }` (entra en esa pista) o `{ slot, lineY }` (pista nueva
+ * en ese hueco; `lineY` = dónde se dibuja la raya). Pista nueva cuando:
+ *   - el puntero está en la raya entre dos pistas (±BOUNDARY_PX),
+ *   - fuera de las pistas de su bloque (encima, debajo o sobre el otro bloque),
+ *   - sobre una pista de su bloque pero de otro tipo o bloqueada (por mitades).
+ *
+ * `originAlone`: el clip que se mueve es el único de su pista (`originId`); una
+ * pista nueva pegada a ella no cambiaría nada, así que se queda en la suya.
  */
-export function dropIntent(clips, trackId, time, dur, yRatio, excludeIds) {
-  const span = Math.max(0, Number(dur) || 0)
-  const t = Math.max(0, Number(time) || 0)
-  const hit = clipCollidingWith(clips, trackId, t, span, excludeIds)
-  if (!hit) return { action: 'place', start: +t.toFixed(3), targetId: null }
+export function zoneAt(tracks, geo, kind, y, { boundaryPx = BOUNDARY_PX, originId = null, originAlone = false } = {}) {
+  const byId = new Map((tracks || []).map((t) => [t.id, t]))
+  const rows = (geo || []).map((g) => ({ ...g, track: byId.get(g.id) })).filter((r) => r.track)
+  const stack = kind === 'video' || kind === 'text'
+  const group = rows.filter((r) => isStackTrack(r.track) === stack)
+  if (!group.length) {
+    // Primera pista de su bloque: la pila arriba del todo, el audio al final.
+    const lineY = stack ? (rows[0]?.top ?? 0) : (rows[rows.length - 1]?.bottom ?? 0)
+    return { slot: { targetId: null, place: stack ? 'above' : 'below' }, lineY }
+  }
+  const slot = (r, place) => ({ slot: { targetId: r.id, place }, lineY: place === 'above' ? r.top : r.bottom })
+  const first = group[0]
+  const last = group[group.length - 1]
+  const Y = Number(y) || 0
+  const row = group.find((r) => Y >= r.top && Y < r.bottom)
 
-  const y = Number(yRatio)
-  if (Number.isFinite(y) && y < NEW_TRACK_BAND) {
-    return { action: 'newTrack', start: +t.toFixed(3), targetId: hit.id }
+  let zone
+  if (!row) {
+    // Fuera de su bloque: el borde más cercano (el audio va debajo de la pila).
+    zone = Y < first.top ? slot(first, 'above') : slot(last, 'below')
+  } else {
+    const h = row.bottom - row.top
+    const band = Math.min(boundaryPx, h / 4)
+    if (Y < row.top + band) zone = slot(row, 'above')
+    else if (Y >= row.bottom - band) zone = slot(row, 'below')
+    else if (row.track.kind === kind && !row.track.locked) zone = { trackId: row.id }
+    else zone = slot(row, Y < row.top + h / 2 ? 'above' : 'below')
   }
 
-  const hitDur = clipDur(hit)
-  const offset = Math.abs(t - hit.start)
-  if (hitDur > 0 && offset < hitDur * REPLACE_TOL) {
-    return { action: 'replace', start: +hit.start.toFixed(3), targetId: hit.id }
+  if (zone.slot && originAlone && originId) {
+    const b = rows.findIndex((r) => r.id === zone.slot.targetId) + (zone.slot.place === 'below' ? 1 : 0)
+    const o = rows.findIndex((r) => r.id === originId)
+    if (o >= 0 && (b === o || b === o + 1)) return { trackId: originId }
   }
+  return zone
+}
 
-  // Desplazado: se entiende "ponlo al lado", detrás del clip que estorba.
-  return {
-    action: 'after',
-    start: freeStartOnTrack(clips, trackId, clipEnd(hit), span, { excludeIds }),
-    targetId: hit.id,
+/** Inicio pegado al vecino de la misma pista si el hueco que queda es menor que `snapSec`. */
+function stickToNeighbors(clips, trackId, start, span, excludeIds, snapSec) {
+  if (!(snapSec > 0)) return start
+  const skip = toSet(excludeIds)
+  let prevEnd = -Infinity
+  let nextStart = Infinity
+  for (const c of clips || []) {
+    if (c.track_id !== trackId || skip.has(c.id)) continue
+    const ce = clipEnd(c)
+    if (ce <= start + 1e-9) prevEnd = Math.max(prevEnd, ce)
+    else if (c.start >= start + span - 1e-9) nextStart = Math.min(nextStart, c.start)
   }
+  if (start - prevEnd <= snapSec) return prevEnd
+  if (nextStart - (start + span) <= snapSec && nextStart - span >= Math.max(0, prevEnd)) return nextStart - span
+  return start
+}
+
+/**
+ * Inicio en la pista `trackId` para un clip de `dur` s que se quiere en `desired`.
+ * Libre: ahí (pegado al vecino si queda a menos de `snapSec`). Ocupado: el hueco
+ * más cercano que lo admita, solo si está a ≤ `stickSec`. Si no, null: no cabe
+ * cerca y quien llama lo sube de pista (liftTarget).
+ */
+export function placeOnTrack(clips, trackId, desired, dur, { excludeIds, stickSec = 0, snapSec = 0 } = {}) {
+  const span = Math.max(0.001, Number(dur) || 0)
+  const want = r3(desired)
+  if (!clipCollidingWith(clips, trackId, want, span, excludeIds)) {
+    return { start: r3(stickToNeighbors(clips, trackId, want, span, excludeIds, snapSec)) }
+  }
+  const cand = clampStartNoOverlap(clips, trackId, want, span, { excludeIds })
+  if (Math.abs(cand - want) <= stickSec + 1e-9) return { start: r3(cand) }
+  return null
+}
+
+/**
+ * Pista a la que sube un clip que no cabe en `fromId` en [start, start+dur):
+ * la vecina de su tipo (encima en la pila, debajo en el audio) si está libre
+ * ahí, visible y sin bloquear; si no, una pista nueva pegada a `fromId`.
+ * Devuelve `{ trackId }` o `{ slot }`.
+ */
+export function liftTarget(tracks, clips, fromId, start, dur, excludeIds) {
+  const rows = displayTracks(tracks)
+  const i = rows.findIndex((t) => t.id === fromId)
+  const from = rows[i]
+  if (!from) return null
+  // La pila crece hacia arriba (delante del vídeo); el audio, hacia abajo.
+  const up = isStackTrack(from)
+  const next = rows[i + (up ? -1 : 1)]
+  if (next && next.kind === from.kind && !next.locked && !next.hidden
+    && !clipCollidingWith(clips, next.id, start, dur, excludeIds)) {
+    return { trackId: next.id }
+  }
+  return { slot: { targetId: fromId, place: up ? 'above' : 'below' } }
+}
+
+function lineYFor(geo, slot) {
+  const g = (geo || []).find((r) => r.id === slot?.targetId)
+  if (!g) return 0
+  return slot.place === 'below' ? g.bottom : g.top
+}
+
+/**
+ * Dónde cae un clip de `kind` y `dur` s arrastrado con el fantasma empezando en
+ * `time` y el puntero a la altura `y` (px del contenido, ver zoneAt).
+ *
+ * Opciones: `pointerTime` (instante bajo el puntero: elige el clip a reemplazar
+ * y el corte magnético), `excludeIds` (los clips que se mueven), `originId` y
+ * `originAlone` (ver zoneAt), `replace` (Alt), `pps` (px/s: pasa STICK_PX a
+ * segundos) y `snapSec` (imán con el vecino de la misma pista).
+ *
+ * Devuelve `{ trackId, start }` o `{ slot, lineY, start }`, más:
+ *   - `replaceId`: sustituye ese clip (Alt),
+ *   - `insert`: pista magnética, entra en ese corte y empuja lo de detrás,
+ *   - `lifted`: no cabía donde se soltó y sube de pista.
+ */
+export function dropTarget({
+  tracks, clips, geo, kind, y, time, dur,
+  pointerTime, excludeIds, originId, originAlone, replace = false, pps = 60, snapSec = 0,
+}) {
+  const zone = zoneAt(tracks, geo, kind, y, { originId, originAlone })
+  const start = r3(time)
+  if (zone.slot) return { slot: zone.slot, lineY: zone.lineY, start }
+  const track = (tracks || []).find((t) => t.id === zone.trackId)
+  if (!track) return null
+  const span = Math.max(0.001, Number(dur) || 0)
+  const at = Number.isFinite(Number(pointerTime)) ? Number(pointerTime) : start
+  if (replace) {
+    const hit = clipAtTime(clips, track.id, at, excludeIds)
+    if (hit) return { trackId: track.id, start: r3(hit.start), replaceId: hit.id }
+  }
+  if (track.magnetic) {
+    return { trackId: track.id, start: magneticCut(clips, track.id, at, excludeIds).start, insert: true }
+  }
+  const stickSec = STICK_PX / Math.max(1, Number(pps) || 60)
+  const placed = placeOnTrack(clips, track.id, start, span, { excludeIds, stickSec, snapSec })
+  if (placed) return { trackId: track.id, start: placed.start }
+  const lift = liftTarget(tracks, clips, track.id, start, span, excludeIds)
+  if (lift?.trackId) return { trackId: lift.trackId, start, lifted: true }
+  return { slot: lift.slot, lineY: lineYFor(geo, lift.slot), start, lifted: true }
 }
 
 /**
@@ -111,46 +224,6 @@ export function newTrackIndex(tracks, kind, side) {
   return toEnd ? last + 1 : first
 }
 
-/**
- * Pista nueva al arrastrar un clip de `kind` sobre la pista `hoverId`, con el
- * puntero a `yRatio` de su alto (0 = borde superior). Como CapCut: sobre una
- * pista que no es de su tipo (un texto sobre un vídeo) se señala SIEMPRE una
- * pista nueva, encima o debajo según la mitad; sobre una de su tipo, en sus
- * bordes (`edge`, fracción del alto), sea cual sea la pista de al lado. Fuera
- * de su bloque (un texto sobre el audio), en el borde del bloque más cercano.
- *
- * `originAlone`: el clip es el único de su pista (`originId`). Una pista nueva
- * pegada a ella no cambiaría nada (la suya se quita al quedar vacía), así que
- * ahí se queda donde está.
- *
- * Devuelve `{ targetId, place }` ('above' | 'below' tal como se ve) o null si
- * el clip entra en esa pista.
- */
-export function insertSlot(tracks, kind, hoverId, yRatio, originId, { edge = INSERT_EDGE, originAlone = false } = {}) {
-  const rows = displayTracks(tracks)
-  const hover = rows.find((t) => t.id === hoverId)
-  if (!hover) return null
-  const stack = kind === 'video' || kind === 'text'
-  let slot = null
-  if (isStackTrack(hover) !== stack) {
-    const group = rows.filter((t) => isStackTrack(t) === stack)
-    if (!group.length) return null
-    slot = stack ? { targetId: group[group.length - 1].id, place: 'below' } : { targetId: group[0].id, place: 'above' }
-  } else {
-    const y = Number.isFinite(Number(yRatio)) ? Number(yRatio) : 0.5
-    if (hover.kind !== kind || hover.locked) slot = { targetId: hover.id, place: y < 0.5 ? 'above' : 'below' }
-    else if (y < edge) slot = { targetId: hover.id, place: 'above' }
-    else if (y > 1 - edge) slot = { targetId: hover.id, place: 'below' }
-  }
-  if (!slot) return null
-  if (originAlone && originId) {
-    const b = slotBoundary(tracks, slot)
-    const o = rows.findIndex((t) => t.id === originId)
-    if (o >= 0 && (b === o || b === o + 1)) return null
-  }
-  return slot
-}
-
 /** Hueco entre filas de un slot tal como se ve: 0 = encima de la primera fila.
  *  Dos slots con el mismo hueco (debajo de A = encima de B) son la misma pista nueva. */
 export function slotBoundary(tracks, slot) {
@@ -160,7 +233,7 @@ export function slotBoundary(tracks, slot) {
   return i + (slot.place === 'below' ? 1 : 0)
 }
 
-/** Índice del array `tracks` para una pista nueva en `slot` (ver insertSlot).
+/** Índice del array `tracks` para una pista nueva en `slot` (ver zoneAt).
  *  La pila se ve invertida (la última del array, arriba); el audio, en orden. */
 export function slotIndex(tracks, slot) {
   const list = tracks || []
