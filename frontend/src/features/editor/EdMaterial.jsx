@@ -287,7 +287,7 @@ function withProjectScope(items, kind) {
 
 export default function EdMaterial({
   project, onAdd, onDragInfo, onRefresh, fav, onEditYtClip,
-  selectedClip, onChangeFx,
+  selectedClip, onChangeFx, onAddVfx, onSetAnimation,
   onAddText, onApplyTextPreset,
   matTab, onMatTab,
   audioDb, onAudioDb,
@@ -1403,6 +1403,7 @@ export default function EdMaterial({
           mode="effects"
           clip={selectedClip}
           onChangeFx={onChangeFx}
+          onAddVfx={onAddVfx}
           onAddAdjustment={onAddAdjustment}
           onAddCinemaBars={onAddCinemaBars}
           onApplyRecipe={onApplyRecipe}
@@ -1425,6 +1426,7 @@ export default function EdMaterial({
           mode="transitions"
           clip={selectedClip}
           onChangeFx={onChangeFx}
+          onSetAnimation={onSetAnimation}
         />
       )}
       {tab === 'motion' && motion && (

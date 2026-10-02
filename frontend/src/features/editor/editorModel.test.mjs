@@ -19,6 +19,7 @@ import {
   matchClipsToFirstDuration, durationPatchToMatch,
   clipLayerInfo, moveClipLayer, canLayerClip,
   trackTextContent, trackSrt, trackSrtWithReference, trackSource, srtTimestamp,
+  compactOriginSources, sourceRefOf,
   mcpBusyClipIds, MCP_BUSY_MS,
   freeStartOnTrack, clampStartNoOverlap, trimBounds, clampTrimDelta,
 } from './editorModel.js'
@@ -562,6 +563,44 @@ const srtRefClips = [
     origin: { source: { title: 'Mi vídeo', url: 'https://y', description: 'Desc' } } },
 ]
 assert.deepEqual(trackSource(srtRefClips, 'T1'), { title: 'Mi vídeo', url: 'https://y', description: 'Desc' })
+// Referencia al material (2026-09-28): el título/descripción se resuelven al copiar.
+{
+  const ref = sourceRefOf({ kind: 'audio', index: 3, filename: 'voz.wav', name: 'Voz' })
+  assert.deepEqual(ref, { kind: 'audio', asset_id: 3, filename: 'voz.wav', name: 'Voz' })
+  assert.equal(sourceRefOf({ kind: 'text' }), null)
+  const refClips = [
+    { id: 'a', track_id: 'T1', kind: 'text', start: 0, out_point: 1, source_duration: 1, text: 'Hola',
+      origin: { source_ref: ref } },
+  ]
+  const resolve = (r) => (r.asset_id === 3 ? { title: 'Mi audio', url: '', description: 'D' } : null)
+  assert.equal(trackSource(refClips, 'T1'), null)   // sin resolutor no hay fuente
+  assert.deepEqual(trackSource(refClips, 'T1', resolve), { title: 'Mi audio', url: '', description: 'D' })
+  assert.ok(trackSrtWithReference(refClips, 'T1', resolve).startsWith('Título: Mi audio'))
+  // Los fragmentos nuevos llevan solo la referencia, nunca la descripción entera.
+  const caps = textClipsFromTranscript(
+    { kind: 'audio', start: 0, in_point: 0, out_point: 4 },
+    [{ start: 0, end: 2, text: 'uno dos' }, { start: 2, end: 4, text: 'tres cuatro' }],
+    'T1', { max_words: 8 }, null, ref,
+  )
+  assert.ok(caps.length === 2 && caps.every((c) => c.origin.source_ref === ref && !c.origin.source))
+}
+// Compactar proyectos antiguos: la copia queda solo en el primer cuadro de cada pista.
+{
+  const src = { title: 'T', description: 'x'.repeat(50) }
+  const old = [
+    { id: 'a', track_id: 'T1', kind: 'text', origin: { transcript_id: 1, source: src } },
+    { id: 'b', track_id: 'T1', origin: { transcript_id: 1, source: src } },
+    { id: 'c', track_id: 'T2', origin: { transcript_id: 2, source: src } },
+    { id: 'd', track_id: 'T2', origin: { transcript_id: 2 } },
+  ]
+  const out = compactOriginSources(old)
+  assert.equal(out[0], old[0])
+  assert.deepEqual(out[1].origin, { transcript_id: 1 })
+  assert.equal(out[2], old[2])
+  assert.equal(out[3], old[3])
+  assert.equal(compactOriginSources(out), out)     // idempotente: mismo array
+  assert.deepEqual(trackSource(out, 'T1'), src)
+}
 assert.equal(
   trackSrtWithReference(srtRefClips, 'T1'),
   'Título: Mi vídeo\n\nFuente: https://y\n\nDescripción:\nDesc\n\n---\n\n1\n00:00:00,000 --> 00:00:01,000\nHola',

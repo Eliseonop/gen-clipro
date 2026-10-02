@@ -733,6 +733,10 @@ export function usePaperComp(projectId, { format, onUploaded } = {}) {
     if (!active) {
       playingRef.current = false
       setPlaying(false)
+      // Fuera del tab no se dibuja: las siluetas rasgadas (4 imágenes a tamaño
+      // completo por objeto y por letra) se sueltan; al volver se regeneran solas
+      // en el primer dibujado (OPTIMIZACION_MEMORIA, Fase 5).
+      rendererRef.current?.invalidateTornCache()
     }
   }, [active])
 

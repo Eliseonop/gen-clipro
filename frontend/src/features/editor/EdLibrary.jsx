@@ -7,6 +7,8 @@ import {
 } from '../../services/api'
 import { dragPayload, useToggle, bustUrl, Empty, clampAspect, AR_PLACEHOLDER, useMasonrySpan } from './MaterialClipGrid'
 import EdLibraryStick, { FileDropZone, UploadButton } from './EdLibraryStick'
+import LazyVideo from './LazyVideo'
+import { useNearViewport } from './useNearViewport'
 
 // Biblioteca = carpetas de material reutilizable bajo una raíz (ver collections.py).
 // La raíz muestra CARPETAS; al entrar en una se ve su contenido y se le pueden
@@ -40,6 +42,7 @@ function assetItem(it, duration) {
 function LibVideoCard({ item, onAdd, onPlay, di }) {
   const { ref, playing, setPlaying, toggle } = useToggle(onPlay)
   const { ref: msRef, recalc: msRecalc } = useMasonrySpan()
+  const near = useNearViewport(msRef)
   const [dur, setDur] = useState(0)
   const [ar, setAr] = useState(null)
   const assetKind = 'clips'
@@ -55,7 +58,7 @@ function LibVideoCard({ item, onAdd, onPlay, di }) {
       onDragEnd={() => di?.(null)}
     >
       <div className="ed-card-media" style={{ aspectRatio: ar || AR_PLACEHOLDER }}>
-        <video ref={ref} src={bustUrl(item.url, item)} preload="metadata" playsInline muted
+        <LazyVideo show={near || playing} mediaRef={ref} src={bustUrl(item.url, item)} preload="metadata" playsInline muted
           onLoadedMetadata={(e) => {
             const v = e.currentTarget
             if (v.videoWidth && v.videoHeight) setAr(clampAspect(v.videoWidth, v.videoHeight))

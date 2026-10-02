@@ -9,7 +9,7 @@ export const MAT_NAV = [
   { id: 'effects', icon: 'auto_awesome', label: 'Efectos', short: 'Efectos', sep: true },
   { id: 'shapes', icon: 'category', label: 'Figuras', short: 'Figuras' },
   { id: 'text', icon: 'title', label: 'Texto', short: 'Texto' },
-  { id: 'transitions', icon: 'animation', label: 'Transiciones', short: 'Trans.' },
+  { id: 'transitions', icon: 'animation', label: 'Animación', short: 'Anim.' },
   { id: 'motion', icon: 'animation', label: 'Motion', short: 'Motion', sep: true },
   { id: 'paper', icon: 'draw', label: 'Paper', short: 'Paper' },
   { id: 'ai', icon: 'smart_toy', label: 'IA', short: 'IA', sep: true },

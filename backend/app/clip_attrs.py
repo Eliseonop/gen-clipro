@@ -25,8 +25,10 @@ ATTR_GROUPS: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
     ("blend", "Opacidad y modo de fusión", _VISUAL, False),
     ("animation", "Animación (keyframes)", _VISUAL, False),
     ("transitions", "Entrada y salida", ("video", "image", "text"), False),
+    ("animations", "Animaciones (entrada, salida, bucle)", _VISUAL, False),
     ("crop", "Recorte y encuadre", _MEDIA, False),
     ("effects", "Filtro, efectos y ajustes", (*_MEDIA, "adjustment"), False),
+    ("vfx", "Efectos animados", _MEDIA, False),
     ("mask", "Máscara", _VISUAL, False),
     ("chroma", "Croma y contorno", _MEDIA, False),
     ("style", "Estilo", ("text", "shape"), True),
@@ -192,6 +194,10 @@ _APPLY = {
     "blend": _paste_blend,
     "animation": _set(anim=lambda s: copy.deepcopy(s.get("anim"))),   # pistas `anim` antiguas
     "transitions": _set(appear=lambda s: s.get("appear") or "none", exit=lambda s: s.get("exit") or "none"),
+    "animations": _set(animations=lambda s: copy.deepcopy(s.get("animations"))),
+    # Efectos animados (fx_bake): cada copia con su propio uid.
+    "vfx": _set(vfx=lambda s: [{**copy.deepcopy(e), "uid": f"fx{uuid.uuid4().hex[:10]}"}
+                               for e in (s.get("vfx") or []) if isinstance(e, dict)] or None),
     "crop": _paste_crop,
     "effects": _set(effects=lambda s: copy.deepcopy(s.get("effects")) or {}, look=lambda s: s.get("look") or "none",
                     filters=lambda s: copy.deepcopy(s.get("filters"))),

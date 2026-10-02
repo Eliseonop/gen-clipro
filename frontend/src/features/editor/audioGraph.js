@@ -129,3 +129,18 @@ export function syncAudioFx(el, clip, localT) {
     }
   } catch { /* el elemento no admite Web Audio: suena sin efectos */ }
 }
+
+/**
+ * Suelta el grafo de un elemento que se desmonta (clip borrado, dividido o fuera
+ * del pool). Sin esto el MediaElementSource, conectado al destino, mantenía vivo
+ * el <video> —con sus búferes— para siempre.
+ */
+export function releaseAudioFx(el) {
+  const g = el && graphs.get(el)
+  if (!g) return
+  try { g.src.disconnect() } catch { /* noop */ }
+  for (const n of g.nodes) { try { n.disconnect() } catch { /* noop */ } }
+  g.nodes = []
+  g.fx = []
+  graphs.delete(el)
+}

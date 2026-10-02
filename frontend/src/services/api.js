@@ -426,6 +426,9 @@ export async function segmentBg(pid, body) {
 }
 export const getBgStatus = (baseKey) => get(`/api/bg/status/${encodeURIComponent(baseKey)}`)
 export const getBgCacheStats = () => get('/api/bg/cache')
+// RAM del backend y modelos de IA cargados (panel ?debug=mem).
+export const getMemoryDiagnostics = () => get('/api/diagnostics/memory')
+export const unloadModels = () => post('/api/diagnostics/memory/unload', {})
 export const clearBgCache = (baseKey) =>
   del(`/api/bg/cache${baseKey ? `?base_key=${encodeURIComponent(baseKey)}` : ''}`)
 export const cancelJob = (jobId) => del(`/api/job/${jobId}`)

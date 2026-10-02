@@ -59,8 +59,13 @@ export function colorMatrix(effects) {
 
 // --- Filtro SVG para el canvas ------------------------------------------------
 // Un <filter> por matriz distinta (clave redondeada), en un <svg> oculto del DOM.
-const _filters = new Map()
+// Arrastrar un slider de color genera una matriz nueva por cada valor: sin tope,
+// los nodos se acumulaban para siempre. Se guardan los 64 usados más
+// recientemente (un fotograma usa como mucho unos pocos) y el resto sale del DOM.
+const FILTERS_MAX = 64
+const _filters = new Map()   // clave -> id (orden = uso reciente)
 let _svg = null
+let _seq = 0
 
 export function matrixFilterUrl(m) {
   if (!m || typeof document === 'undefined') return ''
@@ -70,7 +75,10 @@ export function matrixFilterUrl(m) {
     .map((v) => (Math.abs(v) < 1e-9 ? 0 : +v.toFixed(5)))
   const key = values.join(' ')
   let id = _filters.get(key)
-  if (!id) {
+  if (id) {
+    _filters.delete(key)
+    _filters.set(key, id)
+  } else {
     if (!_svg) {
       _svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
       _svg.setAttribute('width', '0')
@@ -79,7 +87,7 @@ export function matrixFilterUrl(m) {
       _svg.style.position = 'absolute'
       document.body.appendChild(_svg)
     }
-    id = `vy-adj-${_filters.size}`
+    id = `vy-adj-${_seq++}`
     const f = document.createElementNS('http://www.w3.org/2000/svg', 'filter')
     f.setAttribute('id', id)
     f.setAttribute('color-interpolation-filters', 'sRGB')
@@ -89,6 +97,11 @@ export function matrixFilterUrl(m) {
     f.appendChild(cm)
     _svg.appendChild(f)
     _filters.set(key, id)
+    while (_filters.size > FILTERS_MAX) {
+      const [oldKey, oldId] = _filters.entries().next().value
+      _filters.delete(oldKey)
+      _svg.querySelector(`#${oldId}`)?.remove()
+    }
   }
   return `url(#${id})`
 }

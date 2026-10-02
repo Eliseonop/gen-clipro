@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { EdAnimPicker, EdVfxStack } from './EdVfx'
 import Icon from '../../components/Icon'
 import FlipSelect from '../../components/FlipSelect'
 import { clipPose } from '../../lib/clipAnim'
@@ -34,8 +35,8 @@ function baseNavs(clip, textMode, audioMode) {
   if (clip?.kind === 'shape') return ['video', 'animacion']
   if (clip?.kind === 'adjustment') return ['ajuste']
   if (isVisualClip(clip)) {
-    if (clip.kind === 'video') return ['video', 'animacion', 'audio']
-    return ['video', 'animacion']
+    if (clip.kind === 'video') return ['video', 'efectos', 'animacion', 'audio']
+    return ['video', 'efectos', 'animacion']
   }
   return []
 }
@@ -48,6 +49,7 @@ function navLabel(id) {
   if (id === 'audio') return 'Audio'
   if (id === 'ajuste') return 'Capa de ajuste'
   if (id === 'seguimiento') return 'Seguimiento'
+  if (id === 'efectos') return 'Efectos'
   return 'Video'
 }
 
@@ -476,6 +478,14 @@ export default function EdInspector({
                 </button>
               )}
             </div>
+          </InspSection>
+        )}
+        {hasTarget && activeNav === 'efectos' && p.vfxProps && (
+          <EdVfxStack clip={clip} onChange={p.vfxProps.onChange} />
+        )}
+        {hasTarget && activeNav === 'animacion' && p.animProps && (
+          <InspSection title="Animaciones" hint="Entrada, salida, bucle y combo">
+            <EdAnimPicker clip={clip} onChange={p.animProps.onChange} />
           </InspSection>
         )}
         {hasTarget && activeNav === 'animacion' && (

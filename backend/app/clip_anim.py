@@ -75,3 +75,27 @@ def clip_pose(clip: Any, local_t: float) -> dict:
         "rotation": interp_track(anim.get("rotation"), local_t, base["rotation"]),
         "opacity": interp_track(anim.get("opacity"), local_t, base["opacity"]),
     }
+
+
+def render_pose(clip: Any, local_t: float) -> dict:
+    """Pose con la que se DIBUJA el clip: ``clip_pose`` más las animaciones de
+    entrada/salida/bucle/combo (``clip.animations``). Espejo de
+    ``clipRenderPose`` (clipAnim.js). La edición sigue usando ``clip_pose``."""
+    from . import fx_anims
+    from .clip_speed import clip_timeline_duration
+
+    pose = clip_pose(clip, local_t)
+    if not fx_anims.has_animations(clip):
+        return pose
+    d = fx_anims.animation_delta(clip, local_t, clip_timeline_duration(clip))
+    return fx_anims.apply_delta(pose, d)
+
+
+def anim_opacity(clip: Any, local_t: float) -> float:
+    """Factor de opacidad de las animaciones en ``local_t`` (1 si no hay)."""
+    from . import fx_anims
+    from .clip_speed import clip_timeline_duration
+
+    if not fx_anims.has_animations(clip):
+        return 1.0
+    return fx_anims.animation_delta(clip, local_t, clip_timeline_duration(clip))["opacity"]

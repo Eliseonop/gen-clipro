@@ -227,13 +227,25 @@ function relSegmentWords(segment, src, clipStart, dur) {
   })
 }
 
+/** Referencia pequeña al material transcrito (vídeo o audio). El título, la
+ *  descripción y la url se leen DEL MATERIAL cuando hacen falta (copiar SRT con
+ *  referencia): antes se copiaban enteros en cada fragmento de subtítulo, y una
+ *  descripción de 3 KB × cientos de fragmentos llegó a ser 2/3 de la timeline. */
+export function sourceRefOf(src) {
+  if (!src) return null
+  const assetId = src.asset_id ?? src.index ?? null
+  const ref = { kind: src.kind || null, asset_id: assetId, filename: src.filename || null }
+  if (src.name) ref.name = src.name
+  return ref.asset_id != null || ref.filename ? ref : null
+}
+
 /** Segmentos del Whisper → clips de texto en la timeline, recortados al tramo del clip.
  *  Si el segmento trae ``words[]`` (timing real), cada fragmento hereda solo sus
- *  palabras (relativas al fragmento) y conserva ``origin`` hacia su transcripción. */
-export function textClipsFromTranscript(src, segments, trackId, style, transcript = null, source = null) {
+ *  palabras (relativas al fragmento) y conserva ``origin`` hacia su transcripción.
+ *  ``sourceRef`` (de ``sourceRefOf``) apunta al material transcrito. */
+export function textClipsFromTranscript(src, segments, trackId, style, transcript = null, sourceRef = null) {
   const clipLen = src.out_point - src.in_point
   const news = []
-  const srcRef = source && (source.title || source.description || source.url) ? source : null
   ;(segments || []).forEach((s, segIndex) => {
     const ls = s.start - src.in_point
     const le = s.end - src.in_point
@@ -249,7 +261,7 @@ export function textClipsFromTranscript(src, segments, trackId, style, transcrip
       segment_index: s.index ?? segIndex,
       source_range: { start: s.start, end: s.end },
       word_range: [0, splitCaptionWords(text).length],
-      ...(srcRef ? { source: srcRef } : {}),
+      ...(sourceRef ? { source_ref: sourceRef } : {}),
     }
     news.push(...splitClipByMaxWords(made, style?.max_words ?? 8))
   })
@@ -1106,18 +1118,42 @@ export function trackSrt(clips, trackId) {
     .join('\n\n')
 }
 
-// Metadatos del vídeo/fuente que se transcribió (título/descripción/url), si se
-// estamparon al generar los subtítulos. Toma el primer cuadro que los tenga.
-export function trackSource(clips, trackId) {
-  const hit = trackTextClips(clips, trackId).find((c) => c?.origin?.source)
-  return hit?.origin?.source || null
+// Metadatos del vídeo/fuente que se transcribió (título/descripción/url). Toma el
+// primer cuadro que los tenga: `origin.source` (copia antigua, proyectos previos
+// al 2026-09-28) o `origin.source_ref`, que se resuelve contra el material con
+// `resolveRef(ref) → {title, description, url} | null`.
+export function trackSource(clips, trackId, resolveRef = null) {
+  for (const c of trackTextClips(clips, trackId)) {
+    if (c?.origin?.source) return c.origin.source
+    if (c?.origin?.source_ref && resolveRef) {
+      const got = resolveRef(c.origin.source_ref)
+      if (got) return got
+    }
+  }
+  return null
+}
+
+/** Proyectos antiguos: deja la copia de `origin.source` solo en el primer cuadro
+ *  de cada pista que la tenga (es lo único que lee `trackSource`). Devuelve el
+ *  MISMO array si no había nada que compactar. */
+export function compactOriginSources(clips) {
+  const seen = new Set()
+  let changed = false
+  const out = (clips || []).map((c) => {
+    if (!c?.origin?.source) return c
+    if (!seen.has(c.track_id)) { seen.add(c.track_id); return c }
+    changed = true
+    const { source: _drop, ...origin } = c.origin
+    return { ...c, origin }
+  })
+  return changed ? out : clips
 }
 
 // SRT precedido de una referencia con el título y la descripción del vídeo
 // transcrito. Si no hay fuente, cae al SRT simple.
-export function trackSrtWithReference(clips, trackId) {
+export function trackSrtWithReference(clips, trackId, resolveRef = null) {
   const srt = trackSrt(clips, trackId)
-  const src = trackSource(clips, trackId)
+  const src = trackSource(clips, trackId, resolveRef)
   if (!src) return srt
   const head = []
   const title = String(src.title || '').trim()

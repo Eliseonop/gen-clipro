@@ -4,6 +4,8 @@ import { fmt } from '../../lib/utils'
 import './editor.css'
 import { IMAGE_DEFAULT_DUR } from './editorModel.js'
 import { hasFaceTrack, materialDuration, segmentRange } from './clipExtract.js'
+import LazyVideo from './LazyVideo'
+import { useNearViewport } from './useNearViewport'
 
 // Proporción adaptativa de las miniaturas: se respeta el formato real del
 // material (9:16, 16:9, 1:1…) pero acotado a un rango para que ni un panorama ni
@@ -144,6 +146,8 @@ export function VideoCard({
 }) {
   const { ref, playing, setPlaying, toggle } = useToggle(onPlay)
   const { ref: msRef, recalc: msRecalc } = useMasonrySpan()
+  // Solo con la tarjeta a la vista hay <video> (OPTIMIZACION_MEMORIA, Fase 3).
+  const near = useNearViewport(msRef)
   const title = clip.label || (clip.scope === 'library' ? (clip.filename || 'Guardado') : `Clip #${clip.index}`)
   const desc = (clip.description || '').trim()
   const dur = materialDuration(clip)
@@ -212,7 +216,7 @@ export function VideoCard({
         onPointerMove={onScrub}
         onPointerLeave={onScrubLeave}
       >
-        <video ref={ref} src={bustUrl(clip.url, clip)} preload="metadata" playsInline muted
+        <LazyVideo show={near || playing} mediaRef={ref} src={bustUrl(clip.url, clip)} preload="metadata" playsInline muted
           onLoadedMetadata={onMeta} onTimeUpdate={seg ? onTime : undefined}
           onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} />
         {(seg || tracked) && (

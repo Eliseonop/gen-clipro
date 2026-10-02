@@ -23,7 +23,7 @@ try:
 except ImportError:
     BatchedInferencePipeline = None  # type: ignore[assignment,misc]
 
-from . import gpu, transcribe_settings, ytdlp
+from . import gpu, model_manager, transcribe_settings, ytdlp
 
 log = logging.getLogger("videoyt.transcribe")
 
@@ -99,7 +99,12 @@ def _get_model(size: str) -> tuple[str, WhisperModel]:
     carga en CUDA falla (faltan cuBLAS/cuDNN), cae a CPU (int8)."""
     cached = _models.get(size)
     if cached is not None:
+        model_manager.touch(f"whisper:{size}")
         return cached
+    # Un solo tamaño en RAM: pedir otro suelta el anterior (cada uno ocupa de
+    # cientos de MB a varios GB).
+    for other in list(_models):
+        model_manager.unload(f"whisper:{other}") or _drop_model(other)
     device, compute = gpu.whisper_device()
     cpu_threads = (os.cpu_count() or 4) if device == "cpu" else 4
     try:
@@ -116,7 +121,15 @@ def _get_model(size: str) -> tuple[str, WhisperModel]:
                              cpu_threads=cpu_threads)
         log.info("Whisper '%s' cargado en cpu (int8), threads=%d.", size, cpu_threads)
     _models[size] = (device, model)
+    model_manager.register(f"whisper:{size}", lambda: _drop_model(size),
+                           heavy=size not in ("tiny", "base", "small"))
     return device, model
+
+
+def _drop_model(size: str) -> None:
+    """Suelta el modelo y su pipeline (lo llama el gestor al descargarlo)."""
+    _models.pop(size, None)
+    _pipelines.pop(size, None)
 
 
 def _get_pipeline(size: str) -> tuple[str, object, int]:
@@ -209,6 +222,8 @@ def _transcribe_path(path: str, model_size: str, language: Optional[str],
             on_progress(base, f"Transcribiendo (cpu, {mode})…")
             segments, info = _do_transcribe(pipeline, path, language, bs)
             result = _collect_segments(segments, info, on_progress, base)
+        # Último uso = fin del job (una transcripción larga no cuenta como inactividad).
+        model_manager.touch(f"whisper:{model_size}")
         log.info("Whisper '%s' listo: %s segmentos.", model_size, len(result["segments"]))
         return result
 

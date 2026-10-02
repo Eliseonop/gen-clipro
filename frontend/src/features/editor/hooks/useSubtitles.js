@@ -2,9 +2,9 @@
 import { useState, useEffect } from 'react'
 import { getJob, generateSubtitles, transcribeClip, getSettings } from '../../../services/api'
 import { subtitleStyle } from '../../../lib/textstyles'
-import { canCaptionClip, textClipsFromTranscript } from '../editorModel'
+import { canCaptionClip, sourceRefOf, textClipsFromTranscript } from '../editorModel'
 
-export function useSubtitles(projectId, { tracksRef, ensureTextTrack, setClips, setCtxMenu, onChange, resolveSource }) {
+export function useSubtitles(projectId, { tracksRef, ensureTextTrack, setClips, setCtxMenu, onChange }) {
   const [subJob, setSubJob] = useState(null)
 
   function requestSubtitles(clip) {
@@ -33,8 +33,7 @@ export function useSubtitles(projectId, { tracksRef, ensureTextTrack, setClips, 
     const existing = tracksRef.current.find((t) => t.kind === 'text')
     const style = existing?.style || subtitleStyle()
     const tid = ensureTextTrack(style)
-    const source = resolveSource ? resolveSource(src) : null
-    const news = textClipsFromTranscript(src, job.transcript.segments || [], tid, style, job.transcript, source)
+    const news = textClipsFromTranscript(src, job.transcript.segments || [], tid, style, job.transcript, sourceRefOf(src))
     if (news.length) setClips((prev) => [...prev, ...news])
   }
 

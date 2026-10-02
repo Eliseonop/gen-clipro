@@ -1170,6 +1170,109 @@ def set_clip_effects(tl: Timeline, clip_id: str, effects: dict | None = None, re
     return EditResult(out, changed=[clip_id])
 
 
+_VFX_KINDS = ("video", "image", "motion")
+_ANIM_KINDS = ("video", "image", "motion", "text", "shape")
+
+
+def apply_effect(tl: Timeline, clip_ids: list, effect: str | None = None, params: dict | None = None,
+                 start: float | None = None, end: float | None = None, remove: bool = False,
+                 uid: str | None = None, stack: list | None = None) -> EditResult:
+    """Efectos de vídeo ANIMADOS (``clip.vfx``, docs/EFECTOS_ANIMADOS.md).
+
+    - ``effect`` (+ ``params``, ``start``/``end`` en s locales): añade el efecto.
+    - ``uid``: cambia ese efecto de la pila (params se fusionan, start/end).
+    - ``remove``: quita ``uid`` o todos los ``effect`` indicados.
+    - ``stack``: sustituye la pila entera ([] la vacía).
+    Solo vídeo, imagen y motion graphics.
+    """
+    import uuid
+
+    from . import fx_catalog
+
+    ids = [str(x) for x in (clip_ids or []) if x]
+    if not ids:
+        raise ValueError("pasa clip_ids")
+
+    def entry(eid, prm, frm, to, uid_=None):
+        man = fx_catalog.effect(eid)
+        if not man:
+            raise ValueError(f"efecto desconocido: {eid} (list_effects da el catálogo)")
+        if man.get("engine") == "generator":
+            raise ValueError(f"{eid} es un generador: va en su propio clip, no sobre otro")
+        frm = max(0.0, float(frm or 0.0))
+        return {
+            "uid": uid_ or f"fx{uuid.uuid4().hex[:10]}", "effect": man["id"], "v": int(man.get("v") or 1),
+            "enabled": True, "params": fx_catalog.resolve_params(man, prm),
+            "from": frm, "to": None if to is None else max(frm, float(to)),
+        }
+
+    out = _copy(tl)
+    for cid in ids:
+        c = _find_clip(out, cid)
+        if c.kind not in _VFX_KINDS:
+            raise ValueError(f"los efectos de vídeo solo aplican a vídeo, imagen o motion (clip {cid} es {c.kind})")
+        cur = [dict(e) for e in (c.vfx or []) if isinstance(e, dict)]
+        if stack is not None:
+            cur = [entry(e.get("effect"), e.get("params"), e.get("from"), e.get("to"), e.get("uid"))
+                   for e in stack if isinstance(e, dict)]
+        elif remove:
+            if not (uid or effect):
+                raise ValueError("remove necesita uid o effect")
+            cur = [e for e in cur
+                   if not ((uid and e.get("uid") == uid) or (not uid and e.get("effect") == effect))]
+        elif uid:
+            hit = next((e for e in cur if e.get("uid") == uid), None)
+            if hit is None:
+                raise ValueError(f"el clip {cid} no tiene el efecto {uid}")
+            merged = {**(hit.get("params") or {}), **(params or {})}
+            new = entry(hit["effect"], merged, hit.get("from") if start is None else start,
+                        hit.get("to") if end is None else end, uid)
+            new["enabled"] = hit.get("enabled", True) is not False
+            cur = [new if e.get("uid") == uid else e for e in cur]
+        else:
+            if not effect:
+                raise ValueError("pasa effect, uid, remove o stack")
+            cur.append(entry(effect, params, start, end))
+        c.vfx = cur or None
+    return EditResult(out, changed=ids)
+
+
+def set_clip_animation(tl: Timeline, clip_ids: list, slot: str, animation: str | None = None,
+                       duration: float | None = None) -> EditResult:
+    """Animación de clip del catálogo (``clip.animations``): ``slot`` in|out|loop|combo,
+    ``animation`` = id (None la quita), ``duration`` en s (en loop, el periodo)."""
+    from . import fx_catalog
+
+    if slot not in ("in", "out", "loop", "combo"):
+        raise ValueError("slot debe ser in, out, loop o combo")
+    ids = [str(x) for x in (clip_ids or []) if x]
+    if not ids:
+        raise ValueError("pasa clip_ids")
+    anim = None
+    if animation:
+        anim = fx_catalog.anim(animation)
+        if not anim:
+            raise ValueError(f"animación desconocida: {animation} (list_effects da el catálogo)")
+        if anim.get("slot") != slot:
+            raise ValueError(f"{animation} es de la ranura {anim.get('slot')}, no {slot}")
+    out = _copy(tl)
+    for cid in ids:
+        c = _find_clip(out, cid)
+        if c.kind not in _ANIM_KINDS:
+            raise ValueError(f"las animaciones solo aplican a vídeo, imagen, texto, figura o motion ({cid})")
+        cur = dict(c.animations or {})
+        if anim is None:
+            cur.pop(slot, None)
+        else:
+            val = {"id": anim["id"]}
+            if slot != "combo":
+                d = float(duration) if duration is not None else float(anim.get("dur") or 0.5)
+                val["dur"] = round(min(8.0, max(0.1, d)), 3)
+            cur[slot] = val
+        c.animations = cur or None
+    return EditResult(out, changed=ids)
+
+
 def set_clip_masks(tl: Timeline, clip_id: str, masks: list | None) -> EditResult:
     """Sustituye las máscaras del clip (lista normalizada; None/[] = sin máscara).
 

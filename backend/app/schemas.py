@@ -534,6 +534,11 @@ class TimelineClip(BaseModel):
     masks: list[dict] = []                # máscaras de composición (ver clip_mask.py); masks[0] anima con keyframes
     bg_removal: Optional[dict] = None     # eliminar fondo: matte IA + chroma key (ver clip_bg.py); None = apagado
     anim: Optional[dict] = None           # (legado) pistas {x,y,scale,rotation,opacity: [{t,v,ease}]}
+    # Efectos de vídeo animados (docs/EFECTOS_ANIMADOS.md): pila
+    # [{uid, effect, v, enabled, params, from, to}] (from/to en s locales).
+    vfx: Optional[list] = None
+    # Animaciones de clip: {in: {id, dur}, out: {id, dur}, loop: {id, dur}, combo: {id}}.
+    animations: Optional[dict] = None
     keyframes: Optional[dict] = None      # snapshots: {enabled, items: [{id,t,interpolation,props}]}
     asset_scope: str = "project"          # "project" | "library" | "collection"
     description: Optional[str] = None

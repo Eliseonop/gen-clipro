@@ -128,10 +128,33 @@ def _pose_prop_points(clip: TimelineClip, prop: str, dur: float) -> list[tuple[f
     Los instantes salen de ``pose_sample_times``: en tramos con curva (ease,
     cúbica, bézier, hold) hay puntos intermedios, porque la expresión que se
     construye con ellos (``clipper._pw_expr``) interpola en línea recta."""
+    from . import fx_anims
     from .clip_keyframes import clip_props_at, pose_sample_times
 
-    pts = [(t, float(clip_props_at(clip, t).get(prop, 0))) for t in pose_sample_times(clip, dur)]
-    return pts or [(0.0, float(clip_props_at(clip, 0).get(prop, 0)))]
+    times = pose_sample_times(clip, dur)
+    anim = fx_anims.has_animations(clip) and prop in _ANIM_PROPS
+    if anim:
+        # Animaciones de entrada/salida/bucle/combo: delta sobre la pose (mismo que
+        # clipRenderPose del preview), muestreado a 30 fps dentro de sus ventanas.
+        times = sorted(set(times) | set(fx_anims.animation_sample_times(clip, dur)))
+
+    def value(t: float) -> float:
+        p = clip_props_at(clip, t)
+        if anim:
+            p = fx_anims.apply_delta(p, fx_anims.animation_delta(clip, t, dur))
+        return float(p.get(prop, 0))
+
+    pts = [(t, value(t)) for t in times]
+    return pts or [(0.0, value(0.0))]
+
+
+_ANIM_PROPS = ("x", "y", "scale", "rotation", "opacity")
+
+
+def _pose_animated(clip: TimelineClip) -> bool:
+    """La pose se anima (keyframes o animaciones); el recorte solo con keyframes."""
+    from . import fx_anims
+    return keyframes_enabled(clip) or fx_anims.has_animations(clip)
 
 
 def _pose_spread(pts: list[tuple[float, float]]) -> float:
@@ -143,7 +166,7 @@ def _pose_spread(pts: list[tuple[float, float]]) -> float:
 
 def pose_transform_animates(clip: TimelineClip) -> bool:
     """True si x/y/scale/rotation/opacity cambian (no el recorte zoom/cx/cy)."""
-    if not keyframes_enabled(clip):
+    if not _pose_animated(clip):
         return False
     dur = clip_timeline_duration(clip)
     for prop, eps in (("x", 0.004), ("y", 0.004), ("scale", 0.01),
@@ -238,7 +261,8 @@ def _overlay_video_filter(path: Path, clip: TimelineClip, W: int, H: int, dur: f
     rf = clip.reframe
     crop_w = float(getattr(rf, "crop_w", None) or 1.0)
     crop_h = float(getattr(rf, "crop_h", None) or 1.0)
-    animated = keyframes_enabled(clip)
+    animated = keyframes_enabled(clip)      # el RECORTE lo dictan los keyframes
+    posed = animated or _pose_animated(clip)  # la POSE, también las animaciones
     pose_dur = clip_timeline_duration(clip)
     pose_scale = _pose_prop_points(clip, "scale", pose_dur)
     pose_x = _pose_prop_points(clip, "x", pose_dur)
@@ -260,7 +284,7 @@ def _overlay_video_filter(path: Path, clip: TimelineClip, W: int, H: int, dur: f
         kfs = _shifted_keyframes(rf, clip.in_point, dur, 1) if rf else []
     fr0 = frame_at(kfs, 0, (rf.zoom if rf else None) or 1.0, (rf.pan_mode if rf else None) or "smooth")
     _, _, sw, sh = source_crop_px(crop_w, crop_h, fr0["cx"], fr0["cy"], iw, ih)
-    if not animated:
+    if not posed:
         ox, oy, dw, dh, rot = dest_rect_even(clip.transform, sw, sh, W, H)
     else:
         rot = pose_rot[-1][1] if pose_rot else 0.0
@@ -296,7 +320,7 @@ def _overlay_video_filter(path: Path, clip: TimelineClip, W: int, H: int, dur: f
     if flip:
         crop_f += f",{flip}"
 
-    if animated:
+    if posed:
         # ESCALA: se aplica en el chain del PIP (scale eval=frame), donde 't' es
         # tiempo LOCAL del clip. POSICIÓN: se aplica en el overlay final, donde
         # 't' es tiempo de composición → usamos 't-start' para volver a local.
@@ -713,7 +737,8 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
                   mask_files: Optional[dict] = None,
                   bg_files: Optional[dict] = None, frame_at: Optional[float] = None,
                   text_layers: Optional[dict] = None,
-                  track_text_layers: Optional[dict] = None) -> list[str]:
+                  track_text_layers: Optional[dict] = None,
+                  fx_baked: Optional[dict] = None) -> list[str]:
     """Construye la lista de argumentos de ffmpeg para renderizar la timeline.
 
     Con ``frame_at`` (segundos) NO codifica el vídeo: busca ese instante y escribe UN
@@ -747,11 +772,15 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
         if not media_exists(path):   # (secuencia PNG = «dibujar trazo» animado, #14)
             continue
         if track.kind == "video" and clip_fits_track(c.kind, "video"):
+            # Efectos de vídeo (fx_bake): la IMAGEN sale del horneado; el audio, del
+            # material original con otro id (cada uno su input de FFmpeg).
+            baked = (fx_baked or {}).get(c.id)
             if not track.hidden:
-                vclips.append((c, path, track))
+                vclips.append((baked[0], baked[1], track) if baked else (c, path, track))
             # el audio de un clip de vídeo suena si ni la pista ni el clip están muteados
             if (not is_still_clip(c)) and clip_mixes_audio(c, track) and _has_audio(path):
-                aclips.append((c, path, track))
+                ac = c.model_copy(update={"id": f"{c.id}__audio"}) if baked else c
+                aclips.append((ac, path, track))
         elif track.kind == "audio":
             if clip_mixes_audio(c, track) and _has_audio(path):
                 aclips.append((c, path, track))
@@ -923,7 +952,7 @@ def build_command(project: Project, timeline: Timeline, out_path: Path,
                 clip_bg(c)["outline"], detect.dims(path)[1], bg_label, n)
             bg_steps += ol_steps
         has_bg = bool(bg_steps)
-        animated_ov = is_overlay(c) and keyframes_enabled(c)
+        animated_ov = is_overlay(c) and _pose_animated(c)
         # Una figura con keyframes se rasteriza neutra (shapes.export_pose): su
         # pose se aplica aquí SIEMPRE, aunque sea constante.
         fill_pose = (not is_overlay(c)) and (
@@ -1306,10 +1335,14 @@ def render(project: Project, timeline: Timeline, out_path: Path,
         # que exportar dos veces no vuelve a ejecutar el modelo.
         from .bg import service as bg_service
         bg_files = bg_service.build_timeline_bg_masks(timeline, int(timeline.fps or 30))
+        # Efectos de vídeo animados: se hornean (Chromium) antes de componer.
+        from . import fx_bake
+        fx_baked = fx_bake.bake_timeline(
+            project, timeline, lambda f, m: on_progress(0.05 + 0.1 * f, m))
         cmd = build_command(project, timeline, out_path, ass_path=ass_path,
                             shape_files=shape_files, mask_files=mask_files,
                             bg_files=bg_files, text_layers=text_layers,
-                            track_text_layers=track_text_layers)
+                            track_text_layers=track_text_layers, fx_baked=fx_baked)
         cmd = _filter_script_cmd(cmd, Path(td))
         on_progress(0.15, "Renderizando el vídeo final con FFmpeg…")
         log.info("Export: %d clip(s), encoder=%s crf=%s → %s",
@@ -1344,9 +1377,12 @@ def render_frame(project: Project, timeline: Timeline, out_path: Path, at_time: 
         mask_files = build_timeline_masks(timeline, Path(td) / "masks", W, H, int(timeline.fps or 30))
         from .bg import service as bg_service
         bg_files = bg_service.build_timeline_bg_masks(timeline, int(timeline.fps or 30))
+        from . import fx_bake
+        fx_baked = fx_bake.bake_timeline(project, timeline)
         cmd = build_command(project, timeline, out_path, ass_path=ass_path, shape_files=shape_files,
                             mask_files=mask_files, bg_files=bg_files, frame_at=at_time,
-                            text_layers=text_layers, track_text_layers=track_text_layers)
+                            text_layers=text_layers, track_text_layers=track_text_layers,
+                            fx_baked=fx_baked)
         cmd = _filter_script_cmd(cmd, Path(td))
         cmd[1:1] = ["-nostdin"]
         with timed("render FFmpeg (frame)", log, clips=len(timeline.clips)):

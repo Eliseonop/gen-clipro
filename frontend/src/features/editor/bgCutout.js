@@ -24,34 +24,42 @@ import {
   outlineParams,
 } from '../../lib/clipBg'
 import { mediaSize } from '../../lib/clipLayout'
+import { createLruBytes, pixelBytes } from '../../lib/lruBytes'
 
 // Techo de resolución del recorte. Con croma hay una pasada por píxel en JS, así
 // que se recorta más: el lienzo del preview es bastante menor y no se nota.
 const MAX_SIDE_MATTE = 1280
 const MAX_SIDE_CHROMA = 960
 
-// Fotogramas de matte que se mantienen descargados (~16 s a 15 fps).
-const MATTE_IMG_MAX = 260
+// Fotogramas de matte decodificados que se mantienen en RAM. Tope en bytes: a
+// 1280×720 son ~3,7 MB por fotograma (el PNG es gris, pero decodificado ocupa
+// RGBA), así que 256 MB ≈ 70 fotogramas; los que salen se vuelven a pedir (el
+// navegador los tiene en su caché HTTP, son inmutables).
+const MATTE_IMG_BYTES = 256 * 1024 * 1024
+// Canvas de trabajo por clip (alfa, recorte, pluma, contorno…): todos en UNA
+// caché con tope en bytes, en vez de 7 mapas de hasta 24 clips cada uno.
+const SCRATCH_BYTES = 192 * 1024 * 1024
 // Fotogramas que se piden por adelantado para que la reproducción no tirite.
 const PREFETCH = 6
 
-const matteImgs = new Map()   // `${baseKey}/${idx}` -> HTMLImageElement
+// `${baseKey}/${idx}` -> HTMLImageElement. Al descartar se suelta el src para que
+// el navegador libere el mapa de bits decodificado.
+const matteImgs = createLruBytes({
+  maxBytes: MATTE_IMG_BYTES,
+  name: 'bg-matte',
+  onEvict: (_k, img) => { img.onload = null; img.removeAttribute('src') },
+})
 const metas = new Map()       // baseKey -> meta | 'loading' | 'error'
-const alphaCache = new Map()  // clipId -> { sig, canvas }
-const cutCache = new Map()    // clipId -> { sig, canvas }
-const blurCache = new Map()   // clipId -> { sig, canvas } (auxiliar de la pluma)
-const grayCache = new Map()   // clipId -> { sig, canvas } (alfa como gris, croma)
-const outlineCache = new Map() // clipId -> { sig, canvas } (recorte + contorno, #9)
-const olGrayCache = new Map()  // clipId -> { sig, canvas } (alfa del recorte como gris)
-const olBlurCache = new Map()  // clipId -> { sig, canvas } (difuminados del contorno)
-
-function evict(map, max) {
-  while (map.size > max) {
-    const first = map.keys().next()
-    if (first.done) return
-    map.delete(first.value)
-  }
-}
+// `${etapa}:${clipId}` -> { sig, canvas }
+const scratchLru = createLruBytes({ maxBytes: SCRATCH_BYTES, name: 'bg-cutout' })
+const alphaCache = 'alpha'      // alfa del matte con niveles/pluma/pincel
+const cutCache = 'cut'          // recorte final
+const blurCache = 'blur'        // auxiliar de la pluma
+const grayCache = 'gray'        // alfa como gris (croma)
+const outlineCache = 'outline'  // recorte + contorno (#9)
+const olGrayCache = 'olgray'    // alfa del recorte como gris
+const olBlurCache = 'olblur'    // difuminados del contorno
+const STAGES = [alphaCache, cutCache, blurCache, grayCache, outlineCache, olGrayCache, olBlurCache]
 
 /** Metadatos del matte en caché (rango disponible, cadencia). Los pide una vez. */
 export function bgMeta(baseKey) {
@@ -76,30 +84,30 @@ export function bgMetaState(baseKey) {
 function matteImage(baseKey, idx) {
   const key = `${baseKey}/${idx}`
   let img = matteImgs.get(key)
-  if (img) {
-    // refrescar el orden de uso (Map conserva el orden de inserción)
-    matteImgs.delete(key)
-    matteImgs.set(key, img)
-    return img.complete && img.naturalWidth ? img : null
-  }
+  if (img) return img.complete && img.naturalWidth ? img : null
   img = new Image()
   img.decoding = 'sync'
+  // El peso real se conoce al cargar; hasta entonces cuenta como 0.
+  img.onload = () => { if (matteImgs.peek(key) === img) matteImgs.resize(key, pixelBytes(img)) }
   img.src = `/api/bg/matte/${encodeURIComponent(baseKey)}/${idx}.png`
-  matteImgs.set(key, img)
-  evict(matteImgs, MATTE_IMG_MAX)
+  matteImgs.set(key, img, 0)
   return null
 }
 
 function scratch(store, id, w, h) {
-  let entry = store.get(id)
+  const key = `${store}:${id}`
+  let entry = scratchLru.get(key)
   if (!entry) {
     if (typeof document === 'undefined') return null
     entry = { sig: '', canvas: document.createElement('canvas') }
-    store.set(id, entry)
-    evict(store, 24)
+    scratchLru.set(key, entry, 0)
   }
   const cv = entry.canvas
-  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h }
+  if (cv.width !== w || cv.height !== h) {
+    cv.width = w
+    cv.height = h
+    scratchLru.resize(key, w * h * 4)
+  }
   return entry
 }
 
@@ -316,7 +324,7 @@ export function cutoutDrawable(clip, el, srcTime, loopDur = 0) {
     ? `${bg.chroma.color}:${bg.chroma.similarity}:${bg.chroma.blend}:${bg.chroma.spill}`
       + `:${bg.chroma.edge}:${bg.chroma.shrink}`
     : ''
-  const alphaSig = alpha ? alphaCache.get(clip.id)?.sig || '' : ''
+  const alphaSig = alpha ? scratchLru.peek(`${alphaCache}:${clip.id}`)?.sig || '' : ''
   const sig = [`${w}x${h}`, chromaSig, alphaSig, wantChroma ? srcTime.toFixed(4) : ''].join('#')
   const entry = scratch(cutCache, clip.id, w, h)
   if (!entry) return null
@@ -415,24 +423,20 @@ function withOutline(clip, bg, cut, cutSig, w, h) {
 /** Olvida lo cacheado de un clip (al borrarlo, o al recalcular su matte). */
 export function resetCutout(clipId) {
   if (clipId == null) {
-    alphaCache.clear()
-    cutCache.clear()
-    blurCache.clear()
-    grayCache.clear()
-    outlineCache.clear()
-    olGrayCache.clear()
-    olBlurCache.clear()
+    scratchLru.clear()
     matteImgs.clear()
     metas.clear()
     return
   }
-  alphaCache.delete(clipId)
-  cutCache.delete(clipId)
-  blurCache.delete(clipId)
-  grayCache.delete(clipId)
-  outlineCache.delete(clipId)
-  olGrayCache.delete(clipId)
-  olBlurCache.delete(clipId)
+  for (const stage of STAGES) scratchLru.delete(`${stage}:${clipId}`)
+}
+
+/**
+ * Suelta los canvas de trabajo de los clips que ya no están en la timeline
+ * (borrados, divididos, deshechos). `aliveIds`: Set de ids vivos.
+ */
+export function releaseDeadCutouts(aliveIds) {
+  scratchLru.purge((key) => aliveIds.has(key.slice(key.indexOf(':') + 1)))
 }
 
 /** Invalida los metadatos de una base_key (tras ampliar el rango del matte). */

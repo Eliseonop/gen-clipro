@@ -1,4 +1,37 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { registerStats } from '../../../lib/lruBytes.js'
+
+// Tope del historial: 80 pasos Y como mucho ~48 MB de instantáneas (una timeline
+// larga con subtítulos ronda los cientos de KB por paso; V8 guarda las cadenas
+// en 1 o 2 bytes por carácter, se cuenta 2 por prudencia).
+export const HISTORY_MAX_STEPS = 80
+export const HISTORY_MAX_BYTES = 48 * 1024 * 1024
+
+export function snapBytes(snap) {
+  return (snap?.length || 0) * 2
+}
+
+/** Recorta `past` (el más antiguo primero) a los topes de pasos y de bytes. Muta. */
+export function trimHistory(past, future = [], maxSteps = HISTORY_MAX_STEPS, maxBytes = HISTORY_MAX_BYTES) {
+  while (past.length > maxSteps) past.shift()
+  let total = 0
+  for (const s of past) total += snapBytes(s)
+  for (const s of future) total += snapBytes(s)
+  while (past.length > 1 && total > maxBytes) total -= snapBytes(past.shift())
+  return past
+}
+
+// Todas las instancias vivas del historial, para el panel `?debug=mem`.
+const instances = new Set()
+registerStats('undo', () => {
+  let entries = 0
+  let bytes = 0
+  for (const h of instances) {
+    for (const s of h.past.current) { entries += 1; bytes += snapBytes(s) }
+    for (const s of h.future.current) { entries += 1; bytes += snapBytes(s) }
+  }
+  return { entries, bytes }
+})
 
 /**
  * Undo/redo por instantáneas JSON con debounce.
@@ -17,6 +50,12 @@ export function useEditorHistory(snapshot, enabled) {
   const skip = useRef(false)
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
+
+  useEffect(() => {
+    const h = { past, future }
+    instances.add(h)
+    return () => { instances.delete(h) }
+  }, [])
 
   const reset = useCallback(() => {
     past.current = []
@@ -42,9 +81,9 @@ export function useEditorHistory(snapshot, enabled) {
       }
       if (snap === last.current) return
       past.current.push(last.current)
-      if (past.current.length > 80) past.current.shift()
-      last.current = snap
       future.current = []
+      trimHistory(past.current)
+      last.current = snap
       setCanUndo(true)
       setCanRedo(false)
     }, 320)

@@ -30,7 +30,7 @@ import {
   trackContextItems, linkTrackPair, unlinkTrackPair,
   applyAudioSpeedToLinkedText, matchClipsToFirstDuration,
   clipLayerInfo, moveClipLayer, canLayerClip,
-  trackTextContent, trackSrt, trackSrtWithReference, trackSource, clipCopyText,
+  trackTextContent, trackSrt, trackSrtWithReference, trackSource, clipCopyText, compactOriginSources,
   previewHead, safeMediaTime, mcpBusyClipIds,
   motionLayersToTimeline, motionClipTiming,
 } from './editorModel'
@@ -48,9 +48,15 @@ import {
   editsAtFrame, isInteractiveProvider, isManualMark, matteFrameIndex, matteFrameTime, normalizeBg,
   preferredSamProvider, providerMaskHeight, recommendedProvider,
 } from '../../lib/clipBg'
-import { clearMagic, magicCovers, setMagicMask } from './bgMagic'
+import { clearMagic, magicCovers, releaseDeadMagic, setMagicMask } from './bgMagic'
 import { copyClipAttrs, groupApplies, pasteClipAttrs, pasteableGroups } from '../../lib/clipAttrs'
-import { resetBgMeta, resetCutout } from './bgCutout'
+import { releaseDeadCutouts, resetBgMeta, resetCutout } from './bgCutout'
+import { releaseUnusedGifs } from './gifPlayer'
+import { makeVfxEntry, releaseDeadVfx } from '../../fx/core/runtime'
+import { releaseVfxMemo } from './render/vfxLayer'
+import { forgetPosters, posterFor, rememberPoster } from './render/posters'
+import { mediaWindow, sameIds } from './mediaWindow'
+import EdMemPanel from './EdMemPanel'
 import { canvasPointer, cropWindow, followTrackMaskKeys, frameRectOf, freeFrameAt, isOverlay, mediaSize, newTransform, sourceCropPx, videosAt } from '../../lib/clipLayout'
 import {
   AUDIO_FX_KEYS, applyVolumeFade, canKeyframe, clipPropsAt, clipVolumeAt, clampVolume, deleteKeyframeItem,
@@ -69,7 +75,7 @@ import { patchDirectionSegment, suggestClipNotes, freezeFrame as apiFreezeFrame,
   applyRecipe as apiApplyRecipe } from '../../services/api'
 import { placeSoundDesign } from '../../lib/soundDesign'
 import { applyFollowKeys, followObjectKeys } from '../../lib/objectTrack'
-import { resumeAudio, syncAudioFx } from './audioGraph'
+import { releaseAudioFx, resumeAudio, syncAudioFx } from './audioGraph'
 import { canFreeze, FREEZE_DUR, freezeSourceTime, frozenClipFrom, insertFreeze } from '../../lib/freezeFrame'
 import { clipBeats, nextSnapTime, normalizeMarkers, toggleMarkerAt } from '../../lib/beats'
 import { EMPTY_MARK, hasMarkRange, resolveGenerateTarget, setMark } from './motionTarget'
@@ -116,14 +122,37 @@ function clipWorkspaceTracks() {
   return [{ id: 'V1', kind: 'video', name: 'V1', hidden: false, muted: false, locked: false }]
 }
 
+// Clips que admiten efectos de vídeo (fx/) y animaciones de clip.
+const VFX_CLIP_KINDS = new Set(['video', 'image', 'motion'])
+const ANIM_CLIP_KINDS = new Set(['video', 'image', 'motion', 'text', 'shape'])
+
 function HiddenMedia({ clip, src, mediaEls, onLoadedMetadata }) {
   const id = clip.id
   const ref = useCallback((el) => {
-    if (el) mediaEls.current.set(id, el)
-    else mediaEls.current.delete(id)
+    if (el) {
+      mediaEls.current.set(id, el)
+      return
+    }
+    // Desmontaje: soltar el decodificador y los búferes del elemento sin esperar
+    // al recolector (que puede tardar minutos con vídeos grandes). Diferido y solo
+    // si de verdad salió del DOM: StrictMode (dev) simula un desmontaje de refs
+    // al montar y el elemento sigue en uso.
+    const old = mediaEls.current.get(id)
+    mediaEls.current.delete(id)
+    if (old && old.tagName !== 'IMG') {
+      setTimeout(() => {
+        if (old.isConnected || mediaEls.current.get(id) === old) return
+        rememberPoster(id, old)
+        releaseAudioFx(old)
+        try { old.pause(); old.removeAttribute('src'); old.load() } catch { /* noop */ }
+      }, 0)
+    }
   }, [id, mediaEls])
   if (clip.kind === 'image') {
-    return <img alt="" loading="eager" decoding="async" src={src} ref={ref} onLoad={onLoadedMetadata} />
+    return (
+      <img alt="" loading="eager" decoding="async" src={src} ref={ref}
+        onLoad={(e) => { rememberPoster(id, e.currentTarget); onLoadedMetadata?.(e) }} />
+    )
   }
   const mediaProps = { src, ref, preload: 'auto', onLoadedMetadata }
   // Motion: WebM con alfa → <video muted> (no lleva audio); se dibuja como overlay.
@@ -374,6 +403,9 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const mainStageRef = useRef(null)
   const hitListRef = useRef([])
   const mediaEls = useRef(new Map())
+  const poolPrevRef = useRef(new Set())
+  // Panel de diagnóstico de memoria: solo con `?debug=mem` en la URL.
+  const [memDebug] = useState(() => new URLSearchParams(window.location.search).get('debug') === 'mem')
   const rafRef = useRef(0)
   const playRef = useRef({ perf: 0, head: 0 })
   const mainTextBox = useRef(null)
@@ -442,6 +474,26 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   const selectedClip = clips.find((c) => c.id === selClipId) || null
   const histSnap = useMemo(() => ({ tracks, clips, markers }), [tracks, clips, markers])
   const hist = useEditorHistory(histSnap, loaded)
+
+  // Limpieza de cachés al cambiar la timeline: lo que era de clips borrados,
+  // divididos o deshechos se suelta (recorte de fondo, selección de SAM, GIFs).
+  // Con retardo: tras el cambio, React ya desmontó los elementos de los clips idos.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const alive = new Set(clipsRef.current.map((c) => c.id))
+      releaseDeadCutouts(alive)
+      releaseDeadMagic(alive)
+      releaseDeadVfx(alive)
+      releaseVfxMemo(alive)
+      forgetPosters(alive)
+      const gifs = new Set()
+      for (const el of mediaEls.current.values()) {
+        if (el?.tagName === 'IMG') gifs.add(el.currentSrc || el.src)
+      }
+      releaseUnusedGifs(gifs)
+    }, 1500)
+    return () => clearTimeout(t)
+  }, [clips])
   const histRef = useRef(hist)
   histRef.current = hist
   const mcpBusyIds = useMemo(
@@ -478,7 +530,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
         if (tl && tl.tracks && tl.tracks.length) {
           settleResetRef.current = true
           setTracks(tl.tracks)
-          setClips((tl.clips || []).map((c) => ({
+          setClips(compactOriginSources(tl.clips || []).map((c) => ({
             ...c,
             reframe: isVisualClip(c) ? withKfIds(c.reframe || newReframe()) : null,
             appear: c.appear || 'none',
@@ -576,7 +628,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       const tl = await getTimeline(project.id)
       if (!tl) return
       const nextTracks = tl.tracks || []
-      const nextClips = (tl.clips || []).map((c) => ({
+      const nextClips = compactOriginSources(tl.clips || []).map((c) => ({
         ...c,
         reframe: isVisualClip(c) ? withKfIds(c.reframe || newReframe()) : null,
         appear: c.appear || 'none',
@@ -1634,9 +1686,10 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       if (c.id !== clip.id) return c
       // Un segmento por referencia apunta al vídeo ENTERO: su out_point es el fin
       // del tramo, no el del archivo. Nunca se "des-recorta" hasta el final.
-      if (c.ref_segment) return { ...c, source_duration: real, out_point: Math.min(c.out_point, real) }
-      const wasUntrimmed = Math.abs(c.out_point - c.source_duration) < 0.05 || c.source_duration <= 0
-      const out = wasUntrimmed ? real : Math.min(c.out_point, real)
+      const out = c.ref_segment
+        ? Math.min(c.out_point, real)
+        : ((Math.abs(c.out_point - c.source_duration) < 0.05 || c.source_duration <= 0) ? real : Math.min(c.out_point, real))
+      if (Math.abs((c.source_duration || 0) - real) < 1e-6 && Math.abs((c.out_point || 0) - out) < 1e-6) return c
       return { ...c, source_duration: real, out_point: out }
     }))
   }
@@ -2302,7 +2355,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   async function copyTrackSrtRef(track) {
     setTrackMenu(null)
     if (!track || track.kind !== 'text') return
-    await copyPlain(trackSrtWithReference(clipsRef.current, track.id), 'SRT + referencia copiado.')
+    await copyPlain(trackSrtWithReference(clipsRef.current, track.id, resolveTranscriptSource), 'SRT + referencia copiado.')
   }
   async function copyClipDescription(clip) {
     setCtxMenu(null)
@@ -3870,7 +3923,6 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
   }
   const { subJob, setSubJob, requestSubtitles } = useSubtitles(project.id, {
     tracksRef, ensureTextTrack, setClips, setCtxMenu, onChange,
-    resolveSource: resolveTranscriptSource,
   })
   const fav = useFavorites(project.id)
 
@@ -4069,13 +4121,25 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     const sel = visual.find((c) => c.id === selIdsRef.current[0])
     const first = sel || [...visual].sort((a, b) => a.start - b.start)[0]
     if (!first) return null
-    const m = mediaSize(mediaEls.current.get(first.id))
+    const m = mediaSize(mediaEls.current.get(first.id) || posterFor(first.id)?.media)
     return m.w > 0 && m.h > 0 ? m : null
   }
   const hasVisualClip = clips.some((c) => isVisualClip(c))
 
-  // Elementos multimedia ocultos (el texto no tiene medio)
-  const mediaPool = clips.filter((c) => c.kind !== 'text' && c.kind !== 'shape' && c.kind !== 'adjustment').map((c) => (
+  // Ventana del pool: el cabezal en saltos de 0,5 s (no recalcular cada fotograma).
+  const poolHead = Math.floor((playhead || 0) * 2) / 2
+  const poolPinKey = [selClipId, ...selClipIds, cropClipId, maskFollow?.clipId].filter(Boolean).join('|')
+  const poolIds = useMemo(() => {
+    const pinned = new Set(poolPinKey ? poolPinKey.split('|') : [])
+    const next = mediaWindow(clips, poolHead, { pinned, prev: poolPrevRef.current })
+    if (sameIds(next, poolPrevRef.current)) return poolPrevRef.current
+    poolPrevRef.current = next
+    return next
+  }, [clips, poolHead, poolPinKey])
+
+  // Elementos multimedia ocultos (el texto no tiene medio). Solo los de la VENTANA
+  // alrededor del cabezal + los fijados (mediaWindow.js, OPTIMIZACION_MEMORIA Fase 2).
+  const mediaPool = clips.filter((c) => poolIds.has(c.id)).map((c) => (
     <HiddenMedia
       key={c.id}
       clip={c}
@@ -4122,6 +4186,30 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
     return note
   }
 
+  // Efectos de vídeo animados (fx/): se añaden a los clips visuales seleccionados.
+  function addVfx(effectId) {
+    const ids = new Set(selIdsRef.current)
+    setClips((prev) => prev.map((c) => {
+      if (!ids.has(c.id) || !VFX_CLIP_KINDS.has(c.kind)) return c
+      const entry = makeVfxEntry(effectId)
+      return entry ? { ...c, vfx: [...(Array.isArray(c.vfx) ? c.vfx : []), entry] } : c
+    }))
+  }
+  function setClipVfx(clipId, list) {
+    setClips((prev) => prev.map((c) => (c.id === clipId ? { ...c, vfx: list.length ? list : null } : c)))
+  }
+  // Animaciones de clip (entrada/salida/bucle/combo), también en textos y figuras.
+  function setClipAnimation(slot, value) {
+    const ids = new Set(selIdsRef.current)
+    setClips((prev) => prev.map((c) => {
+      if (!ids.has(c.id) || !ANIM_CLIP_KINDS.has(c.kind)) return c
+      const next = { ...(c.animations && typeof c.animations === 'object' ? c.animations : {}) }
+      if (value) next[slot] = value
+      else delete next[slot]
+      return { ...c, animations: Object.keys(next).length ? next : null }
+    }))
+  }
+
   function patchClipFx(patch) {
     const ids = new Set(selIdsRef.current)
     setClips((prev) => {
@@ -4143,6 +4231,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
       style={panels.vars}
     >
       <div className="ed-hidden-media">{mediaPool}</div>
+      {memDebug && <EdMemPanel mediaEls={mediaEls} />}
 
       <EdTopBar
         projectName={project.name}
@@ -4194,6 +4283,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           faceTrackBusyIdent={matFaceBusy}
           selectedClip={selectedClip}
           onChangeFx={patchClipFx}
+          onAddVfx={addVfx}
+          onSetAnimation={setClipAnimation}
           onAddText={addText}
           onApplyTextPreset={(p) => {
             if (isTextSel) applyPreset(selectedClip.id, p)
@@ -4489,6 +4580,8 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
           noteProps={selectedClip && !isAudioTrackSel && !isTextTrackSel
             ? { onChange: setClipNote, onSuggest: suggestClipNoteFor } : null}
           effectsProps={{
+            vfxProps: selectedClip && !isAudioTrackSel ? { onChange: (list) => setClipVfx(selectedClip.id, list) } : null,
+            animProps: selectedClip && !isAudioTrackSel && !isTextTrackSel ? { onChange: setClipAnimation } : null,
             clip: isAudioTrackSel ? (trackAudioClip || { kind: 'audio', volume: 1, muted: false, audio_fx: {}, start: 0 }) : selectedClip,
             onChangeFx: isAudioTrackSel ? (patch) => patchTrackAudio(selTrackObj.id, patch) : patchClipFx,
             textStyle: isTextSel ? effectiveTextStyle(selTrackObj?.style, selectedClip.style) : (isTextTrackSel ? selTrackObj.style : null),
@@ -4963,7 +5056,7 @@ export default function VideoEditor({ project, onChange, onBack, onOpenJson }) {
               linked: !!(tracks.find((t) => t.id === trackMenu.track.id) || trackMenu.track).linked_track_id,
               canLink: tracks.some((t) => t.kind === 'text'),
               hasText: !!trackTextContent(clips, trackMenu.track.id),
-              hasSource: !!trackSource(clips, trackMenu.track.id),
+              hasSource: !!trackSource(clips, trackMenu.track.id, resolveTranscriptSource),
               canUp: !motionMode && !!trackNeighbor(tracks, trackMenu.track.id, -1),
               canDown: !motionMode && !!trackNeighbor(tracks, trackMenu.track.id, 1),
             }).map((item) => (

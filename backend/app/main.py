@@ -102,6 +102,20 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/api/diagnostics/memory")
+def get_memory_diagnostics() -> dict:
+    """RAM del backend y modelos de IA cargados (panel ``?debug=mem``)."""
+    from . import model_manager
+    return model_manager.memory_report()
+
+
+@app.post("/api/diagnostics/memory/unload")
+def unload_models() -> dict:
+    """Descarga ya los modelos de IA que no estén en uso."""
+    from . import model_manager
+    return {"unloaded": model_manager.unload_all(), **model_manager.memory_report()}
+
+
 @app.get("/api/diagnostics")
 def get_diagnostics() -> dict:
     """Estado del hardware/motores (GPU/CPU) para OpenCV y FFmpeg."""

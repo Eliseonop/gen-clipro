@@ -116,11 +116,17 @@ export default function EdChat({ project, context, onReload, onBusy, clips, onMc
       return
     }
     let alive = true
+    // Firma de la última respuesta: si nada cambió no se toca el estado. Antes cada
+    // sondeo (1 s) creaba objetos nuevos y re-renderizaba el editor entero.
+    let lastSig = null
     const load = async () => {
       if (document.hidden) return
       try {
         const { entries, active } = await getMcpAudit(project.id)
         if (!alive) return
+        const sig = JSON.stringify([entries || [], active || []])
+        if (sig === lastSig) return
+        lastSig = sig
         setAudit(entries || [])
         setLive(active || [])
         onMcpAudit?.({ entries: entries || [], active: active || [] })

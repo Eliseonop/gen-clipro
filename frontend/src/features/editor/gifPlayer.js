@@ -11,8 +11,13 @@
 // null y canvas.js cae al <img> (que al menos muestra algo). La caché es por
 // `src`, así que varios clips del mismo GIF comparten los fotogramas.
 
-const cache = new Map()   // src -> { status, frames: [{canvas, end}], duration, width, height }
+import { createLruBytes, pixelBytes } from '../../lib/lruBytes.js'
+
 const MAX_FRAMES = 600    // tope de seguridad para GIFs enormes
+// src -> { status, frames: [{canvas, end}], duration, width, height }. Tope en
+// bytes (un GIF de 480×480 y 200 fotogramas ya son ~180 MB): al pasarlo se
+// descartan los GIF usados hace más tiempo y se vuelven a decodificar si hacen falta.
+const cache = createLruBytes({ maxBytes: 160 * 1024 * 1024, name: 'gif' })
 
 const SUPPORTED = typeof window !== 'undefined' && typeof window.ImageDecoder !== 'undefined'
 
@@ -43,8 +48,11 @@ async function decodeGif(src) {
       // image.duration está en microsegundos; 0 → 0.1s (como los navegadores).
       const dur = image.duration ? image.duration / 1e6 : 0.1
       t += dur > 0 ? dur : 0.1
-      entry.frames.push({ canvas: cv, end: t })
       if (typeof image.close === 'function') image.close()
+      // Descartado mientras decodificaba (tope o purga): no seguir llenando RAM.
+      if (cache.peek(src) !== entry) { if (typeof dec.close === 'function') dec.close(); return }
+      entry.frames.push({ canvas: cv, end: t })
+      cache.resize(src, entry.frames.length * pixelBytes(cv))
     }
     entry.duration = t
     entry.width = entry.frames[0]?.canvas.width || 0
@@ -83,4 +91,12 @@ export function gifFrameAt(src, localTime, loop = true) {
     if (t < frames[i].end) return frames[i].canvas
   }
   return frames[frames.length - 1].canvas
+}
+
+/**
+ * Suelta los GIF que ya no usa ningún clip. `aliveSrcs`: conjunto de `src` en uso
+ * (se llama al cambiar la timeline). Si vuelven a hacer falta se re-decodifican.
+ */
+export function releaseUnusedGifs(aliveSrcs) {
+  cache.purge((src) => aliveSrcs.has(src))
 }

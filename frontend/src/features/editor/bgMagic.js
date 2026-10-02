@@ -68,6 +68,12 @@ export function clearMagic(clipId) {
   if (clipId == null) { sam.clear(); comp.clear() } else { sam.delete(clipId); comp.delete(clipId) }
 }
 
+/** Suelta las selecciones de SAM de los clips que ya no están en la timeline. */
+export function releaseDeadMagic(aliveIds) {
+  for (const id of [...sam.keys()]) if (!aliveIds.has(id)) sam.delete(id)
+  for (const id of [...comp.keys()]) if (!aliveIds.has(id)) comp.delete(id)
+}
+
 function marksSig(marks) {
   let n = 0
   for (const e of marks) n += e.points.length
@@ -137,6 +143,8 @@ export function magicOverlayCanvas(clipId, view, srcW, srcH) {
     out: canvasOf(w, h, c?.out),
     tmp: canvasOf(w, h, c?.tmp),
   }
+  // Solo se edita un clip a la vez: los lienzos de composición de los demás sobran.
+  for (const id of comp.keys()) if (id !== clipId) comp.delete(id)
   comp.set(clipId, c)
 
   // 1-2. Selección = SAM ∪ pincel − borrador (alfa blanco).

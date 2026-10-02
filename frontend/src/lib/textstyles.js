@@ -2,7 +2,7 @@
 // Las medidas son relativas al alto de salida: size = fracción de la altura.
 // x/y son el centro del texto en coordenadas normalizadas (0-1) de la salida.
 
-import { clipFlip, clipPose } from './clipAnim.js'
+import { animOpacity, clipFlip, clipRenderPose } from './clipAnim.js'
 import { clipFxAt, typingReveal } from './clipFx.js'
 import { activeWordIndex, activeWordIndexFromWords, applyThemeToStyle, hasWordFx, karaokeOn, styleOpacity, wordOpacity } from './textKaraoke.js'
 import { themeById } from './subtitleThemes.js'
@@ -515,13 +515,14 @@ export function drawTextClip(ctx, clip, cw, ch, opts = {}) {
   const st0 = opts.trackStyle ? effectiveTextStyle(opts.trackStyle, clip.style) : (clip.style || {})
   const entry = typeof ctx.getTransform === 'function' ? ctx.getTransform() : null
   const localT = opts.time == null ? 0 : opts.time - (clip.start || 0)
-  const pose = clipPose(clip, localT)
+  const pose = clipRenderPose(clip, localT)
   // Color, Trazo, Fondo y Sombra con keyframes (espejo de text_ass._posed_style).
   const st = {
     ...withTextStyleKf(st0, textStyleAt(clip, localT)),
     x: pose.x,
     y: pose.y,
-    opacity: keyframesEnabled(clip) ? pose.opacity : styleOpacity(st0),
+    // Sin keyframes manda la opacidad del estilo; las animaciones la multiplican.
+    opacity: keyframesEnabled(clip) ? pose.opacity : styleOpacity(st0) * animOpacity(clip, localT),
     size: (st0.size ?? 0.07) * (pose.scale || 1),
     rotation: pose.rotation,
   }

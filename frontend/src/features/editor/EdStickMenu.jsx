@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import Icon from '../../components/Icon'
 import { fmt } from '../../lib/utils'
 import { listSticks, getStick } from '../../services/api'
+import LazyVideo from './LazyVideo'
+import { useNearViewport } from './useNearViewport'
 
 // Menú "Agregar Stick" desde la línea de tiempo (§1-§5 del flujo pedido):
 //   personaje  →  Vídeo / Imagen  →  galería de expresiones (variantes en
@@ -18,6 +20,8 @@ const KIND_ICON = { video: 'movie', image: 'image' }
 // título. Al hacer clic la agrega.
 function StickCard({ item, chromaColor, onPick }) {
   const vidRef = useRef(null)
+  const cardRef = useRef(null)
+  const near = useNearViewport(cardRef)
   const [dur, setDur] = useState(0)
   const isVideo = item.kind === 'video'
 
@@ -32,6 +36,7 @@ function StickCard({ item, chromaColor, onPick }) {
 
   return (
     <button
+      ref={cardRef}
       type="button"
       className="ed-stick-card"
       title={item.title}
@@ -43,8 +48,9 @@ function StickCard({ item, chromaColor, onPick }) {
     >
       <div className="ed-stick-thumb">
         {isVideo ? (
-          <video
-            ref={vidRef}
+          <LazyVideo
+            show={near}
+            mediaRef={vidRef}
             src={item.url}
             muted
             loop

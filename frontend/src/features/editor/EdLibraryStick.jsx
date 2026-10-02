@@ -2,6 +2,8 @@ import { useRef, useState } from 'react'
 import Icon from '../../components/Icon'
 import { fmt } from '../../lib/utils'
 import { dragPayload } from './MaterialClipGrid'
+import LazyVideo from './LazyVideo'
+import { useNearViewport } from './useNearViewport'
 
 // Vista de una carpeta STICK dentro de la Biblioteca: cada expresión (Feliz,
 // Triste…) es un grupo y a la vez una zona donde soltar vídeos/imágenes del
@@ -79,6 +81,8 @@ export function stickAssetItem(it, duration) {
 
 function StickTile({ item, expressions, onAdd, onRecat, di }) {
   const vid = useRef(null)
+  const tileRef = useRef(null)
+  const near = useNearViewport(tileRef)
   const [dur, setDur] = useState(0)
   const isVideo = item.stick_kind === 'video'
   const assetKind = isVideo ? 'clips' : 'images'
@@ -86,6 +90,7 @@ function StickTile({ item, expressions, onAdd, onRecat, di }) {
   const stop = () => vid.current?.pause()
   return (
     <div
+      ref={tileRef}
       className="ed-lib-stile"
       draggable
       onDragStart={(e) => {
@@ -99,7 +104,7 @@ function StickTile({ item, expressions, onAdd, onRecat, di }) {
     >
       <div className="ed-stick-thumb">
         {isVideo ? (
-          <video ref={vid} src={item.url} muted loop playsInline preload="metadata"
+          <LazyVideo show={near} mediaRef={vid} src={item.url} muted loop playsInline preload="metadata"
             onLoadedMetadata={(e) => { const d = e.currentTarget.duration; if (Number.isFinite(d)) setDur(d) }} />
         ) : (
           <img src={item.url} alt={item.title} loading="lazy" draggable={false} />

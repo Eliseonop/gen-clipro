@@ -344,6 +344,47 @@ def set_clip_effects(project_id: str, clip_id: str, effects: dict | None = None,
                   {"clip_id": clip_id, "effects": effects, "replace": replace, "filters": filters})
 
 
+def list_effects(category: str | None = None, query: str | None = None) -> dict:
+    """Catálogo de efectos de vídeo ANIMADOS (glitch, VHS, temblor, papel recortado…) y de animaciones de clip (entrada/salida/bucle/combo). Filtra por category o query."""
+    from .. import fx_catalog
+
+    words = (query or "").lower().split()
+
+    def hit_effect(e: dict) -> bool:
+        if category and e.get("category") != category:
+            return False
+        hay = " ".join([e.get("id", ""), e.get("name", ""), e.get("description", ""), *e.get("tags", [])]).lower()
+        return all(w in hay for w in words)
+
+    effects = [
+        {"id": e["id"], "name": e["name"], "category": e["category"], "description": e["description"],
+         "params": [{k: v for k, v in p.items() if k != "label"} for p in e["params"]]}
+        for e in fx_catalog.effects() if e.get("engine") != "generator" and hit_effect(e)
+    ]
+    anims: dict = {}
+    for a in fx_catalog.anims():
+        hay = " ".join([a["id"], a["name"], *a.get("tags", [])]).lower()
+        if all(w in hay for w in words):
+            anims.setdefault(a["slot"], []).append({"id": a["id"], "name": a["name"], "dur": a.get("dur")})
+    return {"categories": [c["id"] for c in fx_catalog.categories()], "effects": effects, "animations": anims}
+
+
+def apply_effect(project_id: str, clip_ids: list, effect: str | None = None, params: dict | None = None,
+                 start: float | None = None, end: float | None = None, remove: bool = False,
+                 uid: str | None = None, stack: list | None = None) -> dict:
+    """Efecto de vídeo animado en clips (vídeo/imagen/motion): effect (+params, start/end s del clip) lo añade; uid lo edita; remove lo quita; stack sustituye la pila. Catálogo: list_effects. Un undo."""
+    return _apply(project_id, "apply_effect", {
+        "clip_ids": list(clip_ids or []), "effect": effect, "params": params, "start": start,
+        "end": end, "remove": remove, "uid": uid, "stack": stack})
+
+
+def set_clip_animation(project_id: str, clip_ids: list, slot: str, animation: str | None = None,
+                       duration: float | None = None) -> dict:
+    """Animación de clip del catálogo (list_effects): slot in|out|loop|combo, animation id (null la quita), duration s (loop = periodo). Vídeo, imagen, texto, figura o motion. No toca los keyframes."""
+    return _apply(project_id, "set_clip_animation", {
+        "clip_ids": list(clip_ids or []), "slot": slot, "animation": animation, "duration": duration})
+
+
 def set_clip_masks(project_id: str, clip_id: str, masks: list | None = None) -> dict:
     """Sustituye las máscaras del clip (tipos linear|film|circle|rectangle|star|heart|text|brush; target clip|adjust)."""
     return _apply(project_id, "set_clip_masks", {"clip_id": clip_id, "masks": masks})
@@ -526,6 +567,9 @@ def register(mcp) -> None:
     tool(mcp, access="write")(set_project_format)
     # Etapa 4.5 — propiedades por-clip + figuras.
     tool(mcp, access="write")(set_clip_effects)
+    tool(mcp, access="read")(list_effects)
+    tool(mcp, access="write")(apply_effect)
+    tool(mcp, access="write")(set_clip_animation)
     tool(mcp, access="write")(set_clip_masks)
     tool(mcp, access="write")(set_clip_audio_fx)
     tool(mcp, access="write")(set_clip_volume)

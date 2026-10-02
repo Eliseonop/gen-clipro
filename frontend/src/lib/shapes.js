@@ -1,6 +1,6 @@
 // Figuras vectoriales parametrizables (no PNG).
 // La geometría vive en un viewBox 0–100; x/y/w/h del clip son fracciones del canvas.
-import { applyShapePose, clipFlip, clipPose } from './clipAnim.js'
+import { applyShapePose, clipFlip, clipPose, clipRenderPose } from './clipAnim.js'
 import { clipPropsAt, easeT, keyframesEnabled, normalizeItems, upsertKeyframeAt } from './clipKeyframes.js'
 import { drawSelectionFrame } from './selectionFrame.js'
 
@@ -620,7 +620,7 @@ export function dragShapePayload(item) {
 }
 
 export function drawShapeClip(ctx, clip, cw, ch, opts = {}) {
-  const pose = clipPose(clip, opts.time ?? 0)
+  const pose = clipRenderPose(clip, opts.time ?? 0)
   const st = applyShapePose(normalizeShape(clip?.shape), pose)
   const box = { cx: st.x * cw, cy: st.y * ch, bw: st.w * cw, bh: st.h * ch, rotation: st.rotation }
   // «Dibujar trazo» (#14): cada línea o contorno se dibuja hasta la fracción

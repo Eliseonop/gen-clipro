@@ -13,7 +13,7 @@ from typing import Callable
 import numpy as np
 import soundfile as sf
 
-from . import config
+from . import config, model_manager
 
 ProgressCb = Callable[[float, str], None]
 
@@ -37,11 +37,20 @@ def available() -> bool:
     return _MODEL.exists() and _VOICES.exists()
 
 
+def _drop_kokoro() -> None:
+    global _kokoro
+    _kokoro = None
+
+
 def _get_kokoro():
     global _kokoro
     if _kokoro is None:
         from kokoro_onnx import Kokoro
         _kokoro = Kokoro(str(_MODEL), str(_VOICES))
+        # ~325 MB en disco: se descarga de la RAM tras un rato sin narrar.
+        model_manager.register("tts:kokoro", _drop_kokoro, heavy=False)
+    else:
+        model_manager.touch("tts:kokoro")
     return _kokoro
 
 

@@ -36,7 +36,7 @@ from typing import Callable, Optional
 import cv2
 import numpy as np
 
-from .. import config, gpu
+from .. import config, gpu, model_manager
 
 log = logging.getLogger("videoyt.bg")
 
@@ -136,6 +136,8 @@ class OnnxMatteProvider(BackgroundRemovalProvider):
     # (BiRefNet a 1024²) lo hacen crecer en cada inferencia hasta fallar con
     # «bad allocation» en la segunda; sin él la memoria se libera al acabar.
     low_memory: bool = False
+    # heavy: modelo grande en RAM; el gestor deja solo uno pesado cargado a la vez.
+    heavy: bool = False
 
     def __init__(self) -> None:
         self._session = None
@@ -189,10 +191,22 @@ class OnnxMatteProvider(BackgroundRemovalProvider):
                 f"Descárgalo a mano en {MODEL_DIR} desde {self.url}"
             ) from exc
 
+    @property
+    def _mm_name(self) -> str:
+        return f"bg:{self.id}"
+
     def ensure_ready(self, on_progress: ProgressCb = None) -> None:
+        # El registro va FUERA del lock: puede descargar otro modelo pesado, que
+        # toma su propio lock (dos cargas cruzadas no deben bloquearse).
+        if self._load(on_progress):
+            model_manager.register(self._mm_name, self._release, heavy=self.heavy)
+        else:
+            model_manager.touch(self._mm_name)
+
+    def _load(self, on_progress: ProgressCb = None) -> bool:
         with self._lock:
             if self._session is not None:
-                return
+                return False
             providers = gpu.onnx_providers(_device_setting())
             if not providers:
                 raise ProviderUnavailable(
@@ -222,6 +236,7 @@ class OnnxMatteProvider(BackgroundRemovalProvider):
             self._input_name = sess.get_inputs()[0].name
             self._device = gpu.onnx_device_label(sess.get_providers())
             log.info("Eliminar fondo: modelo %s listo en %s", self.id, self._device)
+            return True
 
     def _check_io(self, sess) -> None:
         """Valida las entradas/salidas del modelo. Por defecto, nada."""
@@ -230,9 +245,22 @@ class OnnxMatteProvider(BackgroundRemovalProvider):
     def device(self) -> str:
         return self._device
 
-    def close(self) -> None:
+    def _release(self) -> None:
         with self._lock:
             self._session = None
+
+    def close(self) -> None:
+        self._release()
+        model_manager.forget(self._mm_name)
+
+    def _live_session(self):
+        """La sesión cargada (carga perezosa) y marca de uso para el gestor."""
+        sess = self._session
+        if sess is None:
+            self.ensure_ready()
+            sess = self._session
+        model_manager.touch(self._mm_name)
+        return sess
 
     # -- inferencia ---------------------------------------------------------
     def _pre(self, frame: np.ndarray) -> np.ndarray:
@@ -254,10 +282,9 @@ class OnnxMatteProvider(BackgroundRemovalProvider):
         return out
 
     def matte(self, frame: np.ndarray) -> np.ndarray:
-        if self._session is None:
-            self.ensure_ready()
+        sess = self._live_session()
         h, w = frame.shape[:2]
-        outs = self._session.run(None, {self._input_name: self._pre(frame)})
+        outs = sess.run(None, {self._input_name: self._pre(frame)})
         return self._post(outs[0], w, h)
 
 
@@ -267,6 +294,7 @@ class U2NetProvider(OnnxMatteProvider):
     model_version = "u2net-1"
     filename = "u2net.onnx"
     url = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx"
+    heavy = True
 
 
 class U2NetLiteProvider(OnnxMatteProvider):
@@ -295,6 +323,7 @@ class BiRefNetLiteProvider(OnnxMatteProvider):
            "BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx")
     input_size = (1024, 1024)
     low_memory = True
+    heavy = True
 
     def _post(self, raw: np.ndarray, width: int, height: int) -> np.ndarray:
         logits = np.clip(np.asarray(raw, np.float32), -60.0, 60.0)
@@ -360,8 +389,7 @@ class RvmProvider(OnnxMatteProvider):
 
     def step(self, frame: np.ndarray, rec: list[np.ndarray]) -> tuple[np.ndarray, list[np.ndarray]]:
         """Un fotograma con el estado ``rec`` → (matte uint8, estado siguiente)."""
-        if self._session is None:
-            self.ensure_ready()
+        sess = self._live_session()
         h, w = frame.shape[:2]
         src = np.ascontiguousarray(frame.transpose(2, 0, 1)[None], dtype=np.float32)
         src *= 1.0 / 255.0
@@ -370,7 +398,7 @@ class RvmProvider(OnnxMatteProvider):
             "r1i": rec[0], "r2i": rec[1], "r3i": rec[2], "r4i": rec[3],
             "downsample_ratio": np.array([self.downsample_ratio(w, h)], np.float32),
         }
-        pha, *nxt = self._session.run(list(self._OUTPUTS), feed)
+        pha, *nxt = sess.run(list(self._OUTPUTS), feed)
         out = np.clip(pha[0, 0] * 255.0 + 0.5, 0, 255).astype(np.uint8)
         if out.shape[:2] != (h, w):
             out = cv2.resize(out, (w, h), interpolation=cv2.INTER_LINEAR)
@@ -400,6 +428,7 @@ class RvmResNet50Provider(RvmProvider):
     filename = "rvm_resnet50_fp32.onnx"
     url = ("https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/"
            "rvm_resnet50_fp32.onnx")
+    heavy = True
 
 
 # --- Registro ---------------------------------------------------------------

@@ -22,6 +22,9 @@ DEFAULTS = {
     # Eliminar fondo: device de ONNX Runtime (auto | cuda | dml | cpu) y modelo
     # de segmentación por defecto para los clips nuevos.
     "bg_removal": {"device": "auto", "provider": "u2net"},
+    # Modelos de IA: minutos sin uso tras los que se descargan de la RAM
+    # (0 = nunca). Ver model_manager.py.
+    "models": {"idle_minutes": 5},
 }
 
 _KEY_MASKS = {"", "true", "false", "********", "••••", "••••••••"}
@@ -72,6 +75,7 @@ def load() -> dict:
             "export": dict(DEFAULTS["export"]),
             "transcribe": dict(DEFAULTS["transcribe"]),
             "bg_removal": dict(DEFAULTS["bg_removal"]),
+            "models": dict(DEFAULTS["models"]),
         }
     try:
         data = json.loads(_FILE.read_text(encoding="utf-8"))
@@ -132,6 +136,14 @@ def save(data: dict) -> dict:
                 "device": dev if dev in ("auto", "cuda", "dml", "cpu") else "auto",
                 "provider": prov if prov in BG_PROVIDER_IDS else DEFAULT_PROVIDER,
             }
+
+        if "models" in incoming:
+            raw = {**(current.get("models") or {}), **(incoming.get("models") or {})}
+            try:
+                idle = min(240.0, max(0.0, float(raw.get("idle_minutes", 5))))
+            except (TypeError, ValueError):
+                idle = 5.0
+            incoming["models"] = {"idle_minutes": idle}
 
         current.update(incoming)
         current["api_keys"] = merged

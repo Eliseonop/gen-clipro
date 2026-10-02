@@ -5,6 +5,7 @@ import {
   clipPropsAt, keyframesEnabled, staticProps,
 } from './clipKeyframes.js'
 import { clipMasks, maskFromProps } from './clipMask.js'
+import { animClipDur, animationDelta, applyAnimDelta, IDENTITY } from '../fx/core/animEval.js'
 
 function num(v, d) {
   const n = Number(v)
@@ -72,6 +73,20 @@ export function clipPose(clip, localT, srcTime) {
   return { ...legacy, cx: p.cx, cy: p.cy, zoom: p.zoom }
 }
 
+/**
+ * Pose con la que se DIBUJA el clip: la de edición (`clipPose`) más las
+ * animaciones de entrada/salida/bucle/combo (`clip.animations`, fx/anims.js).
+ * El delta no toca el recorte (cx/cy/zoom). La edición (arrastrar, inspector,
+ * seguimiento) usa `clipPose` para no hornear la animación en la pose. Espejo:
+ * clip_anim.render_pose (export).
+ */
+export function clipRenderPose(clip, localT, srcTime) {
+  const pose = clipPose(clip, localT, srcTime)
+  if (!clip?.animations) return pose
+  const d = animationDelta(clip, localT, animClipDur(clip))
+  return d === IDENTITY ? pose : applyAnimDelta(pose, d)
+}
+
 // Voltear (#7): espejo del contenido en los ejes PROPIOS del clip, antes del giro
 // (como CapCut). La caja, la máscara y los tiradores no se voltean. Espejo de
 // clip_layout.clip_flip (export).
@@ -81,6 +96,17 @@ export function clipFlip(clip) {
 
 export function posedTransform(clip, localT) {
   const p = clipPose(clip, localT)
+  return { x: p.x, y: p.y, scale: p.scale, rotation: p.rotation }
+}
+
+/** Factor de opacidad de las animaciones en `localT` (1 si no hay). */
+export function animOpacity(clip, localT) {
+  if (!clip?.animations) return 1
+  return animationDelta(clip, localT, animClipDur(clip)).opacity
+}
+
+export function posedRenderTransform(clip, localT) {
+  const p = clipRenderPose(clip, localT)
   return { x: p.x, y: p.y, scale: p.scale, rotation: p.rotation }
 }
 

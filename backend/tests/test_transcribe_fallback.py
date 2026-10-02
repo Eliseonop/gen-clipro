@@ -20,7 +20,7 @@ class _Seg:
 class _CudaThenCpu:
     calls = []
 
-    def __init__(self, size, device="cpu", compute_type="int8"):
+    def __init__(self, size, device="cpu", compute_type="int8", **_kw):
         self.device = device
         type(self).calls.append(device)
 
@@ -33,6 +33,7 @@ class _CudaThenCpu:
 class TranscribeCudaFallbackTest(unittest.TestCase):
     def setUp(self):
         transcribe._models.clear()
+        transcribe._pipelines.clear()
         _CudaThenCpu.calls = []
 
     def tearDown(self):
@@ -42,7 +43,7 @@ class TranscribeCudaFallbackTest(unittest.TestCase):
         progress = []
         with patch("app.gpu.whisper_device", side_effect=[("cuda", "float16"), ("cpu", "int8")]), \
              patch("app.gpu.mark_cuda_broken") as marked, \
-             patch("app.transcribe.WhisperModel", _CudaThenCpu):
+             patch("app.transcribe.WhisperModel", _CudaThenCpu),              patch("app.transcribe.BatchedInferencePipeline", None):
             out = transcribe.run_file("x.wav", "base", "es", lambda f, m: progress.append((f, m)))
         self.assertEqual(_CudaThenCpu.calls, ["cuda", "cpu"])
         self.assertEqual(out["language"], "es")

@@ -12,7 +12,8 @@ from typing import Iterable
 
 from . import text3d
 from .font_metrics import ass_size_factor, text_width
-from .clip_anim import clip_pose
+from .clip_anim import anim_opacity, render_pose
+from .fx_anims import has_animations
 from .clip_fx import clip_fx_at
 from .clip_keyframes import (
     clip_props_at, keyframes_enabled, text_style_animates, text_style_at, with_text_style_kf,
@@ -67,12 +68,15 @@ def _posed_style(clip: TimelineClip, st: dict, local_t: float = 0.0) -> dict:
     out["flip_h"], out["flip_v"] = clip_flip(clip)
     if keyframes_enabled(clip):
         out["opacity"] = pose["opacity"]
+    elif has_animations(clip):
+        # Sin keyframes manda la opacidad del estilo; las animaciones la multiplican.
+        out["opacity"] = _clamp01(out.get("opacity"), 1.0) * anim_opacity(clip, local_t)
     return out
 
 
 def _pose_at(clip: TimelineClip, local_t: float) -> dict:
     """Pose del preview (``clipPose``) + giro 3D (``rot_x``/``rot_y``, keyframeable)."""
-    pose = clip_pose(clip, local_t)
+    pose = render_pose(clip, local_t)
     if keyframes_enabled(clip):
         p = clip_props_at(clip, local_t)
         pose["rot_x"], pose["rot_y"] = p["rot_x"], p["rot_y"]
@@ -1038,6 +1042,8 @@ def text_animates(clip: TimelineClip, fps: float = 30) -> bool:
     """True si la pose del texto (posición, escala, giro u opacidad) cambia
     durante el clip, por keyframes o por pistas ``anim`` antiguas."""
     anim = clip.anim if isinstance(clip.anim, dict) else {}
+    if has_animations(clip):
+        return True
     if not keyframes_enabled(clip) and not any(anim.values()):
         return False
     dur = _clip_dur(clip)

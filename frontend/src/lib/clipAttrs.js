@@ -17,8 +17,10 @@ export const ATTR_GROUPS = [
   { id: 'blend', label: 'Opacidad y modo de fusión', icon: 'layers', kinds: VISUAL },
   { id: 'animation', label: 'Animación (keyframes)', icon: 'animation', kinds: VISUAL },
   { id: 'transitions', label: 'Entrada y salida', icon: 'login', kinds: ['video', 'image', 'text'] },
+  { id: 'animations', label: 'Animaciones (entrada, salida, bucle)', icon: 'motion_photos_on', kinds: VISUAL },
   { id: 'crop', label: 'Recorte y encuadre', icon: 'crop', kinds: MEDIA },
   { id: 'effects', label: 'Filtro, efectos y ajustes', icon: 'auto_fix_high', kinds: [...MEDIA, 'adjustment'] },
+  { id: 'vfx', label: 'Efectos animados', icon: 'auto_awesome', kinds: MEDIA },
   { id: 'mask', label: 'Máscara', icon: 'vignette', kinds: VISUAL },
   { id: 'chroma', label: 'Croma y contorno', icon: 'format_color_reset', kinds: MEDIA },
   { id: 'style', label: 'Estilo', icon: 'palette', kinds: ['text', 'shape'], sameKind: true },
@@ -189,6 +191,14 @@ const APPLY = {
   blend: pasteBlend,
   animation: (out, src) => ({ ...out, anim: clone(src.anim) ?? null }),  // pistas `anim` antiguas
   transitions: (out, src) => ({ ...out, appear: src.appear || 'none', exit: src.exit || 'none' }),
+  animations: (out, src) => ({ ...out, animations: clone(src.animations) ?? null }),
+  // Efectos animados (fx/): cada copia con su propio uid.
+  vfx: (out, src) => ({
+    ...out,
+    vfx: Array.isArray(src.vfx) && src.vfx.length
+      ? src.vfx.map((e, i) => ({ ...clone(e), uid: `fx${Date.now().toString(36)}${i}${Math.random().toString(36).slice(2, 6)}` }))
+      : null,
+  }),
   crop: pasteCrop,
   effects: (out, src) => ({ ...out, effects: clone(src.effects) || {}, look: src.look || 'none', filters: clone(src.filters) ?? null }),
   mask: (out, src) => ({ ...out, masks: (src.masks || []).map((m) => ({ ...clone(m), id: maskId() })) }),

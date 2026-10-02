@@ -27,7 +27,7 @@ from typing import Callable, Optional
 import cv2
 import numpy as np
 
-from .. import config, gpu
+from .. import config, gpu, model_manager
 
 log = logging.getLogger("videoyt.bg")
 
@@ -156,10 +156,22 @@ class Sam21Provider:
                 f"Descarga {zip_name} a mano en {self._dir} desde {url}"
             ) from exc
 
+    @property
+    def _mm_name(self) -> str:
+        return f"sam:{self.backbone}"
+
     def ensure_ready(self, on_progress: ProgressCb = None) -> None:
+        # Registro fuera del lock (ver OnnxMatteProvider.ensure_ready). SAM cuenta
+        # como pesado salvo el backbone tiny.
+        if self._load(on_progress):
+            model_manager.register(self._mm_name, self._release, heavy=self.backbone != "tiny")
+        else:
+            model_manager.touch(self._mm_name)
+
+    def _load(self, on_progress: ProgressCb = None) -> bool:
         with self._lock:
             if self._enc is not None and self._dec is not None:
-                return
+                return False
             providers = gpu.onnx_providers(_device_setting())
             if not providers:
                 raise ProviderUnavailable(
@@ -188,27 +200,40 @@ class Sam21Provider:
             self._device = gpu.onnx_device_label(self._enc.get_providers())
             log.info("Eliminar fondo (asistido): SAM 2.1 %s listo en %s",
                      self.backbone, self._device)
+            return True
 
     @property
     def device(self) -> str:
         return self._device
 
-    def close(self) -> None:
+    def _release(self) -> None:
         with self._lock:
             self._enc = None
             self._dec = None
 
+    def close(self) -> None:
+        self._release()
+        model_manager.forget(self._mm_name)
+
+    def _sessions(self):
+        """(encoder, decoder) cargados (carga perezosa) + marca de uso."""
+        enc, dec = self._enc, self._dec
+        if enc is None or dec is None:
+            self.ensure_ready()
+            enc, dec = self._enc, self._dec
+        model_manager.touch(self._mm_name)
+        return enc, dec
+
     # -- inferencia ---------------------------------------------------------
     def encode(self, frame: np.ndarray) -> dict:
         """Fotograma RGB (uint8, HxWx3) -> embeddings (nivel 1, cacheable)."""
-        if self._enc is None:
-            self.ensure_ready()
+        enc, _dec = self._sessions()
         im = cv2.resize(frame, (_INPUT, _INPUT), interpolation=cv2.INTER_LINEAR)
         im = im.astype(np.float32) / 255.0
         im = (im - _MEAN) / _STD
         tensor = np.expand_dims(im.transpose(2, 0, 1), 0).astype(np.float32)
-        names = [o.name for o in self._enc.get_outputs()]
-        return dict(zip(names, self._enc.run(None, {"image": tensor})))
+        names = [o.name for o in enc.get_outputs()]
+        return dict(zip(names, enc.run(None, {"image": tensor})))
 
     def predict(self, embeds: dict, points: list[tuple[float, float, int]],
                 orig_hw: tuple[int, int],
@@ -222,8 +247,7 @@ class Sam21Provider:
         añade el punto de relleno (label −1) que espera el prompt encoder.
         ``mask_input``: logits 256×256 de una predicción anterior (opcional).
         """
-        if self._dec is None:
-            self.ensure_ready()
+        _enc, dec = self._sessions()
         coords = [[x * _INPUT, y * _INPUT] for x, y, _ in points]
         labels = [float(lab) for _, _, lab in points]
         if box is not None:
@@ -244,7 +268,7 @@ class Sam21Provider:
                            else np.zeros((1, 1, 256, 256), np.float32)),
             "has_mask_input": np.array([1.0 if has_mask else 0.0], np.float32),
         }
-        masks, iou = self._dec.run(None, feed)
+        masks, iou = dec.run(None, feed)
         return masks[0].astype(np.float32), iou.reshape(-1)[: masks.shape[1]].astype(np.float32)
 
     def decode(self, embeds: dict, points: list[tuple[float, float, int]],

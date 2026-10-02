@@ -1,6 +1,7 @@
 import Icon from '../../components/Icon'
 import EdFilters from './EdFilters'
 import EdRecipes from './EdRecipes'
+import { EdAnimGrid, EdVfxLibrary } from './EdVfx'
 import { CINEMA_RATIOS } from '../../lib/shapes'
 import {
   APPEAR_OPTIONS, EXIT_OPTIONS, VIDEO_FX_TOGGLES, fxOn, fxNum,
@@ -31,6 +32,8 @@ export default function EdFxLibrary({
   recipeBusy,
   selectedClips,
   onDragInfo,
+  onAddVfx,
+  onSetAnimation,
 }) {
   const visual = isVisualClip(clip)
   const effects = clip?.effects && typeof clip.effects === 'object' ? clip.effects : {}
@@ -103,11 +106,15 @@ export default function EdFxLibrary({
   }
 
   if (mode === 'transitions') {
-    if (!clip || (clip.kind !== 'video' && clip.kind !== 'image' && clip.kind !== 'text')) {
-      return <NeedClip text="Selecciona un clip o un texto para aplicar una transición." />
+    if (!clip || !['video', 'image', 'text', 'shape', 'motion'].includes(clip.kind)) {
+      return <NeedClip text="Selecciona un clip, un texto o una figura para animarlo." />
     }
+    const classic = clip.kind === 'video' || clip.kind === 'image' || clip.kind === 'text'
     return (
       <div className="ed-mat-list ed-fx-lib">
+        <EdAnimGrid clip={clip} onChange={(slot, v) => onSetAnimation?.(slot, v)} />
+        {classic && <details className="ed-fx-classic">
+        <summary>Aparición y salida clásicas</summary>
         <div className="ed-fx-label">Aparición</div>
         <div className="ed-fx-grid">
           {APPEAR_OPTIONS.map((o) => (
@@ -136,6 +143,7 @@ export default function EdFxLibrary({
             </button>
           ))}
         </div>
+        </details>}
       </div>
     )
   }
@@ -161,12 +169,16 @@ export default function EdFxLibrary({
       ))}
     </div>
   )
+  const vfxBlock = onAddVfx && (
+    <EdVfxLibrary clip={visual ? clip : null} onAdd={(id) => (visual ? onAddVfx(id) : onNeedClip?.())} />
+  )
   const recipesBlock = onApplyRecipe && (
     <EdRecipes selected={selectedClips || []} busy={recipeBusy} onApply={onApplyRecipe} />
   )
   if (!visual) {
     return (
       <div className="ed-mat-list ed-fx-lib">
+        {vfxBlock}
         {recipesBlock}
         {adjustBtn}
         {barsRow}
@@ -177,11 +189,12 @@ export default function EdFxLibrary({
 
   return (
     <div className="ed-mat-list ed-fx-lib">
+      {vfxBlock}
       {recipesBlock}
       {adjustBtn}
       {barsRow}
       <EdFilters clip={clip} onChangeFx={onChangeFx} />
-      <div className="ed-fx-label">Efectos</div>
+      <div className="ed-fx-label">Efectos básicos</div>
       <div className="ed-fx-grid">
         {VIDEO_FX_TOGGLES.map((item) => {
           const on = fxOn(effects, item.id)

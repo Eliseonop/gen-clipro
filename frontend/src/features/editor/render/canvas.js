@@ -11,9 +11,11 @@ import { drawAlignGuides } from '../../../lib/alignGuides'
 import { clipDur, timelineToSource } from '../editorModel'
 import { gifFrameAt, gifInfo } from '../gifPlayer'
 import { cutoutDrawable } from '../bgCutout'
+import { vfxDrawable } from './vfxLayer'
+import { posterFor } from './posters'
 import { magicOverlayCanvas } from '../bgMagic'
 import { applyCanvasFx, clipFxAt } from '../../../lib/clipFx'
-import { posedTransform, clipPose, clipMasksAt } from '../../../lib/clipAnim'
+import { posedRenderTransform, clipPose, clipRenderPose, clipMasksAt } from '../../../lib/clipAnim'
 import { beginMaskLayer, endMaskLayer, maskHandles, strokeMaskShape } from '../../../lib/clipMask'
 import { adjustPasses } from '../../../lib/clipAdjust'
 import { blendOp } from '../../../lib/clipBlend'
@@ -91,7 +93,7 @@ function drawText3d(g, c, ang, { cw, ch, ox, oy, head, track, localT, selected }
   l.clearRect(0, 0, layer.width, layer.height)
   l.translate(ox, oy)
   const r = drawTextClip(l, c, cw, ch, { selected, frame: false, time: head, trackStyle: track?.style })
-  const pose = clipPose(c, localT)
+  const pose = clipRenderPose(c, localT)
   const f = focalOf(ch, effectiveTextStyle(track?.style, c.style).perspective)
   const cx = ox + pose.x * cw
   const cy = oy + pose.y * ch
@@ -105,7 +107,7 @@ function drawText3d(g, c, ang, { cw, ch, ox, oy, head, track, localT, selected }
 }
 
 export function fillDestRect(cw, ch, clip, localT) {
-  const pose = clipPose(clip, localT)
+  const pose = clipRenderPose(clip, localT)
   const sc = pose.scale ?? 1
   const dw = cw * sc
   const dh = ch * sc
@@ -156,13 +158,13 @@ function overlayDest(ctx, media, clip, srcTime, outW, outH, localT, frame) {
   const { w: vw, h: vh } = mediaSize(media)
   const crop = cropWindow(clip, vw / vh, outW / outH, srcTime, localT)
   const px = sourceCropPx(crop, vw, vh)
-  return { px, dest: destRectOnFrame(posedTransform(clip, localT), px, outW, outH, frame) }
+  return { px, dest: destRectOnFrame(posedRenderTransform(clip, localT), px, outW, outH, frame) }
 }
 
 function drawOverlayLayer(ctx, media, drawEl, clip, srcTime, outW, outH, fx, localT, frame) {
   const { px: geo, dest } = overlayDest(ctx, media, clip, srcTime, outW, outH, localT, frame)
   const px = srcRectOn(drawEl, media, geo)
-  const pose = clipPose(clip, localT)
+  const pose = clipRenderPose(clip, localT)
   ctx.save()
   if (fx.wipe != null && fx.wipe < 1) {
     ctx.beginPath()
@@ -288,7 +290,7 @@ export function canvasToSourceNorm(clip, px, py, frame, env, head) {
   x = x / fxs + cw / 2
   y = y / fxs + ch / 2
   // pose⁻¹
-  const pose = clipPose(clip, localT)
+  const pose = clipRenderPose(clip, localT)
   x -= cw / 2 + (pose.x - 0.5) * cw
   y -= ch / 2 + (pose.y - 0.5) * ch
   ;[x, y] = unrotate(x, y, pose.rotation || 0)
@@ -325,7 +327,7 @@ export function bgBrushRadiusPx(clip, size, frame, env, head) {
     return (size * vh / crop.sh) * dest.dh * fxs / 2
   }
   const crop = cropWindow(clip, vw / vh, slotAspectOf(clip, outW / outH), srcTime, localT)
-  const pose = clipPose(clip, localT)
+  const pose = clipRenderPose(clip, localT)
   if (!crop.hf) return 0
   return (size / crop.hf) * frame.h * (pose.scale ?? 1) * fxs / 2
 }
@@ -521,21 +523,30 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
       }
       continue
     }
-    const el = mediaEls.current.get(clip.id)
-    const { w: mw } = mediaSize(el)
+    let el = mediaEls.current.get(clip.id)
+    let { w: mw } = mediaSize(el)
+    // Sin elemento montado (fuera del pool) o aún cargando: su último fotograma
+    // conocido en pequeño (render/posters.js) en vez de negro.
+    const poster = (!el || !mw) ? posterFor(clip.id) : null
+    if (poster) { el = poster.media; mw = poster.media.videoWidth }
     if (!el || !mw) { flush(); continue }
-    const srcTime = clip.kind === 'image'
+    const srcTime = (clip.kind === 'image' || poster)
       ? clamp(timelineToSource(clip, head), clip.in_point, clip.out_point)
       : el.currentTime
     // GIF animado + Eliminar fondo: la fuente de dibujo se sustituye por un
     // canvas del MISMO aspecto; la geometría se sigue calculando con `el` (las
     // dimensiones reales del material), nunca con la del recorte.
     const editing = !!(magic?.on && magic.clipId === clip.id && !ghost)
-    const drawEl = drawSourceFor(clip, el, srcTime, { cutout: !editing })
+    let drawEl = poster ? poster.canvas : drawSourceFor(clip, el, srcTime, { cutout: !editing })
+    // Efectos de vídeo (fx/): la fuente con la pila aplicada; con margen, la
+    // geometría usa un material virtual más grande (ver render/vfxLayer.js).
+    let geoEl = el
+    const vfx = (editing || poster) ? null : vfxDrawable(clip, drawEl, el, localT, outW, outH)
+    if (vfx) { drawEl = vfx.canvas; geoEl = vfx.media }
     const magicEl = editing ? magicOverlayCanvas(clip.id, magic, mw, mediaSize(el).h) : null
     const fx = fxForClip(clip, head)
     if (isOverlay(clip)) {
-      const dest = drawOverlayLayer(g, el, drawEl, clip, srcTime, outW, outH, fx, localT, fr)
+      const dest = drawOverlayLayer(g, geoEl, drawEl, clip, srcTime, outW, outH, fx, localT, fr)
       // Misma geometría de overlay, con el overlay de selección encima.
       if (magicEl) drawOverlayLayer(g, el, magicEl, clip, srcTime, outW, outH, fx, localT, fr)
       flush()
@@ -543,7 +554,7 @@ export function drawComposite(ctx, head, selClipIds, env, frame) {
       hits.push({ id: clip.id, kind: clip.kind, dest, overlay: true })
       if (selected.has(clip.id)) overlayDestSel = dest
     } else {
-      const pose = clipPose(clip, localT)
+      const pose = clipRenderPose(clip, localT)
       g.save()
       g.translate(ox, oy)
       applyCanvasFx(g, { ...fx, opacity: fx.opacity * pose.opacity }, cw, ch)
