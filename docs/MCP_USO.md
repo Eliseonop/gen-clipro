@@ -85,6 +85,7 @@ params —nunca valores—, estado y ms). Cada tool lleva además `meta.domain` 
 - `analyze_youtube(url, …)` — tramos del heatmap (síncrono)
 - `create_clips_from_segments(project_id, url, segments, crop_mode)` — job de recorte
 - `fetch_image(project_id, url)` — trae una imagen al proyecto
+- `generate_image(project_id, prompt, aspect="9:16", model="auto", label?)` — genera una imagen con IA (MAI-Image/FLUX.2 de Foundry, fallback entre modelos) y la añade al proyecto · [detalle](GENERAR_IMAGEN_IA.md)
 - `download_youtube_video(project_id, url, quality?)` — job: vídeo COMPLETO al material (None = máxima calidad; `analyze_youtube` da `video.qualities`) · [detalle](YOUTUBE_VIDEO_COMPLETO.md)
 - `replace_media_version(project_id, clip_index, old_indexes?, dry_run?)` — cambia en la timeline las versiones de menos calidad del mismo vídeo por ésta (deshacible) · [detalle](SUBIR_CALIDAD.md)
 - `delete_media` *(destructive)*
@@ -148,7 +149,7 @@ params —nunca valores—, estado y ms). Cada tool lleva además `meta.domain` 
 
 **Transcripción / audio**
 - `transcribe(project_id, source|clip_index, model?)` · `generate_subtitles`
-- `generate_voice(text, engine=kokoro|piper|gemini, …)` · `search_sfx` *(read)*
+- `generate_voice(text, engine=kokoro|piper|gemini|azure, …)` · `search_sfx` *(read)*
 
 **Render / jobs / historial**
 - `export_project` · `cancel_job`

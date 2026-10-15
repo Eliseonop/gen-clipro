@@ -1,6 +1,10 @@
 # Optimización de memoria del editor web
 
-> Estado: **plan, nada implementado** (2026-09-18; revisado el 2026-09-28).
+> Estado (comprobado en el código el 2026-10-06): **Fases 0, 1, 1b, 2 y 3 implementadas** (commits
+> del 2026-10-02: `mediaWindow.js`, `lib/lruBytes.js`, `model_manager.py`, `LazyVideo`, panel
+> `?debug=mem`). Las Fases 4 y 5 siguen pendientes y pasan a
+> [OPTIMIZACION_RENDIMIENTO.md](OPTIMIZACION_RENDIMIENTO.md), que también cubre velocidad y GPU.
+> Plan original: 2026-09-18, revisado el 2026-09-28.
 > Objetivo: que la RAM del editor deje de crecer mientras se edita (una meseta estable en vez de un
 > crecimiento sin fin), para no tener que recargar la página, **sin perder ninguna funcionalidad
 > de UI/UX actual**.

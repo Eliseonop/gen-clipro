@@ -45,6 +45,7 @@ El orden de las columnas se cambia desde el botón **Diseño** (icono de cuadrí
 - Agregar el **vídeo de YouTube completo** al material eligiendo la **calidad** (4K, 1080p, 720p…; por defecto la mejor): [YOUTUBE_VIDEO_COMPLETO.md](YOUTUBE_VIDEO_COMPLETO.md).
 - **Subir/arrastrar** vídeos, imágenes y audios locales.
 - Buscar y añadir **imágenes y vídeos de stock** (Pexels, GIPHY, Pixabay, Unsplash…).
+- **Crear imágenes con IA** (pestaña IA → *Crear imagen*; MAI-Image y FLUX.2 de Foundry, con fallback automático si un modelo agota su cuota): [GENERAR_IMAGEN_IA.md](GENERAR_IMAGEN_IA.md).
 - Generar **narración por voz (TTS)** con varios motores (Kokoro, Gemini, ElevenLabs), elegir voz, mezclar dos voces, velocidad y pausas.
 - Extraer el **audio** de un vídeo de YouTube.
 - Biblioteca de **SFX** con categorías, clasificación y favoritos.

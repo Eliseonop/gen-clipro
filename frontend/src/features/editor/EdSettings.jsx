@@ -3,7 +3,7 @@ import Icon from '../../components/Icon'
 import Hint from '../../components/Hint'
 import Toast from '../../components/Toast'
 import { FPS_CHOICES, normalizeFps } from '../../lib/projectFps'
-import { getSettings, putSettings, getAiConfig, getLmStudioModels, testApiKeys, addApiKey, setApiKeyAt, deleteApiKeyAt } from '../../services/api'
+import { getSettings, putSettings, getAiConfig, getLmStudioModels, testApiKeys, addApiKey, setApiKeyAt, deleteApiKeyAt, getAiImageStatus } from '../../services/api'
 
 // `use` = etiqueta corta de PARA QUÉ sirve la clave (chip). `icon` = material-icons
 // clásico (por ligadura). `wired: false` = la clave se guarda y se puede probar,
@@ -117,6 +117,11 @@ export default function EdSettings({ audioDb, onAudioDb }) {
   const [azFoundryApiVersion, setAzFoundryApiVersion] = useState('')
   const [azFoundryKey, setAzFoundryKey] = useState('')
   const [azFoundryEdit, setAzFoundryEdit] = useState(false)
+  // Generación de imagen (Foundry): un recurso por región, cada uno con su clave.
+  const [imgStatus, setImgStatus] = useState(null)
+  const [imgKeys, setImgKeys] = useState({})
+  const [cfAccount, setCfAccount] = useState('')
+  const [cfToken, setCfToken] = useState('')
 
   const savedIds = useMemo(
     () => API_PROVIDERS.map((p) => p.id).filter((id) => setKeys[id]),
@@ -196,6 +201,50 @@ export default function EdSettings({ audioDb, onAudioDb }) {
     }
   }
 
+  async function reloadImg() {
+    const st = await getAiImageStatus()
+    setImgStatus(st)
+    setCfAccount(st?.cloudflare?.account_id || '')
+  }
+
+  async function saveCloudflare() {
+    const account = cfAccount.trim()
+    const token = cfToken.trim()
+    if (!account) return
+    setBusy(true)
+    setErr('')
+    try {
+      await putSettings({
+        cloudflare_ai: { account_id: account },
+        ...(token ? { api_keys: { cloudflare_ai: token } } : {}),
+      })
+      setCfToken('')
+      await reloadImg()
+      setToast({ type: 'success', message: 'Cloudflare Workers AI guardado.' })
+    } catch (e) {
+      setErr(e.message || 'No se pudo guardar.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function saveImgKey(id) {
+    const key = (imgKeys[id] || '').trim()
+    if (!key) return
+    setBusy(true)
+    setErr('')
+    try {
+      await putSettings({ api_keys: { [`azure_image_${id}`]: key } })
+      setImgKeys((k) => ({ ...k, [id]: '' }))
+      await reloadImg()
+      setToast({ type: 'success', message: `Clave de ${id} guardada.` })
+    } catch (e) {
+      setErr(e.message || 'No se pudo guardar.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function reloadAi() {
     const c = await getAiConfig()
     setAiCfg(c)
@@ -222,6 +271,7 @@ export default function EdSettings({ audioDb, onAudioDb }) {
   useEffect(() => {
     reload().catch(() => {})
     reloadAi().catch(() => {})
+    reloadImg().catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -704,6 +754,66 @@ export default function EdSettings({ audioDb, onAudioDb }) {
               )}
             </div>
           </div>
+
+          {imgStatus && (
+            <div className="ed-key-row">
+              <div className="ed-key-row-head">
+                <span className="ed-key-name">
+                  Generar imágenes (Foundry + Cloudflare)
+                  <Hint>MAI-Image y FLUX.2 en Azure: cada recurso (región) tiene su propia clave y su propia cuota; el recurso del chat reutiliza la clave de Foundry. Cloudflare Workers AI es la reserva gratuita (cupo diario): Account ID y un API token con permiso «Workers AI». Si uno se agota se usa el siguiente.</Hint>
+                </span>
+                <span className={`ed-key-set ${imgStatus.available ? '' : 'off'}`}>
+                  {imgStatus.resources.filter((r) => r.has_key).length}/{imgStatus.resources.length} con clave
+                </span>
+              </div>
+              <div className="ed-key-form">
+                {imgStatus.resources.filter((r) => r.provider !== 'cloudflare').map((r) => (
+                  <label key={r.id} className="field">
+                    <span>{r.id} · {r.models.join(', ')} {r.has_key ? '✓' : '(sin clave)'}</span>
+                    <div className="ed-key-actions">
+                      <input
+                        className="ed-cfg-input"
+                        type="password"
+                        autoComplete="off"
+                        value={imgKeys[r.id] || ''}
+                        disabled={busy}
+                        onChange={(e) => setImgKeys((k) => ({ ...k, [r.id]: e.target.value }))}
+                        placeholder={r.has_key ? 'Pega otra clave para reemplazarla' : `Clave de ${r.id}`}
+                      />
+                      <button type="button" className="primary small" onClick={() => saveImgKey(r.id)}
+                        disabled={busy || !(imgKeys[r.id] || '').trim()}>Guardar</button>
+                    </div>
+                  </label>
+                ))}
+                <label className="field">
+                  <span>
+                    Cloudflare Workers AI · FLUX.2 klein/dev gratis {imgStatus.cloudflare?.has_key && imgStatus.cloudflare?.account_id ? '✓' : '(sin configurar)'}
+                  </span>
+                  <div className="ed-key-actions">
+                    <input
+                      className="ed-cfg-input"
+                      autoComplete="off"
+                      value={cfAccount}
+                      disabled={busy}
+                      onChange={(e) => setCfAccount(e.target.value)}
+                      placeholder="Account ID"
+                    />
+                    <input
+                      className="ed-cfg-input"
+                      type="password"
+                      autoComplete="off"
+                      value={cfToken}
+                      disabled={busy}
+                      onChange={(e) => setCfToken(e.target.value)}
+                      placeholder={imgStatus.cloudflare?.has_key ? 'Pega otro token para reemplazarlo' : 'API token (Workers AI)'}
+                    />
+                    <button type="button" className="primary small" onClick={saveCloudflare}
+                      disabled={busy || !cfAccount.trim() || (!cfToken.trim() && cfAccount.trim() === (imgStatus.cloudflare?.account_id || ''))}>Guardar</button>
+                  </div>
+                </label>
+              </div>
+            </div>
+          )}
 
           {err && <div className="ed-mat-err">{err}</div>}
         </div>

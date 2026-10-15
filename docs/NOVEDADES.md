@@ -6,6 +6,22 @@ Toda funcionalidad nueva se documenta aquí y en su `.md` propio.
 
 ---
 
+## 2026-10-06 — Crear imágenes con IA (MAI-Image + FLUX.2, con fallback)
+
+Detalle: [GENERAR_IMAGEN_IA.md](GENERAR_IMAGEN_IA.md).
+
+- **IA → Crear imagen**: escribe qué quieres, elige formato (9:16, 16:9, 1:1…), modelo y
+  cantidad; la imagen va al material del proyecto. **Prompt desde la escena** lo escribe
+  a partir del guion y del punto actual de la timeline.
+- **Fallback automático** entre 7 modelos (MAI-Image 2.5/2.6, FLUX.2 pro/flex) y 3
+  recursos de Azure: si uno agota su cuota o falla, se usa el siguiente.
+- **Reserva gratuita: Cloudflare Workers AI** (FLUX.2 klein 9B/4B y dev, cupo diario de
+  10 000 neuronas, se bloquea al agotarse sin cobrar). Va al final de la cadena; si el
+  cupo diario se agota, ese modelo se aparta 1 h.
+- Configuración → **Generar imágenes (Foundry + Cloudflare)**: una clave por
+  recurso/región de Azure, y Account ID + API token de Cloudflare.
+- MCP: `generate_image(project_id, prompt, aspect, model)`.
+
 ## 2026-09-28 — Arrastrar y soltar en la timeline, sin solapes y pista magnética
 
 Detalle: [TIMELINE_ARRASTRE.md](TIMELINE_ARRASTRE.md).

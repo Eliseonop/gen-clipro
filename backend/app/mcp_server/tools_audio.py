@@ -64,16 +64,20 @@ def generate_subtitles(project_id: str, filename: str, asset_kind: str = "audios
 def generate_voice(project_id: str, text: str, engine: str = "kokoro", voice: str = "ef_dora",
                    voice2: str | None = None, blend: float = 0.5, speed: float = 1.0,
                    pause: float = 0.4, name: str | None = None, style: str | None = None) -> dict:
-    """Genera un audio de narrador (TTS) y lo añade al proyecto. engine kokoro|piper|gemini. En gemini, style define el carácter: documentary|close|fun|friendly|mysterious|curiosity|energetic|calm. Devuelve job."""
+    """Genera un audio de narrador (TTS) y lo añade al proyecto. engine kokoro|piper|gemini|azure (voice p. ej. es-MX-LucianoNeural). En gemini, style define el carácter: documentary|close|fun|friendly|mysterious|curiosity|energetic|calm. Devuelve job."""
     _project_or_raise(project_id)
     if not (text or "").strip():
         raise ValueError("El texto está vacío.")
-    from .. import gemini_tts, piper_tts, tts
+    from .. import azure_tts, gemini_tts, piper_tts, tts
     if engine == "gemini":
         reason = gemini_tts.unavailable_reason()
         if reason:
             code = "dependency_error" if "paquete" in reason.lower() else "configuration_error"
             raise MCPError(code, reason)
+    elif engine == "azure":
+        reason = azure_tts.unavailable_reason()
+        if reason:
+            raise MCPError("configuration_error", reason)
     elif engine == "piper":
         if not piper_tts.available():
             raise MCPError("dependency_error",
@@ -82,7 +86,7 @@ def generate_voice(project_id: str, text: str, engine: str = "kokoro", voice: st
         if not tts.available():
             raise MCPError("dependency_error", "Faltan los modelos de Kokoro (ver README).")
     else:
-        raise MCPError("invalid_parameter", "Motor TTS no válido (usa kokoro|piper|gemini).",
+        raise MCPError("invalid_parameter", "Motor TTS no válido (usa kokoro|piper|gemini|azure).",
                        param="engine", retryable=True)
 
     req = TTSRequest(project_id=project_id, text=text, engine=engine, voice=voice,

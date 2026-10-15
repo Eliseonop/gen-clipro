@@ -46,7 +46,7 @@ CAPABILITIES = [
     "media.library",
     "media.image",
     "media.shape",
-    "voice:kokoro|piper|gemini",
+    "voice:kokoro|piper|gemini|azure",
     "tracks.link",
     "tracks.rename",
     "tracks.audio:volume|mute|fx|fade",

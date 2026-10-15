@@ -207,7 +207,7 @@ class CapabilitiesTest(unittest.TestCase):
         from app.mcp_server import dto
         caps = dto.capabilities()
         for c in ("media.shape", "clip.opacity:0-1", "clip.effects:blur|grayscale|sepia|brightness|contrast|saturation",
-                  "clip.keyframes:x|y|scale|rotation|opacity|volume|audio_fx", "voice:kokoro|piper|gemini", "tracks.link"):
+                  "clip.keyframes:x|y|scale|rotation|opacity|volume|audio_fx", "voice:kokoro|piper|gemini|azure", "tracks.link"):
             self.assertIn(c, caps)
         self.assertIn("clip.animate:zoom|spin|slide|fade|pop|pulse|draw_in|follow_audio", caps)
 

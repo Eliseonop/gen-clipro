@@ -34,6 +34,7 @@ TOOL_DOMAINS: dict[str, str] = {
     "analyze_youtube": "media",
     "create_clips_from_segments": "media",
     "fetch_image": "media",
+    "generate_image": "media",
     "delete_media": "media",
     "download_youtube_video": "media",
     "replace_media_version": "media",
@@ -198,6 +199,12 @@ HELP: dict[str, str] = {
         "| split_left | split_right. Espera con wait_for_job y mira list_media.\n"
         "- fetch_image(url, label?): descarga una imagen y la añade al proyecto "
         "(devuelve id para add_to_timeline con asset_kind=images).\n"
+        "- generate_image(prompt, aspect=9:16, model=auto, label?): genera una "
+        "imagen con IA (Foundry: MAI-Image 2.5/2.6, FLUX.2 pro/flex) y la añade al "
+        "proyecto. Si un modelo falla o agota su cuota pasa solo al siguiente; "
+        "model fija el preferido. aspect 9:16|16:9|1:1|3:4|4:3. Prompt detallado "
+        "(sujeto, estilo, luz, encuadre); en inglés suele rendir mejor. Devuelve "
+        "id para add_to_timeline con asset_kind=images.\n"
         "- delete_media(kind, ident): borra material Y su archivo. kind clips|"
         "audios|images; ident = index del clip o id del audio/imagen. NO deshacible.\n"
         "- download_youtube_video(url, quality?): job que baja el vídeo COMPLETO al "
@@ -352,7 +359,7 @@ HELP: dict[str, str] = {
         "end: 3.5}).\n"
         "- generate_voice(text, engine=kokoro, voice=ef_dora, voice2?, blend=0.5, "
         "speed=1, pause=0.4, name?, style?): TTS de narrador → audio del proyecto. "
-        "engine kokoro|piper|gemini (deben estar disponibles). Devuelve job.\n"
+        "engine kokoro|piper|gemini|azure (deben estar disponibles). Devuelve job.\n"
         "- search_sfx(query='', category='', limit=50): busca efectos de sonido en "
         "la biblioteca local. No necesita proyecto. Usa el id devuelto en "
         "add_to_timeline(asset_kind='sfx')."

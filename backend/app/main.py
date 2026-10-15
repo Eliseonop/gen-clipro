@@ -2119,8 +2119,9 @@ def ai_status() -> dict:
 
     Speech y Vision son servicios independientes; Foundry es la capa GENERATIVA
     que los complementa (no los reemplaza)."""
-    from . import azure_stt, azure_vision, foundry
+    from . import azure_stt, azure_vision, foundry, foundry_image
     return {
+        "image": foundry_image.status(),
         "speech": {
             "available": azure_stt.available(),
             "reason": azure_stt.unavailable_reason(),
@@ -2284,6 +2285,36 @@ def ai_foundry_generate(body: dict = Body(...)) -> dict:
         )
     except foundry.FoundryError as exc:
         raise HTTPException(status_code=_foundry_error_status(exc.code), detail=str(exc)) from exc
+
+
+@app.get("/api/ai/image/status")
+def ai_image_status() -> dict:
+    """Recursos/modelos de generación de imagen (MAI-Image, FLUX.2) sin claves."""
+    from . import foundry_image
+    return foundry_image.status()
+
+
+@app.post("/api/projects/{project_id}/ai/generate-image")
+def ai_generate_image(project_id: str, body: dict = Body(...)) -> dict:
+    """Genera UNA imagen (Foundry, con fallback entre modelos/recursos) y la añade
+    al material. Entrada: {prompt, aspect?="9:16", model?="auto", strict?, label?}.
+    Salida: {image, model, resource, attempts}."""
+    from . import foundry_image
+    body = body or {}
+    try:
+        return foundry_image.generate_to_project(
+            project_id, str(body.get("prompt") or ""),
+            aspect=str(body.get("aspect") or foundry_image.DEFAULT_ASPECT),
+            model=(str(body.get("model")) if body.get("model") else None),
+            strict=bool(body.get("strict")),
+            label=(str(body.get("label")).strip() or None) if body.get("label") else None)
+    except foundry_image.ImageGenError as exc:
+        status = {"not_found": 404, "bad_request": 400, "not_configured": 400,
+                  "rate_limit": 429, "content_filter": 422}.get(exc.code, 502)
+        tried = "; ".join(f"{a['model']}@{a['resource']}: {a['error']}"
+                          for a in exc.attempts if a.get("code") != "ok")
+        raise HTTPException(status_code=status,
+                            detail=f"{exc}{f' ({tried})' if tried else ''}") from exc
 
 
 @app.post("/api/projects/{project_id}/ai/analyze-materials", response_model=Job)

@@ -203,6 +203,12 @@ export const foundryChat = ({ projectId, message, context, language } = {}) =>
 // Operaciones estructuradas: op ∈ improve_script | generate_hooks | generate_titles |
 // generate_description | suggest_resources | visual_prompt | analyze_scene | assistant.
 export const foundryGenerate = (body) => post('/api/ai/foundry/generate', body)
+// Generar imagen (MAI-Image / FLUX.2 de Foundry, con fallback entre modelos y recursos).
+// body: { prompt, aspect?: '9:16'|'16:9'|'1:1'|'3:4'|'4:3', model?: 'auto'|id, strict?, label? }
+// → { image, model, resource, attempts }. La imagen queda en el material del proyecto.
+export const getAiImageStatus = () => get('/api/ai/image/status')
+export const generateAiImage = (projectId, body) =>
+  post(`/api/projects/${projectId}/ai/generate-image`, body)
 // Analizar material con visión de Foundry → Job (resumen en job.result).
 // body: { only_missing?, rename_generic?, items?: [{kind:'clips'|'images', id}] }
 export const analyzeMaterials = (projectId, body = {}) =>

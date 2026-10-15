@@ -100,6 +100,29 @@ def fetch_image(project_id: str, url: str, label: str | None = None) -> dict:
                                   "height": info.height, "url": info.url}}
 
 
+def generate_image(project_id: str, prompt: str, aspect: str = "9:16", model: str = "auto",
+                   label: str | None = None) -> dict:
+    """Genera una imagen con IA (MAI-Image/FLUX.2 de Foundry, fallback automático) y la añade al proyecto."""
+    from .. import foundry_image
+    _project_or_raise(project_id)
+    if aspect not in foundry_image.ASPECTS:
+        raise MCPError("invalid_parameter", f"aspect inválido: {aspect} (usa {list(foundry_image.ASPECTS)})",
+                       param="aspect", retryable=True)
+    try:
+        out = foundry_image.generate_to_project(project_id, prompt, aspect=aspect,
+                                                model=model, label=label)
+    except foundry_image.ImageGenError as exc:
+        code = {"bad_request": "invalid_parameter", "content_filter": "invalid_parameter",
+                "not_configured": "configuration_error",
+                "rate_limit": "temporary_error"}.get(exc.code, "processing_error")
+        raise MCPError(code, str(exc), retryable=code in ("invalid_parameter", "temporary_error"),
+                       hint=("Reescribe el prompt." if exc.code == "content_filter" else None)) from None
+    im = out["image"]
+    return {"ok": True, "model": out["model"],
+            "image": {"id": im["id"], "filename": im["filename"], "label": im["label"],
+                      "width": im["width"], "height": im["height"], "url": im["url"]}}
+
+
 def download_youtube_video(project_id: str, url: str, quality: int | None = None) -> dict:
     """Job que baja el vídeo COMPLETO al material (quality 720/1080/2160…; None = la máxima)."""
     from ..schemas import YouTubeVideoRequest
@@ -129,6 +152,7 @@ def register(mcp) -> None:
     tool(mcp, access="read")(analyze_youtube)
     tool(mcp, access="write")(create_clips_from_segments)
     tool(mcp, access="write")(fetch_image)
+    tool(mcp, access="write")(generate_image)
     tool(mcp, access="write")(download_youtube_video)
     tool(mcp, access="write")(replace_media_version)
     tool(mcp, access="destructive")(delete_media)

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { getAiStatus, transcribeAudio, generateSubtitles, analyzeImage, ocrImage, getJob, analyzeMaterials } from '../../services/api'
+import { getAiStatus, transcribeAudio, generateSubtitles, analyzeImage, ocrImage, getJob, analyzeMaterials, generateAiImage, foundryGenerate } from '../../services/api'
 import Icon from '../../components/Icon'
 import JobStatusBar from '../../components/JobStatusBar'
 import Toast from '../../components/Toast'
@@ -8,6 +8,7 @@ import FoundryPanel from './FoundryPanel'
 // Pestaña "IA": punto único para los servicios de Azure integrados en el editor.
 //   Voz        → generar voz (narrador) + transcribir audio (Whisper / Azure)
 //   Subtítulos → generar subtítulos automáticamente desde un audio
+//   Crear      → generar imágenes (MAI-Image / FLUX.2 de Foundry, fallback entre modelos)
 //   Imagen     → analizar imagen + extraer texto (OCR) con Azure Vision
 //   Material   → describir clips e imágenes con la visión de Foundry (para dirigir escenas)
 // No duplica el narrador ni el motor de subtítulos: reutiliza los endpoints y el
@@ -30,6 +31,7 @@ export default function AiTab({ project, onChange, onGoAudio, onGoSettings, edit
       <div className="audio-subtabs">
         <button type="button" className={`ed-tab ${section === 'voice' ? 'on' : ''}`} onClick={() => setSection('voice')}>Voz</button>
         <button type="button" className={`ed-tab ${section === 'subs' ? 'on' : ''}`} onClick={() => setSection('subs')}>Subtítulos</button>
+        <button type="button" className={`ed-tab ${section === 'create' ? 'on' : ''}`} onClick={() => setSection('create')}>Crear imagen</button>
         <button type="button" className={`ed-tab ${section === 'image' ? 'on' : ''}`} onClick={() => setSection('image')}>Imagen</button>
         <button type="button" className={`ed-tab ${section === 'material' ? 'on' : ''}`} onClick={() => setSection('material')}>Material</button>
         <button type="button" className={`ed-tab ${section === 'foundry' ? 'on' : ''}`} onClick={() => setSection('foundry')}>Foundry</button>
@@ -42,6 +44,11 @@ export default function AiTab({ project, onChange, onGoAudio, onGoSettings, edit
       {section === 'subs' && (
         <SubsSection audios={audios} speech={speechAzure}
           projectId={project?.id} onChange={onChange} setToast={setToast} />
+      )}
+      {section === 'create' && (
+        <CreateImageSection gen={status?.image} projectId={project?.id} editorContext={editorContext}
+          foundryOk={!!status?.foundry?.available} onGoSettings={onGoSettings}
+          onChange={onChange} setToast={setToast} />
       )}
       {section === 'image' && (
         <ImageSection images={images} visionOk={visionOk} visionReason={status?.vision?.reason}
@@ -294,6 +301,136 @@ function MaterialSection({ project, foundry, onGoSettings, onChange, setToast })
               </li>
             ))}
           </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const ASPECT_LABELS = { '9:16': '9:16 vertical', '16:9': '16:9 horizontal', '1:1': '1:1 cuadrado', '3:4': '3:4', '4:3': '4:3' }
+
+// Genera imágenes con Foundry (MAI-Image / FLUX.2). El backend prueba los modelos
+// en orden y salta al siguiente si uno agota su cuota o falla; cada imagen queda
+// en el material del proyecto (origen "ai").
+function CreateImageSection({ gen, projectId, editorContext, foundryOk, onGoSettings, onChange, setToast }) {
+  const [prompt, setPrompt] = useState('')
+  const [aspect, setAspect] = useState('9:16')
+  const [model, setModel] = useState('auto')
+  const [count, setCount] = useState(1)
+  const [busy, setBusy] = useState(false)
+  const [progress, setProgress] = useState('')
+  const [results, setResults] = useState([])
+  const [error, setError] = useState('')
+
+  const available = !!gen?.available
+  const models = (gen?.models || []).filter((m) => m.available)
+  const aspects = gen?.aspects?.length ? gen.aspects : Object.keys(ASPECT_LABELS)
+  const keyless = (gen?.resources || []).filter((r) => !r.has_key)
+
+  async function promptFromScene() {
+    setBusy(true); setError('')
+    try {
+      const ctx = { vertical: aspect === '9:16', format: { aspect } }
+      if (editorContext?.current_time != null) ctx.current_time = editorContext.current_time
+      if (prompt.trim()) ctx.topic = prompt.trim()
+      const r = await foundryGenerate({ op: 'visual_prompt', language: 'es', project_id: projectId, context: ctx })
+      if (r.image_prompt) setPrompt(r.image_prompt)
+    } catch (e) { setError(e.message) }
+    setBusy(false)
+  }
+
+  async function run() {
+    if (!prompt.trim()) { setError('Describe la imagen que quieres.'); return }
+    setBusy(true); setError('')
+    const made = []
+    for (let i = 0; i < count; i += 1) {
+      setProgress(count > 1 ? `Generando ${i + 1} de ${count}…` : 'Generando…')
+      try {
+        made.push(await generateAiImage(projectId, { prompt: prompt.trim(), aspect, model }))
+        setResults((prev) => [made[made.length - 1], ...prev].slice(0, 12))
+      } catch (e) {
+        setError(e.message)
+        break
+      }
+    }
+    setProgress('')
+    setBusy(false)
+    if (made.length) {
+      onChange?.()
+      setToast({ type: 'success', message: made.length > 1 ? `${made.length} imágenes añadidas al material.` : 'Imagen añadida al material.' })
+    }
+  }
+
+  return (
+    <div className="ai-block">
+      <div className="ai-block-head"><Icon name="auto_awesome" size={16} /> Crear imagen con IA (Foundry)</div>
+      <p className="ed-caja-hint">
+        MAI-Image y FLUX.2. Si un modelo agota su cuota o falla, se usa el siguiente automáticamente.
+        La imagen se guarda en el material del proyecto. En inglés y con detalle suele salir mejor.
+      </p>
+      {!available && (
+        <div className="warn">
+          {gen?.reason || 'Configura los recursos de imagen de Foundry.'}
+          {onGoSettings && <button type="button" className="ghost small" onClick={onGoSettings} style={{ marginLeft: 8 }}>Ir a Configuración</button>}
+        </div>
+      )}
+      {available && keyless.length > 0 && (
+        <div className="ed-caja-hint">
+          Sin clave (no se usan como respaldo): {keyless.map((r) => r.id).join(', ')}.
+          {onGoSettings && <button type="button" className="ghost small" onClick={onGoSettings} style={{ marginLeft: 6 }}>Añadir claves</button>}
+        </div>
+      )}
+      <textarea className="tts-text" rows={4} value={prompt} disabled={busy}
+        onChange={(e) => setPrompt(e.target.value)}
+        placeholder="p. ej. a red panda astronaut floating over Earth, cinematic lighting, highly detailed" />
+      <div className="ai-btn-row">
+        <label className="field"><span>Formato</span>
+          <select className="time-input" value={aspect} disabled={busy} onChange={(e) => setAspect(e.target.value)}>
+            {aspects.map((a) => <option key={a} value={a}>{ASPECT_LABELS[a] || a}</option>)}
+          </select>
+        </label>
+        <label className="field"><span>Modelo</span>
+          <select className="time-input" value={model} disabled={busy} onChange={(e) => setModel(e.target.value)}>
+            <option value="auto">Automático (mejor disponible)</option>
+            {models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+          </select>
+        </label>
+        <label className="field"><span>Cantidad</span>
+          <select className="time-input" value={count} disabled={busy} onChange={(e) => setCount(Number(e.target.value))}>
+            {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="ai-btn-row">
+        <button className="primary" type="button" onClick={run} disabled={busy || !available || !prompt.trim()}>
+          {busy && progress ? progress : 'Generar'}
+        </button>
+        <button className="ghost small" type="button" onClick={promptFromScene} disabled={busy || !foundryOk}
+          title="Escribe un prompt a partir del guion y del momento actual de la timeline (usa el chat de Foundry)">
+          Prompt desde la escena
+        </button>
+      </div>
+      {error && <div className="ed-mat-err">{error}</div>}
+
+      {results.length > 0 && (
+        <div className="ai-result">
+          <div className="ai-gen-grid">
+            {results.map((r) => (
+              <div key={r.image.id} className="ai-gen-item" title={r.image.description || ''}
+                style={r.image.width && r.image.height ? { '--ar': `${r.image.width} / ${r.image.height}` } : undefined}>
+                <img src={r.image.url} alt={r.image.label || ''} loading="lazy" />
+                <span>{r.model}</span>
+              </div>
+            ))}
+          </div>
+          {results[0].attempts?.some((a) => a.code !== 'ok') && (
+            <ul className="ai-gen-tries">
+              {results[0].attempts.filter((a) => a.code !== 'ok').map((a, i) => (
+                <li key={i}>{a.model}@{a.resource}: {a.error}</li>
+              ))}
+            </ul>
+          )}
+          <div className="ai-result-meta">Están en Material → Imágenes; arrástralas a la timeline.</div>
         </div>
       )}
     </div>

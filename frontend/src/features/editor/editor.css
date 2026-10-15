@@ -3448,6 +3448,13 @@ body.ed-track-dragging, body.ed-track-dragging * { cursor: ns-resize !important;
 .ai-mat-item > .material-icons { margin-top: 2px; flex: none; }
 .ai-mat-old { color: var(--muted); font-size: 11.5px; }
 
+/* Crear imagen (MAI-Image / FLUX.2) */
+.ai-gen-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
+.ai-gen-item { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ai-gen-item img { width: 100%; aspect-ratio: var(--ar, 9 / 16); object-fit: cover; border-radius: 6px; border: 1px solid var(--border, rgba(255, 255, 255, 0.12)); background: rgba(0, 0, 0, 0.25); }
+.ai-gen-item span { font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-gen-tries { font-size: 11px; color: var(--muted); margin: 0; padding-left: 16px; }
+
 /* Panel Foundry (IA generativa) */
 .foundry-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 2px; }
 .foundry-actions .ed-tab { display: inline-flex; align-items: center; gap: 4px; }
